@@ -95,6 +95,7 @@ public partial class WalShardGrainTests
 
         var floorAfterCrash = await WalAppendFenceRows.ReadRoutingFloorAsync(inner, TreeId, WalRoutingInitiator.ShardRoot(0));
         var rowsAfterCrash = inner.GrainIds(WalAppendFenceRows.GenerationGrainType).Count;
+        var (_, slotsAfterCrash) = await RoutingGenerationSlots.ReadAllAsync(inner, TreeId, ShardIndex);
 
         // The re-drive, on a fresh activation, as the purge's keepalive would run it.
         faulting.FailClears = 0;
@@ -105,7 +106,12 @@ public partial class WalShardGrainTests
         Assert.Multiple(() =>
         {
             Assert.That(floorAfterCrash, Is.EqualTo(4), "the floor covered every row before the first delete was attempted");
-            Assert.That(rowsAfterCrash, Is.EqualTo(2), "the crash left the rows");
+            Assert.That(rowsAfterCrash, Is.EqualTo(1), "the crash left the partition's table row (#5987: one row, a slot per initiator)");
+            Assert.That(slotsAfterCrash, Is.EquivalentTo(new Dictionary<WalRoutingInitiator, long>
+            {
+                [WalRoutingInitiator.ShardRoot(0)] = 4,
+                [WalRoutingInitiator.TreeRangeDelete] = 2,
+            }), "with both slots in it");
             Assert.That(refusedBeforeRedrive.Accepted, Is.False, "a left-over row's generation is refused at the floor even before the re-drive");
             Assert.That(inner.GrainIds(WalAppendFenceRows.GenerationGrainType), Is.Empty, "the re-drive deletes what the crash left");
         });

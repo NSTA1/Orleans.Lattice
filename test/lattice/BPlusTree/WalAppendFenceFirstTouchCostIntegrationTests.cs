@@ -60,9 +60,9 @@ public sealed class WalAppendFenceFirstTouchCostIntegrationTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(first.Get("R _lattice_wal-routing-generation"), Is.EqualTo(1),
+            Assert.That(first.Get($"R {WalAppendFenceRows.GenerationGrainType}"), Is.EqualTo(1),
                 "the first write did not load its shard root's routing generation at the partition, so the fence is not under test");
-            Assert.That(first.Get("W _lattice_wal-routing-generation"), Is.Zero,
+            Assert.That(first.Get($"W {WalAppendFenceRows.GenerationGrainType}"), Is.Zero,
                 "#5833 C1: the first write's cold load claimed its generation instead of loading it read-only");
             Assert.That(first.Get("R _lattice_shard-handoff"), Is.EqualTo(1), "the shard root re-read its hand-off marker");
             Assert.That(first.Get("W _lattice_shard-handoff"), Is.EqualTo(1), "the shard root wrote its hand-off marker more than once");
@@ -103,6 +103,77 @@ public sealed class WalAppendFenceFirstTouchCostIntegrationTests
             Assert.That(initialised, Is.GreaterThan(firstMarker), "the marker was never initialised after its seed");
             Assert.That(claims.Any(i => i > firstMarker && i < initialised), Is.True,
                 "no generation was claimed at a WAL partition between the seed and the initialisation");
+        });
+    }
+
+    [Test]
+    public async Task A_default_shape_trees_first_touch_fence_reads_are_linear_in_shard_roots_plus_partitions()
+    {
+        // #5987, D5: a new tree's first touch pays O(shard roots + partitions) fence
+        // operations, never O(shard roots x partitions). At the defaults (64 shard roots, 8
+        // partitions) every shard root and every partition is touched, and each term is
+        // pinned: one routing-generation table read per partition (not one per partition and
+        // initiator), the routing floor read once per shard-root activation and once per
+        // partition, the retired-epoch floor once per partition, and each hand-off marker
+        // read and written once.
+        const int Shards = LatticeConstants.DefaultShardCount;
+        const int Partitions = LatticeOptions.DefaultWalPartitions;
+        var treeId = $"first-touch-default-{Guid.NewGuid():N}";
+        var registry = _cluster.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        await registry.RegisterAsync(treeId, new TreeRegistryEntry { ShardCount = Shards, WalPartitions = Partitions });
+        var tree = _cluster.Client.GetGrain<ILattice>(treeId);
+        Counters.Target = (await tree.GetRoutingAsync()).PhysicalTreeId;
+
+        Counters.Reset();
+        var rows = Enumerable.Range(0, 4000)
+            .Select(i => new KeyValuePair<string, byte[]>($"archive/{i:D6}", Encoding.UTF8.GetBytes("v")))
+            .ToList();
+        foreach (var page in rows.Chunk(500))
+        {
+            await tree.SetManyAsync(page.ToList());
+        }
+
+        var touch = Counters.Snapshot();
+        TestContext.Out.WriteLine(string.Join(", ", touch.Values.OrderBy(v => v.Key, StringComparer.Ordinal).Select(v => $"{v.Key}={v.Value}")));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(touch.Get($"W {HandOffMarkerRows.ShardGrainType}"), Is.EqualTo(Shards),
+                "precondition: every shard root seeded its marker, so the shard-root terms are not vacuous");
+            Assert.That(touch.Get($"R {WalAppendFenceRows.GenerationGrainType}"), Is.EqualTo(Partitions),
+                "one routing-generation table read per partition: the cold load serves every initiator's slot from it");
+            Assert.That(touch.Get($"R {WalAppendFenceRows.RoutingFloorGrainType}"), Is.LessThanOrEqualTo(Shards + Partitions),
+                "the routing floor is read once per shard-root activation and once per partition");
+            Assert.That(touch.Get($"R {WalAppendFenceRows.FloorGrainType}"), Is.LessThanOrEqualTo(Partitions),
+                "the retired-epoch floor is read once per partition");
+            Assert.That(touch.Get($"R {HandOffMarkerRows.ShardGrainType}"), Is.LessThanOrEqualTo(Shards),
+                "each shard root reads its hand-off marker once");
+            Assert.That(touch.Get($"W {HandOffMarkerRows.ShardGrainType}"), Is.LessThanOrEqualTo(Shards),
+                "each shard root writes its hand-off marker once");
+        });
+    }
+
+    [Test]
+    public async Task Concurrent_first_writes_at_one_shard_root_read_its_routing_floor_once()
+    {
+        // #5987: the writes that reach a shard root before its generation is seeded share
+        // one seeding, so the activation reads its routing floor once, not once per write.
+        var treeId = $"first-touch-concurrent-{Guid.NewGuid():N}";
+        var registry = _cluster.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        await registry.RegisterAsync(treeId, new TreeRegistryEntry { ShardCount = 1 });
+        var tree = _cluster.Client.GetGrain<ILattice>(treeId);
+        Counters.Target = (await tree.GetRoutingAsync()).PhysicalTreeId;
+
+        Counters.Reset();
+        await Task.WhenAll(Enumerable.Range(0, 16).Select(i => tree.SetAsync($"k{i:D2}", Encoding.UTF8.GetBytes("v"))));
+        var touch = Counters.Snapshot();
+        TestContext.Out.WriteLine(string.Join(", ", touch.Values.OrderBy(v => v.Key, StringComparer.Ordinal).Select(v => $"{v.Key}={v.Value}")));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(touch.Get($"W {HandOffMarkerRows.ShardGrainType}"), Is.EqualTo(1), "precondition: the shard root seeded its marker once");
+            Assert.That(touch.Get($"R {WalAppendFenceRows.RoutingFloorGrainType}"), Is.LessThanOrEqualTo(2),
+                "the shard root read its routing floor once, and the one partition once");
         });
     }
 

@@ -41,7 +41,7 @@ public sealed partial class LiveCheckpointAdvanceIntegrationTests
             // B2: the shard had no root, so the load opened no switch and ran no fence.
             Assert.That((await HandOffMarkerRows.ReadShardAsync(Storage, BulkRawTree, 0)).RecordExists, Is.False,
                 "a never-written shard's load writes no hand-off marker");
-            Assert.That((await WalAppendFenceRows.ReadGenerationAsync(Storage, BulkRawTree, 0, WalRoutingInitiator.ShardRoot(0))).RecordExists,
+            Assert.That((await WalAppendFenceRows.ReadGenerationsAsync(Storage, BulkRawTree, 0)).RecordExists,
                 Is.False, "and claims no routing generation");
         });
 

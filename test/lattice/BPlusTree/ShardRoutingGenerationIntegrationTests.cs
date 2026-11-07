@@ -218,8 +218,8 @@ public sealed class ShardRoutingGenerationIntegrationTests
 
         for (var partition = 0; partition < partitions; partition++)
         {
-            var row = await WalAppendFenceRows.ReadGenerationAsync(Storage, Name, partition, WalRoutingInitiator.ShardRoot(0));
-            Assert.That(row.State.Generation, Is.EqualTo(donorMarker.RoutingGeneration),
+            var row = await RoutingGenerationSlots.ReadAsync(Storage, Name, partition, WalRoutingInitiator.ShardRoot(0));
+            Assert.That(row.Generation, Is.EqualTo(donorMarker.RoutingGeneration),
                 $"partition {partition}: the raised generation was re-claimed, fencing every write admitted before the close");
         }
     }

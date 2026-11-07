@@ -17,16 +17,8 @@ public sealed class TreeRoutingFenceRetirementTests
 {
     private const string Tree = "fence-retire";
 
-    private static async Task WriteGenerationAsync(IGrainStorage storage, int partition, WalRoutingInitiator initiator, long generation)
-    {
-        var row = await WalAppendFenceRows.ReadGenerationAsync(storage, Tree, partition, initiator);
-        row.State.Generation = generation;
-        await WalAppendFenceRows.WriteAsync(
-            storage,
-            WalAppendFenceRows.GenerationGrainType,
-            WalAppendFenceRows.GenerationKey(Tree, partition, initiator.Kind, initiator.Index),
-            row);
-    }
+    private static Task WriteGenerationAsync(IGrainStorage storage, int partition, WalRoutingInitiator initiator, long generation) =>
+        RoutingGenerationSlots.WriteAsync(storage, Tree, partition, initiator, generation);
 
     private static Task WriteMarkerAsync(IGrainStorage storage, int shard, long generation) =>
         HandOffMarkerRows.UpdateShardAsync(storage, Tree, shard, m =>
@@ -79,13 +71,13 @@ public sealed class TreeRoutingFenceRetirementTests
             partition: 0,
             shardCount: 1);
 
-        var left = (await WalAppendFenceRows.ReadGenerationAsync(storage, Tree, 1, WalRoutingInitiator.ShardRoot(0))).State.Generation;
+        var left = (await RoutingGenerationSlots.ReadAsync(storage, Tree, 1, WalRoutingInitiator.ShardRoot(0))).Generation;
         var shardFloor = await FloorAsync(storage, WalRoutingInitiator.ShardRoot(0));
         var fenceFloor = await FloorAsync(storage, WalRoutingInitiator.TreeRangeDelete);
         Assert.Multiple(() =>
         {
             Assert.That(storage.GrainIds(WalAppendFenceRows.GenerationGrainType), Has.Count.EqualTo(1),
-                "partition 0's rows are deleted from storage; partition 1 is retired by its own call");
+                "partition 0's table row is deleted from storage; partition 1 is retired by its own call");
             Assert.That(left, Is.EqualTo(9));
             Assert.That(shardFloor, Is.EqualTo(3), "each initiator's floor covers the rows of it the fallback deleted");
             Assert.That(fenceFloor, Is.EqualTo(7));
