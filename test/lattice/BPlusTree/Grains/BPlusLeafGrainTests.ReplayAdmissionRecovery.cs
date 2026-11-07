@@ -42,7 +42,7 @@ public partial class BPlusLeafGrainTests
                 });
             state.State.TreeId = treeId;
             using (ListenForSaturationRefusals(treeId, refusals))
-                await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
+                await ActivateAgainstHeldPermitsAsync(grain);
             Assert.That(grain.ReplayAdmissionPhaseForTest,
                 Is.EqualTo(BPlusLeafGrain.ReplayAdmissionPhase.HoldsPermit),
                 "admission must reach the actual replay, not a no-op activation");
