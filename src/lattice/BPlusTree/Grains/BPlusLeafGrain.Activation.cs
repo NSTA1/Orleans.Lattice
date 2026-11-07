@@ -799,10 +799,13 @@ internal sealed partial class BPlusLeafGrain
 
     /// <summary>
     /// Lazily resolves the per-silo replay concurrency gate from
-    /// <paramref name="options"/>. A non-positive
-    /// <see cref="LatticeOptions.WalMaterialiserMaxConcurrentReplays"/> resolves
+    /// <paramref name="options"/>. A zero
+    /// <see cref="LatticeOptions.WalMaterialiserMaxConcurrentReplays"/>, or the
+    /// auto default on a silo whose WAL store is not remote (issue #5957), resolves
     /// to the lesser of <see cref="Environment.ProcessorCount"/> and the
-    /// container's enforced CPU grant. The gate is sized once on first use and is
+    /// container's enforced CPU grant; auto on a remote store resolves to
+    /// <see cref="LatticeOptions.RemoteWalMaterialiserMaxConcurrentReplays"/>.
+    /// The gate is sized once on first use and is
     /// a process-wide structural constant thereafter.
     /// <para>
     /// <b><see cref="Environment.ProcessorCount"/> does not always honour the
@@ -944,11 +947,16 @@ internal sealed partial class BPlusLeafGrain
     /// figure the process actually chose and the two figures it chose between.
     /// </para>
     /// </summary>
-    private static SemaphoreSlim ResolveReplayConcurrencyGate(LatticeOptions options, Func<ILogger?> loggerAccessor)
+    private static SemaphoreSlim ResolveReplayConcurrencyGate(
+        LatticeOptions options, Func<bool> walStoreIsRemote, Func<ILogger?> loggerAccessor)
     {
         var existing = Volatile.Read(ref _replayConcurrencyGate);
         if (existing is not null)
             return existing;
+
+        // Resolved outside the lock: it reads the silo's service provider.
+        var remote = options.WalMaterialiserMaxConcurrentReplays == LatticeOptions.AutoWalMaterialiserMaxConcurrentReplays
+            && walStoreIsRemote();
 
         bool sizedHere;
         int max;
@@ -966,7 +974,8 @@ internal sealed partial class BPlusLeafGrain
                 (max, containerCpuGrant) = ResolveGateSizing(
                     options.WalMaterialiserMaxConcurrentReplays,
                     Environment.ProcessorCount,
-                    ContainerCpuGrant.Read());
+                    ContainerCpuGrant.Read(),
+                    remote);
                 _replayConcurrencyGate = new SemaphoreSlim(max, max);
                 _replayConcurrencyCeiling = max;
                 Volatile.Write(ref _withheldReplayPermits, 0);
@@ -1080,10 +1089,16 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     /// <param name="configured">
     /// <see cref="LatticeOptions.WalMaterialiserMaxConcurrentReplays"/> as the
-    /// operator set it. A positive value supersedes both derived figures.</param>
+    /// operator set it. A positive value supersedes both derived figures;
+    /// <see cref="LatticeOptions.AutoWalMaterialiserMaxConcurrentReplays"/>
+    /// resolves by <paramref name="walStoreIsRemote"/>; <c>0</c> is always
+    /// CPU-derived.</param>
     /// <param name="processorCount">The runtime's reported processor count.</param>
     /// <param name="containerCpuGrant">The enforced container CPU grant, or
     /// <see langword="null"/> when unknown.</param>
+    /// <param name="walStoreIsRemote">Whether the silo's registered WAL
+    /// provider reports <see cref="IWalStorageProvider.IsRemote"/>. Read only
+    /// for the auto sentinel (issue #5957).</param>
     /// <returns>The resolved ceiling, and the grant that was read.</returns>
     /// <remarks>
     /// <para>
@@ -1105,10 +1120,12 @@ internal sealed partial class BPlusLeafGrain
     /// </para>
     /// </remarks>
     internal static (int Ceiling, int? ContainerCpuGrant) ResolveGateSizing(
-        int configured, int processorCount, int? containerCpuGrant)
+        int configured, int processorCount, int? containerCpuGrant, bool walStoreIsRemote = false)
         => (configured > 0
                 ? configured
-                : ResolveDefaultReplayCeiling(processorCount, containerCpuGrant),
+                : configured == LatticeOptions.AutoWalMaterialiserMaxConcurrentReplays && walStoreIsRemote
+                    ? LatticeOptions.RemoteWalMaterialiserMaxConcurrentReplays
+                    : ResolveDefaultReplayCeiling(processorCount, containerCpuGrant),
             containerCpuGrant);
 
     /// <summary>
@@ -1168,7 +1185,7 @@ internal sealed partial class BPlusLeafGrain
             logger.LogInformation(
                 "Leaf WAL replay concurrency gate sized to {MaxConcurrentReplays} permit(s) for this silo. "
                 + "Configured WalMaterialiserMaxConcurrentReplays={ConfiguredMaxConcurrentReplays} "
-                + "(non-positive means unset, in which case the ceiling is the lesser of "
+                + "(-1 is auto: 32 when the registered WAL storage provider is remote, otherwise as 0; 0 means the ceiling is the lesser of "
                 + "Environment.ProcessorCount and the enforced container CPU grant), "
                 + "Environment.ProcessorCount reports {ProcessorCount}, and the container CPU grant read "
                 + "from the cgroup filesystem is {ContainerCpuGrant}. Each permit admits one whole-window "
@@ -1871,7 +1888,7 @@ internal sealed partial class BPlusLeafGrain
         // the only frame that knows which await it is sitting in.
         _replayAdmissionPhase = ReplayAdmissionPhase.ResolvingOptions;
         var options = await GetOptionsAsync();
-        var gate = ResolveReplayConcurrencyGate(options, ResolveLogger);
+        var gate = ResolveReplayConcurrencyGate(options, WalStoreIsRemote, ResolveLogger);
         RestoreReplayStorageWhenIdle(gate, Stopwatch.GetTimestamp());
 
         // ADMISSION CONTROL (issue #3284). Read BEFORE the counter below is
@@ -2121,7 +2138,7 @@ internal sealed partial class BPlusLeafGrain
     {
         _replayAdmissionPhase = ReplayAdmissionPhase.ResolvingOptions;
         var options = await GetOptionsAsync();
-        var gate = ResolveReplayConcurrencyGate(options, ResolveLogger);
+        var gate = ResolveReplayConcurrencyGate(options, WalStoreIsRemote, ResolveLogger);
 
         cancellationToken.ThrowIfCancellationRequested();
         if (!TryAcquireStarvationReplayPermit(gate, origin))
@@ -4061,6 +4078,15 @@ internal sealed partial class BPlusLeafGrain
     private LeafResidentWorkingSet ResidentWorkingSet
         => context.ActivationServices?.GetService<LeafResidentWorkingSet>()
             ?? LeafResidentWorkingSet.Shared;
+
+    /// <summary>
+    /// Whether the silo's registered WAL provider reports
+    /// <see cref="IWalStorageProvider.IsRemote"/>. Read only when an auto-sized
+    /// replay gate is first sized (issue #5957); a host with no provider
+    /// registered reads as local.
+    /// </summary>
+    private bool WalStoreIsRemote()
+        => context.ActivationServices?.GetService<IWalStorageProvider>()?.IsRemote == true;
 
     /// <summary>
     /// Accounts what this activation will keep resident against the per-silo

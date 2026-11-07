@@ -110,6 +110,14 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
     public int MaxAppendBatchEntries => MaxEntriesPerBatch;
 
     /// <summary>
+    /// Azure Table Storage is remote: a replay waits on table round trips, so
+    /// an auto-sized replay gate admits the remote ceiling (issue #5957). This
+    /// holds against Azurite too; a host co-located with it pins
+    /// <c>LatticeOptions.WalMaterialiserMaxConcurrentReplays</c> to <c>0</c>.
+    /// </summary>
+    public bool IsRemote => true;
+
+    /// <summary>
     /// Row-key prefix for entry rows. Sorts before <see cref="HeadRowKey"/>
     /// so a <see cref="Azure.Data.Tables.TableClient.QueryAsync{T}(System.Linq.Expressions.Expression{System.Func{T, bool}}, System.Nullable{int}, System.Collections.Generic.IEnumerable{string}, System.Threading.CancellationToken)"/> filtering on
     /// <c>RowKey ge 'E' and RowKey lt 'F'</c> returns only entries.

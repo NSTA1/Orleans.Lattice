@@ -154,6 +154,21 @@ public interface IWalStorageProvider
     int MaxAppendBatchEntries => int.MaxValue;
 
     /// <summary>
+    /// Whether this provider's store is remote: a read waits on network round
+    /// trips rather than local CPU or disk. The default is
+    /// <see langword="false"/> (in-memory and file stores). Only sizing reads
+    /// it: when <see cref="LatticeOptions.WalMaterialiserMaxConcurrentReplays"/>
+    /// is left at <see cref="LatticeOptions.AutoWalMaterialiserMaxConcurrentReplays"/>,
+    /// a silo whose registered provider is remote admits
+    /// <see cref="LatticeOptions.RemoteWalMaterialiserMaxConcurrentReplays"/>
+    /// concurrent WAL replays, and any other silo the CPU-derived ceiling
+    /// (issue #5957). The Azure Table provider returns <see langword="true"/>,
+    /// including against a local emulator, so a host that runs it on the same
+    /// machine as Azurite should set the option to <c>0</c>.
+    /// </summary>
+    bool IsRemote => false;
+
+    /// <summary>
     /// Completes once every entry whose <see cref="AppendBatchAsync"/> or
     /// <see cref="AppendEncodedBatchAsync"/> call on this provider instance had
     /// already returned when this call began is readable through
