@@ -322,7 +322,7 @@
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardSchedulingWorkloadB"],
-        "note": "The 86-case group contains ReplayPermits mutations and the WalGcStarvationDrive, SagaReadProgress and TagIndexReconcile cases. Its measured item took 12.11 minutes in the receipt-free bucket push ci.yml run 40909619830 (head 9418a498d, job 123577568215) and 20.64 in coverage.yml run 40923724192 (head 0e4aa6b2a, job 123623834772); 16.38 is their mean. Estimates are planning inputs, not runtime guarantees."
+        "note": "The 87-case group contains ReplayPermits mutations and the WalGcStarvationDrive, SagaReadProgress and TagIndexReconcile cases. Its measured item took 12.11 minutes in the receipt-free bucket push ci.yml run 40909619830 (head 9418a498d, job 123577568215) and 20.64 in coverage.yml run 40923724192 (head 0e4aa6b2a, job 123623834772); 16.38 is their mean. Estimates are planning inputs, not runtime guarantees."
       },
       {
         "shard": "formal-tlc-scheduling-shipping",

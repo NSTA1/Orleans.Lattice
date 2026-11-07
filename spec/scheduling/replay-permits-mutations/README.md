@@ -1,12 +1,15 @@
 # ReplayPermits mutation catalogue
 
-The 29 anchored mutations cover every checked property, including TypeOK, and
+The 30 anchored mutations cover every checked property, including TypeOK, and
 every behavioural Next action, including environment actions. Read the
 [refinement](../ReplayPermitsRefinement.md) for the approved cold-lifetime
-correction and the explicit temporal premises. All 29 one-target pairs passed
-against source SHA-256
+correction and the explicit temporal premises. All 29 original one-target pairs
+passed against source SHA-256
 `657769D201A472F5EFFF54C85EC17A2F56D0CB81F6F4844F0B91E49426BB10D0`,
-as did the complete base and both enrolled larger-bound configurations.
+as did the complete base and both enrolled larger-bound configurations. After
+work-conserving refusal (#5992 A1), all 30 pairs, the base and both variants
+passed again against the LF-normalised source SHA-256
+`3DCD5C946280F348954F8B89502703D6B74ADBC3032042074199BC9E3DE7A710`.
 Each file is an anchored edit against the current base, never a copied model.
 The filename and `MODULE` begin with the target property. The harness generates
 one-target configurations and carries TypeOK beside every non-TypeOK target.
@@ -52,6 +55,7 @@ edits do not claim direct action coverage.
 | `ColdDeadlineIsolationAbandonsOwner` | Anchored `ClientDeadline` perturbation directly retires/releases the shared owner without changing its cancellation membership. |
 | `TypeOKLifetimeCancellationOutsideDomain` | Anchored environment `CancelColdLifetime` perturbation introduces an unknown owner. |
 | `RestoreOwnershipStealsServiceCapacity` | Anchored `Restore` action perturbation with a service-owned baseline in mutant. |
+| `WorkConservingRefusalWaitIgnoresFreePermit` | Anchored `RefuseWait` action perturbation; the wait arm drops its decision-time re-check. |
 
 All actual environment actions have perturbations; only `Stutter` represents
 no production behavior. The refinement records the completed pairs, scoped
