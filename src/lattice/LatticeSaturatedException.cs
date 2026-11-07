@@ -177,9 +177,10 @@ public sealed class LatticeSaturatedException : InvalidOperationException, ILatt
     /// split forward, the online-resize mirror, and its <c>Set</c> event) ran
     /// before the refusal was raised. Every key on a refused branch, or on a
     /// branch still in flight when the refusal was raised, is listed. So a
-    /// caller may retry only these keys, each with its latest value, and every
-    /// key the batch held still lands; retrying the whole batch also remains
-    /// correct, as it always was.
+    /// caller may retry only these keys, and every key the batch held still
+    /// lands; retrying the whole batch also remains correct, as it always was. A
+    /// branch still in flight is not cancelled and can land after the retry, as
+    /// before, so re-read a key if the order of its writes matters.
     /// </para>
     /// <para>
     /// <see langword="null"/> whenever the outcome cannot be attributed key by

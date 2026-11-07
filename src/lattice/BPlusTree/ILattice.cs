@@ -215,9 +215,12 @@ public interface ILattice : IGrainWithStringKey
     /// <see cref="Orleans.Lattice.LatticeSaturatedException.UnappliedKeys"/>, a
     /// superset of its keys that may not have landed, so a caller can retry only
     /// those keys rather than the whole batch. The keys left out landed, and their
-    /// <c>Set</c> events were published before the refusal. The list is
-    /// <see langword="null"/> when that cannot be determined, and retrying the
-    /// whole batch is always correct.
+    /// <c>Set</c> events were published before the refusal, so a caller that
+    /// retries the whole batch instead publishes a second <c>Set</c> for each of
+    /// them. The list is <see langword="null"/> when that cannot be determined,
+    /// and retrying the whole batch is always correct. A branch still in flight
+    /// when the refusal surfaced is not cancelled and can land after the retry,
+    /// so re-read a key if the order of its writes matters.
     /// </para>
     /// </summary>
     Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries, CancellationToken cancellationToken = default);
