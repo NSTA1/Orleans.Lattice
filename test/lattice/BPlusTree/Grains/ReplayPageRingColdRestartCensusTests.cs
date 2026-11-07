@@ -39,15 +39,16 @@ public sealed class ReplayPageRingColdRestartCensusTests
 
     /// <summary>
     /// The cold-restart shape a permit gate produces (issue #5877): leaves
-    /// replay in waves, each starting while the previous one is half way
-    /// through the log, the waves still queued having declared where they
-    /// start, and the cache holds only a fraction <c>f</c> of the log. Each
-    /// later wave then re-reads at most the part of the log the cache could not
-    /// keep, so the reads per entry are bounded by <c>1 + (1 - f)(W - 1)</c>.
-    /// Evicting the lowest pages first, which every new wave reads first,
-    /// exceeds it (7.25 against 6.38 here). Strictly sequential waves do not
-    /// discriminate: there, lowest-first ends each wave holding the tail, which
-    /// the next wave reads last, and meets the bound too.
+    /// replay in waves, each starting once the previous one has read a quarter
+    /// of the log (scheduled on progress, not time), the waves still queued
+    /// having declared where they start, and the cache holds only a fraction
+    /// <c>f</c> of the log. Each later wave then re-reads at most the part of
+    /// the log the cache could not keep, so the reads per entry are bounded by
+    /// <c>1 + (1 - f)(W - 1)</c> = 6.25. Demand-aware eviction reads 5.38-5.63;
+    /// evicting the lowest pages first, which every new wave reads first, reads
+    /// 6.69. Strictly sequential waves do not discriminate: there,
+    /// lowest-first ends each wave holding the tail, which the next wave reads
+    /// last, and meets the bound too.
     /// </summary>
     [Test]
     public async Task A_cold_restart_in_waves_re_reads_at_most_what_the_cache_could_not_hold()
@@ -57,9 +58,9 @@ public sealed class ReplayPageRingColdRestartCensusTests
         var logBytes = (Entries * (96L + (2 * 6) + 1)) + ((Entries / SliceBudget) * 64L);
 
         var readsPerEntry = await RunCensusAsync(
-            (long)(logBytes * fraction), waveSize: Leaves / waves, declareQueued: true, overlap: true);
+            (long)(logBytes * fraction), waveSize: Leaves / waves, declareQueued: true, overlap: true, overlapAt: 0.25);
 
-        var bound = 1 + ((1 - fraction) * (waves - 1)) + 0.5;
+        var bound = 1 + ((1 - fraction) * (waves - 1));
         Assert.That(readsPerEntry, Is.LessThanOrEqualTo(bound),
             "a wave may re-read only what the cache could not hold, not the whole log");
     }
@@ -82,7 +83,8 @@ public sealed class ReplayPageRingColdRestartCensusTests
         Assert.That(readsPerEntry, Is.LessThanOrEqualTo(1 + ((1 - fraction) * (waves - 1)) + 0.5));
     }
 
-    private static async Task<double> RunCensusAsync(long ringBytes, int waveSize, bool declareQueued, bool overlap = false)
+
+    private static async Task<double> RunCensusAsync(long ringBytes, int waveSize, bool declareQueued, bool overlap = false, double overlapAt = 0.5)
     {
         CountingWalStorageProvider.Reset();
         RingSwitch.Bytes = ringBytes;
@@ -142,7 +144,7 @@ public sealed class ReplayPageRingColdRestartCensusTests
                             break;
                         owned += slice.Count(e => e.Mutation.Value is not null);
                         from = slice[^1].Offset;
-                        if (from >= head / 2)
+                        if (from >= head * overlapAt)
                             waveHalfway.TrySetResult();
                     }
 
