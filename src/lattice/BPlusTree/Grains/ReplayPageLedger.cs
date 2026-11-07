@@ -53,6 +53,12 @@ internal sealed class ReplayPageLedger
     /// </summary>
     internal const int EvictionHeadroomDivisor = 16;
 
+    /// <summary>
+    /// The most bulk headroom one eviction frees (4 MiB), so a large cache does
+    /// not drop demanded pages wholesale to amortise its ranking pass.
+    /// </summary>
+    internal const long MaxEvictionHeadroomBytes = 4L * 1024 * 1024;
+
     /// <summary>The cached page count from which eviction frees headroom in bulk.</summary>
     internal const int BulkEvictionMinimumPages = 64;
 
@@ -149,7 +155,9 @@ internal sealed class ReplayPageLedger
             // can be most of a page.
             if (_bytes + size > room)
             {
-                var headroom = _pageCount >= BulkEvictionMinimumPages ? room / EvictionHeadroomDivisor : 0;
+                var headroom = _pageCount >= BulkEvictionMinimumPages
+                    ? Math.Min(room / EvictionHeadroomDivisor, MaxEvictionHeadroomBytes)
+                    : 0;
                 EvictLocked(room - size - headroom, now);
             }
             if (_bytes + size > room)
@@ -258,7 +266,12 @@ internal sealed class ReplayPageLedger
         }
     }
 
-    /// <summary>Groups candidates by ring so each ring's array is rebuilt once.</summary>
+    /// <summary>
+    /// Groups candidates by ring so each ring's array is rebuilt once. Two rings
+    /// whose identity hashes collide may interleave, which only splits one
+    /// ring's removals into more than one rebuild; every chosen page is still
+    /// removed exactly once.
+    /// </summary>
     private sealed class RingOrder : IComparer<Candidate>
     {
         public static readonly RingOrder Instance = new();

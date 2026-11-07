@@ -274,22 +274,6 @@ internal sealed class ReplayPageRing
         Volatile.Write(ref _bytes, _bytes + bytes);
     }
 
-    /// <summary>Removes one page. Runs under the ledger's lock.</summary>
-    /// <returns>The bytes freed.</returns>
-    internal long RemoveLocked(Slot slot)
-    {
-        var slots = _slots;
-        var index = Array.FindIndex(slots, s => ReferenceEquals(s.Page, slot.Page));
-        if (index < 0)
-            return 0;
-        var next = new Slot[slots.Length - 1];
-        Array.Copy(slots, next, index);
-        Array.Copy(slots, index + 1, next, index, slots.Length - index - 1);
-        Volatile.Write(ref _slots, next);
-        Volatile.Write(ref _bytes, _bytes - slot.Bytes);
-        return slot.Bytes;
-    }
-
     /// <summary>
     /// Removes the pages of <paramref name="candidates"/> in
     /// <c>[start, end)</c>, all of this ring, rebuilding the page array once.
