@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
+using Orleans.Runtime;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Testing;
@@ -119,5 +120,52 @@ public partial class BPlusLeafGrainTests
         var consumer = await LeafConsumerAsync(registry, treeId);
         Assert.That(consumer.CheckpointOffsets is { } offsets && offsets.TryGetValue(0, out var claimed) ? claimed : (long?)null,
             Is.EqualTo(5L), "a replay advance must claim its checkpoint again (A3)");
+    }
+    [Test]
+    public async Task A_replay_interleaving_with_a_live_advance_blocked_on_its_hand_off_read_still_claims_its_offset()
+    {
+        // S1: the live advance stays in flight across its awaits on this [AlwaysInterleave]
+        // activation; a replay advance landing meanwhile is not the live advance's stamp.
+        var registry = new InMemoryWalCursorRegistry();
+        var treeId = UniqueCoverageRepairTreeId("live-advance-interleave");
+        var rig = new LiveAdvanceRig();
+        var (grain, _, _, _) = CreateLeafForCoverageRepair(
+            persistedCheckpoint: -1L,
+            treeId: treeId,
+            cursorReporter: new InMemoryLeafCursorReporter(registry),
+            liveAdvance: rig);
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
+        await SetStampedAsync(grain, "a", "1");
+        await SetStampedAsync(grain, "b", "2");
+        await SetStampedAsync(grain, "c", "3");
+        var view = new TaskCompletionSource<LeafLiveAdvanceView>();
+        rig.ShardRoot.GetLiveAdvanceViewAsync(Arg.Any<GrainId>(), Arg.Any<string?>(), Arg.Any<string?>()).Returns(view.Task);
+        rig.ShardRoot.ClearReceivedCalls();
+
+        var advance = grain.TryAdvanceLiveCheckpointAsync();
+        await WaitUntilAsync(() => rig.ShardRoot.ReceivedCalls().Any());
+        var blocked = !advance.IsCompleted;
+        using (LatticeApplyOffsetContext.BeginScope(0, 5))
+        {
+            await ((ILeafProjection)grain).SetCheckpointOffsetAsync(5, CancellationToken.None);
+        }
+
+        var claimedWhileBlocked = await ClaimAsync(registry, treeId);
+        view.SetResult(LeafLiveAdvanceView.For(rig.ShardMarker, null, null, reachable: true, orphanRepairInProgress: false));
+        await advance;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(blocked, Is.True, "precondition: the live advance was blocked on its hand-off read");
+            Assert.That(claimedWhileBlocked, Is.EqualTo(5L),
+                "a replay interleaving with an in-flight live advance was tagged live and its claim withdrawn, hiding catch-up lag (S1)");
+        });
+        Assert.That(await ClaimAsync(registry, treeId), Is.EqualTo(5L), "the replay's claim must survive the live advance completing");
+    }
+
+    private static async Task<long?> ClaimAsync(InMemoryWalCursorRegistry registry, string treeId)
+    {
+        var consumer = await LeafConsumerAsync(registry, treeId);
+        return consumer.CheckpointOffsets is { } offsets && offsets.TryGetValue(0, out var claimed) ? claimed : null;
     }
 }

@@ -62,7 +62,7 @@ public partial class WalSaturationSamplerDrainLagTests
             Assert.That(logger.Lines[0].Fields["ConsumerId"], Is.EqualTo(LeafConsumerId("behind")));
             Assert.That(logger.Lines[0].Fields["LaggingConsumers"], Is.EqualTo(1),
                 "the unclaimed consumer was counted as lagging");
-            Assert.That(logger.Lines[0].Fields.TryGetValue("UnclaimedCheckpoints", out var unclaimed) ? unclaimed : null,
+            Assert.That(logger.Lines[0].Fields.TryGetValue("UnclaimedConsumers", out var unclaimed) ? unclaimed : null,
                 Is.EqualTo(1), "the holder log must keep the unclaimed population observable");
         });
     }

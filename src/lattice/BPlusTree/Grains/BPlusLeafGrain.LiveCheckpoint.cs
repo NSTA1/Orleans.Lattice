@@ -393,7 +393,9 @@ internal sealed partial class BPlusLeafGrain
                 }
 
                 var stampedFrom = GetCurrentCheckpointForPartition(p);
+                _liveAdvanceStamp = (p, target);
                 await StampCheckpointHintAsync(p, target);
+                _liveAdvanceStamp = null;
                 _checkpointLiveAdvancedSinceStallCheck += Math.Max(0, GetCurrentCheckpointForPartition(p) - stampedFrom);
                 advanced = true;
             }

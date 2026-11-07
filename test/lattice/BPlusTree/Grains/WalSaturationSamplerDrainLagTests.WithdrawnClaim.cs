@@ -34,7 +34,7 @@ public partial class WalSaturationSamplerDrainLagTests
                 "a withdrawn claim was read as unknown history and warned (#5981)");
             Assert.That(logger.Lines.Where(l => l.Fields.ContainsKey("LaggingConsumers")).Select(l => l.Fields["LaggingConsumers"]),
                 Has.All.EqualTo(1), "the withdrawn consumer was counted as lagging (#5981)");
-            Assert.That(logger.Lines.Where(l => l.Fields.ContainsKey("UnclaimedCheckpoints")).Select(l => l.Fields["UnclaimedCheckpoints"]),
+            Assert.That(logger.Lines.Where(l => l.Fields.ContainsKey("UnclaimedConsumers")).Select(l => l.Fields["UnclaimedConsumers"]),
                 Has.All.EqualTo(1), "the withdrawn claim must stay observable as unclaimed");
         });
     }
