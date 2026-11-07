@@ -147,6 +147,48 @@ public class AzureTableWalStorageProviderPhaseTwoReplayTests
     }
 
     [Test]
+    public async Task A_batch_claimed_during_a_resend_is_refused_when_a_successor_restamped_TAIL_at_the_same_value()
+    {
+        // a5e2e2ef's B1 on #5963: a successor's reconcile re-stamps TAIL at the value this
+        // instance's lost-response commit wrote, precisely to fence this instance out. The
+        // replay proof reads that same value; adopting the re-stamp's ETag would let this
+        // instance's batches commit against the successor's fence. The commit nonce tells
+        // the two rows apart, so the fence is invalidated and the batch is refused.
+        var (provider, table) = CreateProvider();
+        await using var _ = provider;
+
+        var manifestPartition = AzureTableWalStorageProvider.BuildManifestPartitionKey(TreeId, ShardIndex);
+        Task? second = null;
+        var resends = 0;
+        table.ResendAfterCommit = actions =>
+        {
+            if (!IsManifestCommit(actions) || Interlocked.CompareExchange(ref resends, 1, 0) != 0)
+            {
+                return false;
+            }
+
+            second = provider.AppendBatchAsync(TreeId, ShardIndex, Entries(3, 2), CancellationToken.None);
+
+            // The successor's re-stamp: the same value, rewritten without this commit's nonce.
+            var written = table.Partition(manifestPartition).Single(r => r.RowKey == AzureTableWalStorageProvider.TailRowKey);
+            table.Seed(new AzureTableWalEntity { PartitionKey = manifestPartition, RowKey = written.RowKey, Offset = written.Offset });
+            return true;
+        };
+
+        await provider.AppendBatchAsync(TreeId, ShardIndex, Entries(0, 3), CancellationToken.None);
+        await provider.FlushPhaseTwoAsync(CancellationToken.None);
+        Assert.That(second, Is.Not.Null, "precondition: the second batch was claimed during the resend");
+
+        Assert.That(async () =>
+        {
+            await second!;
+            await provider.FlushPhaseTwoAsync(CancellationToken.None);
+        }, Throws.InstanceOf<TimeoutException>(),
+            "a batch claimed before a successor re-stamped TAIL committed against the successor's fence");
+        Assert.That(ManifestRows(table), Has.Count.EqualTo(1), "the stale batch's manifest row landed");
+    }
+
+    [Test]
     public async Task Append_fails_loudly_and_overwrites_nothing_when_the_manifest_row_records_another_batch()
     {
         var (provider, table) = CreateProvider();

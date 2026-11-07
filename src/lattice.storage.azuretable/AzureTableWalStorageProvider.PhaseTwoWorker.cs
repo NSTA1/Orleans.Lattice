@@ -892,6 +892,8 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
                     RowKey = AzureTableWalStorageProvider.TailRowKey,
                     Offset = tailToPersist,
                     Payload = null,
+                    // Names this commit, so a replay proof adopts only its own TAIL (#5605 W7).
+                    CommitNonce = Guid.NewGuid().ToString("N"),
                 };
                 actions.Add(fenceETag is { } etag
                     ? new TableTransactionAction(TableTransactionActionType.UpdateReplace, tail, etag)
@@ -1103,9 +1105,10 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
     /// the catch-all <c>unknown</c> bucket so the tag's cardinality
     /// stays bounded.
     /// </summary>
-    private static string ResolveProviderStatusTag(Exception ex) => ex switch
+    internal static string ResolveProviderStatusTag(Exception ex) => ex switch
     {
         RequestFailedException rfe => rfe.Status.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        TimeoutException { InnerException: RequestFailedException refused } => refused.Status.ToString(System.Globalization.CultureInfo.InvariantCulture),
         _ => "unknown",
     };
 
@@ -1187,10 +1190,10 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
                     _tenantTag,
                 });
 
-            // Proven durable. The proof read TAIL; when it still holds exactly what this
-            // transaction wrote, its ETag conditions the next commit as the landed
-            // attempt's response would have (#5605 W7). Otherwise it is unknown, and the
-            // fence is invalidated (issue #5810).
+            // Proven durable. The proof read TAIL; when it is still the row this
+            // transaction wrote - its value and its commit nonce - its ETag conditions the
+            // next commit as the landed attempt's response would have (#5605 W7).
+            // Otherwise it is unknown, and the fence is invalidated (issue #5810).
             return proof.TailETag;
         }
     }

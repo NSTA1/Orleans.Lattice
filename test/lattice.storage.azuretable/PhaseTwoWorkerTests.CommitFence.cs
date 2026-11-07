@@ -160,6 +160,20 @@ public partial class PhaseTwoWorkerTests
     }
 
     [Test]
+    public void A_refusal_surfaced_as_a_timeout_keeps_the_stores_status_on_the_exhausted_counter()
+    {
+        // a5e2e2ef's S1 on #5963: a fenced TAIL write the store refused with 412 is surfaced
+        // as the fence's retryable TimeoutException, and is still counted under 412.
+        var refused = new TimeoutException("refused", new RequestFailedException(412, "The update condition specified in the request was not satisfied."));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(PhaseTwoWorker.ResolveProviderStatusTag(refused), Is.EqualTo("412"));
+            Assert.That(PhaseTwoWorker.ResolveProviderStatusTag(new TimeoutException("stale generation")), Is.EqualTo("unknown"));
+        });
+    }
+
+    [Test]
     public async Task A_failed_commit_records_its_batches_and_the_pending_ones_for_reclaim()
     {
         // Review nit N1: the batches of a failed commit have landed their entry rows,

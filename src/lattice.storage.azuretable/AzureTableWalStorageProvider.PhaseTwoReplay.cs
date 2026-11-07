@@ -38,12 +38,14 @@ public sealed partial class AzureTableWalStorageProvider
 
     /// <summary>
     /// <see cref="IsIdempotentPhaseTwoReplayAsync"/>, also returning the ETag of the
-    /// <c>TAIL</c> row it read when that row holds exactly the value the transaction
-    /// wrote (issue #5810, #5605 W7). No commit of this shard can have landed since
-    /// without raising <c>TAIL</c> above that value, so the ETag conditions the next
-    /// commit exactly as the landed attempt's own response would have, and the commit
-    /// fence advances instead of refusing every batch claimed meanwhile. A higher
-    /// <c>TAIL</c>, or a transaction without one, yields no ETag.
+    /// <c>TAIL</c> row it read when that row is still the one the transaction wrote:
+    /// the same value and the same <see cref="AzureTableWalEntity.CommitNonce"/>
+    /// (issue #5810, #5605 W7). The row has not been written since, so its ETag
+    /// conditions the next commit exactly as the landed attempt's own response would
+    /// have, and the commit fence advances instead of refusing every batch claimed
+    /// meanwhile. The value alone is not enough: a successor's re-stamp writes the same
+    /// value precisely to fence this writer out, and drops the nonce. A higher
+    /// <c>TAIL</c>, another nonce, or a transaction without one yields no ETag.
     /// </summary>
     internal static async Task<PhaseTwoReplayProof> ProvePhaseTwoReplayAsync(
         TableClient table,
@@ -84,7 +86,10 @@ public sealed partial class AzureTableWalStorageProvider
                 return default;
             }
 
-            if (expected.RowKey == TailRowKey && resident!.Offset == expected.Offset)
+            if (expected.RowKey == TailRowKey
+                && resident!.Offset == expected.Offset
+                && expected.CommitNonce is { } nonce
+                && string.Equals(resident.CommitNonce, nonce, StringComparison.Ordinal))
             {
                 tailETag = resident.ETag;
             }
