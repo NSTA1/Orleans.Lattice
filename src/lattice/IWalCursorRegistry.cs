@@ -39,11 +39,15 @@ public interface IWalCursorRegistry
         => Task.FromResult<IReadOnlyList<string>?>(null);
 
     /// <summary>
-    /// Reports an HLC and a partition's inclusive durable checkpoint offset.
-    /// Offsets advance independently of HLCs and affect only advisory drain age;
-    /// existing causal vectors and blocked-floor pins are preserved. A checkpoint
-    /// of -1 has consumed no entries. Legacy implementations may forward only the
-    /// HLC, in which case offset-based drain age is explicitly unavailable.
+    /// Reports an HLC and a partition's inclusive applied checkpoint offset.
+    /// Offsets advance independently of HLCs and affect only advisory drain age:
+    /// the offset is never a retention floor, and a reporter may report a position
+    /// it has applied but not yet persisted. Existing causal vectors and
+    /// blocked-floor pins are preserved. A checkpoint of -1 is "no claim" - nothing
+    /// consumed, or a leaf born with no checkpoint at the partition - and the
+    /// drain-lag sampler counts it as unclaimed rather than as lag. Legacy
+    /// implementations may forward only the HLC, in which case offset-based drain
+    /// age is explicitly unavailable.
     /// </summary>
     Task ReportCheckpointAsync(
         string treeName,

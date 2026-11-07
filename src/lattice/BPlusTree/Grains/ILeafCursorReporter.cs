@@ -58,7 +58,11 @@ internal interface ILeafCursorReporter
         HybridLogicalClock cursor,
         CancellationToken cancellationToken);
 
-    /// <summary>Reports the inclusive persisted checkpoint independently of the applied HLC.</summary>
+    /// <summary>
+    /// Reports the inclusive applied checkpoint independently of the applied HLC. The offset is
+    /// advisory: only the drain-lag sampler reads it, and it is never a retention floor (the
+    /// durable pin carries the persisted checkpoint). <c>-1</c> is "no claim".
+    /// </summary>
     Task ReportCheckpointAsync(
         string treeName, string consumerId, HybridLogicalClock cursor,
         int walPartition, long checkpointOffset, CancellationToken cancellationToken);

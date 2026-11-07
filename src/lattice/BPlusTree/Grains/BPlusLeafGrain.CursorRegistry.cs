@@ -171,8 +171,14 @@ internal sealed partial class BPlusLeafGrain
             var consumerId = BuildConsumerId(idBase, partition, partitionCount);
             try
             {
+                // The registry's checkpoint offset is advisory: only the drain-lag
+                // sampler reads it, never a retention floor (the durable pin below
+                // keeps the persisted checkpoint). It is the APPLIED position, so a
+                // born leaf whose hinted checkpoint is held back from persistence
+                // until a capture covers it (#5877, H2) does not read as lagging
+                // from the partition's first append (#5969).
                 await reporter.ReportCheckpointAsync(treeId, consumerId, clock,
-                    partition, GetPersistedCheckpointForPartition(partition), CancellationToken.None);
+                    partition, GetCurrentCheckpointForPartition(partition), CancellationToken.None);
             }
             catch (Exception ex)
             {

@@ -183,6 +183,7 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
         string treeId,
         long lagTicks,
         int laggingConsumers,
+        int unclaimedCheckpoints,
         in WalCursorSnapshot minHolder,
         DateTimeOffset observedAt,
         Guid observationId,
@@ -194,10 +195,11 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
             : null;
 
         _logger.LogWarning(
-            "Materialiser drain lag for tree {TreeId} is over the threshold at {DrainLagSeconds:F1}s across {LaggingConsumers} lagging consumer(s). Holder {HolderRank}/{HolderCount}: {ConsumerId} at cursor {Cursor}; last report {ReportAgeSeconds:F1}s ago, position last advanced {PositionAgeSeconds}s ago (null when not observed since registration). Observation {ObservationId} at {ObservedAtUtc:O}.",
+            "Materialiser drain lag for tree {TreeId} is over the threshold at {DrainLagSeconds:F1}s across {LaggingConsumers} lagging consumer(s), {UnclaimedCheckpoints} unclaimed partition checkpoint(s) not counted. Holder {HolderRank}/{HolderCount}: {ConsumerId} at cursor {Cursor}; last report {ReportAgeSeconds:F1}s ago, position last advanced {PositionAgeSeconds}s ago (null when not observed since registration). Observation {ObservationId} at {ObservedAtUtc:O}.",
             treeId,
             TimeSpan.FromTicks(lagTicks).TotalSeconds,
             laggingConsumers,
+            unclaimedCheckpoints,
             holderRank,
             holderCount,
             minHolder.ConsumerId,
@@ -560,6 +562,7 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
                 var snapshot = await _cursors.SnapshotAsync(treeId, cancellationToken).ConfigureAwait(false);
                 long lagTicks = 0;
                 var lagging = 0;
+                var unclaimed = 0;
                 var incomplete = false;
                 var measured = false;
                 var eligible = false;
@@ -578,6 +581,19 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
                     long? age = null;
                     foreach (var offset in offsets)
                     {
+                        // A negative checkpoint is "no claim": a leaf born with no
+                        // checkpoint at the partition (its donor had no replay
+                        // frontier there, #5757/#5769) or one that has applied nothing
+                        // yet. It is its own case - neither lag from the partition's
+                        // first append, which would count every freshly built leaf
+                        // (#5969), nor incomplete history, which would warn on every
+                        // fresh resize. It is counted as unclaimed for the holder log.
+                        if (offset.Value < 0)
+                        {
+                            unclaimed++;
+                            continue;
+                        }
+
                         if (appendTimes is null || !appendTimes.TryGetValue(offset.Key, out var timeline))
                         {
                             incomplete = true;
@@ -647,14 +663,14 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
                     {
                         var observationId = Guid.NewGuid();
                         var holderCount = third.HasValue ? 3 : second.HasValue ? 2 : 1;
-                        LogDrainLagHolder(treeId, lagTicks, lagging, minimum.Entry, observedAt, observationId, 1, holderCount);
+                        LogDrainLagHolder(treeId, lagTicks, lagging, unclaimed, minimum.Entry, observedAt, observationId, 1, holderCount);
                         if (second is { } runnerUp)
                         {
-                            LogDrainLagHolder(treeId, lagTicks, lagging, runnerUp.Entry, observedAt, observationId, 2, holderCount);
+                            LogDrainLagHolder(treeId, lagTicks, lagging, unclaimed, runnerUp.Entry, observedAt, observationId, 2, holderCount);
                         }
                         if (third is { } thirdHolder)
                         {
-                            LogDrainLagHolder(treeId, lagTicks, lagging, thirdHolder.Entry, observedAt, observationId, 3, holderCount);
+                            LogDrainLagHolder(treeId, lagTicks, lagging, unclaimed, thirdHolder.Entry, observedAt, observationId, 3, holderCount);
                         }
                         _lastDrainLagHolderLogTimestamp[treeId] = _time.GetTimestamp();
                     }
