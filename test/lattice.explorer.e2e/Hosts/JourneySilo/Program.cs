@@ -140,6 +140,8 @@ builder.Host.UseOrleans(silo =>
         silo.ConfigureEndpoints(siloPort, gatewayPort, listenOnAnyHostAddress: true);
     }
 
+    silo.ConfigureLattice(options => options.WalMaterialiserMaxConcurrentReplays = 0); // W10 PROBE arm a: #5959 equivalent
+
     silo.UseAzureStorageClustering(options =>
         storage.ConfigureTable(options, config["Clustering:TableName"] ?? "OrleansLatticeClustering"));
     silo.UseAzureTableReminderService(options =>
