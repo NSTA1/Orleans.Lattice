@@ -1,6 +1,6 @@
 # ReplayPermits mutation catalogue
 
-The 30 anchored mutations cover every checked property, including TypeOK, and
+The 36 anchored mutations cover every checked property, including TypeOK, and
 every behavioural Next action, including environment actions. Read the
 [refinement](../ReplayPermitsRefinement.md) for the approved cold-lifetime
 correction and the explicit temporal premises. All 29 original one-target pairs
@@ -10,6 +10,9 @@ as did the complete base and both enrolled larger-bound configurations. After
 work-conserving refusal (#5992 A1), all 30 pairs, the base and both variants
 passed again against the LF-normalised source SHA-256
 `3DCD5C946280F348954F8B89502703D6B74ADBC3032042074199BC9E3DE7A710`.
+After retained arrivals (#5992), all 36 pairs, the base and both variants
+passed against the LF-normalised source SHA-256
+`5FACE20F886D2B46C41E1C18FA7961191493392BEC9C2EFCDE61F2CCDF1A4385`.
 Each file is an anchored edit against the current base, never a copied model.
 The filename and `MODULE` begin with the target property. The harness generates
 one-target configurations and carries TypeOK beside every non-TypeOK target.
@@ -56,6 +59,12 @@ edits do not claim direct action coverage.
 | `TypeOKLifetimeCancellationOutsideDomain` | Anchored environment `CancelColdLifetime` perturbation introduces an unknown owner. |
 | `RestoreOwnershipStealsServiceCapacity` | Anchored `Restore` action perturbation with a service-owned baseline in mutant. |
 | `WorkConservingRefusalWaitIgnoresFreePermit` | Anchored `RefuseWait` action perturbation; the wait arm drops its decision-time re-check. |
+| `RetainedBoundedRetainIgnoresCirculating` | Anchored `RetainOnRefusal` action perturbation with a one-permit ceiling in mutant; retention ignores the retained count. |
+| `RetentionGuardedAdmitsAtTheBound` | `Retainable` read-definition perturbation; retention admits at, not below, the circulating permits. |
+| `RetentionExpiresExpiryKeepsEntry` | `ExpireRetained`-helper perturbation reached from `BudgetOpportunity`; the maximum age leaves the entry parked. |
+| `AdmissionNoOvertakingAnyWaiter` | `Admit`-helper perturbation reached from `CapacityOpportunity`; the gate grants any parked waiter. |
+| `QueueProgressDriveIgnoresParkedWaiter` | Anchored `DriveAdmission` action perturbation; the drive probe takes a released permit while a waiter is parked (G1). |
+| `QueueBoundedBulkIgnoresTotalDepth` | `RefuseForDepth` read-definition perturbation; the current Interactive bound is dropped. |
 
 All actual environment actions have perturbations; only `Stutter` represents
 no production behavior. The refinement records the completed pairs, scoped
