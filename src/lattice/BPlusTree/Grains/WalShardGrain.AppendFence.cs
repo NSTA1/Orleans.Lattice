@@ -608,9 +608,10 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable, IWalAppend
 
         return (epoch, generation) switch
         {
-            (true, true) => Task.WhenAll(EnsureEpochFloorLoadedAsync(storage), EnsureGenerationFloorLoadedAsync(storage)),
-            (true, false) => EnsureEpochFloorLoadedAsync(storage),
-            (false, true) => EnsureGenerationFloorLoadedAsync(storage),
+            // RED (#5987): no single-flight on either floor.
+            (true, true) => Task.WhenAll(LoadEpochFloorCoreAsync(storage), LoadGenerationFloorCoreAsync(storage)),
+            (true, false) => LoadEpochFloorCoreAsync(storage),
+            (false, true) => LoadGenerationFloorCoreAsync(storage),
             _ => Task.CompletedTask,
         };
     }
@@ -683,7 +684,8 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable, IWalAppend
             }
         }
 
-        var slots = await Bound(load, bound).ConfigureAwait(true);
+        _ = load;
+        var slots = await Bound(ReadGenerationRowAsync(storage), bound).ConfigureAwait(true); // RED (#5987): one read per initiator.
         return slots.TryGetValue(WalAppendFenceRows.InitiatorTag(initiator), out var slot) ? slot : 0;
     }
 

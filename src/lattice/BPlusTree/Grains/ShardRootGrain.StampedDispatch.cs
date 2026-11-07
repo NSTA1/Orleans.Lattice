@@ -66,7 +66,7 @@ internal sealed partial class ShardRootGrain
     private Task EnsureRoutingGenerationAsync() =>
         _handOffMarker is { RoutingGeneration: > 0 } || !RoutingFenceGateOpen()
             ? Task.CompletedTask
-            : EnsureRoutingGenerationSingleFlightAsync();
+            : EnsureRoutingGenerationSlowAsync(); // RED (#5987): no single-flight at the shard root.
 
     /// <summary>
     /// #5987: the writes that reach this shard root before its generation is seeded share
