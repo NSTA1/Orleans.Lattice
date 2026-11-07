@@ -1123,7 +1123,7 @@ internal sealed partial class BPlusLeafGrain
         int configured, int processorCount, int? containerCpuGrant, bool walStoreIsRemote = false)
         => (configured > 0
                 ? configured
-                : configured == LatticeOptions.AutoWalMaterialiserMaxConcurrentReplays && walStoreIsRemote
+                : configured == LatticeOptions.AutoWalMaterialiserMaxConcurrentReplays
                     ? LatticeOptions.RemoteWalMaterialiserMaxConcurrentReplays
                     : ResolveDefaultReplayCeiling(processorCount, containerCpuGrant),
             containerCpuGrant);
