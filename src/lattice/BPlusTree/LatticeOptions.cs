@@ -2374,7 +2374,7 @@ public class LatticeOptions
     /// leaves at a time while thousands queued. The default is paired with
     /// <see cref="WalReplayServiceRateControllerEnabled"/>, on by default, which
     /// walks the ceiling down when storage throttles or slows and back up when
-    /// it recovers, never above this value. Set to <c>0</c> for the previous
+    /// it recovers, never above this value. Its latency signal is replay slice-read latency including in-process queueing, so on a CPU-bound host it walks the ceiling down toward the CPU knee. Set to <c>0</c> for the previous
     /// default: the lesser of <see cref="Environment.ProcessorCount"/> and the
     /// CPU grant the container's cgroup actually enforces, so a host that raises
     /// <c>DOTNET_PROCESSOR_COUNT</c> above its quota cannot oversubscribe this

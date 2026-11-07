@@ -401,8 +401,8 @@ internal sealed partial class BPlusLeafGrain
     private static ReplayStoragePressureGovernor? _replayStoragePressureGovernor;
     private static readonly KeyValuePair<string, object?> StorageThrottleTrigger =
         new(LatticeMetrics.TagTrigger, "storage_throttle");
-    private static readonly KeyValuePair<string, object?> StorageLatencyTrigger =
-        new(LatticeMetrics.TagTrigger, "storage_latency");
+    private static readonly KeyValuePair<string, object?> ReplayLatencyTrigger =
+        new(LatticeMetrics.TagTrigger, "replay_latency");
     private static readonly KeyValuePair<string, object?> StorageRecoveryTrigger =
         new(LatticeMetrics.TagTrigger, "storage_recovery");
     private static readonly KeyValuePair<string, object?> StorageIdleTrigger =
@@ -550,7 +550,8 @@ internal sealed partial class BPlusLeafGrain
             unit: "{permit}",
             description:
                 "Replay permits currently in circulation on the per-silo WAL replay concurrency gate: "
-                + "orleans.lattice.wal.replay.permit_ceiling less every withheld permit. The step reasons "
+                + "orleans.lattice.wal.replay.permit_ceiling less every withheld permit; replay_latency steps count "
+                + "slice-read latency including in-process queueing. The step reasons "
                 + "are the trigger tags on orleans.lattice.wal.replay.permit_adaptations; storage-pressure steps count "
                 + "throttle retries on every storage request this process makes, appends included (issue #5877).");
 
@@ -1030,7 +1031,7 @@ internal sealed partial class BPlusLeafGrain
                 LatticeMetrics.WalReplayPermitAdaptations.Add(
                     0, LatticeMetrics.PermitAdaptationWithheld, StorageThrottleTrigger, LatticeTenantLabel.Platform);
                 LatticeMetrics.WalReplayPermitAdaptations.Add(
-                    0, LatticeMetrics.PermitAdaptationWithheld, StorageLatencyTrigger, LatticeTenantLabel.Platform);
+                    0, LatticeMetrics.PermitAdaptationWithheld, ReplayLatencyTrigger, LatticeTenantLabel.Platform);
                 LatticeMetrics.WalReplayPermitAdaptations.Add(
                     0, LatticeMetrics.PermitAdaptationRestored, StorageRecoveryTrigger, LatticeTenantLabel.Platform);
                 LatticeMetrics.WalReplayPermitAdaptations.Add(
