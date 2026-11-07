@@ -87,6 +87,24 @@ internal interface ILeafReplayCoordinatorGrain : IGrainWithStringKey
     /// </summary>
     [AlwaysInterleave]
     Task<long> GetTailOffsetAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Declares that the leaf <paramref name="reader"/> is queued to replay this
+    /// partition after <paramref name="nextExclusive"/> (issue #5877), so the
+    /// replay page cache keeps the pages it will read. Advisory and leased: it
+    /// orders eviction only, and lapses unless the reader reads or declares again.
+    /// </summary>
+    [AlwaysInterleave]
+    [OneWay]
+    Task DeclareReplayDemandAsync(string reader, long nextExclusive);
+
+    /// <summary>
+    /// Withdraws <paramref name="reader"/>'s declared demand on this partition:
+    /// its replay ended without reading it to the head.
+    /// </summary>
+    [AlwaysInterleave]
+    [OneWay]
+    Task ClearReplayDemandAsync(string reader);
 }
 
 /// <summary>

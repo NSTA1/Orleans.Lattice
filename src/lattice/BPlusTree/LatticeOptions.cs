@@ -2434,13 +2434,20 @@ public class LatticeOptions
     /// Estimated bytes of WAL pages the per-partition replay coordinators of
     /// one silo may hold, so that every leaf replaying a partition is served
     /// from one storage read of each page rather than reading it again itself
-    /// (issue #5896). Defaults to
-    /// <see cref="DefaultWalReplayPageRingBytes"/> (64 MiB). One partition's
-    /// coordinator never holds more than this, and all of a silo's coordinators
-    /// together never hold more than this either: a page that would exceed it
-    /// is served without being cached. A replay in flight additionally holds the
-    /// page it is reading, bounded by <see cref="WalReplaySliceBudget"/>. Set to
+    /// (issue #5896). Defaults to <see cref="AutoWalReplayPageRingBytes"/>
+    /// (<c>-1</c>, issue #5877): the cached pages of every coordinator of the
+    /// silo are charged to the same byte budget that bounds resident leaves (a
+    /// quarter of the heap limit), and are always evicted before any leaf is
+    /// shed; when no heap limit can be read, they are capped at
+    /// <see cref="UnboundedHeapWalReplayPageRingBytes"/> (64 MiB). A positive
+    /// value caps them further. Eviction chooses across every partition: first
+    /// pages no queued or reading leaf still needs, then the pages needed
+    /// latest, so a cold restart that replays in waves keeps the head of the log
+    /// each new wave reads first. A replay in flight additionally holds the page
+    /// it is reading, bounded by <see cref="WalReplaySliceBudget"/>. Set to
     /// <c>0</c> to disable the cache, every replay then reading storage itself.
+    /// The setting is silo-wide: it is read from the silo's global options, so
+    /// a per-tree override has no effect.
     /// <para>
     /// A cached page is served only while its WAL partition is at the durable
     /// incarnation it was read at, checked in memory on every serve, so a purge
@@ -2451,8 +2458,21 @@ public class LatticeOptions
     /// </summary>
     public long WalReplayPageRingBytes { get; set; } = DefaultWalReplayPageRingBytes;
 
-    /// <summary>Default value for <see cref="WalReplayPageRingBytes"/> (64 MiB).</summary>
-    public const long DefaultWalReplayPageRingBytes = 64L * 1024 * 1024;
+    /// <summary>Default value for <see cref="WalReplayPageRingBytes"/>: <see cref="AutoWalReplayPageRingBytes"/>.</summary>
+    public const long DefaultWalReplayPageRingBytes = AutoWalReplayPageRingBytes;
+
+    /// <summary>
+    /// The <see cref="WalReplayPageRingBytes"/> sentinel (<c>-1</c>) that leaves
+    /// the replay page cache to the silo's resident working-set budget (issue
+    /// #5877).
+    /// </summary>
+    public const long AutoWalReplayPageRingBytes = -1;
+
+    /// <summary>
+    /// The cap an auto-sized replay page cache takes when no heap limit can be
+    /// read (64 MiB, issue #5877).
+    /// </summary>
+    public const long UnboundedHeapWalReplayPageRingBytes = 64L * 1024 * 1024;
 
     /// <summary>
     /// Enables process-wide adaptation of replay concurrency beneath the

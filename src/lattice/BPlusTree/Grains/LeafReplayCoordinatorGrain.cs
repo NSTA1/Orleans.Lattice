@@ -23,7 +23,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </para>
 /// <para>
 /// Since issue #5896 that cache is replaced, whenever
-/// <see cref="LatticeOptions.WalReplayPageRingBytes"/> is positive, by a
+/// <see cref="LatticeOptions.WalReplayPageRingBytes"/> is not <c>0</c>, by a
 /// <see cref="ReplayPageRing"/> of unfiltered pages from which every leaf's
 /// filtered slice is projected (<see cref="ReplaySliceProjection"/>), so each
 /// page of the partition is read from storage once however many leaves replay
@@ -106,18 +106,51 @@ internal sealed class LeafReplayCoordinatorGrain(
     /// <summary>The ring, or <see langword="null"/> when the page cache is disabled.</summary>
     internal ReplayPageRing? RingForTest => _ring;
 
+    /// <summary>
+    /// How long a declared or observed reader keeps protecting the pages it
+    /// will read without reading or declaring again (issue #5877). Long enough
+    /// to outlast a wait in the replay permit queue; a reader that reaches the
+    /// head or abandons its replay withdraws sooner.
+    /// </summary>
+    internal static readonly TimeSpan ReplayDemandLease = TimeSpan.FromMinutes(10);
+
+    private static readonly long ReplayDemandLeaseTicks =
+        (long)(ReplayDemandLease.TotalSeconds * Stopwatch.Frequency);
+
     private ReplayPageRing? Ring()
     {
         if (_ring is null)
         {
             var budget = context.ActivationServices.GetService<IOptionsMonitor<LatticeOptions>>()?.CurrentValue.WalReplayPageRingBytes
                 ?? LatticeOptions.DefaultWalReplayPageRingBytes;
-            if (budget <= 0)
+            if (budget == 0)
                 return null;
-            _ring = new ReplayPageRing(budget);
+
+            // The pages are charged to the same working set as resident
+            // leaves (issue #5877); a test supplies its own.
+            var ledger = (context.ActivationServices.GetService<LeafResidentWorkingSet>() ?? LeafResidentWorkingSet.Shared).Pages;
+            ledger.Configure(budget);
+            _ring = new ReplayPageRing(ledger);
         }
 
         return _ring;
+    }
+
+    /// <inheritdoc />
+    public Task DeclareReplayDemandAsync(string reader, long nextExclusive)
+    {
+        ArgumentNullException.ThrowIfNull(reader);
+        EnsureBindingsParsed();
+        Ring()?.NoteDemand(reader, nextExclusive, ReplayDemandLeaseTicks);
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public Task ClearReplayDemandAsync(string reader)
+    {
+        ArgumentNullException.ThrowIfNull(reader);
+        _ring?.ClearDemand(reader);
+        return Task.CompletedTask;
     }
 
     /// <summary>
@@ -146,6 +179,29 @@ internal sealed class LeafReplayCoordinatorGrain(
         if (ring is null)
             return await ReadSliceCoreAsync(fromOffsetExclusive, toOffsetInclusive, budget, filter, cancellationToken);
 
+        // The reader's position orders eviction only (issue #5877): it is
+        // recorded before the read and advanced past what it was served.
+        var reader = LeafReplayReaderContext.Current;
+        if (string.IsNullOrEmpty(reader))
+            return await ServeFromRingAsync(ring, fromOffsetExclusive, toOffsetInclusive, budget, filter, cancellationToken);
+
+        ring.NoteDemand(reader, fromOffsetExclusive, ReplayDemandLeaseTicks);
+        var served = await ServeFromRingAsync(ring, fromOffsetExclusive, toOffsetInclusive, budget, filter, cancellationToken);
+        if (served.Count == 0 || served[^1].Offset >= toOffsetInclusive)
+            ring.ClearDemand(reader);
+        else
+            ring.NoteDemand(reader, served[^1].Offset, ReplayDemandLeaseTicks);
+        return served;
+    }
+
+    private async Task<IReadOnlyList<CommitLogSliceEntry>> ServeFromRingAsync(
+        ReplayPageRing ring,
+        long fromOffsetExclusive,
+        long toOffsetInclusive,
+        int budget,
+        WalKeyFilter filter,
+        CancellationToken cancellationToken)
+    {
         while (true)
         {
             await VerifyRingIncarnationAsync(cancellationToken);

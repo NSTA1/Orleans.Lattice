@@ -51,15 +51,13 @@ public partial class LeafReplayCoordinatorGrainTests
             Entries.Add((offset, new LatticeMutation { TreeId = TreeId, Kind = MutationKind.Set, Key = key, Value = [value] }));
     }
 
-    private static (LeafReplayCoordinatorGrain Grain, ControlledLog Log) RingGrain(ControlledLog? log = null, long ringBytes = 1L << 20)
+    private static (LeafReplayCoordinatorGrain Grain, ControlledLog Log) RingGrain(
+        ControlledLog? log = null, long ringBytes = 1L << 20, LeafResidentWorkingSet? workingSet = null)
     {
         log ??= new ControlledLog();
-        var (grain, _) = CreateGrain(reader: log.Reader(), ringBytes: ringBytes);
+        var (grain, _) = CreateGrain(reader: log.Reader(), ringBytes: ringBytes, workingSet: workingSet);
         return (grain, log);
     }
-
-    [SetUp]
-    public void ResetRingTally() => ReplayPageRing.ResetProcessBytesForTest();
 
     [Test]
     public async Task Leaves_replaying_one_partition_share_one_storage_read_per_page()
@@ -168,7 +166,7 @@ public partial class LeafReplayCoordinatorGrainTests
     {
         var (grain, log) = RingGrain();
         log.Append(0, "k0", 1);
-        var ring = new ReplayPageRing(1L << 20);
+        var ring = new ReplayPageRing(new LeafResidentWorkingSet(1L << 30).Pages);
         ring.Reset(0);
 
         var stuck = new TaskCompletionSource<ReplayPage?>();
@@ -191,7 +189,8 @@ public partial class LeafReplayCoordinatorGrainTests
         for (var i = 0; i < 400; i++)
             log.Append(i, "key" + rng.Next(1000), (byte)i);
 
-        var grains = Enumerable.Range(0, 3).Select(_ => RingGrain(log, ringBytes: 8_000).Grain).ToList();
+        var workingSet = new LeafResidentWorkingSet(1L << 30);
+        var grains = Enumerable.Range(0, 3).Select(_ => RingGrain(log, ringBytes: 8_000, workingSet: workingSet).Grain).ToList();
         for (var round = 0; round < 300; round++)
         {
             var grain = grains[rng.Next(grains.Count)];
@@ -200,7 +199,7 @@ public partial class LeafReplayCoordinatorGrainTests
 
             foreach (var g in grains)
                 Assert.That(g.RingForTest?.Bytes ?? 0, Is.LessThanOrEqualTo(8_000));
-            Assert.That(ReplayPageRing.ProcessBytes, Is.LessThanOrEqualTo(8_000),
+            Assert.That(workingSet.Pages.Bytes, Is.LessThanOrEqualTo(8_000),
                 "all rings of one process share the one budget");
         }
     }
