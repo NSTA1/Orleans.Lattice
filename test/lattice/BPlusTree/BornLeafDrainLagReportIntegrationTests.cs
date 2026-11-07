@@ -18,8 +18,8 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// partition and sat over the drain-lag threshold. A negative checkpoint is "no claim", and
 /// the sampler treats it as unknown.
 /// <para>
-/// The precondition proves the destination's born leaves registered a population of consumers,
-/// so the bound cannot pass on a destination that reported nothing for the sampler to count.
+/// The preconditions prove the destination registered a population of consumers and that some
+/// of them carry no claim, so the bound cannot pass on a destination with nothing to miscount.
 /// </para>
 /// </summary>
 [TestFixture]
@@ -96,29 +96,62 @@ public sealed class BornLeafDrainLagReportIntegrationTests
         // sampler for several more drain-lag thresholds before judging it. The metric's tree tag
         // is the logical tree id, which a resize destination keeps.
         var deadline = Environment.TickCount64 + (long)RegistrationBudget.TotalMilliseconds;
-        var consumers = 0;
-        while (Environment.TickCount64 < deadline
-            && (consumers = await RegisteredConsumersAsync(destination)) < RegisteredPopulation)
+        var census = await CensusAsync(destination);
+        var unclaimedSeen = census.Unclaimed;
+        while (Environment.TickCount64 < deadline && census.Registered < RegisteredPopulation)
         {
             await Task.Delay(250);
+            census = await CensusAsync(destination);
+            unclaimedSeen = Math.Max(unclaimedSeen, census.Unclaimed);
         }
 
         await Task.Delay(ObservationWindow);
-        consumers = Math.Max(consumers, await RegisteredConsumersAsync(destination));
+        census = await CensusAsync(destination);
+        unclaimedSeen = Math.Max(unclaimedSeen, census.Unclaimed);
         var measured = lagging.TryGetValue(treeName, out var max) ? max : 0;
 
-        Assert.That(consumers, Is.GreaterThanOrEqualTo(RegisteredPopulation),
+        // The tag is the logical tree id, which the resize source shares, and each sampler
+        // record counts one physical tree's consumers, so claims across both bound it.
+        var source = await CensusAsync(treeName);
+        var claimed = census.Claimed + source.Claimed;
+
+        Assert.That(census.Registered, Is.GreaterThanOrEqualTo(RegisteredPopulation),
             "precondition: the destination's born leaves registered consumers");
-        Assert.That(measured, Is.LessThanOrEqualTo(4),
-            $"the sampler counted {measured} lagging consumer(s) of {consumers} on a freshly built resize destination: "
-            + "born leaves with no checkpoint claim (-1) were read as lagging from the partition's first append (#5969)");
+        Assert.That(unclaimedSeen, Is.GreaterThan(0),
+            "precondition: born leaves registered with no checkpoint claim, the population the sampler must not count");
+
+        // Claims only grow, so the claimed population at the end bounds every earlier count of
+        // consumers the sampler could legitimately measure, whatever the load.
+        Assert.That(measured, Is.LessThanOrEqualTo(claimed),
+            $"the sampler counted {measured} lagging consumer(s) on a freshly built resize destination where only "
+            + $"{claimed} consumer(s) of the destination's {census.Registered} and the source's {source.Registered} hold a checkpoint claim: born leaves with no claim (-1) were read "
+            + "as lagging from the partition's first append (#5969)");
     }
 
-    private static async Task<int> RegisteredConsumersAsync(string physicalTreeId)
+    private static async Task<(int Registered, int Claimed, int Unclaimed)> CensusAsync(string physicalTreeId)
     {
         var prefix = ILeafCursorReporter.MaterialiserConsumerIdPrefix + physicalTreeId + "_";
         var registered = await SiloServices.GetRequiredService<IWalCursorRegistry>().SnapshotAsync(physicalTreeId);
-        return registered.Count(c => c.ConsumerId.StartsWith(prefix, StringComparison.Ordinal));
+        int total = 0, claimed = 0, unclaimed = 0;
+        foreach (var consumer in registered)
+        {
+            if (!consumer.ConsumerId.StartsWith(prefix, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            total++;
+            if (consumer.CheckpointOffsets is { Count: > 0 } offsets && offsets.Values.Any(o => o >= 0))
+            {
+                claimed++;
+            }
+            else
+            {
+                unclaimed++;
+            }
+        }
+
+        return (total, claimed, unclaimed);
     }
 
     private static IServiceProvider SiloServices =>
