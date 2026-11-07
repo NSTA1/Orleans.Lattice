@@ -1795,6 +1795,15 @@ internal sealed partial class BPlusLeafGrain
     /// overtakes a parked waiter, so a positive count is a permit nobody is
     /// queued for.
     /// </para>
+    /// <para>
+    /// That premise is #5992's G1, which the retention slice pins: its detector
+    /// <c>A_drive_probe_is_refused_while_a_replay_waiter_is_parked_even_just_after_a_release</c>
+    /// and a hygiene test fixing the replay gate's acquire sites, so a new
+    /// acquire that could overtake a parked waiter fails the build. Until then
+    /// the sites are <see cref="AcquireReplayPermitAsync"/> (and its permit
+    /// re-takes across nested calls), which wait, and
+    /// <see cref="TryAcquireStarvationReplayPermit"/>, which probes.
+    /// </para>
     /// </remarks>
     private static bool IsReplayPermitFreeWithNoWaiterAhead()
         => Volatile.Read(ref _replayConcurrencyGate) is { CurrentCount: > 0 };
