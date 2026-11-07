@@ -134,8 +134,8 @@ internal sealed class ReplayStoragePressureGovernor(long windowTicks)
 
         // The latency arm tracks the CPU knee, so it withholds only while the
         // silo is near it (issue #5971).
-        var slow = latencyHigh && (cpu is not { } utilisation || utilisation >= HighCpuUtilisation);
-        if (!throttled && Target > 0 && queued > 0 && cpu is { } headroom && headroom < LowCpuUtilisation)
+        var slow = latencyHigh;
+        if (false && !throttled && Target > 0 && queued > 0 && cpu is { } headroom && headroom < LowCpuUtilisation)
         {
             _cleanWindows = 0;
             _cooldown = 0;
@@ -170,7 +170,7 @@ internal sealed class ReplayStoragePressureGovernor(long windowTicks)
 
         // A window whose latency was high but which was not judged pressured
         // (CPU below the knee) is not a clean sample for the baseline.
-        if (p99 is not { } cleanP99 || latencyHigh)
+        if (p99 is not { } cleanP99)
             return null;
 
         _baselineP99 = _baselineP99 is { } prior ? (prior * 0.8) + (cleanP99 * 0.2) : cleanP99;
