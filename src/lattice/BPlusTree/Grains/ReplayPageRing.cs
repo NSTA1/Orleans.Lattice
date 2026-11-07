@@ -44,9 +44,11 @@ internal sealed class ReplayPageRing
     private readonly ReplayPageLedger _ledger;
     private readonly Dictionary<long, (Task<ReplayPage?> Fill, long StartedAt)> _fills = [];
     private readonly Dictionary<string, (long Next, long ExpiresAt)> _demand = new(StringComparer.Ordinal);
+    private readonly object _demandGate = new();
     private Slot[] _slots = [];
     private long _bytes;
-    private SortedSet<long>? _liveDemand;
+    private bool _detached;
+    private long[]? _liveDemand;
     private long _liveDemandValidUntil = long.MinValue;
 
     /// <summary>One cached page, with its estimated size and the order it was admitted in.</summary>
@@ -69,8 +71,20 @@ internal sealed class ReplayPageRing
     /// <summary>Advances whenever the ring is reset; a fill inserts only at the epoch it started at.</summary>
     public long Epoch { get; private set; }
 
-    /// <summary>The pages, ascending by <see cref="ReplayPage.FromExclusive"/>.</summary>
-    public IReadOnlyList<ReplayPage> Pages => Array.ConvertAll(Volatile.Read(ref _slots), s => s.Page);
+    /// <summary>
+    /// The pages, ascending by <see cref="ReplayPage.FromExclusive"/>. Copies;
+    /// for tests and diagnostics only - a serve uses <see cref="RunFrom"/>.
+    /// </summary>
+    internal IReadOnlyList<ReplayPage> Pages => Array.ConvertAll(Volatile.Read(ref _slots), s => s.Page);
+
+    /// <summary>
+    /// Whether the ring has been cleared and detached from the ledger. Read
+    /// under the ledger's lock; a detached ring admits nothing (issue #5877).
+    /// </summary>
+    internal bool IsDetachedLocked => _detached;
+
+    /// <summary>Marks the ring detached. Runs under the ledger's lock.</summary>
+    internal void MarkDetachedLocked() => _detached = true;
 
     /// <summary>Estimated bytes this ring holds.</summary>
     public long Bytes => Volatile.Read(ref _bytes);
@@ -163,7 +177,7 @@ internal sealed class ReplayPageRing
     {
         ArgumentNullException.ThrowIfNull(reader);
         var at = now ?? Stopwatch.GetTimestamp();
-        lock (_ledger.Gate)
+        lock (_demandGate)
         {
             if (!_demand.ContainsKey(reader) && _demand.Count >= MaxDemandEntries)
             {
@@ -187,7 +201,7 @@ internal sealed class ReplayPageRing
     public void ClearDemand(string reader)
     {
         ArgumentNullException.ThrowIfNull(reader);
-        lock (_ledger.Gate)
+        lock (_demandGate)
         {
             if (_demand.Remove(reader))
                 _liveDemand = null;
@@ -197,42 +211,49 @@ internal sealed class ReplayPageRing
     /// <summary>The number of readers currently declared, live or not.</summary>
     internal int DemandCount
     {
-        get { lock (_ledger.Gate) { return _demand.Count; } }
+        get { lock (_demandGate) { return _demand.Count; } }
     }
 
     /// <summary>
-    /// The distinct next offsets of the readers whose lease has not expired,
-    /// dropping the expired ones. Read under the ledger's lock.
+    /// The next offsets of the readers whose lease has not expired, ascending,
+    /// dropping the expired ones. Recomputed only when the table changed or a
+    /// lease lapsed, so repeated eviction passes reuse one array.
     /// </summary>
-    internal SortedSet<long>? LiveDemandLocked(long now)
+    internal long[] LiveDemand(long now)
     {
-        if (_liveDemand is not null && now < _liveDemandValidUntil)
-            return _liveDemand;
-
-        List<string>? expired = null;
-        var live = new SortedSet<long>();
-        var validUntil = long.MaxValue;
-        foreach (var (reader, entry) in _demand)
+        lock (_demandGate)
         {
-            if (entry.ExpiresAt <= now)
+            if (_liveDemand is not null && now < _liveDemandValidUntil)
+                return _liveDemand;
+
+            List<string>? expired = null;
+            var live = new long[_demand.Count];
+            var count = 0;
+            var validUntil = long.MaxValue;
+            foreach (var (reader, entry) in _demand)
             {
-                (expired ??= []).Add(reader);
-                continue;
+                if (entry.ExpiresAt <= now)
+                {
+                    (expired ??= []).Add(reader);
+                    continue;
+                }
+
+                live[count++] = entry.Next;
+                validUntil = Math.Min(validUntil, entry.ExpiresAt);
             }
 
-            live.Add(entry.Next);
-            validUntil = Math.Min(validUntil, entry.ExpiresAt);
-        }
+            if (expired is not null)
+            {
+                foreach (var reader in expired)
+                    _demand.Remove(reader);
+            }
 
-        if (expired is not null)
-        {
-            foreach (var reader in expired)
-                _demand.Remove(reader);
+            Array.Resize(ref live, count);
+            Array.Sort(live);
+            _liveDemand = live;
+            _liveDemandValidUntil = validUntil;
+            return live;
         }
-
-        _liveDemand = live;
-        _liveDemandValidUntil = validUntil;
-        return live;
     }
 
     /// <summary>Adds a page in offset order. Runs under the ledger's lock.</summary>
@@ -264,6 +285,34 @@ internal sealed class ReplayPageRing
         Volatile.Write(ref _slots, next);
         Volatile.Write(ref _bytes, _bytes - slot.Bytes);
         return slot.Bytes;
+    }
+
+    /// <summary>
+    /// Removes the pages of <paramref name="candidates"/> in
+    /// <c>[start, end)</c>, all of this ring, rebuilding the page array once.
+    /// Runs under the ledger's lock.
+    /// </summary>
+    /// <returns>The bytes freed.</returns>
+    internal long RemoveManyLocked(ReplayPageLedger.Candidate[] candidates, int start, int end)
+    {
+        var slots = _slots;
+        var victims = new HashSet<ReplayPage>(end - start, ReferenceEqualityComparer.Instance);
+        for (var i = start; i < end; i++)
+            victims.Add(candidates[i].Slot.Page);
+
+        var keep = new List<Slot>(slots.Length);
+        var freed = 0L;
+        foreach (var slot in slots)
+        {
+            if (victims.Contains(slot.Page))
+                freed += slot.Bytes;
+            else
+                keep.Add(slot);
+        }
+
+        Volatile.Write(ref _slots, keep.ToArray());
+        Volatile.Write(ref _bytes, _bytes - freed);
+        return freed;
     }
 
     /// <summary>Drops every page. Runs under the ledger's lock.</summary>
@@ -322,7 +371,11 @@ internal sealed class ReplayPageRing
     {
         _ledger.Detach(this);
         _fills.Clear();
-        lock (_ledger.Gate)
+
+        // A fill still in flight - one joined past its aging bound, say - finishes
+        // after this; the new epoch and the detached flag both refuse its page.
+        Epoch++;
+        lock (_demandGate)
         {
             _demand.Clear();
             _liveDemand = null;

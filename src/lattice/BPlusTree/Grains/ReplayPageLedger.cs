@@ -80,7 +80,7 @@ internal sealed class ReplayPageLedger
             _cap = configuredBytes > 0
                 ? configuredBytes
                 : _owner.HasKnownLimit ? long.MaxValue : LatticeOptions.UnboundedHeapWalReplayPageRingBytes;
-            EvictLocked(long.MaxValue, protect: null, now: System.Diagnostics.Stopwatch.GetTimestamp());
+            EvictLocked(long.MaxValue, System.Diagnostics.Stopwatch.GetTimestamp());
         }
     }
 
@@ -98,8 +98,15 @@ internal sealed class ReplayPageLedger
         lock (Gate)
         {
             _bytes -= ring.DropAllLocked();
+            ring.MarkDetachedLocked();
             _rings.Remove(ring);
         }
+    }
+
+    /// <summary>The rings attached, for tests and diagnostics.</summary>
+    internal int RingCount
+    {
+        get { lock (Gate) { return _rings.Count; } }
     }
 
     /// <summary>
@@ -112,11 +119,17 @@ internal sealed class ReplayPageLedger
     {
         lock (Gate)
         {
+            // A ring cleared on deactivation is gone from the ledger, so a
+            // page admitted to it could never be evicted and its bytes would
+            // be charged to the working set for good (issue #5877, B1).
+            if (ring.IsDetachedLocked)
+                return false;
+
             var room = Math.Min(_cap, _owner.BudgetBytes - _owner.LeafBytesLocked);
             if (size > room)
                 return false;
 
-            EvictLocked(room - size, protect: null, now);
+            EvictLocked(room - size, now);
             if (_bytes + size > room)
                 return false;
 
@@ -134,66 +147,121 @@ internal sealed class ReplayPageLedger
     internal long ReclaimLocked(long needed)
     {
         var before = _bytes;
-        EvictLocked(Math.Max(0, _bytes - needed), protect: null, System.Diagnostics.Stopwatch.GetTimestamp());
+        EvictLocked(Math.Max(0, _bytes - needed), System.Diagnostics.Stopwatch.GetTimestamp());
         return before - _bytes;
     }
 
     /// <summary>Releases bytes a ring dropped on its own (a reset or a clear).</summary>
     internal void ReleaseLocked(long bytes) => _bytes -= bytes;
 
-    private void EvictLocked(long target, ReplayPage? protect, long now)
+    /// <summary>
+    /// Evicts down to <paramref name="target"/> (and the cap) in one pass: every
+    /// cached page is ranked once, the ranks are sorted, and each ring rebuilds
+    /// its page array once, so the lock is held for one scan and one sort
+    /// rather than a scan per victim.
+    /// </summary>
+    private void EvictLocked(long target, long now)
     {
         var limit = Math.Min(target, _cap);
-        while (_bytes > limit)
+        if (_bytes <= limit)
+            return;
+
+        var count = 0;
+        foreach (var ring in _rings)
+            count += ring.SlotsLocked.Length;
+        if (count == 0)
+            return;
+
+        var candidates = new Candidate[count];
+        var n = 0;
+        foreach (var ring in _rings)
         {
-            ReplayPageRing? victimRing = null;
-            ReplayPageRing.Slot victim = default;
-            (int Class, long Key, long Bytes) best = default;
-            foreach (var ring in _rings)
-            {
-                var demand = ring.LiveDemandLocked(now);
-                foreach (var slot in ring.SlotsLocked)
-                {
-                    if (ReferenceEquals(slot.Page, protect))
-                        continue;
-                    var rank = Rank(slot, demand);
-                    if (victimRing is null || Better(rank, best))
-                    {
-                        victimRing = ring;
-                        victim = slot;
-                        best = rank;
-                    }
-                }
-            }
+            var demand = ring.LiveDemand(now);
+            foreach (var slot in ring.SlotsLocked)
+                candidates[n++] = new Candidate(ring, slot, Rank(slot, demand));
+        }
 
-            if (victimRing is null)
-                return;
+        Array.Sort(candidates, static (a, b) => Compare(b.Rank, a.Rank));
 
-            _bytes -= victimRing.RemoveLocked(victim);
+        var excess = _bytes - limit;
+        var chosen = 0;
+        while (chosen < n && excess > 0)
+            excess -= candidates[chosen++].Slot.Bytes;
+
+        Array.Sort(candidates, 0, chosen, RingOrder.Instance);
+        var start = 0;
+        while (start < chosen)
+        {
+            var end = start + 1;
+            while (end < chosen && ReferenceEquals(candidates[end].Ring, candidates[start].Ring))
+                end++;
+            _bytes -= candidates[start].Ring.RemoveManyLocked(candidates, start, end);
+            start = end;
         }
     }
 
-    /// <summary>Lower class evicts first; within a class, the larger key, then the larger page.</summary>
-    private static bool Better((int Class, long Key, long Bytes) candidate, (int Class, long Key, long Bytes) best) =>
-        candidate.Class != best.Class
-            ? candidate.Class < best.Class
-            : candidate.Key != best.Key ? candidate.Key > best.Key : candidate.Bytes > best.Bytes;
+    /// <summary>One page considered for eviction, with its rank.</summary>
+    internal readonly record struct Candidate(ReplayPageRing Ring, ReplayPageRing.Slot Slot, (int Class, long Key, long Bytes) Rank);
 
-    internal static (int Class, long Key, long Bytes) Rank(ReplayPageRing.Slot slot, SortedSet<long>? demand)
+    /// <summary>Groups candidates by ring so each ring's array is rebuilt once.</summary>
+    private sealed class RingOrder : IComparer<Candidate>
     {
-        if (demand is null || demand.Count == 0)
-            return (1, slot.Sequence, slot.Bytes);
+        public static readonly RingOrder Instance = new();
 
+        public int Compare(Candidate x, Candidate y) =>
+            System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(x.Ring)
+                .CompareTo(System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(y.Ring));
+    }
+
+    /// <summary>
+    /// Orders two ranks: the one to evict first compares greater. A lower class
+    /// goes first; within a class, the larger key, then the larger page.
+    /// </summary>
+    internal static int Compare((int Class, long Key, long Bytes) a, (int Class, long Key, long Bytes) b) =>
+        a.Class != b.Class
+            ? b.Class.CompareTo(a.Class)
+            : a.Key != b.Key ? a.Key.CompareTo(b.Key) : a.Bytes.CompareTo(b.Bytes);
+
+    /// <summary>
+    /// The eviction rank of one page against its ring's live demand, the
+    /// distinct next offsets of its readers in ascending order.
+    /// </summary>
+    internal static (int Class, long Key, long Bytes) Rank(ReplayPageRing.Slot slot, long[] demand)
+    {
         var page = slot.Page;
-        if (demand.Min >= page.CoveredThroughInclusive)
+        if (demand.Length == 0)
+        {
+            // No declared readers: the head is what the next wave reads first,
+            // so the highest pages go first.
+            return (1, page.FromExclusive, slot.Bytes);
+        }
+
+        if (demand[0] >= page.CoveredThroughInclusive)
             return (0, -slot.Sequence, slot.Bytes);
 
-        // A reader at or inside the page needs it now.
-        var inside = demand.GetViewBetween(page.FromExclusive, page.CoveredThroughInclusive - 1);
-        if (inside.Count > 0)
+        // The first reader at or above the page's lower bound: one inside the
+        // page needs it now.
+        var at = LowerBound(demand, page.FromExclusive);
+        if (at < demand.Length && demand[at] < page.CoveredThroughInclusive)
             return (2, 0, slot.Bytes);
 
-        var below = demand.GetViewBetween(long.MinValue, page.FromExclusive - 1);
-        return (2, page.FromExclusive - below.Max, slot.Bytes);
+        // Otherwise the nearest reader below it, which exists because the page
+        // is demanded and no reader is inside it.
+        return (2, page.FromExclusive - demand[at - 1], slot.Bytes);
+    }
+
+    private static int LowerBound(long[] sorted, long value)
+    {
+        int lo = 0, hi = sorted.Length;
+        while (lo < hi)
+        {
+            var mid = (lo + hi) >>> 1;
+            if (sorted[mid] < value)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+
+        return lo;
     }
 }

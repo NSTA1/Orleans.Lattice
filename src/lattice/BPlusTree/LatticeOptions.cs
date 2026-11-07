@@ -2446,6 +2446,8 @@ public class LatticeOptions
     /// each new wave reads first. A replay in flight additionally holds the page
     /// it is reading, bounded by <see cref="WalReplaySliceBudget"/>. Set to
     /// <c>0</c> to disable the cache, every replay then reading storage itself.
+    /// The setting is silo-wide: it is read from the silo's global options, so
+    /// a per-tree override has no effect.
     /// <para>
     /// A cached page is served only while its WAL partition is at the durable
     /// incarnation it was read at, checked in memory on every serve, so a purge

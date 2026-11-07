@@ -153,10 +153,8 @@ public sealed class ReplayPageLedgerTests
         const long lease = 500;
         ring.NoteDemand("leaf-a", 4, lease, now: declaredAt);
 
-        lock (workingSet.Gate)
-            Assert.That(ring.LiveDemandLocked(declaredAt + lease - 1), Is.EqualTo(new[] { 4L }), "live inside its lease");
-        lock (workingSet.Gate)
-            Assert.That(ring.LiveDemandLocked(declaredAt + lease), Is.Empty, "lapsed at the end of its lease");
+        Assert.That(ring.LiveDemand(declaredAt + lease - 1), Is.EqualTo(new[] { 4L }), "live inside its lease");
+        Assert.That(ring.LiveDemand(declaredAt + lease), Is.Empty, "lapsed at the end of its lease");
         Assert.That(ring.DemandCount, Is.Zero, "a lapsed declaration is dropped");
     }
 
@@ -169,14 +167,45 @@ public sealed class ReplayPageLedgerTests
         for (var i = 0; i < ReplayPageRing.MaxDemandEntries; i++)
             ring.NoteDemand($"leaf-{i}", i, leaseTicks: long.MaxValue / 4);
 
-        lock (workingSet.Gate)
+        Assert.Multiple(() =>
         {
-            Assert.Multiple(() =>
-            {
-                Assert.That(ring.DemandCount, Is.EqualTo(ReplayPageRing.MaxDemandEntries));
-                Assert.That(ring.LiveDemandLocked(System.Diagnostics.Stopwatch.GetTimestamp()), Does.Not.Contain(-100L), "the oldest lease is the one dropped");
-            });
-        }
+            Assert.That(ring.DemandCount, Is.EqualTo(ReplayPageRing.MaxDemandEntries));
+            Assert.That(ring.LiveDemand(System.Diagnostics.Stopwatch.GetTimestamp()), Does.Not.Contain(-100L), "the oldest lease is the one dropped");
+        });
+    }
+
+    [Test]
+    public void A_fill_that_completes_after_the_ring_is_cleared_charges_nothing()
+    {
+        var workingSet = new LeafResidentWorkingSet(1L << 30);
+        var ring = Ring(workingSet);
+        var epochAtFillStart = ring.Epoch;
+
+        ring.Clear();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ring.TryInsert(Page(-1, 10), epochAtFillStart), Is.False,
+                "an orphan fill finishing after deactivation must not be cached");
+            Assert.That(workingSet.Pages.Bytes, Is.Zero,
+                "nothing is charged to the working set for a page no ring can evict");
+        });
+    }
+
+    [Test]
+    public void With_no_declared_readers_the_highest_pages_are_evicted_first_even_when_the_head_was_refilled_last()
+    {
+        var size = ReplayPageRing.EstimateBytes(Page(-1, 10));
+        var workingSet = new LeafResidentWorkingSet(1L << 30);
+        workingSet.Pages.Configure(2 * size);
+        var ring = Ring(workingSet);
+        Assert.That(ring.TryInsert(Page(9, 10), ring.Epoch), Is.True);
+        Assert.That(ring.TryInsert(Page(-1, 10), ring.Epoch), Is.True, "the head, cached last");
+
+        Assert.That(ring.TryInsert(Page(19, 10), ring.Epoch), Is.True);
+
+        Assert.That(ring.Pages.Select(p => p.FromExclusive), Does.Contain(-1L),
+            "with no declared readers the head is what the next wave reads first, so it stays");
     }
 
     [Test]
