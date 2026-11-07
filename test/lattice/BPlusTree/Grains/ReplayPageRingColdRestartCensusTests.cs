@@ -28,8 +28,67 @@ public sealed class ReplayPageRingColdRestartCensusTests
     [TestCase(false)]
     public async Task Cold_restart_census_reads_each_wal_page_about_once_with_the_ring(bool ring)
     {
+        var readsPerEntry = await RunCensusAsync(
+            ring ? LatticeOptions.DefaultWalReplayPageRingBytes : 0, waveSize: Leaves, declareQueued: false);
+
+        if (ring)
+            Assert.That(readsPerEntry, Is.LessThan(1.5), "each page of the log is read from storage about once");
+        else
+            Assert.That(readsPerEntry, Is.GreaterThan(Leaves / 2), "control: without the ring every leaf reads the log itself");
+    }
+
+    /// <summary>
+    /// The cold-restart shape a permit gate produces (issue #5877): leaves
+    /// replay in waves, each starting once the previous one has read a quarter
+    /// of the log (scheduled on progress, not time), the waves still queued
+    /// having declared where they start, and the cache holds only a fraction
+    /// <c>f</c> of the log. Each later wave then re-reads at most the part of
+    /// the log the cache could not keep, so the reads per entry are bounded by
+    /// <c>1 + (1 - f)(W - 1)</c> = 6.25. Demand-aware eviction reads 5.38-5.63;
+    /// evicting the lowest pages first, which every new wave reads first, reads
+    /// 6.69. Strictly sequential waves do not discriminate: there,
+    /// lowest-first ends each wave holding the tail, which the next wave reads
+    /// last, and meets the bound too.
+    /// </summary>
+    [Test]
+    public async Task A_cold_restart_in_waves_re_reads_at_most_what_the_cache_could_not_hold()
+    {
+        const int waves = 8;
+        const double fraction = 0.25;
+        var logBytes = (Entries * (96L + (2 * 6) + 1)) + ((Entries / SliceBudget) * 64L);
+
+        var readsPerEntry = await RunCensusAsync(
+            (long)(logBytes * fraction), waveSize: Leaves / waves, declareQueued: true, overlap: true, overlapAt: 0.25);
+
+        var bound = 1 + ((1 - fraction) * (waves - 1));
+        Assert.That(readsPerEntry, Is.LessThanOrEqualTo(bound),
+            "a wave may re-read only what the cache could not hold, not the whole log");
+    }
+
+    /// <summary>
+    /// Non-regression at the same bound for strictly sequential waves, which do
+    /// not discriminate eviction policies (lowest-first meets the bound too) but
+    /// must never exceed it.
+    /// </summary>
+    [Test]
+    public async Task A_cold_restart_in_sequential_waves_stays_within_the_same_bound()
+    {
+        const int waves = 8;
+        const double fraction = 0.25;
+        var logBytes = (Entries * (96L + (2 * 6) + 1)) + ((Entries / SliceBudget) * 64L);
+
+        var readsPerEntry = await RunCensusAsync(
+            (long)(logBytes * fraction), waveSize: Leaves / waves, declareQueued: true);
+
+        Assert.That(readsPerEntry, Is.LessThanOrEqualTo(1 + ((1 - fraction) * (waves - 1)) + 0.5));
+    }
+
+
+    private static async Task<double> RunCensusAsync(long ringBytes, int waveSize, bool declareQueued, bool overlap = false, double overlapAt = 0.5)
+    {
         CountingWalStorageProvider.Reset();
-        RingSwitch.Bytes = ring ? LatticeOptions.DefaultWalReplayPageRingBytes : 0;
+        RingSwitch.Bytes = ringBytes;
+        var ring = ringBytes != 0;
         var builder = new TestClusterBuilder(1);
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
         var cluster = builder.Build();
@@ -58,36 +117,63 @@ public sealed class ReplayPageRingColdRestartCensusTests
 
             var coordinator = cluster.Client.GetGrain<ILeafReplayCoordinatorGrain>($"{tree}/0");
             var perLeaf = Entries / Leaves;
-            var delivered = await Task.WhenAll(Enumerable.Range(0, Leaves).Select(async leaf =>
+            if (declareQueued)
             {
-                var filter = new WalKeyFilter(
-                    $"k{leaf * perLeaf:D5}",
-                    leaf == Leaves - 1 ? null : $"k{(leaf + 1) * perLeaf:D5}");
-                var from = -1L;
-                var owned = 0;
-                while (from < head)
-                {
-                    var slice = await coordinator.ReadSliceAsync(from, head, SliceBudget, filter, CancellationToken.None);
-                    if (slice.Count == 0)
-                        break;
-                    owned += slice.Count(e => e.Mutation.Value is not null);
-                    from = slice[^1].Offset;
-                }
+                for (var leaf = waveSize; leaf < Leaves; leaf++)
+                    await coordinator.DeclareReplayDemandAsync($"leaf-{leaf}", -1);
+            }
 
-                return owned;
-            }));
+            var deliveredByLeaf = new List<int>();
+            var waveTasks = new List<Task<int[]>>();
+            var halfway = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            foreach (var wave in Enumerable.Range(0, Leaves).Chunk(waveSize))
+            {
+                var waveHalfway = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                var waveTask = Task.WhenAll(wave.Select(async leaf =>
+                {
+                    using var reader = LeafReplayReaderContext.BeginScope($"leaf-{leaf}");
+                    var filter = new WalKeyFilter(
+                        $"k{leaf * perLeaf:D5}",
+                        leaf == Leaves - 1 ? null : $"k{(leaf + 1) * perLeaf:D5}");
+                    var from = -1L;
+                    var owned = 0;
+                    while (from < head)
+                    {
+                        var slice = await coordinator.ReadSliceAsync(from, head, SliceBudget, filter, CancellationToken.None);
+                        if (slice.Count == 0)
+                            break;
+                        owned += slice.Count(e => e.Mutation.Value is not null);
+                        from = slice[^1].Offset;
+                        if (from >= head * overlapAt)
+                            waveHalfway.TrySetResult();
+                    }
+
+                    waveHalfway.TrySetResult();
+                    return owned;
+                }));
+                waveTasks.Add(waveTask);
+
+                // Sequential waves wait for the previous wave to finish; overlapping
+                // ones start as soon as it is half way through the log, as a permit
+                // gate that admits a leaf whenever one finishes would.
+                if (overlap)
+                    await waveHalfway.Task;
+                else
+                    await waveTask;
+            }
+
+            foreach (var task in waveTasks)
+                deliveredByLeaf.AddRange(await task);
+            var delivered = deliveredByLeaf.ToArray();
 
             var examined = CountingWalStorageProvider.EntriesExamined;
             var readsPerEntry = examined / (double)Entries;
             TestContext.Out.WriteLine(
-                $"[census] ring={ring} leaves={Leaves} entries={Entries} examined={examined} "
-                + $"providerReads={CountingWalStorageProvider.Reads} readsPerPage={readsPerEntry:0.00}");
+                $"[census] ring={ring} ringBytes={ringBytes} leaves={Leaves} waveSize={waveSize} entries={Entries} "
+                + $"examined={examined} providerReads={CountingWalStorageProvider.Reads} readsPerPage={readsPerEntry:0.00}");
 
             Assert.That(delivered.Sum(), Is.EqualTo(Entries), "every entry reached exactly its owning leaf");
-            if (ring)
-                Assert.That(readsPerEntry, Is.LessThan(1.5), "each page of the log is read from storage about once");
-            else
-                Assert.That(readsPerEntry, Is.GreaterThan(Leaves / 2), "control: without the ring every leaf reads the log itself");
+            return readsPerEntry;
         }
         finally
         {

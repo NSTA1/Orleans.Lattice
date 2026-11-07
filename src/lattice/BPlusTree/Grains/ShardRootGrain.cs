@@ -1425,7 +1425,22 @@ internal sealed partial class ShardRootGrain(
             var bucket = orderedBuckets[i].Bucket;
             leafDispatchTasks[i] = DispatchLeafBatchWithRetryAsync(bucket.Leaf!, bucket.Slice, routing);
         }
-        var splitResults = await Task.WhenAll(leafDispatchTasks);
+
+        SplitResult?[] splitResults;
+        try
+        {
+            splitResults = await Task.WhenAll(leafDispatchTasks);
+        }
+        catch
+        {
+            // Issue #5970: only the failure path pays for attribution. When every
+            // faulted leaf was refused for saturation, report the refused slices
+            // so the caller can retry those keys alone; otherwise rethrow as before.
+            var attributed = await AttributeLeafBatchRefusalAsync(orderedBuckets, leafDispatchTasks, entries.Count);
+            if (attributed is null)
+                throw;
+            throw attributed;
+        }
 
         // Walk split promotion sequentially per leaf. Parent
         // AcceptSplitAsync calls mutate shared internal-node routing

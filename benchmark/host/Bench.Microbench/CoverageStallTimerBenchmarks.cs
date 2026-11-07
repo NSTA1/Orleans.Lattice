@@ -56,6 +56,9 @@ public class CoverageStallTimerBenchmarks
         public Task<long> GetHeadOffsetAsync(CancellationToken cancellationToken = default) => _head;
         public Task<long> GetTailOffsetAsync(CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
+        public Task DeclareReplayDemandAsync(string reader, long nextExclusive) => Task.CompletedTask;
+
+        public Task ClearReplayDemandAsync(string reader) => Task.CompletedTask;
         public Task<IReadOnlyList<CommitLogSliceEntry>> ReadSliceAsync(
             long fromOffsetExclusive, long toOffsetInclusive, int budget,
             CancellationToken cancellationToken = default) => throw new NotSupportedException();

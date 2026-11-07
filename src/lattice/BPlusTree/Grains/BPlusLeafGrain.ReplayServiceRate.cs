@@ -100,10 +100,11 @@ internal sealed partial class BPlusLeafGrain
 
     /// <summary>
     /// Lets the storage-pressure governor (issue #5877) close a window and moves
-    /// its ledger one permit toward the governor's target. True means this
-    /// acquired permit must be withheld; a step up releases one extra permit
-    /// here. One permit per release keeps every ledger change paired with a
-    /// physical permit, so the gate's count never drifts from the ledgers.
+    /// its ledger toward the governor's target. True means this acquired permit
+    /// must be withheld (a withhold is still one permit per release). A step up
+    /// returns every storage-withheld permit down to the new target at once
+    /// (issue #5971), each release paired with one ledger decrement, so the
+    /// gate's count never drifts from the ledgers.
     /// </summary>
     internal static bool AdaptReplayStoragePressure(SemaphoreSlim gate, long now)
     {
@@ -119,9 +120,18 @@ internal sealed partial class BPlusLeafGrain
                 return false;
 
             step = governor.IsDue(now)
-                ? governor.Observe(now, ReplayStoragePressure.Read(), _replayConcurrencyCeiling)
+                ? ObserveReplayStoragePressure(governor, now)
                 : null;
             disposition = ReconcileReplayStorageLedger(gate, governor.Target);
+
+            // A restore returns every permit down to the new target at once, as
+            // the idle step does: a silo with headroom but few releases would
+            // otherwise take one release per permit to recover (issue #5971).
+            if (step is { Direction: > 0 })
+            {
+                while (_storageWithheldReplayPermits > governor.Target)
+                    ReconcileReplayStorageLedger(gate, governor.Target);
+            }
         }
 
         if (step is { } taken)
@@ -151,7 +161,7 @@ internal sealed partial class BPlusLeafGrain
             if (governor is null || _storageWithheldReplayPermits == 0 || !governor.IsDue(now))
                 return;
 
-            var observed = governor.Observe(now, ReplayStoragePressure.Read(), _replayConcurrencyCeiling);
+            var observed = ObserveReplayStoragePressure(governor, now);
             if (observed is { Direction: > 0 })
             {
                 step = observed;
@@ -167,6 +177,39 @@ internal sealed partial class BPlusLeafGrain
         if (step is { } taken)
             RecordReplayStorageStep(taken);
     }
+
+    /// <summary>Test-only: the CPU denominator the governor's utilisation uses.</summary>
+    internal static int ReplayCpuCoresForTest => ReplayCpuCores.Value;
+
+    /// <summary>
+    /// The CPU the process can obtain, in cores: the lesser of the processor
+    /// count and the enforced container grant, read once.
+    /// </summary>
+    private static readonly Lazy<int> ReplayCpuCores = new(
+        () => ResolveDefaultReplayCeiling(Environment.ProcessorCount, Orleans.Lattice.Internal.Cgroups.ContainerCpuGrant.Read()));
+
+    /// <summary>
+    /// Closes the governor's window with the storage tallies, the replay permit
+    /// queue depth and the process CPU time, so the latency arm can tell a CPU
+    /// knee from queueing it caused itself (issue #5971).
+    /// </summary>
+    private static ReplayStoragePressureStep? ObserveReplayStoragePressure(ReplayStoragePressureGovernor governor, long now) =>
+        governor.Observe(
+            now,
+            ReplayStoragePressure.Read(),
+            _replayConcurrencyCeiling,
+            Volatile.Read(ref _queuedReplayPermitWaiters),
+            _replayProcessCpu(),
+            ReplayCpuCores.Value);
+
+    private static readonly Func<TimeSpan?> RealProcessCpu = static () => Environment.CpuUsage.TotalTime;
+
+    /// <summary>
+    /// The process CPU time source; a test that drives the governor on a
+    /// synthetic clock replaces it, since real CPU time over synthetic windows
+    /// is meaningless.
+    /// </summary>
+    private static Func<TimeSpan?> _replayProcessCpu = RealProcessCpu;
 
     private static int ReconcileReplayStorageLedger(SemaphoreSlim gate, int target)
     {
@@ -199,10 +242,18 @@ internal sealed partial class BPlusLeafGrain
                 _ => StorageRecoveryTrigger,
             });
 
-    internal static void SeedReplayStoragePressureForTest(long windowTicks)
+    /// <summary>
+    /// Test-only: replaces the governor with one on <paramref name="windowTicks"/>
+    /// windows. Synthetic timestamps make real CPU time meaningless, so the CPU
+    /// source reads as unknown unless <paramref name="processCpu"/> supplies one.
+    /// </summary>
+    internal static void SeedReplayStoragePressureForTest(long windowTicks, Func<TimeSpan?>? processCpu = null)
     {
         lock (_replayConcurrencyGateLock)
+        {
             _replayStoragePressureGovernor = new ReplayStoragePressureGovernor(windowTicks);
+            _replayProcessCpu = processCpu ?? (static () => null);
+        }
     }
 
     private static void RecordReplayPermitAdaptation(

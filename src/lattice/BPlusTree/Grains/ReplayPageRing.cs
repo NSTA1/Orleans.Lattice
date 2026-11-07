@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace Orleans.Lattice.BPlusTree.Grains;
 
 /// <summary>
@@ -7,9 +9,13 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </summary>
 /// <remarks>
 /// <para>
-/// <b>Not thread-safe; it relies on the grain.</b> Every member runs inside the
-/// owning coordinator's turn. The coordinator's reads interleave, so members are
-/// called between awaits, but never concurrently.
+/// <b>Threading.</b> The fill bookkeeping, the epoch and the incarnation are
+/// touched only inside the owning coordinator's turn. The pages and the demand
+/// table are also read, and pages removed, by <see cref="ReplayPageLedger"/>
+/// on behalf of other rings, so every change to either runs under the ledger's
+/// lock, and the pages are published as an immutable array: a serve that took
+/// the array before an eviction keeps projecting from it, and pages are
+/// immutable, so that serve is unaffected (condition AC2).
 /// </para>
 /// <para>
 /// <b>Incarnation (conditions I2, I3).</b> The ring holds pages of exactly one
@@ -18,25 +24,46 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// (<see cref="TryInsert"/>).
 /// </para>
 /// <para>
-/// <b>Memory (condition A-f).</b> A ring holds at most
-/// <see cref="LatticeOptions.WalReplayPageRingBytes"/> of estimated page bytes,
-/// evicting its lowest pages first, which every replaying leaf has already
-/// passed; and the rings of one process together never exceed that same budget,
-/// because a page that would take the process past it is served without being
-/// cached. The worst case is therefore the budget plus the fills in flight,
-/// each bounded by the slice budget.
+/// <b>Memory (condition A-f, issue #5877).</b> Page bytes are charged to the
+/// process's <see cref="ReplayPageLedger"/>, which bounds every ring together
+/// and chooses what to evict across all of them. The worst case is that bound
+/// plus the fills in flight, each bounded by the slice budget.
+/// </para>
+/// <para>
+/// <b>Demand (issue #5877).</b> Leaves queued for, or reading, this partition
+/// declare their next offset, so the ledger evicts the pages no one still needs
+/// before those the next admission wave will read. The table is bounded and
+/// leased, and it is advisory only (condition DT2).
 /// </para>
 /// </remarks>
-internal sealed class ReplayPageRing(long budgetBytes)
+internal sealed class ReplayPageRing
 {
-    private static long _processBytes;
+    /// <summary>The most declared readers a ring tracks; the oldest lease is dropped beyond it (condition DT3).</summary>
+    internal const int MaxDemandEntries = 4096;
 
-    private readonly List<ReplayPage> _pages = [];
+    private readonly ReplayPageLedger _ledger;
     private readonly Dictionary<long, (Task<ReplayPage?> Fill, long StartedAt)> _fills = [];
+    private readonly Dictionary<string, (long Next, long ExpiresAt)> _demand = new(StringComparer.Ordinal);
+    private readonly object _demandGate = new();
+    private Slot[] _slots = [];
     private long _bytes;
+    private bool _detached;
+    private long[]? _liveDemand;
+    private long _liveDemandValidUntil = long.MinValue;
 
-    /// <summary>Estimated bytes all rings in this process hold.</summary>
-    internal static long ProcessBytes => Volatile.Read(ref _processBytes);
+    /// <summary>One cached page, with its estimated size and the order it was admitted in.</summary>
+    internal readonly record struct Slot(ReplayPage Page, long Bytes, long Sequence);
+
+    /// <summary>Creates a ring charged to <paramref name="ledger"/>.</summary>
+    internal ReplayPageRing(ReplayPageLedger ledger)
+    {
+        ArgumentNullException.ThrowIfNull(ledger);
+        _ledger = ledger;
+        ledger.Attach(this);
+    }
+
+    /// <summary>The ledger this ring is charged to.</summary>
+    internal ReplayPageLedger Ledger => _ledger;
 
     /// <summary>The partition incarnation the ring's pages belong to, or <see langword="null"/> before the first check.</summary>
     public long? Incarnation { get; private set; }
@@ -44,11 +71,26 @@ internal sealed class ReplayPageRing(long budgetBytes)
     /// <summary>Advances whenever the ring is reset; a fill inserts only at the epoch it started at.</summary>
     public long Epoch { get; private set; }
 
-    /// <summary>The pages, ascending by <see cref="ReplayPage.FromExclusive"/>.</summary>
-    public IReadOnlyList<ReplayPage> Pages => _pages;
+    /// <summary>
+    /// The pages, ascending by <see cref="ReplayPage.FromExclusive"/>. Copies;
+    /// for tests and diagnostics only - a serve uses <see cref="RunFrom"/>.
+    /// </summary>
+    internal IReadOnlyList<ReplayPage> Pages => Array.ConvertAll(Volatile.Read(ref _slots), s => s.Page);
+
+    /// <summary>
+    /// Whether the ring has been cleared and detached from the ledger. Read
+    /// under the ledger's lock; a detached ring admits nothing (issue #5877).
+    /// </summary>
+    internal bool IsDetachedLocked => _detached;
+
+    /// <summary>Marks the ring detached. Runs under the ledger's lock.</summary>
+    internal void MarkDetachedLocked() => _detached = true;
 
     /// <summary>Estimated bytes this ring holds.</summary>
-    public long Bytes => _bytes;
+    public long Bytes => Volatile.Read(ref _bytes);
+
+    /// <summary>The cached pages, for the ledger. Read under its lock.</summary>
+    internal Slot[] SlotsLocked => _slots;
 
     /// <summary>
     /// Drops every page and starts the ring at <paramref name="incarnation"/>.
@@ -56,9 +98,11 @@ internal sealed class ReplayPageRing(long budgetBytes)
     /// </summary>
     public void Reset(long incarnation)
     {
-        foreach (var page in _pages)
-            Release(page);
-        _pages.Clear();
+        lock (_ledger.Gate)
+        {
+            var pages = _slots.Length;
+            _ledger.ReleaseLocked(DropAllLocked(), pages);
+        }
         _fills.Clear();
         Incarnation = incarnation;
         Epoch++;
@@ -67,14 +111,21 @@ internal sealed class ReplayPageRing(long budgetBytes)
     /// <summary>
     /// The pages from the one covering <paramref name="fromExclusive"/>
     /// onwards, for <see cref="ReplaySliceProjection.Project"/>; empty when no
-    /// page covers it.
+    /// page covers it. The result is a snapshot: a later eviction does not
+    /// change it.
     /// </summary>
     public IReadOnlyList<ReplayPage> RunFrom(long fromExclusive)
     {
-        for (var i = 0; i < _pages.Count; i++)
+        var slots = Volatile.Read(ref _slots);
+        for (var i = 0; i < slots.Length; i++)
         {
-            if (_pages[i].CoversFrom(fromExclusive))
-                return _pages.GetRange(i, _pages.Count - i);
+            if (slots[i].Page.CoversFrom(fromExclusive))
+            {
+                var run = new ReplayPage[slots.Length - i];
+                for (var j = i; j < slots.Length; j++)
+                    run[j - i] = slots[j].Page;
+                return run;
+            }
         }
 
         return [];
@@ -107,35 +158,158 @@ internal sealed class ReplayPageRing(long budgetBytes)
 
     /// <summary>
     /// Inserts a filled page, if the ring is still at the epoch and incarnation
-    /// the fill started at and the byte budgets allow it.
+    /// the fill started at and the ledger can make room for it.
     /// </summary>
     /// <returns>Whether the page is now cached.</returns>
     public bool TryInsert(ReplayPage page, long epoch)
     {
         ArgumentNullException.ThrowIfNull(page);
-        if (epoch != Epoch || page.Incarnation != Incarnation || budgetBytes <= 0)
+        if (epoch != Epoch || page.Incarnation != Incarnation)
             return false;
 
-        var size = EstimateBytes(page);
-        if (size > budgetBytes)
-            return false;
+        return _ledger.TryAdmit(this, page, EstimateBytes(page), Stopwatch.GetTimestamp());
+    }
 
-        while (_pages.Count > 0 && _bytes + size > budgetBytes)
+    /// <summary>
+    /// Records that <paramref name="reader"/> will next read this partition
+    /// after <paramref name="nextExclusive"/>, until <paramref name="leaseTicks"/>
+    /// from now unless renewed. <paramref name="now"/> is a
+    /// <see cref="Stopwatch"/> timestamp; tests supply their own clock.
+    /// </summary>
+    public void NoteDemand(string reader, long nextExclusive, long leaseTicks, long? now = null)
+    {
+        ArgumentNullException.ThrowIfNull(reader);
+        var at = now ?? Stopwatch.GetTimestamp();
+        lock (_demandGate)
         {
-            Release(_pages[0]);
-            _pages.RemoveAt(0);
+            if (!_demand.ContainsKey(reader) && _demand.Count >= MaxDemandEntries)
+            {
+                string? oldest = null;
+                var oldestExpiry = long.MaxValue;
+                foreach (var (key, entry) in _demand)
+                {
+                    if (entry.ExpiresAt < oldestExpiry)
+                        (oldest, oldestExpiry) = (key, entry.ExpiresAt);
+                }
+
+                _demand.Remove(oldest!);
+            }
+
+            _demand[reader] = (nextExclusive, at + leaseTicks);
+            _liveDemand = null;
+        }
+    }
+
+    /// <summary>Forgets <paramref name="reader"/>'s demand: its replay of this partition is over.</summary>
+    public void ClearDemand(string reader)
+    {
+        ArgumentNullException.ThrowIfNull(reader);
+        lock (_demandGate)
+        {
+            if (_demand.Remove(reader))
+                _liveDemand = null;
+        }
+    }
+
+    /// <summary>The number of readers currently declared, live or not.</summary>
+    internal int DemandCount
+    {
+        get { lock (_demandGate) { return _demand.Count; } }
+    }
+
+    /// <summary>
+    /// The next offsets of the readers whose lease has not expired, ascending,
+    /// dropping the expired ones. Recomputed only when the table changed or a
+    /// lease lapsed, so repeated eviction passes reuse one array.
+    /// </summary>
+    internal long[] LiveDemand(long now)
+    {
+        lock (_demandGate)
+        {
+            if (_liveDemand is not null && now < _liveDemandValidUntil)
+                return _liveDemand;
+
+            List<string>? expired = null;
+            var live = new long[_demand.Count];
+            var count = 0;
+            var validUntil = long.MaxValue;
+            foreach (var (reader, entry) in _demand)
+            {
+                if (entry.ExpiresAt <= now)
+                {
+                    (expired ??= []).Add(reader);
+                    continue;
+                }
+
+                live[count++] = entry.Next;
+                validUntil = Math.Min(validUntil, entry.ExpiresAt);
+            }
+
+            if (expired is not null)
+            {
+                foreach (var reader in expired)
+                    _demand.Remove(reader);
+            }
+
+            Array.Resize(ref live, count);
+            Array.Sort(live);
+            _liveDemand = live;
+            _liveDemandValidUntil = validUntil;
+            return live;
+        }
+    }
+
+    /// <summary>Adds a page in offset order. Runs under the ledger's lock.</summary>
+    internal void AddLocked(ReplayPage page, long bytes, long sequence)
+    {
+        var slots = _slots;
+        var index = Array.FindIndex(slots, s => s.Page.FromExclusive > page.FromExclusive);
+        if (index < 0)
+            index = slots.Length;
+        var next = new Slot[slots.Length + 1];
+        Array.Copy(slots, next, index);
+        next[index] = new Slot(page, bytes, sequence);
+        Array.Copy(slots, index, next, index + 1, slots.Length - index);
+        Volatile.Write(ref _slots, next);
+        Volatile.Write(ref _bytes, _bytes + bytes);
+    }
+
+    /// <summary>
+    /// Removes the pages of <paramref name="candidates"/> in
+    /// <c>[start, end)</c>, all of this ring, rebuilding the page array once.
+    /// Runs under the ledger's lock.
+    /// </summary>
+    /// <returns>The bytes freed.</returns>
+    internal long RemoveManyLocked(ReplayPageLedger.Candidate[] candidates, int start, int end)
+    {
+        var slots = _slots;
+        var victims = new HashSet<ReplayPage>(end - start, ReferenceEqualityComparer.Instance);
+        for (var i = start; i < end; i++)
+            victims.Add(candidates[i].Slot.Page);
+
+        var keep = new List<Slot>(slots.Length);
+        var freed = 0L;
+        foreach (var slot in slots)
+        {
+            if (victims.Contains(slot.Page))
+                freed += slot.Bytes;
+            else
+                keep.Add(slot);
         }
 
-        if (Interlocked.Add(ref _processBytes, size) > budgetBytes)
-        {
-            Interlocked.Add(ref _processBytes, -size);
-            return false;
-        }
+        Volatile.Write(ref _slots, keep.ToArray());
+        Volatile.Write(ref _bytes, _bytes - freed);
+        return freed;
+    }
 
-        _bytes += size;
-        var index = _pages.FindIndex(p => p.FromExclusive > page.FromExclusive);
-        _pages.Insert(index < 0 ? _pages.Count : index, page);
-        return true;
+    /// <summary>Drops every page. Runs under the ledger's lock.</summary>
+    /// <returns>The bytes freed.</returns>
+    internal long DropAllLocked()
+    {
+        var freed = _bytes;
+        Volatile.Write(ref _slots, []);
+        Volatile.Write(ref _bytes, 0);
+        return freed;
     }
 
     /// <summary>
@@ -179,20 +353,20 @@ internal sealed class ReplayPageRing(long budgetBytes)
         return page;
     }
 
-    /// <summary>Drops every page, returning its bytes to the process budget.</summary>
+    /// <summary>Drops every page and detaches from the ledger: the coordinator is deactivating.</summary>
     public void Clear()
     {
-        foreach (var page in _pages)
-            Release(page);
-        _pages.Clear();
+        _ledger.Detach(this);
         _fills.Clear();
-    }
 
-    private void Release(ReplayPage page)
-    {
-        var size = EstimateBytes(page);
-        _bytes -= size;
-        Interlocked.Add(ref _processBytes, -size);
+        // A fill still in flight - one joined past its aging bound, say - finishes
+        // after this; the new epoch and the detached flag both refuse its page.
+        Epoch++;
+        lock (_demandGate)
+        {
+            _demand.Clear();
+            _liveDemand = null;
+        }
     }
 
     /// <summary>An estimate of the bytes a page holds: per entry, its key, value and a fixed overhead.</summary>
@@ -209,7 +383,4 @@ internal sealed class ReplayPageRing(long budgetBytes)
 
         return bytes;
     }
-
-    /// <summary>Test-only: forgets the process-wide tally.</summary>
-    internal static void ResetProcessBytesForTest() => Volatile.Write(ref _processBytes, 0);
 }

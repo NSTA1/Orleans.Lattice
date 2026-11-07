@@ -21,7 +21,8 @@ public partial class LatticeGrainTests
         int maxInternalChildren = 128,
         IHostApplicationLifetime? lifetime = null,
         ILatticeMergeModeResolver? mergeModeResolver = null,
-        IWalSaturationSignal? saturationSignal = null)
+        IWalSaturationSignal? saturationSignal = null,
+        IServiceProvider? activationServices = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("lattice", treeId));
@@ -71,7 +72,7 @@ public partial class LatticeGrainTests
             services.GetService(typeof(ILatticeMergeModeResolver)).Returns(mergeModeResolver);
         }
         var logger = NullLogger<LatticeGrain>.Instance;
-        var grain = new LatticeGrain(context, grainFactory, optionsMonitor, optionsResolver, services, logger);
+        var grain = new LatticeGrain(context, grainFactory, optionsMonitor, optionsResolver, activationServices ?? services, logger);
         return (grain, grainFactory);
     }
 

@@ -405,6 +405,9 @@ from this specification.**
   pages inside the old coverage without a fill and be served stale entries at reused
   offsets, and a transient duplicate coordinator activation is beyond the reach of any
   invalidation call, so only the per-serve check closes both. Shared pages are never mutated (A-d).
+  Eviction, including the leaves' advisory demand declarations that order it (issue #5877),
+  decides only which pages stay cached, never what a serve returns: a page that is not cached
+  is fetched, so demand changes the number of storage reads and not the refinement.
   Production pins it:
   `LeafReplayCoordinatorGrainTests.Ring_projection_equals_provider_filtered_read_for_random_windows_filters_budgets_holes_and_tails`,
   `LeafReplayCoordinatorGrainTests.A_page_filled_at_tail_t_never_serves_entries_appended_after_t_as_absent`,

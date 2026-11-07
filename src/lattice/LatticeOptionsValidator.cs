@@ -473,11 +473,12 @@ if (options.WalMaterialiserPinBuckets < 1)
         + "(one persists the whole shard to the single legacy wal-materialiser-pins slot; a higher value splits it "
         + "across that many independently-written durable slots so a pin advance rewrites only its own bucket).");
 }
-if (options.WalReplayPageRingBytes < 0)
+if (options.WalReplayPageRingBytes < LatticeOptions.AutoWalReplayPageRingBytes)
 {
     return ValidateOptionsResult.Fail(
-        $"{nameof(LatticeOptions.WalReplayPageRingBytes)} must be greater than or equal to 0 "
-        + "(zero disables the shared replay page cache).");
+        $"{nameof(LatticeOptions.WalReplayPageRingBytes)} must be greater than or equal to -1 "
+        + "(-1, the default, charges the shared replay page cache to the resident working-set budget; "
+        + "zero disables it; a positive value caps it).");
 }
 if (options.WalMaterialiserMaxConcurrentReplays < LatticeOptions.AutoWalMaterialiserMaxConcurrentReplays)
 {

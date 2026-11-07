@@ -438,6 +438,15 @@ public static class LatticeEventConstants
     internal const string CompactionPathRequestContextKey = "ol.cpath";
 
     /// <summary>
+    /// <see cref="Orleans.Runtime.RequestContext"/> key carrying the id of the
+    /// leaf whose replay issued a commit-log slice read (issue #5877), so the
+    /// partition's replay coordinator can track how far each reader has got and
+    /// keep the pages it will read next. Internal - set through
+    /// <see cref="BPlusTree.Grains.LeafReplayReaderContext"/>.
+    /// </summary>
+    internal const string ReplayReaderRequestContextKey = "ol.rrdr";
+
+    /// <summary>
     /// Orleans <c>RequestContext</c> key used to carry an optional
     /// server-side predicate IR (<see cref="LatticePredicateNode"/>) from a
     /// typed predicate overload on the extension layer down into the leaf

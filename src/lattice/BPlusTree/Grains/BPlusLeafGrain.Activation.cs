@@ -643,6 +643,7 @@ internal sealed partial class BPlusLeafGrain
             _replayServiceRateController = null;
             _storageWithheldReplayPermits = 0;
             _replayStoragePressureGovernor = null;
+            _replayProcessCpu = RealProcessCpu;
             Volatile.Write(ref _queuedReplayPermitWaiters, 0);
             Volatile.Write(ref _replayPermitWaitEwmaTicks, 0);
             Volatile.Write(ref _replayPermitWaitSample, 0);
@@ -1971,6 +1972,12 @@ internal sealed partial class BPlusLeafGrain
             var permitWaitScope = LatticeMetrics.EnterWalReplayPermitWait(state.State.TreeId);
             try
             {
+                // Only a leaf that actually queues declares the pages it will
+                // read (issue #5877, condition DT1); one admitted at once
+                // records its position with its first read.
+                if (gate.CurrentCount == 0)
+                    await DeclareReplayDemandAsync(options);
+
                 try
                 {
                     await gate.WaitAsync(cancellationToken).ConfigureAwait(true);
@@ -3895,6 +3902,22 @@ internal sealed partial class BPlusLeafGrain
                     RecordReplayPermitHold(replayPermitAcquiredAt, metricTreeId, _replayPermitTreeId);
                 }
             }
+
+            // Withdrawn only after the permit is back (#5999): the withdrawal makes
+            // grain calls, and nothing it does may stand between the replay and
+            // the release. It is advisory, so a fault is swallowed; an undelivered
+            // withdrawal lapses with its lease.
+            if (_declaredReplayDemandPartitions > 0)
+            {
+                try
+                {
+                    await ClearDeclaredReplayDemandAsync();
+                }
+                catch
+                {
+                    // Advisory; see above.
+                }
+            }
         }
 
         // Step 1.35 - account this activation's resident footprint against the
@@ -4163,6 +4186,80 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private bool WalStoreIsRemote()
         => context.ActivationServices?.GetService<IWalStorageProvider>()?.IsRemote == true;
+
+    /// <summary>This leaf's id as a replay reader (issue #5877).</summary>
+    private string ReplayReaderId => context.GrainId.ToString();
+
+    /// <summary>Partitions this activation declared replay demand on and has not yet withdrawn.</summary>
+    private int _declaredReplayDemandPartitions;
+
+    /// <summary>
+    /// Tells every partition's replay coordinator where this queued leaf will
+    /// start reading, so the replay page cache keeps those pages (issue #5877).
+    /// One-way and advisory: a lost declaration costs storage reads only.
+    /// </summary>
+    private async Task DeclareReplayDemandAsync(LatticeOptions options)
+    {
+        var treeId = state.State.TreeId;
+        if (string.IsNullOrEmpty(treeId) || options.WalReplayPageRingBytes == 0)
+            return;
+
+        var partitions = Math.Max(1, options.WalPartitions);
+        var reader = ReplayReaderId;
+        for (var partition = 0; partition < partitions; partition++)
+        {
+            try
+            {
+                await grainFactory.GetGrain<ILeafReplayCoordinatorGrain>($"{treeId}/{partition}")
+                    .DeclareReplayDemandAsync(reader, GetPersistedCheckpointForPartition(partition));
+            }
+            catch
+            {
+                // Advisory: an undelivered declaration costs storage reads only.
+            }
+        }
+
+        _declaredReplayDemandPartitions = partitions;
+    }
+
+    /// <summary>
+    /// Test-only: a fault <see cref="ClearDeclaredReplayDemandAsync"/> throws in
+    /// place of withdrawing, so a test can prove a failed withdrawal never costs
+    /// the replay its permit (#5999).
+    /// </summary>
+    internal static Exception? ReplayDemandWithdrawalFaultForTest;
+
+    /// <summary>Withdraws the demand <see cref="DeclareReplayDemandAsync"/> declared.</summary>
+    /// <remarks>
+    /// Runs in the replay's finally, after the permit's release, so nothing it
+    /// does can strand the permit (#5999). It still reads no grain state, since
+    /// the activation may have been invalidated during the replay: the tree id is
+    /// the one captured when the permit path was entered.
+    /// </remarks>
+    private async Task ClearDeclaredReplayDemandAsync()
+    {
+        var partitions = _declaredReplayDemandPartitions;
+        _declaredReplayDemandPartitions = 0;
+        if (Volatile.Read(ref ReplayDemandWithdrawalFaultForTest) is { } fault)
+            throw fault;
+        var treeId = _replayPermitTreeId;
+        if (string.IsNullOrEmpty(treeId))
+            return;
+
+        var reader = ReplayReaderId;
+        for (var partition = 0; partition < partitions; partition++)
+        {
+            try
+            {
+                await grainFactory.GetGrain<ILeafReplayCoordinatorGrain>($"{treeId}/{partition}")
+                    .ClearReplayDemandAsync(reader);
+            }
+            catch
+            {
+                // Advisory: an undelivered withdrawal lapses with its lease.
+            }
+        }
+    }
 
     /// <summary>
     /// Accounts what this activation will keep resident against the per-silo
@@ -7158,7 +7255,8 @@ internal sealed partial class BPlusLeafGrain
             MetricTreeId,
             partition,
             (await GetOptionsAsync()).WalReplaySliceBudget,
-            replayOwnership.Filter);
+            replayOwnership.Filter,
+            ReplayReaderId);
 
         // Reuse the head the sweep-order pre-pass already probed when it has
         // one, so ordering the sweep costs no extra grain call. A head probed

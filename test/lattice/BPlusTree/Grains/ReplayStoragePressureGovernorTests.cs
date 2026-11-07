@@ -11,7 +11,9 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 [TestFixture]
 public class ReplayStoragePressureGovernorTests
 {
-    private const long Window = 100;
+    // One second on every platform: a window of a few hundred nanoseconds (100 ticks at Linux's
+    // 10^9 Hz Stopwatch) quantises the injected CPU time to whole TimeSpan ticks.
+    private static readonly long Window = Stopwatch.Frequency;
 
     /// <summary>Builds cumulative tallies the way the process-wide recorder accumulates them.</summary>
     private sealed class Tallies
@@ -324,5 +326,189 @@ public class ReplayStoragePressureGovernorTests
         Assert.That(end.P99MillisecondsSince(start), Is.EqualTo(4.096).Within(1e-9),
             "99 of 100 window reads took 4 ms, in the [3.584, 4.096) ms bucket; earlier slow reads are outside the window");
         Assert.That(start.P99MillisecondsSince(start), Is.Null);
+    }
+
+    /// <summary>CPU utilisation over one window as a cumulative process CPU time, the way the governor reads it.</summary>
+    private sealed class Cpu
+    {
+        private TimeSpan _total;
+
+        public TimeSpan Advance(double utilisation, int cores) =>
+            _total += TimeSpan.FromSeconds(utilisation * cores * Window / (double)Stopwatch.Frequency);
+
+        public TimeSpan Total => _total;
+    }
+
+    /// <summary>
+    /// Issue #5971: after a storm the latency arm must not hold the ceiling down.
+    /// Slice-read p99 stays high from queueing behind the reduced gate, so with
+    /// latency alone the ceiling ratchets; with CPU headroom and leaves queued it
+    /// must return to within one step of the configured ceiling within a few
+    /// windows.
+    /// </summary>
+    [Test]
+    public void After_load_drops_with_leaves_queued_the_ceiling_returns_within_one_step_in_a_few_windows()
+    {
+        const int cores = 4, ceiling = 32, maxRecoveryWindows = 6;
+        var governor = new ReplayStoragePressureGovernor(Window);
+        var tallies = new Tallies();
+        var cpu = new Cpu();
+        long now = 0;
+        Assert.That(governor.Observe(now, tallies.Sample, ceiling, 0, cpu.Total, cores), Is.Null);
+        now += Window;
+        governor.Observe(now, tallies.Add(20, 4), ceiling, 0, cpu.Advance(0.3, cores), cores);
+
+        // The storm: saturated CPU and slow reads walk the ceiling down.
+        for (var i = 0; i < 12; i++)
+        {
+            now += Window;
+            governor.Observe(now, tallies.Add(100, 64), ceiling, 250, cpu.Advance(0.95, cores), cores);
+        }
+
+        Assert.That(governor.Target, Is.GreaterThan(1), "instrument validation: the storm withheld permits");
+
+        // The load drops: CPU has headroom, reads are still slow from queueing,
+        // and leaves are still queued.
+        var windows = 0;
+        while (governor.Target > 1 && windows < 20)
+        {
+            now += Window;
+            governor.Observe(now, tallies.Add(30, 64), ceiling, 248, cpu.Advance(0.5, cores), cores);
+            windows++;
+        }
+
+        Assert.That(windows, Is.LessThanOrEqualTo(maxRecoveryWindows),
+            "with CPU headroom and leaves queued, the ceiling must climb back to within one step");
+    }
+
+    [Test]
+    public void At_the_cpu_knee_slow_reads_still_withhold_with_the_latency_reason()
+    {
+        const int cores = 4;
+        var governor = new ReplayStoragePressureGovernor(Window);
+        var tallies = new Tallies();
+        var cpu = new Cpu();
+        long now = 0;
+        governor.Observe(now, tallies.Sample, 32, 0, cpu.Total, cores);
+        now += Window;
+        governor.Observe(now, tallies.Add(20, 4), 32, 0, cpu.Advance(0.3, cores), cores);
+
+        now += Window;
+        var step = governor.Observe(now, tallies.Add(20, 16), 32, 10, cpu.Advance(0.95, cores), cores);
+
+        Assert.That(step, Is.EqualTo(new ReplayStoragePressureStep(-1, ReplayStoragePressureReason.Latency)));
+    }
+
+    [Test]
+    public void Below_the_cpu_knee_slow_reads_do_not_withhold()
+    {
+        const int cores = 4;
+        var governor = new ReplayStoragePressureGovernor(Window);
+        var tallies = new Tallies();
+        var cpu = new Cpu();
+        long now = 0;
+        governor.Observe(now, tallies.Sample, 32, 0, cpu.Total, cores);
+        now += Window;
+        governor.Observe(now, tallies.Add(20, 4), 32, 0, cpu.Advance(0.3, cores), cores);
+
+        now += Window;
+        var step = governor.Observe(now, tallies.Add(20, 16), 32, 10, cpu.Advance(0.7, cores), cores);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(step, Is.Null, "slow reads with CPU below the knee are queueing, not a knee");
+            Assert.That(governor.Target, Is.Zero);
+        });
+    }
+
+    [Test]
+    public void Throttling_withholds_whatever_the_cpu_headroom()
+    {
+        const int cores = 4;
+        var governor = new ReplayStoragePressureGovernor(Window);
+        var tallies = new Tallies();
+        var cpu = new Cpu();
+        governor.Observe(0, tallies.Sample, 32, 0, cpu.Total, cores);
+
+        var step = governor.Observe(Window, tallies.Add(100, 4, retries: 1), 32, 10, cpu.Advance(0.2, cores), cores);
+
+        Assert.That(step, Is.EqualTo(new ReplayStoragePressureStep(-1, ReplayStoragePressureReason.Throttle)));
+    }
+
+    /// <summary>
+    /// The utilisation is CPU time over the CPU the process can obtain, not
+    /// over host cores: the same CPU time is headroom on a 4-core quota and a
+    /// saturated knee on a 2-core one (issue #5971).
+    /// </summary>
+    [Test]
+    public void Utilisation_is_measured_against_the_cpu_the_process_can_obtain()
+    {
+        static ReplayStoragePressureStep? Run(int cores)
+        {
+            var governor = new ReplayStoragePressureGovernor(Window);
+            var tallies = new Tallies();
+            var cpu = new Cpu();
+            governor.Observe(0, tallies.Sample, 32, 0, cpu.Total, cores);
+            governor.Observe(Window, tallies.Add(20, 4), 32, 0, cpu.Advance(0.1, 4), cores);
+
+            // Two cores' worth of CPU time in the window, slow reads, a queue.
+            return governor.Observe(2 * Window, tallies.Add(20, 16), 32, 10, cpu.Advance(0.5, 4), cores);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Run(cores: 4), Is.Null, "two of four cores is below the knee: no latency step");
+            Assert.That(Run(cores: 2), Is.EqualTo(new ReplayStoragePressureStep(-1, ReplayStoragePressureReason.Latency)),
+                "two of two cores is the knee: the latency arm withholds");
+        });
+    }
+
+    [Test]
+    public void The_cpu_denominator_is_the_lesser_of_the_processor_count_and_the_container_grant()
+        => Assert.That(BPlusLeafGrain.ReplayCpuCoresForTest, Is.EqualTo(
+            BPlusLeafGrain.ResolveDefaultReplayCeiling(Environment.ProcessorCount, Orleans.Lattice.Internal.Cgroups.ContainerCpuGrant.Read())));
+
+    /// <summary>
+    /// The band between <see cref="ReplayStoragePressureGovernor.LowCpuUtilisation"/>
+    /// and <see cref="ReplayStoragePressureGovernor.HighCpuUtilisation"/> takes no
+    /// step, so under a steady load whose CPU scales with the permits in
+    /// circulation the ceiling settles instead of flapping: at most one change
+    /// of direction, then no step for the rest of the run.
+    /// </summary>
+    [TestCase(16.0)]
+    [TestCase(22.0)]
+    [TestCase(28.0)]
+    public void Under_a_steady_load_the_ceiling_settles_inside_the_cpu_band_without_flapping(double kneePermits)
+    {
+        const int cores = 4, ceiling = 32, windows = 60;
+        var governor = new ReplayStoragePressureGovernor(Window);
+        var tallies = new Tallies();
+        var cpu = new Cpu();
+        long now = 0;
+        governor.Observe(now, tallies.Sample, ceiling, 0, cpu.Total, cores);
+        now += Window;
+        governor.Observe(now, tallies.Add(20, 4), ceiling, 0, cpu.Advance(0.2, cores), cores);
+
+        var directions = new List<int>();
+        var lastStepWindow = -1;
+        for (var w = 0; w < windows; w++)
+        {
+            var circulating = ceiling - governor.Target;
+            var utilisation = Math.Min(1.0, circulating / kneePermits);
+            now += Window;
+            var step = governor.Observe(now, tallies.Add(100, 64), ceiling, 100, cpu.Advance(utilisation, cores), cores);
+            if (step is { } taken)
+            {
+                directions.Add(taken.Direction);
+                lastStepWindow = w;
+            }
+        }
+
+        var reversals = directions.Zip(directions.Skip(1)).Count(pair => pair.First != pair.Second);
+        Assert.Multiple(() =>
+        {
+            Assert.That(reversals, Is.LessThanOrEqualTo(1), $"directions: {string.Join(",", directions)}");
+            Assert.That(lastStepWindow, Is.LessThan(windows / 2), "the ceiling settles in the first half of the run");
+        });
     }
 }

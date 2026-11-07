@@ -81,6 +81,7 @@ internal sealed class ReplaySliceReader
     private readonly int _partition;
     private readonly int _initialBudget;
     private readonly WalKeyFilter _filter;
+    private readonly string? _reader;
 
     private int _budget;
 
@@ -127,7 +128,8 @@ internal sealed class ReplaySliceReader
         string treeId,
         int partition,
         int initialBudget = InitialBudget,
-        WalKeyFilter filter = default)
+        WalKeyFilter filter = default,
+        string? reader = null)
     {
         ArgumentNullException.ThrowIfNull(coordinator);
         ArgumentNullException.ThrowIfNull(treeId);
@@ -136,6 +138,7 @@ internal sealed class ReplaySliceReader
         _treeId = treeId;
         _partition = partition;
         _filter = filter;
+        _reader = reader;
         // Clamp rather than throw, and do not "tidy" this into agreement with
         // the validator. The two guards sit on the same value at seams where
         // failure costs differently, so their postures differ deliberately.
@@ -244,18 +247,32 @@ internal sealed class ReplaySliceReader
                 // A bounded filter takes the filtered overload (issue #3565); an
                 // unbounded one keeps the unfiltered read, which is the same
                 // result without the push-down.
-                var read = !_filter.IsUnbounded
-                    ? _coordinator.ReadSliceAsync(
-                        fromExclusive,
-                        toInclusive,
-                        _budget,
-                        _filter,
-                        cancellationToken)
-                    : _coordinator.ReadSliceAsync(
-                        fromExclusive,
-                        toInclusive,
-                        _budget,
-                        cancellationToken);
+                //
+                // The replaying leaf's id rides on the request context of this
+                // one call only (issue #5877), so the coordinator can record how
+                // far the reader has got; it is removed as soon as the call is
+                // issued, so no other call carries it.
+                Task<IReadOnlyList<CommitLogSliceEntry>> read;
+                var readerScope = _reader is null ? null : LeafReplayReaderContext.BeginScope(_reader);
+                try
+                {
+                    read = !_filter.IsUnbounded
+                        ? _coordinator.ReadSliceAsync(
+                            fromExclusive,
+                            toInclusive,
+                            _budget,
+                            _filter,
+                            cancellationToken)
+                        : _coordinator.ReadSliceAsync(
+                            fromExclusive,
+                            toInclusive,
+                            _budget,
+                            cancellationToken);
+                }
+                finally
+                {
+                    readerScope?.Dispose();
+                }
                 slice = await AwaitProviderReadAsync(read, cancellationToken);
                 // The storage-pressure governor's latency signal (issue #5877):
                 // successful reads only, so a cancelled or faulted read cannot
