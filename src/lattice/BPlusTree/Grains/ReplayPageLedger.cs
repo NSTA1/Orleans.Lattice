@@ -46,6 +46,18 @@ internal sealed class ReplayPageLedger
     private long _cap = long.MaxValue;
     private long _sequence;
 
+    /// <summary>
+    /// When an admission must make room, it frees this fraction of the room
+    /// beyond what it needs, so the eviction pass is amortised over the
+    /// admissions that follow.
+    /// </summary>
+    internal const int EvictionHeadroomDivisor = 16;
+
+    /// <summary>The cached page count from which eviction frees headroom in bulk.</summary>
+    internal const int BulkEvictionMinimumPages = 64;
+
+    private int _pageCount;
+
     internal ReplayPageLedger(LeafResidentWorkingSet owner) => _owner = owner;
 
     /// <summary>The lock every page and demand mutation takes: the working set's own.</summary>
@@ -97,6 +109,7 @@ internal sealed class ReplayPageLedger
     {
         lock (Gate)
         {
+            _pageCount -= ring.SlotsLocked.Length;
             _bytes -= ring.DropAllLocked();
             ring.MarkDetachedLocked();
             _rings.Remove(ring);
@@ -129,12 +142,22 @@ internal sealed class ReplayPageLedger
             if (size > room)
                 return false;
 
-            EvictLocked(room - size, now);
+            // Evict in bulk: when room must be made in a large cache, make a
+            // sixteenth of the budget more than this page needs, so the ranking
+            // pass is paid about once per that many admissions rather than on
+            // each one. A small cache evicts exactly, since a sixteenth of it
+            // can be most of a page.
+            if (_bytes + size > room)
+            {
+                var headroom = _pageCount >= BulkEvictionMinimumPages ? room / EvictionHeadroomDivisor : 0;
+                EvictLocked(room - size - headroom, now);
+            }
             if (_bytes + size > room)
                 return false;
 
             ring.AddLocked(page, size, ++_sequence);
             _bytes += size;
+            _pageCount++;
             return true;
         }
     }
@@ -151,8 +174,12 @@ internal sealed class ReplayPageLedger
         return before - _bytes;
     }
 
-    /// <summary>Releases bytes a ring dropped on its own (a reset or a clear).</summary>
-    internal void ReleaseLocked(long bytes) => _bytes -= bytes;
+    /// <summary>Releases the bytes and pages a ring dropped on its own (a reset).</summary>
+    internal void ReleaseLocked(long bytes, int pages)
+    {
+        _bytes -= bytes;
+        _pageCount -= pages;
+    }
 
     /// <summary>
     /// Evicts down to <paramref name="target"/> (and the cap) in one pass: every
@@ -172,7 +199,19 @@ internal sealed class ReplayPageLedger
         if (count == 0)
             return;
 
-        var candidates = new Candidate[count];
+        var candidates = System.Buffers.ArrayPool<Candidate>.Shared.Rent(count);
+        try
+        {
+            EvictRankedLocked(candidates, now, Math.Max(0, _bytes - Math.Max(0, limit)));
+        }
+        finally
+        {
+            System.Buffers.ArrayPool<Candidate>.Shared.Return(candidates, clearArray: true);
+        }
+    }
+
+    private void EvictRankedLocked(Candidate[] candidates, long now, long excess)
+    {
         var n = 0;
         foreach (var ring in _rings)
         {
@@ -181,9 +220,8 @@ internal sealed class ReplayPageLedger
                 candidates[n++] = new Candidate(ring, slot, Rank(slot, demand));
         }
 
-        Array.Sort(candidates, static (a, b) => Compare(b.Rank, a.Rank));
+        Array.Sort(candidates, 0, n, EvictFirst.Instance);
 
-        var excess = _bytes - limit;
         var chosen = 0;
         while (chosen < n && excess > 0)
             excess -= candidates[chosen++].Slot.Bytes;
@@ -196,12 +234,21 @@ internal sealed class ReplayPageLedger
             while (end < chosen && ReferenceEquals(candidates[end].Ring, candidates[start].Ring))
                 end++;
             _bytes -= candidates[start].Ring.RemoveManyLocked(candidates, start, end);
+            _pageCount -= end - start;
             start = end;
         }
     }
 
     /// <summary>One page considered for eviction, with its rank.</summary>
     internal readonly record struct Candidate(ReplayPageRing Ring, ReplayPageRing.Slot Slot, (int Class, long Key, long Bytes) Rank);
+
+    /// <summary>Orders candidates so the page to evict first comes first.</summary>
+    private sealed class EvictFirst : IComparer<Candidate>
+    {
+        public static readonly EvictFirst Instance = new();
+
+        public int Compare(Candidate x, Candidate y) => ReplayPageLedger.Compare(y.Rank, x.Rank);
+    }
 
     /// <summary>Groups candidates by ring so each ring's array is rebuilt once.</summary>
     private sealed class RingOrder : IComparer<Candidate>

@@ -99,7 +99,10 @@ internal sealed class ReplayPageRing
     public void Reset(long incarnation)
     {
         lock (_ledger.Gate)
-            _ledger.ReleaseLocked(DropAllLocked());
+        {
+            var pages = _slots.Length;
+            _ledger.ReleaseLocked(DropAllLocked(), pages);
+        }
         _fills.Clear();
         Incarnation = incarnation;
         Epoch++;
