@@ -86,6 +86,10 @@ public sealed class ReplayPageRingColdRestartCensusTests
 
     private static async Task<double> RunCensusAsync(long ringBytes, int waveSize, bool declareQueued, bool overlap = false, double overlapAt = 0.5)
     {
+        // The replay gate is process-wide: start from a fresh one, so a wait
+        // reading or a seeded queue another fixture left cannot change which of
+        // this census's leaves are admitted (#5992 A1).
+        BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
         CountingWalStorageProvider.Reset();
         RingSwitch.Bytes = ringBytes;
         var ring = ringBytes != 0;

@@ -61,6 +61,49 @@ public partial class BPlusLeafGrainTests
 
     [Test]
     [NonParallelizable]
+    public void The_replay_gate_reset_clears_every_reading_admission_judges_by()
+    {
+        // Every input of the admission decision is process-wide, so a reading one
+        // test leaves behind could flip another test's verdict depending on suite
+        // order. The reset every gate-touching fixture calls must clear them all.
+        var maxQueueWait = new LatticeOptions().WalReplayPermitMaxQueueWait;
+        try
+        {
+            BPlusLeafGrain.SeedReplayAdmissionStateForTest(ceiling: 4, queued: 40);
+            BPlusLeafGrain.SeedReplayPermitWaitStateForTest(
+                maxQueueWait,
+                sinceLastProgress: maxQueueWait + TimeSpan.FromSeconds(1),
+                sinceLastSample: TimeSpan.Zero,
+                sinceHolderProgress: TimeSpan.Zero);
+            Assert.That(
+                BPlusLeafGrain.ClassifyReplayPermitQueueDrainWithoutSideEffects(maxQueueWait, out _),
+                Is.EqualTo(BPlusLeafGrain.ReplayPermitDrainVerdict.WaitExceeded),
+                "instrument validation: the seeded reading refuses");
+
+            BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(
+                    BPlusLeafGrain.ClassifyReplayPermitQueueDrainWithoutSideEffects(maxQueueWait, out var sinceProgress),
+                    Is.EqualTo(BPlusLeafGrain.ReplayPermitDrainVerdict.Draining));
+                Assert.That(sinceProgress, Is.EqualTo(TimeSpan.Zero), "no progress stamp survives");
+                Assert.That(BPlusLeafGrain.ReplayPermitWaitMeanForTest, Is.EqualTo(TimeSpan.Zero));
+                Assert.That(BPlusLeafGrain.ReplayPermitWaitSampleTimestampForTest, Is.Zero);
+                Assert.That(BPlusLeafGrain.ReplayHolderProgressAgeForTest, Is.Null);
+                Assert.That(BPlusLeafGrain.QueuedReplayPermitWaitersForTest, Is.Zero);
+                Assert.That(BPlusLeafGrain.ReplayConcurrencyCeilingForTest, Is.Zero);
+                Assert.That(BPlusLeafGrain.ReplayConcurrencyGateForTest, Is.Null);
+            });
+        }
+        finally
+        {
+            BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
+        }
+    }
+
+    [Test]
+    [NonParallelizable]
     public void A_wait_exceeded_reading_expires_once_its_samples_age_out()
     {
         // Judged on an injected clock, in Stopwatch units, so the verdict depends on
