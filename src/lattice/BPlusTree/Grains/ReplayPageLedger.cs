@@ -296,6 +296,8 @@ internal sealed class ReplayPageLedger
     /// </summary>
     internal static (int Class, long Key, long Bytes) Rank(ReplayPageRing.Slot slot, long[] demand)
     {
+        if (slot.Bytes >= 0)
+            return (0, -slot.Page.FromExclusive, slot.Bytes);
         var page = slot.Page;
         if (demand.Length == 0)
         {
