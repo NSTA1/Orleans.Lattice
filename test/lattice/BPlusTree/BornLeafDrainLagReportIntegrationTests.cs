@@ -18,14 +18,20 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// partition and sat over the drain-lag threshold. A negative checkpoint is "no claim", and
 /// the sampler treats it as unknown.
 /// <para>
-/// The precondition proves the sampler measured the destination over the threshold, so the
-/// bound cannot pass on a destination the sampler never saw lagging.
+/// The precondition proves the destination's born leaves registered a population of consumers,
+/// so the bound cannot pass on a destination that reported nothing for the sampler to count.
 /// </para>
 /// </summary>
 [TestFixture]
 [Category("Integration")]
 public sealed class BornLeafDrainLagReportIntegrationTests
 {
+    private const int RegisteredPopulation = 16;
+
+    private static readonly TimeSpan RegistrationBudget = TimeSpan.FromSeconds(60);
+
+    private static readonly TimeSpan ObservationWindow = TimeSpan.FromSeconds(5);
+
     private TestCluster _cluster = null!;
 
     [OneTimeSetUp]
@@ -86,12 +92,23 @@ public sealed class BornLeafDrainLagReportIntegrationTests
             }
         }
 
-        await Task.Delay(TimeSpan.FromSeconds(10));
-        var consumers = await RegisteredConsumersAsync(destination);
-        var measured = lagging.Where(m => m.Key.Contains(destination, StringComparison.Ordinal))
-            .Select(m => m.Value).DefaultIfEmpty(0).Max();
+        // Born leaves register as they first flush, so wait for a population, then observe the
+        // sampler for several more drain-lag thresholds before judging it. The metric's tree tag
+        // is the logical tree id, which a resize destination keeps.
+        var deadline = Environment.TickCount64 + (long)RegistrationBudget.TotalMilliseconds;
+        var consumers = 0;
+        while (Environment.TickCount64 < deadline
+            && (consumers = await RegisteredConsumersAsync(destination)) < RegisteredPopulation)
+        {
+            await Task.Delay(250);
+        }
 
-        Assert.That(consumers, Is.GreaterThan(8), "precondition: the destination's born leaves registered consumers");
+        await Task.Delay(ObservationWindow);
+        consumers = Math.Max(consumers, await RegisteredConsumersAsync(destination));
+        var measured = lagging.TryGetValue(treeName, out var max) ? max : 0;
+
+        Assert.That(consumers, Is.GreaterThanOrEqualTo(RegisteredPopulation),
+            "precondition: the destination's born leaves registered consumers");
         Assert.That(measured, Is.LessThanOrEqualTo(4),
             $"the sampler counted {measured} lagging consumer(s) of {consumers} on a freshly built resize destination: "
             + "born leaves with no checkpoint claim (-1) were read as lagging from the partition's first append (#5969)");
