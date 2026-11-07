@@ -104,10 +104,14 @@ internal sealed class LeafResidentWorkingSet
 
     private static readonly Lazy<LeafResidentWorkingSet> SharedInstance =
         new(
-            () => new LeafResidentWorkingSet(
-                ResolveBudgetBytes(
-                    GC.GetGCMemoryInfo().TotalAvailableMemoryBytes,
-                    ReadContainerMemoryLimitBytes())),
+            () =>
+            {
+                var heap = GC.GetGCMemoryInfo().TotalAvailableMemoryBytes;
+                var container = ReadContainerMemoryLimitBytes();
+                return new LeafResidentWorkingSet(
+                    ResolveBudgetBytes(heap, container),
+                    hasKnownLimit: SmallerKnownLimit(heap, container) > 0);
+            },
             LazyThreadSafetyMode.ExecutionAndPublication);
 
     private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> PrimedShedTrees = new(StringComparer.Ordinal);
@@ -123,8 +127,32 @@ internal sealed class LeafResidentWorkingSet
     /// drive a small, deterministic budget; production resolves
     /// <see cref="Shared"/>, whose budget is derived from the runtime.
     /// </summary>
-    internal LeafResidentWorkingSet(long budgetBytes)
-        => _budgetBytes = Math.Max(1L, budgetBytes);
+    internal LeafResidentWorkingSet(long budgetBytes, bool hasKnownLimit = true)
+    {
+        _budgetBytes = Math.Max(1L, budgetBytes);
+        HasKnownLimit = hasKnownLimit;
+        Pages = new ReplayPageLedger(this);
+    }
+
+    /// <summary>
+    /// <see langword="false"/> when neither the heap hard limit nor the
+    /// container limit could be read, so <see cref="BudgetBytes"/> is the fixed
+    /// fallback rather than a fraction of a known limit.
+    /// </summary>
+    internal bool HasKnownLimit { get; }
+
+    /// <summary>
+    /// The WAL replay page cache charged to this working set (issue #5877). Its
+    /// pages share the budget with resident leaves and are always reclaimed
+    /// before any leaf is shed.
+    /// </summary>
+    internal ReplayPageLedger Pages { get; }
+
+    /// <summary>The lock guarding this working set and its page ledger.</summary>
+    internal object Gate => _gate;
+
+    /// <summary>Resident leaf bytes, read under <see cref="Gate"/>.</summary>
+    internal long LeafBytesLocked => _residentBytes;
 
     /// <summary>The process-wide working set, sized once from the heap hard limit.</summary>
     internal static LeafResidentWorkingSet Shared => SharedInstance.Value;
@@ -271,8 +299,16 @@ internal sealed class LeafResidentWorkingSet
     private List<LeafResidencyRegistration>? ShedToBudgetLocked(LeafResidencyRegistration admitting)
     {
         List<LeafResidencyRegistration>? condemned = null;
-        while (_residentBytes > _budgetBytes)
+        while (_residentBytes + Pages.BytesLocked > _budgetBytes)
         {
+            // Pages give way before any leaf (issue #5877): a dropped page costs
+            // one storage read, a shed leaf a reactivation.
+            if (Pages.BytesLocked > 0
+                && Pages.ReclaimLocked(_residentBytes + Pages.BytesLocked - _budgetBytes) > 0)
+            {
+                continue;
+            }
+
             var candidate = SelectShedCandidateLocked(admitting);
             if (candidate is null)
             {

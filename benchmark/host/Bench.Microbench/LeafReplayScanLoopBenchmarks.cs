@@ -149,5 +149,8 @@ public class LeafReplayScanLoopBenchmarks
 
         public Task<long> GetTailOffsetAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult(0L);
+        public Task DeclareReplayDemandAsync(string reader, long nextExclusive) => Task.CompletedTask;
+
+        public Task ClearReplayDemandAsync(string reader) => Task.CompletedTask;
     }
 }

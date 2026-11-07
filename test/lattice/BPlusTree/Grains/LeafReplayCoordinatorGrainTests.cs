@@ -39,12 +39,14 @@ public partial class LeafReplayCoordinatorGrainTests
     private static (LeafReplayCoordinatorGrain Grain, ICommitLogReader Reader) CreateGrain(
         string key = TreeId + "/3",
         ICommitLogReader? reader = null,
-        long ringBytes = 0)
+        long ringBytes = 0,
+        LeafResidentWorkingSet? workingSet = null)
     {
         reader ??= Substitute.For<ICommitLogReader>();
 
         var services = new ServiceCollection();
         services.AddSingleton(reader);
+        services.AddSingleton(workingSet ?? new LeafResidentWorkingSet(1L << 30));
         services.Configure<LatticeOptions>(o => o.WalReplayPageRingBytes = ringBytes);
 
         var context = Substitute.For<IGrainContext>();
