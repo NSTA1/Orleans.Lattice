@@ -142,9 +142,7 @@ internal static class TreeRoutingFenceRetirement
         }
         catch (Exception ex) when (WalAppendFenceMethodProbe.IsDefiniteMethodUnknown(ex))
         {
-            // The partition's one table row, every initiator's slot in it (#5987). Every
-            // slot is retired, so the shard count names no row of its own any more.
-            _ = shardCount;
+            // The partition's one table row, every initiator's slot in it (#5987).
             await RetireGenerationsRowAsync(storage, treeId, partition, alsoCover: null, floorsRaised: null).ConfigureAwait(true);
         }
     }

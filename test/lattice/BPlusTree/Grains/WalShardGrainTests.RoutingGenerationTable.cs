@@ -157,4 +157,78 @@ public partial class WalShardGrainTests
                 "the claim wrote from the cached table, resurrecting slots the fallback retired");
         });
     }
+
+    [Test]
+    public async Task A_duplicate_activation_s_raise_after_the_table_was_cached_reaches_the_next_cold_load_through_a_claim_s_read()
+    {
+        // #5988 review, B1: a duplicate activation B raises shard root 1's slot after A
+        // cached the table. A's next claim (of another initiator) reads the row fresh and
+        // merges it into the cache, so A's later cold load of shard root 1 loads B's raise.
+        var storage = new EnumerableMemoryGrainStorage();
+        var (a, clock) = await CachedTableActivationAsync(storage);
+        var b = await CreateFencedGrainAsync(storage);
+        Assert.That((await b.ClaimRoutingGenerationAsync(WalRoutingInitiator.ShardRoot(1), 6, CancellationToken.None)).Accepted, Is.True,
+            "precondition: the duplicate raised the slot after A cached the table");
+
+        var claim = await a.ClaimRoutingGenerationAsync(WalRoutingInitiator.ShardRoot(0), 3, CancellationToken.None);
+        var stale = await a.AppendStampedAsync(
+            MakeEntry("b"), new WalAppendStamp(FenceLeaf, 1, WalRoutingInitiator.ShardRoot(1), 4), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(claim.Accepted, Is.True);
+            Assert.That(clock.Advanced, Is.EqualTo(TimeSpan.Zero), "the cache's age bound did not lapse");
+            Assert.That(stale.Outcome, Is.EqualTo(WalAppendFenceOutcome.StaleGeneration),
+                "the cold load used the table cached before the duplicate's raise, though a claim read the row since");
+        });
+    }
+
+    [Test]
+    public async Task A_duplicate_activation_s_raise_after_the_table_was_cached_reaches_a_cold_load_once_the_cache_ages_out()
+    {
+        // #5988 review, B1: with no claim in between, the cache is re-read once older than
+        // its bound, so a slot a duplicate raised is stale here for a bounded time only.
+        var storage = new EnumerableMemoryGrainStorage();
+        var (a, clock) = await CachedTableActivationAsync(storage);
+        var b = await CreateFencedGrainAsync(storage);
+        Assert.That((await b.ClaimRoutingGenerationAsync(WalRoutingInitiator.ShardRoot(1), 6, CancellationToken.None)).Accepted, Is.True,
+            "precondition: the duplicate raised the slot after A cached the table");
+
+        clock.Advance(WalShardGrain.GenerationRowCacheMaxAge + TimeSpan.FromTicks(1));
+        var stale = await a.AppendStampedAsync(
+            MakeEntry("b"), new WalAppendStamp(FenceLeaf, 1, WalRoutingInitiator.ShardRoot(1), 4), CancellationToken.None);
+
+        Assert.That(stale.Outcome, Is.EqualTo(WalAppendFenceOutcome.StaleGeneration),
+            "a cold load past the cache's age bound used the table cached before the duplicate's raise");
+    }
+
+    /// <summary>
+    /// An activation that has cached the partition's table, holding shard roots 0 (2) and
+    /// 1 (4), from shard root 0's cold load, on a clock the test controls.
+    /// </summary>
+    private static async Task<(WalShardGrain Grain, ManualClock Clock)> CachedTableActivationAsync(EnumerableMemoryGrainStorage storage)
+    {
+        await RoutingGenerationSlots.WriteAsync(storage, TreeId, ShardIndex, WalRoutingInitiator.ShardRoot(0), 2);
+        await RoutingGenerationSlots.WriteAsync(storage, TreeId, ShardIndex, WalRoutingInitiator.ShardRoot(1), 4);
+        var grain = await CreateFencedGrainAsync(storage);
+        var clock = new ManualClock();
+        grain.GenerationRowCacheClock = clock;
+        await grain.ClaimAppendEpochAsync(FenceLeaf, 1, CancellationToken.None);
+        var cached = await grain.AppendStampedAsync(
+            MakeEntry("a"), new WalAppendStamp(FenceLeaf, 1, WalRoutingInitiator.ShardRoot(0), 2), CancellationToken.None);
+        Assert.That(cached.Outcome, Is.EqualTo(WalAppendFenceOutcome.Admitted), "precondition: the cold load cached the table");
+        return (grain, clock);
+    }
+
+    /// <summary>A clock that moves only when the test advances it.</summary>
+    private sealed class ManualClock : TimeProvider
+    {
+        private readonly DateTimeOffset _start = new(2026, 1, 1, 0, 0, 0, TimeSpan.Zero);
+
+        public TimeSpan Advanced { get; private set; }
+
+        public void Advance(TimeSpan by) => Advanced += by;
+
+        public override DateTimeOffset GetUtcNow() => _start + Advanced;
+    }
 }

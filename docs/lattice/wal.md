@@ -1475,7 +1475,9 @@ A partition's routing generations are one row with a slot per shard-level initia
 ([#5987](https://github.com/NSTA1/Orleans.Lattice/issues/5987)). Every write to it is a
 conditional read-modify-write that raises one slot and leaves the others as read, so
 two initiators raising their slots at once both survive, and the partition loads every
-slot with one read. Every raise rewrites the whole row; raises are rare (an arm or a
+slot with one read. That read is refreshed by every claim's read of the row and re-read
+once it is five seconds old, so a raise by a duplicate activation of the partition
+reaches it within a bounded time. Every raise rewrites the whole row; raises are rare (an arm or a
 close), and at the largest tree a slot per shard (4,096 shards) still fits one Azure
 Table entity.
 The rows are keyed by tree and partition, not by WAL provider, so a WAL move

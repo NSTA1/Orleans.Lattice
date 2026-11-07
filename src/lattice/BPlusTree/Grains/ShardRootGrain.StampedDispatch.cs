@@ -97,6 +97,11 @@ internal sealed partial class ShardRootGrain
         {
             await run;
         }
+        catch (Exception)
+        {
+            // Observed here so the discarded task never surfaces an unobserved fault; every
+            // caller awaits the run itself and sees its outcome (#5988 review, S1).
+        }
         finally
         {
             if (ReferenceEquals(_routingGenerationEnsure, run))
