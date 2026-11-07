@@ -482,6 +482,7 @@ internal sealed class InMemoryWalTable
         Compression = source.Compression,
         BatchHash = source.BatchHash is null ? null : (byte[])source.BatchHash.Clone(),
         BatchEntryCount = source.BatchEntryCount,
+        CommitNonce = source.CommitNonce,
     };
 
     private sealed class RowKeyComparer : IComparer<(string PartitionKey, string RowKey)>

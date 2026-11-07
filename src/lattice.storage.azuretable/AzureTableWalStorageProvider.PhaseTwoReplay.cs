@@ -33,18 +33,37 @@ public sealed partial class AzureTableWalStorageProvider
     internal static async Task<bool> IsIdempotentPhaseTwoReplayAsync(
         TableClient table,
         IReadOnlyList<TableTransactionAction> actions,
+        CancellationToken cancellationToken) =>
+        (await ProvePhaseTwoReplayAsync(table, actions, cancellationToken).ConfigureAwait(false)).Proven;
+
+    /// <summary>
+    /// <see cref="IsIdempotentPhaseTwoReplayAsync"/>, also returning the ETag of the
+    /// <c>TAIL</c> row it read when that row is still the one the transaction wrote:
+    /// the same value and the same <see cref="AzureTableWalEntity.CommitNonce"/>
+    /// (issue #5810, #5605 W7). The row has not been written since, so its ETag
+    /// conditions the next commit exactly as the landed attempt's own response would
+    /// have, and the commit fence advances instead of refusing every batch claimed
+    /// meanwhile. The value alone is not enough: a successor's re-stamp writes the same
+    /// value precisely to fence this writer out, and drops the nonce. A higher
+    /// <c>TAIL</c>, another nonce, or a transaction without one yields no ETag.
+    /// </summary>
+    internal static async Task<PhaseTwoReplayProof> ProvePhaseTwoReplayAsync(
+        TableClient table,
+        IReadOnlyList<TableTransactionAction> actions,
         CancellationToken cancellationToken)
     {
         if (actions.Count == 0)
         {
-            return false;
+            return default;
         }
+
+        ETag? tailETag = null;
 
         for (var i = 0; i < actions.Count; i++)
         {
             if (actions[i].Entity is not AzureTableWalEntity expected)
             {
-                return false;
+                return default;
             }
 
             var resident = await TryReadEntityAsync(table, expected.PartitionKey, expected.RowKey, cancellationToken)
@@ -64,11 +83,19 @@ public sealed partial class AzureTableWalStorageProvider
                 };
             if (!effectResident)
             {
-                return false;
+                return default;
+            }
+
+            if (expected.RowKey == TailRowKey
+                && resident!.Offset == expected.Offset
+                && expected.CommitNonce is { } nonce
+                && string.Equals(resident.CommitNonce, nonce, StringComparison.Ordinal))
+            {
+                tailETag = resident.ETag;
             }
         }
 
-        return true;
+        return new PhaseTwoReplayProof(Proven: true, tailETag);
     }
 
     private static async Task<AzureTableWalEntity?> TryReadEntityAsync(

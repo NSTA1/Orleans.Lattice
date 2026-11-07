@@ -134,7 +134,8 @@ public partial class PhaseTwoWorkerTests
         fence.Fill(guard, new ETag("second"), tail: 7L, writtenUpperBound: 7L);
         await using var worker = new PhaseTwoWorker(submitter.SubmitAsync, ManifestPartitionKey, fence);
 
-        Assert.ThrowsAsync<InvalidOperationException>(() => worker.EnqueueAsync(4, 5, generation: stale));
+        // #5605 W7: a refusal is a retryable transient, never a terminal error.
+        Assert.ThrowsAsync<TimeoutException>(() => worker.EnqueueAsync(4, 5, generation: stale));
         Assert.That(submitter.Submits, Is.Empty, "a batch claimed under an older generation was submitted");
     }
 
@@ -149,12 +150,27 @@ public partial class PhaseTwoWorkerTests
         var generation = fence.Fill(new WalShardOverlapGuard(), new ETag("observed"), tail: 3L, writtenUpperBound: 3L);
         await using var worker = new PhaseTwoWorker(submitter.SubmitAsync, ManifestPartitionKey, fence);
 
-        Assert.ThrowsAsync<RequestFailedException>(() => worker.EnqueueAsync(4, 5, generation: generation));
+        var refused = Assert.ThrowsAsync<TimeoutException>(() => worker.EnqueueAsync(4, 5, generation: generation));
+        Assert.That(refused!.InnerException, Is.InstanceOf<RequestFailedException>(), "the store's 412 is kept as the cause");
         Assert.That(fence.TryGetGeneration(out _), Is.False, "a refused TAIL write left the fence holding its ETag");
 
         submitter.Failure = null;
-        Assert.ThrowsAsync<InvalidOperationException>(() => worker.EnqueueAsync(6, 7, generation: generation));
+        Assert.ThrowsAsync<TimeoutException>(() => worker.EnqueueAsync(6, 7, generation: generation));
         Assert.That(submitter.Submits, Has.Count.EqualTo(1), "a claim made under the refused generation was submitted");
+    }
+
+    [Test]
+    public void A_refusal_surfaced_as_a_timeout_keeps_the_stores_status_on_the_exhausted_counter()
+    {
+        // a5e2e2ef's S1 on #5963: a fenced TAIL write the store refused with 412 is surfaced
+        // as the fence's retryable TimeoutException, and is still counted under 412.
+        var refused = new TimeoutException("refused", new RequestFailedException(412, "The update condition specified in the request was not satisfied."));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(PhaseTwoWorker.ResolveProviderStatusTag(refused), Is.EqualTo("412"));
+            Assert.That(PhaseTwoWorker.ResolveProviderStatusTag(new TimeoutException("stale generation")), Is.EqualTo("unknown"));
+        });
     }
 
     [Test]
@@ -171,7 +187,7 @@ public partial class PhaseTwoWorkerTests
         var generation = fence.Fill(new WalShardOverlapGuard(), new ETag("observed"), tail: 3L, writtenUpperBound: 3L);
         await using var worker = new PhaseTwoWorker(submitter.SubmitAsync, ManifestPartitionKey, fence, failed);
 
-        Assert.ThrowsAsync<RequestFailedException>(() => worker.EnqueueAsync(4, 5, generation: generation));
+        Assert.ThrowsAsync<TimeoutException>(() => worker.EnqueueAsync(4, 5, generation: generation));
 
         Assert.That(failed.TakeAll(), Is.EqualTo(new[] { (4L, 5L) }));
         Assert.That(failed.TakeAll(), Is.Null, "taking the recorded batches did not clear them");
