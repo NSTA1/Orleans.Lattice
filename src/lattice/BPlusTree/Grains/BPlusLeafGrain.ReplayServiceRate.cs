@@ -177,13 +177,13 @@ internal sealed partial class BPlusLeafGrain
             RecordReplayStorageStep(taken);
     }
 
+    /// <summary>Test-only: the CPU denominator the governor's utilisation uses.</summary>
+    internal static int ReplayCpuCoresForTest => ReplayCpuCores.Value;
+
     /// <summary>
     /// The CPU the process can obtain, in cores: the lesser of the processor
     /// count and the enforced container grant, read once.
     /// </summary>
-    /// <summary>Test-only: the CPU denominator the governor's utilisation uses.</summary>
-    internal static int ReplayCpuCoresForTest => ReplayCpuCores.Value;
-
     private static readonly Lazy<int> ReplayCpuCores = new(
         () => ResolveDefaultReplayCeiling(Environment.ProcessorCount, Orleans.Lattice.Internal.Cgroups.ContainerCpuGrant.Read()));
 

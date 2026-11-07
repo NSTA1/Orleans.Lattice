@@ -11,7 +11,9 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 [TestFixture]
 public class ReplayStoragePressureGovernorTests
 {
-    private const long Window = 100;
+    // One second on every platform: a window of a few hundred nanoseconds (100 ticks at Linux's
+    // 10^9 Hz Stopwatch) quantises the injected CPU time to whole TimeSpan ticks.
+    private static readonly long Window = Stopwatch.Frequency;
 
     /// <summary>Builds cumulative tallies the way the process-wide recorder accumulates them.</summary>
     private sealed class Tallies
