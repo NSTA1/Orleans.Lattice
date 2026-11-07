@@ -2367,20 +2367,32 @@ public class LatticeOptions
     /// replays run at once so a reactivation storm degrades into a queue rather
     /// than a thread-pool stampede; replays release the permit as soon as the
     /// tail is drained. Defaults to
-    /// <see cref="DefaultWalMaterialiserMaxConcurrentReplays"/> (<c>32</c>,
-    /// issue #5877). A cold replay against a remote WAL store spends most of its
-    /// hold waiting on storage round trips rather than CPU, so a ceiling sized
-    /// from the CPU grant left a cold-restarting silo replaying a handful of
-    /// leaves at a time while thousands queued. The default is paired with
+    /// <see cref="AutoWalMaterialiserMaxConcurrentReplays"/> (<c>-1</c>,
+    /// issue #5957), which resolves when the gate is sized: to
+    /// <see cref="RemoteWalMaterialiserMaxConcurrentReplays"/> (<c>32</c>,
+    /// issue #5877) when the silo's registered
+    /// <see cref="IWalStorageProvider"/> reports
+    /// <see cref="IWalStorageProvider.IsRemote"/>, and otherwise to the
+    /// CPU-derived ceiling described under <c>0</c> below. A cold replay against
+    /// a remote WAL store spends most of its hold waiting on storage round trips
+    /// rather than CPU, so a ceiling sized from the CPU grant left a
+    /// cold-restarting silo replaying a handful of leaves at a time while
+    /// thousands queued. Against a local store (in-memory, file) a replay is
+    /// CPU-bound, and 32 of them on a small host starve foreground grain turns
+    /// (issue #5957), so a local store keeps the CPU-derived ceiling. The Azure
+    /// Table provider reports remote even against a co-located Azurite emulator;
+    /// such a host should set <c>0</c>. The remote ceiling is paired with
     /// <see cref="WalReplayServiceRateControllerEnabled"/>, on by default, which
     /// walks the ceiling down when storage throttles or slows and back up when
-    /// it recovers, never above this value. Set to <c>0</c> for the previous
-    /// default: the lesser of <see cref="Environment.ProcessorCount"/> and the
+    /// it recovers, never above the resolved value. Its latency signal is replay slice-read latency including in-process queueing, so on a CPU-bound host it walks the ceiling down toward the CPU knee. Set to <c>0</c> for the CPU-derived
+    /// ceiling whatever the store: the lesser of <see cref="Environment.ProcessorCount"/> and the
     /// CPU grant the container's cgroup actually enforces, so a host that raises
     /// <c>DOTNET_PROCESSOR_COUNT</c> above its quota cannot oversubscribe this
     /// path (issue #2816). An unreadable or unlimited quota is treated as
     /// unknown and imposes no constraint. Any explicit positive value pins the
-    /// ceiling and always wins.
+    /// ceiling and always wins. The admission queue depth is a multiple of the
+    /// resolved ceiling (<see cref="WalReplayPermitQueueDepthPerPermit"/>), so a
+    /// remote-sized ceiling on a small host also deepens the queue.
     /// <para>
     /// The derived value is an initial guess sized from CPU. When replays are
     /// bound on the grain store instead, which serialises its writes, more
@@ -2396,11 +2408,51 @@ public class LatticeOptions
     public int WalMaterialiserMaxConcurrentReplays { get; set; } = DefaultWalMaterialiserMaxConcurrentReplays;
 
     /// <summary>
-    /// Default value for <see cref="WalMaterialiserMaxConcurrentReplays"/>
-    /// (<c>32</c>, issue #5877). <c>0</c> selects the CPU-derived ceiling that
-    /// was the default before it.
+    /// Default value for <see cref="WalMaterialiserMaxConcurrentReplays"/>:
+    /// <see cref="AutoWalMaterialiserMaxConcurrentReplays"/>, which resolves to
+    /// <see cref="RemoteWalMaterialiserMaxConcurrentReplays"/> on a remote WAL
+    /// store and to the CPU-derived ceiling otherwise (issue #5957).
     /// </summary>
-    public const int DefaultWalMaterialiserMaxConcurrentReplays = 32;
+    public const int DefaultWalMaterialiserMaxConcurrentReplays = AutoWalMaterialiserMaxConcurrentReplays;
+
+    /// <summary>
+    /// The <see cref="WalMaterialiserMaxConcurrentReplays"/> sentinel (<c>-1</c>)
+    /// that sizes the replay gate by the WAL store: the remote ceiling when the
+    /// registered <see cref="IWalStorageProvider"/> reports
+    /// <see cref="IWalStorageProvider.IsRemote"/>, otherwise the CPU-derived
+    /// ceiling (issue #5957).
+    /// </summary>
+    public const int AutoWalMaterialiserMaxConcurrentReplays = -1;
+
+    /// <summary>
+    /// The replay ceiling an auto-sized gate takes on a remote WAL store
+    /// (<c>32</c>, issue #5877).
+    /// </summary>
+    public const int RemoteWalMaterialiserMaxConcurrentReplays = 32;
+
+    /// <summary>
+    /// Estimated bytes of WAL pages the per-partition replay coordinators of
+    /// one silo may hold, so that every leaf replaying a partition is served
+    /// from one storage read of each page rather than reading it again itself
+    /// (issue #5896). Defaults to
+    /// <see cref="DefaultWalReplayPageRingBytes"/> (64 MiB). One partition's
+    /// coordinator never holds more than this, and all of a silo's coordinators
+    /// together never hold more than this either: a page that would exceed it
+    /// is served without being cached. A replay in flight additionally holds the
+    /// page it is reading, bounded by <see cref="WalReplaySliceBudget"/>. Set to
+    /// <c>0</c> to disable the cache, every replay then reading storage itself.
+    /// <para>
+    /// A cached page is served only while its WAL partition is at the durable
+    /// incarnation it was read at, checked in memory on every serve, so a purge
+    /// and a recreate of the same tree id never serve the purged log. A WAL
+    /// wiped out of band, behind the library's back, is not detected: restart
+    /// the silo or set this to <c>0</c> before wiping one.
+    /// </para>
+    /// </summary>
+    public long WalReplayPageRingBytes { get; set; } = DefaultWalReplayPageRingBytes;
+
+    /// <summary>Default value for <see cref="WalReplayPageRingBytes"/> (64 MiB).</summary>
+    public const long DefaultWalReplayPageRingBytes = 64L * 1024 * 1024;
 
     /// <summary>
     /// Enables process-wide adaptation of replay concurrency beneath the

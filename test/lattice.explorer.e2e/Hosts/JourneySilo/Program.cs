@@ -150,6 +150,11 @@ builder.Host.UseOrleans(silo =>
     silo.AddLattice((services, storeName) =>
         services.AddAzureTableGrainStorage(storeName, options => storage.ConfigureTable(options, grainTableName)));
 
+    // The Azure Table WAL reports remote, so the auto replay ceiling would admit 32
+    // replays; against Azurite on the same small runner they are CPU-bound and starve
+    // the journeys' foreground calls (#5957). Keep the CPU-derived ceiling.
+    silo.ConfigureLattice(options => options.WalMaterialiserMaxConcurrentReplays = 0);
+
     // Time compression an operator would apply through configuration: the idle
     // lifetime of a scan cursor, short enough to expire inside a journey.
     if (config.GetValue<int?>("Lattice:CursorIdleTtlSeconds") is { } cursorIdleSeconds)

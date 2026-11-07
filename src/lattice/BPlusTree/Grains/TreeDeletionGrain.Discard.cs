@@ -63,7 +63,10 @@ internal sealed partial class TreeDeletionGrain
         // Released only after the shard marks, which is what stops any further
         // append from landing in the log this trims.
         await DeregisterLeafCursorsAsync();
-        await TrimPurgedWalAsync();
+
+        // Best-effort here: the discarded copy's own purge re-runs this and
+        // fails closed (FinishCompletedPurgeAsync).
+        _ = await TrimPurgedWalAsync();
     }
 
     /// <inheritdoc />
@@ -149,11 +152,21 @@ internal sealed partial class TreeDeletionGrain
     /// is logged and leaves that partition's log retained, exactly as it was
     /// before, and a later call (the discard's own purge, or a reminder-driven
     /// retry) trims again.
+    /// <para>
+    /// After each partition's trim it advances that partition's durable
+    /// incarnation (issue #5896, condition I1), so a replay page a coordinator
+    /// cached from the purged log is never served to a tree created again under
+    /// the same id, which replays from the start of a log whose offsets the
+    /// purge did not reset. The advance comes after the trim: advanced first, a
+    /// fill between the two would cache the purged entries at the new
+    /// incarnation. Returns <see langword="false"/> when any advance failed;
+    /// the purge then fails closed rather than freeing the id.
+    /// </para>
     /// </summary>
-    private async Task TrimPurgedWalAsync()
+    private async Task<bool> TrimPurgedWalAsync()
     {
         if (!PurgeUnregistersTree)
-            return;
+            return true;
 
         int partitions;
         try
@@ -166,9 +179,10 @@ internal sealed partial class TreeDeletionGrain
                 ex,
                 "Could not resolve the WAL partition count of discarded tree {TreeId}; its write-ahead log is left retained until its purge trims it.",
                 TreeId);
-            return;
+            return false;
         }
 
+        var advancedAll = true;
         for (var partition = 0; partition < partitions; partition++)
         {
             try
@@ -188,6 +202,23 @@ internal sealed partial class TreeDeletionGrain
                     partition,
                     TreeId);
             }
+
+            try
+            {
+                await grainFactory.GetGrain<IWalShardGrain>($"{TreeId}/{partition}")
+                    .AdvanceIncarnationAsync(CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                advancedAll = false;
+                logger.LogWarning(
+                    ex,
+                    "Could not advance the incarnation of WAL partition {Partition} of purged tree {TreeId}; the purge is retried before the id is freed.",
+                    partition,
+                    TreeId);
+            }
         }
+
+        return advancedAll;
     }
 }

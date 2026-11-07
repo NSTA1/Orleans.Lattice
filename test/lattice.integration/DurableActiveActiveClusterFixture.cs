@@ -557,6 +557,10 @@ internal sealed class DurableActiveActiveClusterFixture : IAsyncDisposable
         {
             options.WalPartitions = PartitionCount;
             options.AutoSplitEnabled = false;
+
+            // The Azure Table WAL reports remote, so the auto replay ceiling would
+            // be 32; against a local Azurite replays are CPU-bound (#5957).
+            options.WalMaterialiserMaxConcurrentReplays = 0;
         });
 
         siloBuilder.AddAzureTableWalStorage(options =>

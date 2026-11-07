@@ -21,9 +21,15 @@ Each leg gains three keys, read by the workflows:
           its Azurite step runs the npm build rather than the image);
   runner  "hosted" or "pool", for the summary.
 
-FAILS TOWARD HOSTED. Without RUNNER_POOL every leg stays hosted, so the pool is
-opt-in by a single repository variable. If the GitHub API cannot be read, every
-leg stays hosted too: the cost of a wrong guess is queueing, as before.
+A leg the planner marks `"needsPool": true` is pinned: it runs on the pool
+whenever RUNNER_POOL is set, whatever the hosted count (even an unreadable one),
+and takes no hosted slot. Pin a leg only when it is known not to pass on a
+hosted runner (explorer-journeys-plan.py's NEEDS_POOL says why per leg).
+
+FAILS TOWARD HOSTED. Without RUNNER_POOL every leg stays hosted, a pinned one
+included, so the pool is opt-in by a single repository variable. If the GitHub
+API cannot be read, every unpinned leg stays hosted too: the cost of a wrong
+guess is queueing, as before.
 
 The count is a snapshot. Two lanes planning at the same moment can both see
 the same headroom; the budget's margin under the cap absorbs that. It counts
@@ -79,16 +85,26 @@ def route(legs_by_file: list[list[dict]], pool: list[str] | None, busy: int | No
         leg["runsOn"] = json.dumps(hosted)
         leg["pool"] = False
         leg["runner"] = "hosted"
-    if pool is None or busy is None:
+    if pool is None:
         return len(everything), 0
-    slots = max(0, budget - busy)
-    overflow = max(0, len(everything) - slots)
-    longest_first = sorted(everything, key=lambda leg: float(leg.get("estimate") or 0), reverse=True)
-    for leg in longest_first[:overflow]:
+
+    def to_pool(leg):
         leg["runsOn"] = json.dumps(pool)
         leg["pool"] = True
         leg["runner"] = "pool"
-    return len(everything) - overflow, overflow
+
+    pinned = [leg for leg in everything if leg.get("needsPool") is True]
+    for leg in pinned:
+        to_pool(leg)
+    rest = [leg for leg in everything if leg.get("needsPool") is not True]
+    if busy is None:
+        return len(rest), len(pinned)
+    slots = max(0, budget - busy)
+    overflow = max(0, len(rest) - slots)
+    longest_first = sorted(rest, key=lambda leg: float(leg.get("estimate") or 0), reverse=True)
+    for leg in longest_first[:overflow]:
+        to_pool(leg)
+    return len(rest) - overflow, len(pinned) + overflow
 
 
 def _get(url: str, token: str) -> dict:
@@ -219,6 +235,32 @@ def self_test() -> int:
     check(route([h], pool, 17, 18, "ubuntu-24.04") == (1, 2), "--hosted: the budget still overflows")
     check([json.loads(l["runsOn"]) for l in h] == ["ubuntu-24.04", pool, pool],
           "--hosted: hosted legs carry the label, pooled legs the pool's")
+
+    def pin(leg_list, index):
+        leg_list[index]["needsPool"] = True
+        return leg_list
+
+    p = pin(legs(10, 30, 20), 0)
+    check(route([p], pool, 5, 18) == (2, 1), "pinned: a pinned leg pools even with headroom")
+    check(p[0]["pool"] and not p[1]["pool"] and not p[2]["pool"], "pinned: only the pinned leg pools")
+    check(json.loads(p[0]["runsOn"]) == pool, "pinned: the pinned leg carries the pool labels")
+
+    q = pin(legs(10, 30, 20), 0)
+    check(route([q], pool, None, 18) == (2, 1), "pinned: an unreadable count still pools the pinned leg")
+    check(q[0]["pool"] and not q[1]["pool"], "pinned: only the pinned leg pools on an unreadable count")
+
+    r = pin(legs(10, 30, 20), 0)
+    check(route([r], None, 0, 18) == (3, 0), "pinned: no pool keeps even a pinned leg hosted")
+    check(r[0]["pool"] is False and json.loads(r[0]["runsOn"]) == HOSTED, "pinned: fails toward hosted")
+
+    s = pin(legs(10, 30, 20, 5), 0)
+    check(route([s], pool, 16, 18) == (2, 2), "pinned: takes no hosted slot")
+    check({l["id"] for l in s if l["pool"]} == {"leg-1", "leg-2"},
+          "pinned: the pinned leg plus the longest unpinned overflow")
+
+    t = legs(10, 30)
+    t[0]["needsPool"] = "yes"
+    check(route([t], pool, 5, 18) == (2, 0), "pinned: only a literal true pins")
 
     for raw, ok in (("", None), ('["self-hosted","lattice-pool"]', pool)):
         check(parse_pool(raw) == ok, f"parse_pool({raw!r})")

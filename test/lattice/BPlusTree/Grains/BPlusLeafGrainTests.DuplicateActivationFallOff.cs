@@ -409,6 +409,10 @@ public partial class BPlusLeafGrainTests
                 var lowest = await wal.Provider.GetLowestOffsetAsync(treeId, shardIndex, cancellationToken);
                 return lowest >= 0 ? lowest : wal.Head(treeId);
             }
+
+            // This shared WAL never resets a partition, so its incarnation is fixed (issue #5896).
+            public ValueTask<long> GetIncarnationAsync(string treeId, int shardIndex, CancellationToken cancellationToken = default) =>
+                ValueTask.FromResult(0L);
         }
     }
 

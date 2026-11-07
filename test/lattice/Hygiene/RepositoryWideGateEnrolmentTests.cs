@@ -140,6 +140,8 @@ public sealed class RepositoryWideGateEnrolmentTests
                 "asserts every package records its exception deep-copy contract enrolment, not instrument declarations",
             ["UnslicedPackageHygieneCoverageTests"] =
                 "asserts every package is enrolled in slice hygiene, not instrument declarations",
+            ["WalShardIncarnationSiteTests"] =
+                "asserts every WAL trim in src advances the partition incarnation or is a recorded non-reset (issue #5896), not instrument declarations",
         };
 
     /// <summary>

@@ -3,8 +3,10 @@ using System.Buffers;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
 
@@ -18,6 +20,15 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// a short window so two leaves on the same shard activating back-to-back
 /// share one underlying commit-log read. The cache is invalidated as soon
 /// as the requested range deviates from the cached slice.
+/// </para>
+/// <para>
+/// Since issue #5896 that cache is replaced, whenever
+/// <see cref="LatticeOptions.WalReplayPageRingBytes"/> is positive, by a
+/// <see cref="ReplayPageRing"/> of unfiltered pages from which every leaf's
+/// filtered slice is projected (<see cref="ReplaySliceProjection"/>), so each
+/// page of the partition is read from storage once however many leaves replay
+/// it. Pages are served only at the partition's current durable incarnation,
+/// checked on every serve (<see cref="VerifyRingIncarnationAsync"/>).
 /// </para>
 /// </summary>
 internal sealed class LeafReplayCoordinatorGrain(
@@ -77,7 +88,7 @@ internal sealed class LeafReplayCoordinatorGrain(
         long toOffsetInclusive,
         int budget,
         CancellationToken cancellationToken = default) =>
-        ReadSliceCoreAsync(fromOffsetExclusive, toOffsetInclusive, budget, default, cancellationToken);
+        ReadSliceThroughRingAsync(fromOffsetExclusive, toOffsetInclusive, budget, default, cancellationToken);
 
     public Task<IReadOnlyList<CommitLogSliceEntry>> ReadSliceAsync(
         long fromOffsetExclusive,
@@ -85,7 +96,165 @@ internal sealed class LeafReplayCoordinatorGrain(
         int budget,
         WalKeyFilter filter,
         CancellationToken cancellationToken = default) =>
-        ReadSliceCoreAsync(fromOffsetExclusive, toOffsetInclusive, budget, filter, cancellationToken);
+        ReadSliceThroughRingAsync(fromOffsetExclusive, toOffsetInclusive, budget, filter, cancellationToken);
+
+    /// <summary>How long a request joins a fill already reading its next page before issuing its own (condition A-e).</summary>
+    internal static readonly TimeSpan ReplayPageFillAgingBound = TimeSpan.FromSeconds(30);
+
+    private ReplayPageRing? _ring;
+
+    /// <summary>The ring, or <see langword="null"/> when the page cache is disabled.</summary>
+    internal ReplayPageRing? RingForTest => _ring;
+
+    private ReplayPageRing? Ring()
+    {
+        if (_ring is null)
+        {
+            var budget = context.ActivationServices.GetService<IOptionsMonitor<LatticeOptions>>()?.CurrentValue.WalReplayPageRingBytes
+                ?? LatticeOptions.DefaultWalReplayPageRingBytes;
+            if (budget <= 0)
+                return null;
+            _ring = new ReplayPageRing(budget);
+        }
+
+        return _ring;
+    }
+
+    /// <summary>
+    /// Serves a slice from the ring, filling the pages it lacks from storage
+    /// (issue #5896). Equal to what a direct filtered read of the window would
+    /// return (condition A-a), and never treats an offset above what a fill
+    /// actually returned as empty (condition A-b).
+    /// </summary>
+    internal async Task<IReadOnlyList<CommitLogSliceEntry>> ReadSliceThroughRingAsync(
+        long fromOffsetExclusive,
+        long toOffsetInclusive,
+        int budget,
+        WalKeyFilter filter,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (budget <= 0)
+            throw new ArgumentOutOfRangeException(nameof(budget), "Budget must be positive.");
+        if (fromOffsetExclusive < -1)
+            throw new ArgumentOutOfRangeException(nameof(fromOffsetExclusive), "Offset must be >= -1.");
+        if (toOffsetInclusive < fromOffsetExclusive)
+            return EmptySlice;
+
+        EnsureBindingsParsed();
+        var ring = Ring();
+        if (ring is null)
+            return await ReadSliceCoreAsync(fromOffsetExclusive, toOffsetInclusive, budget, filter, cancellationToken);
+
+        while (true)
+        {
+            await VerifyRingIncarnationAsync(cancellationToken);
+            var epoch = ring.Epoch;
+            var run = new List<ReplayPage>(ring.RunFrom(fromOffsetExclusive));
+            var restart = false;
+            while (true)
+            {
+                var (slice, complete, covered) = ReplaySliceProjection.Project(
+                    run, fromOffsetExclusive, toOffsetInclusive, budget, filter);
+                if (complete)
+                    return slice;
+
+                var (page, stale) = await FillOrJoinAsync(ring, covered, toOffsetInclusive, budget, cancellationToken);
+                if (stale || ring.Epoch != epoch)
+                {
+                    restart = true;
+                    break;
+                }
+
+                // Storage holds nothing more in the window: a direct read would
+                // return exactly what is projected.
+                if (page is null)
+                    return slice;
+
+                run.Add(page);
+            }
+
+            if (!restart)
+                return EmptySlice;
+        }
+    }
+
+    /// <summary>
+    /// Checks the ring against the partition's current durable incarnation and
+    /// drops every page on a mismatch (issue #5896, condition I3). An in-memory
+    /// call on the WAL shard grain; no storage is read.
+    /// </summary>
+    internal async Task VerifyRingIncarnationAsync(CancellationToken cancellationToken)
+    {
+        var ring = _ring;
+        if (ring is null)
+            return;
+
+        var incarnation = await _reader!.GetIncarnationAsync(_treeId!, _shardIndex, cancellationToken);
+        if (ring.Incarnation != incarnation)
+            ring.Reset(incarnation);
+    }
+
+    private async Task<(ReplayPage? Page, bool Stale)> FillOrJoinAsync(
+        ReplayPageRing ring, long fromExclusive, long toInclusive, int budget, CancellationToken cancellationToken)
+    {
+        var now = Stopwatch.GetTimestamp();
+        var agingTicks = (long)(ReplayPageFillAgingBound.TotalSeconds * Stopwatch.Frequency);
+        var fill = ring.JoinableFill(fromExclusive, now, agingTicks);
+        if (fill is null)
+        {
+            fill = FillAsync(ring, fromExclusive, toInclusive, budget);
+            ring.RegisterFill(fromExclusive, fill, now);
+        }
+
+        var epoch = ring.Epoch;
+        ReplayPage? page;
+        try
+        {
+            page = await fill.WaitAsync(cancellationToken);
+        }
+        finally
+        {
+            if (fill.IsCompleted)
+                ring.CompleteFill(fromExclusive, fill);
+        }
+
+        if (ring.Epoch != epoch)
+            return (null, true);
+
+        // A joined fill may have read a shorter window than this request
+        // needs; it is still a contiguous page from the same offset.
+        if (page is not null && page.Entries[^1].Offset > toInclusive)
+        {
+            var within = Array.FindAll(page.Entries, e => e.Offset <= toInclusive);
+            page = within.Length == 0 ? null : new ReplayPage(fromExclusive, within, page.Incarnation);
+        }
+
+        return (page, false);
+    }
+
+    /// <summary>Reads one page through <see cref="ReplayPageRing.FillAsync"/>, logging a failed read.</summary>
+    private async Task<ReplayPage?> FillAsync(ReplayPageRing ring, long fromExclusive, long toInclusive, int budget)
+    {
+        try
+        {
+            return await ring.FillAsync(_reader!, _treeId!, _shardIndex, fromExclusive, toInclusive, budget);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "Replay page fill failed for tree={TreeId} shard={ShardIndex} from={From} to={To}.",
+                _treeId, _shardIndex, fromExclusive, toInclusive);
+            throw;
+        }
+    }
+
+    Task IGrainBase.OnDeactivateAsync(DeactivationReason reason, CancellationToken token)
+    {
+        _ring?.Clear();
+        return Task.CompletedTask;
+    }
 
     private async Task<IReadOnlyList<CommitLogSliceEntry>> ReadSliceCoreAsync(
         long fromOffsetExclusive,

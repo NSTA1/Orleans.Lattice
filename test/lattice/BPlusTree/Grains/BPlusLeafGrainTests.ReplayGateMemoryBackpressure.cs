@@ -64,7 +64,8 @@ public partial class BPlusLeafGrainTests
     /// off unless a test asks for it; pass null to keep the library default.
     /// </para>
     /// </remarks>
-    private static async Task<SemaphoreSlim> QuiescentReplayGateAsync(int? permitCeiling = null, bool? controller = false)
+    private static async Task<SemaphoreSlim> QuiescentReplayGateAsync(
+        int? permitCeiling = null, bool? controller = false, IWalStorageProvider? walStorageProvider = null)
     {
         var (warmGrain, warmState, _, _) = CreateGrainWithSnapshotAndCoordinator(
             preloadedSnapshot: null,
@@ -76,7 +77,8 @@ public partial class BPlusLeafGrainTests
                     options.WalMaterialiserMaxConcurrentReplays = ceiling;
                 if (controller is { } enabled)
                     options.WalReplayServiceRateControllerEnabled = enabled;
-            });
+            },
+            walStorageProvider: walStorageProvider);
         warmState.State.TreeId = UniqueReplayPermitTree();
         await LeafActivationHarness.ActivateAsync(warmGrain, CancellationToken.None);
 

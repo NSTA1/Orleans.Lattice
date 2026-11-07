@@ -30,14 +30,22 @@ public partial class LeafReplayCoordinatorGrainTests
     /// Builds the grain over a substituted <see cref="ICommitLogReader"/> resolved
     /// from the activation service provider, exactly as production DI supplies it.
     /// </summary>
+    /// <remarks>
+    /// The replay page ring is off unless <paramref name="ringBytes"/> is
+    /// positive (issue #5896), so these fixtures cover the path a silo takes
+    /// with <see cref="LatticeOptions.WalReplayPageRingBytes"/> set to 0; the
+    /// ring has its own partials.
+    /// </remarks>
     private static (LeafReplayCoordinatorGrain Grain, ICommitLogReader Reader) CreateGrain(
         string key = TreeId + "/3",
-        ICommitLogReader? reader = null)
+        ICommitLogReader? reader = null,
+        long ringBytes = 0)
     {
         reader ??= Substitute.For<ICommitLogReader>();
 
         var services = new ServiceCollection();
         services.AddSingleton(reader);
+        services.Configure<LatticeOptions>(o => o.WalReplayPageRingBytes = ringBytes);
 
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("leafreplaycoordinator", key));

@@ -858,7 +858,12 @@ internal sealed partial class TreeDeletionGrain(
             return;
         }
 
-        await TrimPurgedWalAsync();
+        if (!await TrimPurgedWalAsync())
+        {
+            throw new InvalidOperationException(
+                $"The purge of tree '{TreeId}' could not advance every WAL partition's incarnation (issue #5896); it is retried before the id is freed.");
+        }
+
         await DeregisterLeafCursorsAsync();
         await RetirePurgedFenceRowsAsync();
         await SettleRegistryEntryAsync();
