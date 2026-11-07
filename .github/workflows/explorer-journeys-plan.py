@@ -580,6 +580,13 @@ def plan(root, event, action="", base_ref="", changed=None, labels=(), label="",
                 "(tools/Get-JourneyScreenshots.ps1) into the pull request body; the edit runs the check for "
                 + ", ".join(by_folder[folder][1] for folder in touched) + ".")
 
+    # W10 PROBE (do not merge): only contract-c3 and contract-c4, twice each, no conformance shard.
+    if legs:
+        legs = [contract_leg(c, "contoso", "Contoso") for c in ("C3", "C4")]
+        legs = legs + [dict(leg, name=leg["name"] + "-r2") for leg in legs]
+        for leg in legs:
+            leg["needsPool"] = True
+    conformance = []
     return {"legs": legs, "conformance": conformance, "provenance": provenance, "notes": notes}
 
 
