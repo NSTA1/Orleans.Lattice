@@ -91,6 +91,24 @@ internal sealed partial class ShardRootGrain
         return _commitLogWriter;
     }
 
+    private bool _terminalAppendFenceResolved;
+    private CoordinatorTerminalAppendFence? _terminalAppendFence;
+
+    /// <summary>
+    /// This activation's coordinator-terminal append fence (epic #5605, member 2), or
+    /// <see langword="null"/> when the silo provides no fence gate.
+    /// </summary>
+    private CoordinatorTerminalAppendFence? ResolveTerminalAppendFence()
+    {
+        if (!_terminalAppendFenceResolved)
+        {
+            _terminalAppendFence = CoordinatorTerminalAppendFence.Resolve(context.ActivationServices);
+            _terminalAppendFenceResolved = true;
+        }
+
+        return _terminalAppendFence;
+    }
+
     /// <inheritdoc />
     public async Task<WalRecord?> AppendTxTerminalAsync(
         Guid transactionId,
@@ -349,7 +367,9 @@ internal sealed partial class ShardRootGrain
 
                 if (inlineWalAppend)
                 {
-                    await writer.AppendAsync(terminal, cancellationToken);
+                    // Epic #5605, member 2: the coordinator-terminal class keeps the
+                    // terminal out of the partition's unstamped watermark.
+                    await CoordinatorTerminalAppendFence.AppendAsync(writer, terminal, ResolveTerminalAppendFence(), cancellationToken);
                 }
                 else
                 {
@@ -754,7 +774,10 @@ internal sealed partial class ShardRootGrain
         var startTicks = System.Diagnostics.Stopwatch.GetTimestamp();
         try
         {
-            await leaf.ApplyTxTerminalAsync(transactionId, committed, subset);
+            await WalFenceSeamRetry.RunAsync(
+                () => leaf.ApplyTxTerminalAsync(transactionId, committed, subset),
+                WalFenceSeamRetry.CallerShardRoot,
+                TreeId);
         }
         finally
         {

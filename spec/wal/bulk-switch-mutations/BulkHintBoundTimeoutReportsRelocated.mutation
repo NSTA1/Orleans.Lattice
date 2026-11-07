@@ -1,0 +1,21 @@
+# Pairs with BulkHintBound. Review B1 of #5702: a drain that misses its deadline
+# narrows nothing and reports no frontier, and the graft takes the 10.2.0 path and
+# applies no hint. Reporting the rows relocated, with the old leaf's read position as
+# the frontier, applies the hint over rows still on the old leaf.
+MODULE: BulkHintBoundTimeoutReportsRelocated
+TARGET: BulkHintBound
+CLASS: Invariant
+SUMMARY: a drain past its deadline is reported as a completed relocation with a frontier
+PERTURBS: NarrowTimeout
+
+--- FIND
+    /\ relocOk' = FALSE
+    /\ phase' = "dropped"
+    /\ UNCHANGED <<next, author, rowsO, rpO, fO, narrowed,
+--- REPLACE
+\* MUTATION: reported as relocated, with a frontier.
+    /\ relocOk' = TRUE
+    /\ fO' = rpO
+    /\ phase' = "dropped"
+    /\ UNCHANGED <<next, author, rowsO, rpO, narrowed,
+--- END

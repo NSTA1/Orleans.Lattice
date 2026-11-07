@@ -1,0 +1,15 @@
+# Pairs with TypeOK. The cold load's read of the durable entry is not load-bearing for
+# the straddler fence on its own: the floor the load takes covers every purged
+# generation (see the refinement note). The read is perturbed here against its domain.
+MODULE: TypeOkColdLoadReadPastGenerationDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: the cold load reads a value past the generation domain
+PERTURBS: ColdLoadRead
+
+--- FIND
+    /\ rd' = [rd EXCEPT ![i] = entryRow[i]]
+--- REPLACE
+\* MUTATION: a read past the generation domain.
+    /\ rd' = [rd EXCEPT ![i] = entryRow[i] + MaxGen + 2]
+--- END

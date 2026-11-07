@@ -469,19 +469,19 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
 
         // Claim the offsets before the first await so appends issued in
         // allocation order take the no-I/O path in that order.
-        var claimed = activity.Overlap.TryClaimAboveWritten(firstOffset, endOffsetInclusive);
+        var claimed = activity.Fence.TryClaimAboveWritten(activity.Overlap, firstOffset, endOffsetInclusive, out var generation);
         try
         {
             var table = await EnsureTableAsync(cancellationToken).ConfigureAwait(false);
             if (!claimed)
             {
-                await ClaimOverlapFreeAsync(
-                    table, activity.Overlap, manifestPartitionKey, treeId, shardIndex, firstOffset, endOffsetInclusive, cancellationToken)
+                generation = await ClaimOverlapFreeAsync(
+                    table, activity, manifestPartitionKey, treeId, shardIndex, firstOffset, endOffsetInclusive, cancellationToken)
                     .ConfigureAwait(false);
                 claimed = true;
             }
 
-            await AppendClaimedBatchAsync(table, activity, manifestPartitionKey, treeId, shardIndex, entries, firstOffset, endOffsetInclusive, cancellationToken)
+            await AppendClaimedBatchAsync(table, activity, manifestPartitionKey, treeId, shardIndex, entries, firstOffset, endOffsetInclusive, generation, cancellationToken)
                 .ConfigureAwait(false);
         }
         finally
@@ -502,6 +502,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         IReadOnlyList<WalEntry> entries,
         long firstOffset,
         long endOffsetInclusive,
+        long generation,
         CancellationToken cancellationToken)
     {
         var eliminateCandidateRow = _options.EliminateCandidateRowOnHotPath;
@@ -554,7 +555,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
             // Azure Tables transaction cap) into one manifest-partition
             // transaction in strict ascending start-offset order, then
             // upserts TAIL to the group's highest endOffsetInclusive.
-            await DispatchPhaseTwoAsync(manifestPartitionKey, treeId, shardIndex, firstOffset, endOffsetInclusive, hasCandidateRow: !eliminateCandidateRow, compressionStats.StoredBytes, cancellationToken).ConfigureAwait(false);
+            await DispatchPhaseTwoAsync(manifestPartitionKey, treeId, shardIndex, firstOffset, endOffsetInclusive, hasCandidateRow: !eliminateCandidateRow, compressionStats.StoredBytes, generation, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -607,19 +608,19 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         var activity = GetShardActivity(manifestPartitionKey);
 
         // Claimed before the first await; see AppendBatchAsync.
-        var claimed = activity.Overlap.TryClaimAboveWritten(firstOffset, endOffsetInclusive);
+        var claimed = activity.Fence.TryClaimAboveWritten(activity.Overlap, firstOffset, endOffsetInclusive, out var generation);
         try
         {
             var table = await EnsureTableAsync(cancellationToken).ConfigureAwait(false);
             if (!claimed)
             {
-                await ClaimOverlapFreeAsync(
-                    table, activity.Overlap, manifestPartitionKey, treeId, shardIndex, firstOffset, endOffsetInclusive, cancellationToken)
+                generation = await ClaimOverlapFreeAsync(
+                    table, activity, manifestPartitionKey, treeId, shardIndex, firstOffset, endOffsetInclusive, cancellationToken)
                     .ConfigureAwait(false);
                 claimed = true;
             }
 
-            await AppendClaimedEncodedBatchAsync(table, activity, manifestPartitionKey, treeId, shardIndex, encodedEntries, offsets, firstOffset, endOffsetInclusive, cancellationToken)
+            await AppendClaimedEncodedBatchAsync(table, activity, manifestPartitionKey, treeId, shardIndex, encodedEntries, offsets, firstOffset, endOffsetInclusive, generation, cancellationToken)
                 .ConfigureAwait(false);
         }
         finally
@@ -641,6 +642,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         ReadOnlyMemory<long> offsets,
         long firstOffset,
         long endOffsetInclusive,
+        long generation,
         CancellationToken cancellationToken)
     {
         var batchPartitionKey = BuildBatchPartitionKey(treeId, shardIndex, firstOffset);
@@ -662,7 +664,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
 
             RecordWalCompressionMetrics(treeId, in compressionStats);
 
-            await DispatchPhaseTwoAsync(manifestPartitionKey, treeId, shardIndex, firstOffset, endOffsetInclusive, hasCandidateRow: !eliminateCandidateRow, compressionStats.StoredBytes, cancellationToken).ConfigureAwait(false);
+            await DispatchPhaseTwoAsync(manifestPartitionKey, treeId, shardIndex, firstOffset, endOffsetInclusive, hasCandidateRow: !eliminateCandidateRow, compressionStats.StoredBytes, generation, cancellationToken).ConfigureAwait(false);
         }
         finally
         {
@@ -1283,10 +1285,11 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         long endOffsetInclusive,
         bool hasCandidateRow,
         long payloadBytes,
+        long generation,
         CancellationToken cancellationToken)
     {
         var worker = GetOrCreatePhaseTwoWorker(treeId, shardIndex);
-        var currentTask = worker.EnqueueAsync(firstOffset, endOffsetInclusive, hasCandidateRow, payloadBytes);
+        var currentTask = worker.EnqueueAsync(firstOffset, endOffsetInclusive, hasCandidateRow, payloadBytes, generation);
 
         if (!_options.PipelinePhaseTwoCommits)
         {
@@ -1958,6 +1961,21 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         cancellationToken.ThrowIfCancellationRequested();
 
         var table = await EnsureTableAsync(cancellationToken).ConfigureAwait(false);
+        var (_, highest) = await ReadHighestOffsetsAsync(table, treeId, shardIndex, cancellationToken).ConfigureAwait(false);
+        return highest;
+    }
+
+    /// <summary>
+    /// Reads the shard's persisted <c>TAIL</c> and the highest offset
+    /// <see cref="GetHighestOffsetAsync"/> reports, which folds this instance's
+    /// accepted but not yet committed batches over it, from one read of the row.
+    /// </summary>
+    private async Task<(long PersistedTail, long Highest)> ReadHighestOffsetsAsync(
+        TableClient table,
+        string treeId,
+        int shardIndex,
+        CancellationToken cancellationToken)
+    {
         var manifestPartitionKey = BuildManifestPartitionKey(treeId, shardIndex);
 
         if (_phaseTwoWorkers.TryGetValue(manifestPartitionKey, out var fencedWorker))
@@ -1966,6 +1984,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         }
 
         long persistedTail;
+        ETag? tailETag = null;
         try
         {
             // Point-read the per-shard TAIL row. The phase-2 worker
@@ -1978,11 +1997,16 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
                 TailRowKey,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
             persistedTail = response.Value.Offset;
+            tailETag = response.Value.ETag;
         }
         catch (RequestFailedException ex) when (ex.Status == 404)
         {
             persistedTail = -1L;
         }
+
+        // The commit fence (issue #5810) is filled from this read when it holds no ETag.
+        var activity = GetShardActivity(manifestPartitionKey);
+        activity.Fence.Fill(activity.Overlap, tailETag, persistedTail, writtenUpperBound: null);
 
         // Fold in the live worker's accepted ranges. The worker
         // dictionary is keyed by the same manifest partition key, so
@@ -1990,9 +2014,9 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         // walks upward from the higher of the persisted value and its
         // own committed TAIL - the read above can already be stale
         // (#5466) - so the answer can never be dragged below TAIL.
-        return _phaseTwoWorkers.TryGetValue(manifestPartitionKey, out var worker)
+        return (persistedTail, _phaseTwoWorkers.TryGetValue(manifestPartitionKey, out var worker)
             ? worker.ContiguousAcceptedEndOffsetInclusive(persistedTail)
-            : persistedTail;
+            : persistedTail);
     }
 
     /// <inheritdoc />
@@ -2127,28 +2151,56 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         // a deleted range below a stale watermark.
         // It covers only offsets that were ever committed: a trim past TAIL (a tree
         // discard, or long.MaxValue) deletes no batch above it.
-        var committedTail = await GetHighestOffsetAsync(treeId, shardIndex, cancellationToken).ConfigureAwait(false);
+        var (persistedTail, committedTail) = await ReadHighestOffsetsAsync(table, treeId, shardIndex, cancellationToken)
+            .ConfigureAwait(false);
+        var previousWatermark = -1L;
         if (Math.Min(throughOffsetInclusive, committedTail) is var mark and >= 0)
         {
-            await RaiseTrimWatermarkAsync(table, manifestPartitionKey, mark, cancellationToken).ConfigureAwait(false);
+            previousWatermark = await RaiseTrimWatermarkAsync(table, manifestPartitionKey, mark, cancellationToken).ConfigureAwait(false);
         }
         if (AfterTrimWatermarkRaisedForTesting is { } afterRaised)
         {
             await afterRaised().ConfigureAwait(false);
         }
 
-        // Walk manifest rows in ascending start-offset order. For
-        // batches that end at or before throughOffsetInclusive, delete
-        // every entry in the batch partition plus the manifest row.
-        // For the boundary batch (endOffset > throughOffsetInclusive
-        // but startOffset <= throughOffsetInclusive), per-row delete
-        // only the entries <= throughOffsetInclusive and leave the
-        // manifest row in place so the boundary batch remains
-        // discoverable. TAIL is never moved back by trim.
+        // Entry rows at or below the sweep mark are deleted by one key-range sweep
+        // over the shard's batch partitions, which also reaches a partition no
+        // manifest row names (issue #5810). The mark is capped at the persisted TAIL,
+        // never the folded highest offset, which counts batches this instance has
+        // accepted but not committed: those start above TAIL and are left alone.
+        // A steady trim sweeps from the previous watermark's batch; about once per
+        // TrimFullSweepInterval, at a jittered time, a trim sweeps from the first
+        // partition instead.
+        var sweepMark = Math.Min(throughOffsetInclusive, persistedTail);
+        var sweptFrom = long.MaxValue;
+        string? unexpectedRow = null;
+        if (sweepMark >= 0L)
+        {
+            var full = IsFullSweepDue(manifestPartitionKey);
+            var sweepStartedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+            // A batch holding an offset above the lower of the two marks starts at most
+            // MaxEntriesPerBatch - 1 below it; everything wholly below was trimmed before.
+            sweptFrom = full ? 0L : Math.Max(0L, Math.Min(previousWatermark, sweepMark) - MaxEntriesPerBatch + 1L);
+            unexpectedRow = await SweepEntryRowsAsync(table, treeId, shardIndex, sweptFrom, sweepMark, cancellationToken)
+                .ConfigureAwait(false);
+            if (full)
+            {
+                NoteFullSweep(manifestPartitionKey, sweepStartedAt);
+            }
+        }
+
+        // Walk manifest rows in ascending start-offset order. A batch that ends at
+        // or before throughOffsetInclusive loses its manifest row once its entries
+        // are gone. The sweep deleted them when the batch lies wholly inside its
+        // range; otherwise - it ends above the sweep mark (committed above a TAIL a
+        // racing writer lowered, #3348, or folded in by a trim through the highest
+        // offset), or starts below a steady sweep's range (a crash part-way through
+        // an earlier trim) - its whole partition is deleted here, as before.
+        // TAIL is never moved back by trim.
         var manifestFilter =
             $"PartitionKey eq '{Escape(manifestPartitionKey)}' and RowKey ge '{ManifestRowKeyPrefix}' and RowKey lt '{TailRowKey}' and Offset le {throughOffsetInclusive.ToString(CultureInfo.InvariantCulture)}";
 
-        var batchesFullyCovered = new List<long>();
+        var batchesFullyCovered = new List<(long Start, long End)>();
         await foreach (var manifestRow in table
             .QueryAsync<AzureTableWalEntity>(manifestFilter, cancellationToken: cancellationToken)
             .ConfigureAwait(false))
@@ -2157,15 +2209,18 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
                 manifestRow.RowKey.AsSpan(ManifestRowKeyPrefix.Length),
                 NumberStyles.None,
                 CultureInfo.InvariantCulture);
-            batchesFullyCovered.Add(startOffset);
+            batchesFullyCovered.Add((startOffset, manifestRow.Offset));
         }
 
-        foreach (var startOffset in batchesFullyCovered)
+        foreach (var (startOffset, endOffset) in batchesFullyCovered)
         {
-            var batchPartitionKey = BuildBatchPartitionKey(treeId, shardIndex, startOffset);
-            var entryFilter =
-                $"PartitionKey eq '{Escape(batchPartitionKey)}' and RowKey ge '{EntryRowKeyPrefix}' and RowKey lt 'F'";
-            await DeletePartitionInChunksAsync(table, entryFilter, cancellationToken).ConfigureAwait(false);
+            if (endOffset > sweepMark || startOffset < sweptFrom)
+            {
+                var batchPartitionKey = BuildBatchPartitionKey(treeId, shardIndex, startOffset);
+                var entryFilter =
+                    $"PartitionKey eq '{Escape(batchPartitionKey)}' and RowKey ge '{EntryRowKeyPrefix}' and RowKey lt 'F'";
+                await DeletePartitionInChunksAsync(table, entryFilter, cancellationToken).ConfigureAwait(false);
+            }
 
             // Delete the manifest row once the batch's entries are
             // gone. Order matters for crash safety: if we crashed
@@ -2181,36 +2236,46 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
                 cancellationToken).ConfigureAwait(false);
         }
 
-        // Boundary batch: find the single batch whose startOffset <=
-        // throughOffsetInclusive < endOffsetInclusive. There is at
-        // most one such batch by manifest construction (batches are
-        // contiguous in offset space).
-        var boundaryFilter =
-            $"PartitionKey eq '{Escape(manifestPartitionKey)}' and RowKey ge '{ManifestRowKeyPrefix}' and RowKey lt '{TailRowKey}' and Offset gt {throughOffsetInclusive.ToString(CultureInfo.InvariantCulture)}";
-        await foreach (var manifestRow in table
-            .QueryAsync<AzureTableWalEntity>(boundaryFilter, maxPerPage: 1, cancellationToken: cancellationToken)
-            .ConfigureAwait(false))
+        // Boundary batch: the single batch whose startOffset <=
+        // throughOffsetInclusive < endOffsetInclusive (batches are contiguous in
+        // offset space). The sweep has already deleted its rows at or below the
+        // sweep mark, so it is read only when the trim reaches past that mark.
+        if (throughOffsetInclusive > sweepMark)
         {
-            var startOffset = long.Parse(
-                manifestRow.RowKey.AsSpan(ManifestRowKeyPrefix.Length),
-                NumberStyles.None,
-                CultureInfo.InvariantCulture);
-            if (startOffset > throughOffsetInclusive)
+            var boundaryFilter =
+                $"PartitionKey eq '{Escape(manifestPartitionKey)}' and RowKey ge '{ManifestRowKeyPrefix}' and RowKey lt '{TailRowKey}' and Offset gt {throughOffsetInclusive.ToString(CultureInfo.InvariantCulture)}";
+            await foreach (var manifestRow in table
+                .QueryAsync<AzureTableWalEntity>(boundaryFilter, maxPerPage: 1, cancellationToken: cancellationToken)
+                .ConfigureAwait(false))
             {
-                // The lowest still-extant manifest row already starts
-                // past the trim point; nothing to do for the boundary.
+                var startOffset = long.Parse(
+                    manifestRow.RowKey.AsSpan(ManifestRowKeyPrefix.Length),
+                    NumberStyles.None,
+                    CultureInfo.InvariantCulture);
+                if (startOffset > throughOffsetInclusive)
+                {
+                    // The lowest still-extant manifest row already starts
+                    // past the trim point; nothing to do for the boundary.
+                    break;
+                }
+
+                var batchPartitionKey = BuildBatchPartitionKey(treeId, shardIndex, startOffset);
+                var upperInclusiveRowKey = BuildEntryRowKey(throughOffsetInclusive);
+                var entryFilter =
+                    $"PartitionKey eq '{Escape(batchPartitionKey)}' and RowKey ge '{EntryRowKeyPrefix}' and RowKey le '{upperInclusiveRowKey}'";
+                await DeletePartitionInChunksAsync(table, entryFilter, cancellationToken).ConfigureAwait(false);
                 break;
             }
+        }
 
-            var batchPartitionKey = BuildBatchPartitionKey(treeId, shardIndex, startOffset);
-            var upperInclusiveRowKey = BuildEntryRowKey(throughOffsetInclusive);
-            var entryFilter =
-                $"PartitionKey eq '{Escape(batchPartitionKey)}' and RowKey ge '{EntryRowKeyPrefix}' and RowKey le '{upperInclusiveRowKey}'";
-            await DeletePartitionInChunksAsync(table, entryFilter, cancellationToken).ConfigureAwait(false);
-            break;
+        if (unexpectedRow is not null)
+        {
+            // Every row a trim may delete has been; this one was left in place.
+            throw new InvalidOperationException(
+                $"Trim of '{treeId}/{shardIndex}' found row '{unexpectedRow}' inside its sweep range that is not one of the shard's "
+                + "entry rows at or below the trimmed offset, and did not delete it.");
         }
     }
-
     private static async Task DeletePartitionInChunksAsync(
         TableClient table,
         string filter,
@@ -2547,7 +2612,9 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
             shardIndex,
             _pipelinePhaseTwoTag,
             _options.PhaseTwoCoalescingWindow,
-            _options.PhaseTwoCommitTimeout);
+            _options.PhaseTwoCommitTimeout,
+            fence: GetShardActivity(manifestPartitionKey).Fence,
+            failedBatches: GetShardActivity(manifestPartitionKey).FailedBatches);
         if (_phaseTwoWorkers.TryAdd(manifestPartitionKey, created))
         {
             return created;
@@ -2588,6 +2655,15 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         var workers = _phaseTwoWorkers.Values.ToArray();
         _phaseTwoWorkers.Clear();
 
+        // Swallowing here is the terminal-stage policy, and it is safe only
+        // while two obligations hold (issue #5861): after disposal nothing in
+        // memory may still vouch for a refused or failed range (the worker
+        // discards its accepted ranges before faulting a commit, and on
+        // shutdown before faulting what was left pending), and no append is
+        // acknowledged before its phase-1 rows are durable. Durability rests
+        // on those rows and a successor's reconcile (#5827, #5824), never on
+        // TAIL, so a phase-2 commit lost here costs only that reconcile.
+        //
         // Drain any still-outstanding pipelined phase-2 tasks so a
         // host shutdown observes the same fault that a normal
         // post-append await would have. Faults are swallowed here

@@ -269,6 +269,82 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// </summary>
     Task<LeafRangeDeletePage> DeleteRangeAndNextSiblingAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null);
 
+    /// <summary>
+    /// The stamped counterpart of <see cref="DeleteRangeAndNextSiblingAsync"/> (epic
+    /// #5605, member 2): the range-delete record is appended under
+    /// <paramref name="routing"/>, the tree's range-delete generation the walk's open
+    /// intent handed out, so that intent's close fences every page of the walk. A walk
+    /// whose append is rejected because the generation was re-claimed fails with an
+    /// internal stale-generation exception, before anything is applied, which the shard
+    /// root's walk step handles. The existing method stays unstamped (S3).
+    /// </summary>
+    /// <remarks>Called only while the caller's append-fence gate is open.</remarks>
+    Task<LeafRangeDeletePage> DeleteRangeAndNextSiblingStampedAsync(
+        string startInclusive,
+        string endExclusive,
+        LatticePredicateNode? predicate,
+        Grains.WalRoutingStamp routing);
+
+    // Stamped leaf write methods (epic #5605, member 2; design note section 2, "Stamped
+    // at admission"). Each is the counterpart of an existing write method, called by
+    // new code only: the routing stamp is the shard root's routing generation captured
+    // in the same step as its phase check, or WalRoutingStamp.None for a leaf-to-leaf
+    // hand-off whose receiver appends and applies the write as its own. The existing
+    // methods stay unstamped (S3): a write reaching the leaf through one of them was
+    // admitted under no routing generation, so it is appended unstamped and reported,
+    // never under the leaf's epoch alone. A write rejected because its generation was
+    // re-claimed fails with an internal stale-generation exception before anything is
+    // applied, which the shard root retries through its phase check.
+
+    /// <summary>The stamped counterpart of <see cref="SetAsync(string, byte[], long)"/>; <paramref name="expiresAtTicks"/> 0 means no expiry.</summary>
+    [AlwaysInterleave]
+    Task<SplitResult?> SetStampedAsync(string key, byte[] value, long expiresAtTicks, Grains.WalRoutingStamp routing);
+
+    /// <summary>The stamped counterpart of <see cref="GetOrSetAsync"/>.</summary>
+    Task<GetOrSetResult> GetOrSetStampedAsync(string key, byte[] value, Grains.WalRoutingStamp routing);
+
+    /// <summary>The stamped counterpart of <see cref="SetIfVersionAsync"/>.</summary>
+    Task<CasResult> SetIfVersionStampedAsync(string key, byte[] value, HybridLogicalClock expectedVersion, Grains.WalRoutingStamp routing);
+
+    /// <summary>The stamped counterpart of <see cref="SetManyAsync"/>.</summary>
+    [AlwaysInterleave]
+    Task<SplitResult?> SetManyStampedAsync(List<KeyValuePair<string, byte[]>> entries, Grains.WalRoutingStamp routing);
+
+    /// <summary>The stamped counterpart of <see cref="SetManyWherePredicateAsync"/>.</summary>
+    [AlwaysInterleave]
+    Task<ConditionalSetManyResult> SetManyWherePredicateStampedAsync(
+        List<KeyValuePair<string, byte[]>> entries,
+        LatticePredicateNode predicate,
+        Grains.WalRoutingStamp routing);
+
+    /// <summary>The stamped counterpart of <see cref="DeleteAsync"/>.</summary>
+    [AlwaysInterleave]
+    Task<bool> DeleteStampedAsync(string key, Grains.WalRoutingStamp routing);
+
+    /// <summary>The stamped counterpart of <see cref="DeleteTrackedAsync"/>.</summary>
+    [AlwaysInterleave]
+    Task<LeafDeleteResult> DeleteTrackedStampedAsync(string key, Grains.WalRoutingStamp routing);
+
+    /// <summary>The stamped counterpart of <see cref="ApplyCrdtDeltaAsync(string, LatticeMergeMode, byte[], long)"/>.</summary>
+    Task<CrdtApplyResult> ApplyCrdtDeltaStampedAsync(
+        string key,
+        LatticeMergeMode mode,
+        byte[] deltaBytes,
+        long expiresAtTicks,
+        Grains.WalRoutingStamp routing);
+
+    /// <summary>The stamped counterpart of <see cref="ApplyCrdtDeltaManyAsync"/>.</summary>
+    Task<SplitResult?> ApplyCrdtDeltaManyStampedAsync(
+        List<KeyValuePair<string, byte[]>> deltas,
+        LatticeMergeMode mode,
+        Grains.WalRoutingStamp routing);
+
+    /// <summary>The stamped counterpart of <see cref="MergeManyAsync"/>.</summary>
+    Task<SplitResult?> MergeManyStampedAsync(
+        Dictionary<string, LwwValue<byte[]>> entries,
+        bool isCrossShardMigration,
+        Grains.WalRoutingStamp routing);
+
     /// <summary>Returns the number of live (non-tombstoned) keys in this leaf.</summary>
     Task<int> CountAsync();
 
@@ -743,19 +819,80 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task SetKeyRangeAsync(string? lowKeyInclusive, string? highKeyExclusive);
 
     /// <summary>
-    /// Narrows this leaf's exclusive high bound to <paramref name="highKeyExclusive"/>,
-    /// persisting it, when the current bound is open or lies above it; otherwise a
-    /// no-op, so a re-driven caller converges. A shard's bulk append calls it on the
-    /// rightmost leaf before it links the leaves it appended, so the leaf stops
-    /// declaring the keyspace those leaves now own: the WAL materialiser replays into
-    /// a leaf every record its declared range covers, so a leaf left open-ended would
-    /// re-materialise every later key of its shard when it next activated (issue
-    /// #5460). Throws <see cref="InvalidOperationException"/> when the bound is at or
-    /// below the leaf's low bound.
+    /// Narrows this leaf's exclusive high bound to <paramref name="highKeyExclusive"/>
+    /// when the current bound is open or lies above it, and links
+    /// <paramref name="nextSibling"/> as its successor, both in one persist; a call
+    /// that changes neither persists nothing, so a re-driven caller converges. A
+    /// shard's bulk append calls it on the rightmost leaf before it links the
+    /// leaves it appended, so the leaf stops declaring the keyspace those leaves
+    /// now own: the WAL materialiser replays into a leaf every record its declared
+    /// range covers, so a leaf left open-ended would re-materialise every later key
+    /// of its shard when it next activated (issue #5460). Linking in the same
+    /// persist means a write for a key at or above the bound forwards to the
+    /// successor from the moment the bound narrows, rather than failing open onto
+    /// this leaf outside its span (issue #5654). Throws
+    /// <see cref="InvalidOperationException"/> when the bound is at or below the
+    /// leaf's low bound.
+    /// <para>
+    /// Returns, in <see cref="LeafNarrowResult.Rows"/>, a copy of every row at or above
+    /// the bound, tombstones included, with its stamp and metadata, and removes nothing
+    /// (issue #5610). The graft
+    /// relocates them into the appended leaves and then calls
+    /// <see cref="DropRelocatedRowsAsync"/>, so a relocation that fails part-way is
+    /// handed the same rows again when the graft is re-driven. A converged leaf
+    /// returns an empty list.
+    /// </para>
+    /// <para>
+    /// Returns <see langword="null"/>, having changed nothing, when the leaf would
+    /// narrow but writes it admitted earlier were still unapplied at its drain
+    /// deadline (issue #5706): narrowing then could leave such a write's record
+    /// unapplied by every leaf. The caller links without narrowing, as 10.2.0 does.
+    /// </para>
+    /// <para>
+    /// The result also carries the leaf's replay frontier when this call narrowed it
+    /// (<see cref="LeafNarrowResult.ReadFrontier"/>, issue #5752): the appended leaves
+    /// may start reading the WAL no higher than it, or a record of their range that
+    /// another author appended and this leaf never applied would be applied by no leaf.
+    /// </para>
+    /// <para>
+    /// Before handing the rows back, the leaf moves the saga shadow markers and the
+    /// isolation of its prepared buckets that cover them to the appended leaf in
+    /// <paramref name="relocationTargets"/> that will receive each row (issue #5755),
+    /// as a split and a span forward do, so no destination holds a relocated row
+    /// without its read gate.
+    /// </para>
     /// </summary>
     /// <param name="highKeyExclusive">The new exclusive high bound. Must not be <see langword="null"/>.</param>
-    Task NarrowHighKeyAsync(string highKeyExclusive);
+    /// <param name="nextSibling">The successor to link with the narrowed bound, or <see langword="null"/> to leave the successor unchanged.</param>
+    /// <param name="relocationTargets">
+    /// The appended leaves in ascending separator order, the first at
+    /// <paramref name="highKeyExclusive"/>; a row is relocated to the last one whose
+    /// separator is at or below its key. <see langword="null"/> to move no marker.
+    /// </param>
+    Task<LeafNarrowResult?> NarrowHighKeyAsync(
+        string highKeyExclusive,
+        GrainId? nextSibling = null,
+        List<GraftEntry>? relocationTargets = null);
 
+    /// <summary>
+    /// Returns, in one turn, a copy of every row this leaf holds, tombstones included,
+    /// and its replay frontier read before the copy (issue #5766). A shard's bulk load
+    /// calls it on each leaf of the root it replaced: it merges the rows into the
+    /// loaded tree and caps the loaded leaves' read position at the lowest frontier,
+    /// so a record of their range that another author appended and this leaf never
+    /// applied is replayed by the loaded leaf that owns it. Changes nothing.
+    /// </summary>
+    Task<LeafNarrowResult> CopyRowsForBulkLoadAsync();
+
+    /// <summary>
+    /// Drops the rows a bulk-append graft has relocated out of this leaf (issue
+    /// #5610): each named key whose row this leaf no longer declares and still
+    /// holds at exactly the stamp given. A row rewritten since, or one inside the
+    /// leaf's declared range, is kept. The drop is persisted before this returns,
+    /// and undone if the persist fails. Idempotent.
+    /// </summary>
+    /// <param name="relocated">The relocated keys and the stamps they were handed back with. Must not be <see langword="null"/>.</param>
+    Task DropRelocatedRowsAsync(Dictionary<string, HybridLogicalClock> relocated);
     /// <summary>
     /// Returns this leaf's persisted owned-key-range bounds
     /// (<see cref="Orleans.Lattice.BPlusTree.State.LeafNodeState.LowKeyInclusive"/> /
@@ -1104,6 +1241,21 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     /// </para>
     /// </summary>
     Task MergeEntriesAsync([Immutable] Dictionary<string, LwwValue<byte[]>> entries);
+
+    /// <summary>
+    /// Seeds <paramref name="entries"/> into a leaf a bulk operation has created and not
+    /// yet published (#5812): <see cref="MergeEntriesAsync"/>, except that the appends
+    /// claim no append epoch for this activation. Under an open bulk switch they carry
+    /// the bulk-seed stamp class with the shard root's routing generation,
+    /// <paramref name="seedRouting"/>, captured after the switch's marker opened; with
+    /// no switch they are appended unstamped and reported. The leaf's first epoch claim
+    /// at a partition is therefore made by its first live write, once it is reachable.
+    /// The same caller contract as <see cref="MergeEntriesAsync"/> applies to
+    /// <paramref name="entries"/>.
+    /// </summary>
+    /// <param name="entries">The seeded rows.</param>
+    /// <param name="seedRouting">The shard root's routing for a switched seed, or <see cref="Grains.WalRoutingStamp.Unstamped"/>.</param>
+    Task MergeBulkSeedAsync([Immutable] Dictionary<string, LwwValue<byte[]>> entries, Grains.WalRoutingStamp seedRouting);
 
     /// <summary>
     /// Returns the sorted list of live (non-tombstoned) keys in this leaf

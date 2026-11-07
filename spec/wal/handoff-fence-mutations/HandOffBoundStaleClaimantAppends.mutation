@@ -1,0 +1,17 @@
+# #5841, condition A4: a claimant found stale makes no partition claim and appends
+# nothing epoch-stamped, and every waiter on its claim sees that.
+MODULE: HandOffBoundStaleClaimantAppends
+TARGET: HandOffBound
+CLASS: Invariant
+SUMMARY: a claimant that found itself stale after its row write still appends epoch-only (a5e2e2ef's A4)
+PERTURBS: DupAdmit
+BOUNDS: WithStaleDonor = TRUE, MaxWindows = 1
+
+--- FIND
+    /\ dst = "claimed"
+    /\ ~dpend
+--- REPLACE
+\* MUTATION: a stale claimant is not stopped.
+    /\ dst \in {"claimed", "stale"}
+    /\ ~dpend
+--- END

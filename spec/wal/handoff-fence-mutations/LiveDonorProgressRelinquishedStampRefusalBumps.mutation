@@ -1,0 +1,23 @@
+# #5840 S4, a5e2e2ef's R8: a floor refusal of a write stamped at or below the relinquished
+# epoch self-fences and never bumps D's row. The clean model's counterexample before the
+# guard: the counted close relinquishes epoch 1 with the write stamped at 1 in flight, the
+# live donor re-arms fresh at 2, the write's floor refusal bumps to 3 and re-stamps it
+# there, the link fence raises the row to 4, and the refusal at 3 - above the relinquished
+# epoch and not below the current one - supersedes the live donor.
+MODULE: LiveDonorProgressRelinquishedStampRefusalBumps
+TARGET: LiveDonorProgress
+CLASS: Invariant
+SUMMARY: a floor refusal of a write stamped before the relinquish bumps D's row and re-stamps the write above the relinquished epoch, so the link fence's refusal of it supersedes the live donor
+PERTURBS: LiveBump
+BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1, WithRearmRace = TRUE, WithBatch = FALSE, WithTreeWalk = FALSE, WithLegacyHandOff = FALSE, WithRestart = FALSE
+
+--- FIND
+    /\ lpend
+    /\ lstamp = lEpoch
+    /\ lEpoch > relEpoch
+    /\ lClaim = 0
+--- REPLACE
+    /\ lpend
+\* MUTATION: any pending write's floor refusal bumps, whatever epoch it was stamped under.
+    /\ lClaim = 0
+--- END

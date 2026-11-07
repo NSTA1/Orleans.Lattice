@@ -1,0 +1,21 @@
+# #5837, the claimless advance and the split hint.
+MODULE: ReadPositionHonestFreeAdvanceIgnoresUnstampedSeen
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the free advance ignores the shared unstamped watermark, so it passes a 10.2.0 silo's record
+PERTURBS: FreeCommit
+BOUNDS: WithFreeAdvance = TRUE
+
+--- FIND
+    /\ rp[a] >= seenP[a]
+    /\ rp[a] >= seenU[a]
+    /\ CloseCarried => rp[a] >= seenS[a]
+    /\ \A o \in inflight : author[o] = a => o > ft[a]
+    /\ rp' = [rp EXCEPT ![a] = ft[a]]
+--- REPLACE
+    /\ rp[a] >= seenP[a]
+\* MUTATION: no shared-watermark bound.
+    /\ CloseCarried => rp[a] >= seenS[a]
+    /\ \A o \in inflight : author[o] = a => o > ft[a]
+    /\ rp' = [rp EXCEPT ![a] = ft[a]]
+--- END

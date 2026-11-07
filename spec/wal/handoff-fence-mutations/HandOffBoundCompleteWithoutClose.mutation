@@ -1,0 +1,26 @@
+# Pairs with HandOffBound. A resumed hand-off completes while its marker is open,
+# removing the marker instead of closing it by fence. No heads are recorded, so
+# once L's marker state initialises it reads closed below the hand-off's stamped
+# appends.
+MODULE: HandOffBoundCompleteWithoutClose
+TARGET: HandOffBound
+CLASS: Invariant
+SUMMARY: a resumed hand-off completes by dropping its open marker instead of closing it by fence
+PERTURBS: LegacyComplete
+
+--- FIND
+    /\ resumed
+    /\ ~hoOpen
+    /\ ~fpend
+    /\ hfly' = FALSE
+    /\ fAdmit' = FALSE
+    /\ UNCHANGED <<next, author, hoOpen, hoClosedAt,
+--- REPLACE
+    /\ resumed
+    /\ ~fpend
+    /\ hfly' = FALSE
+    /\ fAdmit' = FALSE
+\* MUTATION: the open marker is dropped, not closed by fence.
+    /\ hoOpen' = FALSE
+    /\ UNCHANGED <<next, author, hoClosedAt,
+--- END

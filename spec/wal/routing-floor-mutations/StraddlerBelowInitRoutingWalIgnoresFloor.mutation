@@ -1,0 +1,23 @@
+# The WAL's cold load of an unloaded generation entry ignores the initiator's routing
+# floor (#5697 review, S1). A cross-shard straddler: shard root s2 of the purged
+# incarnation admitted a write whose keys, under the re-created tree's shard map,
+# belong to L. L's first initialisation claims only its own shard root's generation,
+# not s2's, and s2's re-created counterpart has not initialised. With s2's entry
+# retired, only the WAL-side floor in the load refuses the write; without it, the write
+# is allocated above L's recorded close. Moved from the design's
+# ReadPositionHonestRoutingWalIgnoresFloor; under #5833's C1 the floor is read by the
+# cold load rather than checked at a claim.
+MODULE: StraddlerBelowInitRoutingWalIgnoresFloor
+TARGET: StraddlerBelowInit
+CLASS: Invariant
+SUMMARY: the WAL's cold load ignores the initiator's routing floor
+PERTURBS: ColdLoadApply
+
+--- FIND
+    /\ loaded' = [loaded EXCEPT ![i] = Max2(@, Max2(rd[i], walFloor[i]))]
+    /\ fo' = [fo EXCEPT ![i] = IF loaded[i] = Unloaded THEN rd[i] <= walFloor[i] ELSE @]
+--- REPLACE
+\* MUTATION: the WAL-side floor is not taken.
+    /\ loaded' = [loaded EXCEPT ![i] = Max2(@, rd[i])]
+    /\ UNCHANGED fo
+--- END

@@ -1,0 +1,17 @@
+# Pairs with BulkHintBound. Issue #5752: the appended leaf's read position is the
+# stored hint uncapped, as production applied it before ShardRootGrain.CapAtReadFrontier.
+# A foreign record of the range the old leaf had not replayed when it narrowed lies
+# below the hint: the old leaf never holds it, so the narrow hands nothing back, and
+# the appended leaf is born above it.
+MODULE: BulkHintBoundForeignUnheldBeforeNarrow
+TARGET: BulkHintBound
+CLASS: Invariant
+SUMMARY: the birth hint is applied uncapped by the old leaf's read frontier at the narrow
+PERTURBS: Finish
+
+--- FIND
+    /\ rpN' = IF relocOk /\ hint # Null THEN Min2(hint - 1, fO) ELSE rpN
+--- REPLACE
+\* MUTATION: no cap at the old leaf's read frontier.
+    /\ rpN' = IF relocOk /\ hint # Null THEN hint - 1 ELSE rpN
+--- END

@@ -56,7 +56,7 @@ public partial class WalShardGrainTests
             // inner provider durably holds offsets 1 and 2 - i.e. the
             // transient prefix hole [0] genuinely exists.
             await gate.OffsetGated.Task.WaitAsync(TimeSpan.FromSeconds(15));
-            await WaitForInnerHighestOffsetAsync(gate, expected: 2L, TimeSpan.FromSeconds(15));
+            await WaitForInnerOffsetsOneAndTwoAsync(gate, TimeSpan.FromSeconds(15));
 
             // Sanity: offset 0 is NOT durable on the provider yet, but 1 and 2
             // are - a genuine prefix hole exposed to a raw provider read.
@@ -99,15 +99,19 @@ public partial class WalShardGrainTests
         Assert.That(recovered.NextSequence, Is.EqualTo(3L));
     }
 
-    private static async Task WaitForInnerHighestOffsetAsync(
+    /// <summary>
+    /// Waits until the inner provider holds both offset 1 and offset 2. Their flushes
+    /// are independent provider calls with no ordering between them, so offset 2 can
+    /// land first: waiting on the highest offset alone races offset 1's flush (#5678).
+    /// </summary>
+    private static async Task WaitForInnerOffsetsOneAndTwoAsync(
         PrefixHoleGatingWalStorageProvider gate,
-        long expected,
         TimeSpan timeout)
     {
         var deadline = Environment.TickCount64 + (long)timeout.TotalMilliseconds;
         while (Environment.TickCount64 < deadline)
         {
-            if (await gate.InnerHighestOffsetAsync() >= expected)
+            if (await gate.InnerHighestOffsetAsync() >= 2L && await gate.InnerLowestOffsetAsync() == 1L)
             {
                 return;
             }
@@ -115,7 +119,7 @@ public partial class WalShardGrainTests
             await Task.Delay(10);
         }
 
-        Assert.Fail($"Inner provider did not reach highest offset {expected} within {timeout}.");
+        Assert.Fail($"Inner provider did not hold offsets 1 and 2 within {timeout}.");
     }
 
     /// <summary>

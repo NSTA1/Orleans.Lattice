@@ -9,11 +9,11 @@ SUMMARY: a settled hole is acknowledged to its writer
 PERTURBS: SettleHole
 
 --- FIND
-    /\ orphans' = orphans \ {o}
-    /\ UNCHANGED <<next, inflight, durable, tail, acked>>
+    /\ hidden' = hidden \ {o}
+    /\ UNCHANGED <<next, inflight, occ, tail, acked, resyncing>>
 --- REPLACE
 \* MUTATION: the hole is reported to the writer as a success.
-    /\ orphans' = orphans \ {o}
+    /\ hidden' = hidden \ {o}
     /\ acked' = acked \cup {o}
-    /\ UNCHANGED <<next, inflight, durable, tail>>
+    /\ UNCHANGED <<next, inflight, occ, tail, resyncing>>
 --- END

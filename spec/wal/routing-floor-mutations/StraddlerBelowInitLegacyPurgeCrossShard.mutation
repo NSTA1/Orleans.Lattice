@@ -1,0 +1,20 @@
+# The documented mixed-version residue is real: the model excludes a cross-shard
+# straddler spanning a purge that finished on 10.2.0, and without that exclusion
+# the property fails. The 10.2.0 purge raises no floor, L's catch-up raises only
+# its own initiator's, and L's first initialisation claims only its own
+# generation, so s2's straddler meets its still-loaded entry and is allocated
+# above L's recorded close unless s2 re-seeds first. Operators should not purge
+# trees during a rolling upgrade from 10.2.0.
+MODULE: StraddlerBelowInitLegacyPurgeCrossShard
+TARGET: StraddlerBelowInit
+CLASS: Invariant
+SUMMARY: a cross-shard straddler spans a purge that finished on 10.2.0
+PERTURBS: LegacyPurge
+
+--- FIND
+    /\ ~recreated
+    /\ ~pend["s2"]
+--- REPLACE
+    /\ ~recreated
+\* MUTATION: a cross-shard straddler may span the 10.2.0 purge.
+--- END

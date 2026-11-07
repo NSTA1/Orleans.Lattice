@@ -1,0 +1,17 @@
+# #5833, C2. The arm re-claims the deferred generation but records no close head: the
+# stale donor's write admitted under the old generation before the re-claim lies above
+# the receiver's read position and is passed. It edits an operator, not an action.
+MODULE: ReadPositionHonestReceiverArmBelowDeferredReclaimHead
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the arm re-claims but records no close head
+BOUNDS: WithKeyMove = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
+
+--- FIND
+    /\ hoClosedAt' = Max2(hoClosedAt, IF FreeOn THEN sHi + 1 ELSE next)
+    /\ UNCHANGED <<gD, pendGen
+--- REPLACE
+\* MUTATION: no close head.
+    /\ UNCHANGED hoClosedAt
+    /\ UNCHANGED <<gD, pendGen
+--- END

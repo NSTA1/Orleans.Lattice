@@ -187,6 +187,7 @@ same vocabulary; the last column notes where an arm applies to only some of them
 | (optional facade not registered) | `Unimplemented` | The region-residency, tenant-admin subject, cross-tenant grant, quota-usage, tenant directory, or tenant policy facade is absent from the host, so its RPCs are not served. |
 | `TimeoutException` | `DeadlineExceeded` | A grain call timed out inside the cluster, so the outcome is unknown and a write may already have applied. Retry an idempotent read; confirm state before retrying a write. Logged at Warning (#5742). |
 | `OrleansMessageRejectionException` (including `SiloUnavailableException`) or `EnumerationAbortedException` | `Unavailable` | A silo was unavailable or rejected the message, or a remote enumerator was lost to a grain deactivation mid-read: a transient cluster fault. Retry after a short backoff. Logged at Warning (#5742). |
+| `LatticeWalQuiescingException` | `Unavailable` | A WAL shard is briefly quiesced for a placement move: the write was refused without being applied and the shard accepts writes again once the move lifts its fence. Retry after a short backoff. Logged at Warning (#5800). |
 | anything else | `Internal` | The catch-all, logged server-side and returned without echoing the exception text. It includes the tenancy package's `TenantRegistryConcurrencyException` (sustained write contention on one tenant's registry record), which a client may retry. |
 
 Each arm is explicit and separately tested. `TenantRegionNotAllowedException` and

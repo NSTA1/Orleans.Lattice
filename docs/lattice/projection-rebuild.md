@@ -61,7 +61,13 @@ whenever a child publishes a fresh snapshot upward. A leaf publishes
 after its mutations persist, and mutations that land within
 [`DigestCoalescingWindowMs`](configuration.md#digestcoalescingwindowms)
 (default 5 ms) share one publish; structural changes such as splits and
-tombstone reaps publish immediately. The public shard hash
+tombstone reaps publish immediately. An internal node publishes its own
+subtree aggregate onward only when the fold changed it: an unchanged
+aggregate, one its parent already folded, is re-sent at most once per
+[`MaterialiserCheckpointInterval`](configuration.md#materialisercheckpointinterval)
+(default 5 s), which repairs a publish the parent lost
+([#5851](https://github.com/NSTA1/Orleans.Lattice/issues/5851)).
+The public shard hash
 is
 
 ```text
@@ -673,6 +679,18 @@ caller treats it as a fault:
   `reason=recheck_drive_deferred` - one
   after a first refusal, rising to four to seven after repeated ones,
   jittered per leaf. A drive that is admitted ends the backoff.
+
+The timer's stalled route counts a replay, or any other checkpoint movement except
+the live advance's, or a checkpoint that has reached the WAL head, as progress
+([#5851](https://github.com/NSTA1/Orleans.Lattice/issues/5851)).
+The [live checkpoint advance](wal.md#live-checkpoint-advance) moves a checkpoint
+only over the leaf's own writes, never past another author's record, so its steps
+do not reset the stall count; when a live advance and any other step both move the
+checkpoint in one tick, the other step counts. While replays are queued on the
+per-silo gate - an activation's, or a cold restart's - the stalled drive steps
+aside rather than compete: the timer counts it as
+`reason=recheck_drive_yielded` on `orleans.lattice.leaf.snapshot.driver.declines`,
+and the drive stays owed, so the next tick that finds no replay waiting drives it.
 
 The activation queue's depth and drain policy are unchanged. Per-tree touch
 limits alone cannot bound the aggregate load of many trees on this

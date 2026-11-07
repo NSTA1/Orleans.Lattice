@@ -1,0 +1,17 @@
+# #5833, C2. The arm resolves a deferred close head without re-claiming the raised
+# generation: the stale donor's write under the old generation is still admitted after
+# the arm, above its head. It edits an operator, not an action.
+MODULE: ReadPositionHonestArmWithoutGenerationReclaim
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the arm resolves a deferred head without re-claiming the generation
+BOUNDS: WithKeyMove = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
+
+--- FIND
+    /\ gL' = Max2(gL, pendGen)
+
+--- REPLACE
+\* MUTATION: no re-claim.
+    /\ gL' = gL
+
+--- END

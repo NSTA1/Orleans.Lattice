@@ -549,13 +549,24 @@ function Get-ArchiveGitReading {
 	# git's stderr is matched below, so its locale is pinned for this call only.
 	# A recognition that silently stops matching under a translated git is the
 	# same false clean wearing a different hat.
+	#
+	# Discovery is also told to cross filesystem boundaries (issue #5785). By
+	# default git stops at the first mount boundary above the path and reports
+	# "not a git repository (or any parent up to mount point ...)", having NOT
+	# searched the directories above it. That is no answer to the question asked:
+	# an archive on its own volume would be refused as unexaminable, and an
+	# archive on a filesystem mounted INSIDE a checkout would be mistaken for one
+	# outside every checkout if the wording were accepted. Searching to the real
+	# root answers both correctly.
 	$savedLcAll = $env:LC_ALL
 	$savedLang = $env:LANG
+	$savedAcrossFilesystem = $env:GIT_DISCOVERY_ACROSS_FILESYSTEM
 	$stderrFile = [System.IO.Path]::GetTempFileName()
 
 	try {
 		$env:LC_ALL = 'C'
 		$env:LANG = 'C'
+		$env:GIT_DISCOVERY_ACROSS_FILESYSTEM = '1'
 
 		$toplevel = ''
 		$exitCode = $null
@@ -585,6 +596,7 @@ function Get-ArchiveGitReading {
 	finally {
 		$env:LC_ALL = $savedLcAll
 		$env:LANG = $savedLang
+		$env:GIT_DISCOVERY_ACROSS_FILESYSTEM = $savedAcrossFilesystem
 		Remove-Item -LiteralPath $stderrFile -Force -ErrorAction SilentlyContinue
 	}
 

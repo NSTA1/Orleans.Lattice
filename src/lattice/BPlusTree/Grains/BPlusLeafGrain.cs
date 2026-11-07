@@ -935,7 +935,14 @@ internal sealed partial class BPlusLeafGrain(
         }
     }
 
-    public async Task<GetOrSetResult> GetOrSetAsync(string key, byte[] value)
+    public Task<GetOrSetResult> GetOrSetAsync(string key, byte[] value) =>
+        GetOrSetCoreAsync(key, value, WalRoutingStamp.Unstamped);
+
+    /// <inheritdoc />
+    public Task<GetOrSetResult> GetOrSetStampedAsync(string key, byte[] value, WalRoutingStamp routing) =>
+        GetOrSetCoreAsync(key, value, StampedRouting(routing));
+
+    private async Task<GetOrSetResult> GetOrSetCoreAsync(string key, byte[] value, WalRoutingStamp routing)
     {
         await AwaitReplayBarrierAsync();
 
@@ -954,16 +961,24 @@ internal sealed partial class BPlusLeafGrain(
         }
 
         // Key is absent, tombstoned, expired, or pending - delegate to the write path and wrap the result.
-        return await GetOrSetWriteAsync(key, value);
+        return await GetOrSetWriteAsync(key, value, routing);
     }
 
-    private async Task<GetOrSetResult> GetOrSetWriteAsync(string key, byte[] value)
+    private async Task<GetOrSetResult> GetOrSetWriteAsync(string key, byte[] value, WalRoutingStamp routing)
     {
-        var splitResult = await SetAsync(key, value);
+        await AwaitReplayBarrierAsync();
+        var splitResult = await SetCoreAsync(key, value, 0L, routing);
         return new GetOrSetResult { Split = splitResult };
     }
 
-    public async Task<CasResult> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion)
+    public Task<CasResult> SetIfVersionAsync(string key, byte[] value, HybridLogicalClock expectedVersion) =>
+        SetIfVersionCoreAsync(key, value, expectedVersion, WalRoutingStamp.Unstamped);
+
+    /// <inheritdoc />
+    public Task<CasResult> SetIfVersionStampedAsync(string key, byte[] value, HybridLogicalClock expectedVersion, WalRoutingStamp routing) =>
+        SetIfVersionCoreAsync(key, value, expectedVersion, StampedRouting(routing));
+
+    private async Task<CasResult> SetIfVersionCoreAsync(string key, byte[] value, HybridLogicalClock expectedVersion, WalRoutingStamp routing)
     {
         await AwaitReplayBarrierAsync();
 
@@ -998,12 +1013,13 @@ internal sealed partial class BPlusLeafGrain(
         }
 
         // Version matches - delegate to the async write path.
-        return await SetIfVersionWriteAsync(key, value);
+        return await SetIfVersionWriteAsync(key, value, routing);
     }
 
-    private async Task<CasResult> SetIfVersionWriteAsync(string key, byte[] value)
+    private async Task<CasResult> SetIfVersionWriteAsync(string key, byte[] value, WalRoutingStamp routing)
     {
-        var splitResult = await SetAsync(key, value);
+        await AwaitReplayBarrierAsync();
+        var splitResult = await SetCoreAsync(key, value, 0L, routing);
         // After SetAsync, the entry has a new timestamp.
         var newVersion = Cache.TryGetRow(key, out var committed) ? committed.Timestamp : default;
         return new CasResult
@@ -1118,14 +1134,21 @@ internal sealed partial class BPlusLeafGrain(
     public async Task<SplitResult?> SetAsync(string key, byte[] value)
     {
         await AwaitReplayBarrierAsync();
-        return await SetCoreAsync(key, value, 0L);
+        return await SetCoreAsync(key, value, 0L, WalRoutingStamp.Unstamped);
     }
 
     /// <inheritdoc />
     public async Task<SplitResult?> SetAsync(string key, byte[] value, long expiresAtTicks)
     {
         await AwaitReplayBarrierAsync();
-        return await SetCoreAsync(key, value, expiresAtTicks);
+        return await SetCoreAsync(key, value, expiresAtTicks, WalRoutingStamp.Unstamped);
+    }
+
+    /// <inheritdoc />
+    public async Task<SplitResult?> SetStampedAsync(string key, byte[] value, long expiresAtTicks, WalRoutingStamp routing)
+    {
+        await AwaitReplayBarrierAsync();
+        return await SetCoreAsync(key, value, expiresAtTicks, StampedRouting(routing));
     }
 
     public async Task<LwwEntry?> GetRawEntryAsync(string key)
@@ -1162,7 +1185,7 @@ internal sealed partial class BPlusLeafGrain(
         return result;
     }
 
-    private async Task<SplitResult?> SetCoreAsync(string key, byte[] value, long expiresAtTicks)
+    private async Task<SplitResult?> SetCoreAsync(string key, byte[] value, long expiresAtTicks, WalRoutingStamp routing)
     {
         EnsureInternalOrigin(LatticeOperation.Write);
         using var _mutationScope = EnterMutationScope();
@@ -1193,8 +1216,15 @@ internal sealed partial class BPlusLeafGrain(
             // persist, so none is published here. Its SplitResult is returned
             // for the shard root to link (issue #3523); see
             // SplitResult.Additional.
-            return SplitResult.Combine(recovered, SplitResult.Forward(await grainFactory.GetGrain<IBPlusLeafGrain>(spanTarget)
-                .SetAsync(key, value, expiresAtTicks)));
+            var spanSibling = grainFactory.GetGrain<IBPlusLeafGrain>(spanTarget);
+            return SplitResult.Combine(recovered, SplitResult.Forward(await WalFenceSeamRetry.RunAsync(
+                () => ForwardedStampedOrPlainAsync(
+                    spanTarget,
+                    routing,
+                    () => spanSibling.SetStampedAsync(key, value, expiresAtTicks, routing),
+                    () => spanSibling.SetAsync(key, value, expiresAtTicks)),
+                WalFenceSeamRetry.CallerLeaf,
+                state.State.TreeId)));
         }
 
         if (spanFailOpen != SpanFailOpenReason.None)
@@ -1208,11 +1238,11 @@ internal sealed partial class BPlusLeafGrain(
         SplitResult? committed;
         try
         {
-            committed = await CommitSetAsync(key, value, expiresAtTicks);
+            committed = await CommitSetAsync(key, value, expiresAtTicks, routing);
         }
         catch (WalStampBelowFloorException refusal) when (TryAbsorbClockFloorRefusal(refusal))
         {
-            committed = await CommitSetAsync(key, value, expiresAtTicks);
+            committed = await CommitSetAsync(key, value, expiresAtTicks, routing);
         }
 
         return SplitResult.Combine(recovered, committed);
@@ -1236,7 +1266,7 @@ internal sealed partial class BPlusLeafGrain(
     ///   and short-circuit its loop-prevention.</item>
     /// </list>
     /// </summary>
-    private async Task<SplitResult?> CommitSetAsync(string key, byte[] value, long expiresAtTicks)
+    private async Task<SplitResult?> CommitSetAsync(string key, byte[] value, long expiresAtTicks, WalRoutingStamp routing)
     {
         if (await IsLatePrepareForTerminalTransactionAsync()) return null;
 
@@ -1308,6 +1338,8 @@ internal sealed partial class BPlusLeafGrain(
         // state untouched and the foreground caller observes the WAL error.
         var walStartTicks = Stopwatch.GetTimestamp();
         var writer = ResolveCommitLogWriter();
+        WalRecord? appendedEntry = null;
+        long appendedOffset = -1;
         if (writer is not null)
         {
             var entry = WalRecordBuilder.ForSet(
@@ -1316,7 +1348,8 @@ internal sealed partial class BPlusLeafGrain(
                 key,
                 newEntry,
                 isPrepared) with { PrepareStampOriginal = stampOriginal };
-            await writer.AppendAsync(entry);
+            appendedOffset = await AppendRoutedAsync(writer, entry, routing);
+            appendedEntry = entry;
         }
         RecordCommitStep("wal", walStartTicks);
 
@@ -1366,8 +1399,12 @@ internal sealed partial class BPlusLeafGrain(
             }
             else if (IsLeafOverCapacity(options.MaxLeafKeys, options.MaxLeafBytes))
             {
-                splitResult = await SplitIfNeededUnderGateAsync(options.MaxLeafKeys, options.MaxLeafBytes);
+                splitResult = await SplitIfNeededUnderGateAsync(options.MaxLeafKeys, options.MaxLeafBytes, ownMutationScopes: 1);
             }
+        }
+        if (appendedEntry is { } applied)
+        {
+            MarkLiveAppendApplied(applied, appendedOffset);
         }
         RecordCommitStep("apply", applyStartTicks);
 
@@ -1413,7 +1450,14 @@ internal sealed partial class BPlusLeafGrain(
         return splitResult;
     }
 
-    public async Task<SplitResult?> SetManyAsync(List<KeyValuePair<string, byte[]>> entries)
+    public Task<SplitResult?> SetManyAsync(List<KeyValuePair<string, byte[]>> entries) =>
+        SetManyCoreAsync(entries, WalRoutingStamp.Unstamped);
+
+    /// <inheritdoc />
+    public Task<SplitResult?> SetManyStampedAsync(List<KeyValuePair<string, byte[]>> entries, WalRoutingStamp routing) =>
+        SetManyCoreAsync(entries, StampedRouting(routing));
+
+    private async Task<SplitResult?> SetManyCoreAsync(List<KeyValuePair<string, byte[]>> entries, WalRoutingStamp routing)
     {
         await AwaitReplayBarrierAsync();
 
@@ -1475,7 +1519,7 @@ internal sealed partial class BPlusLeafGrain(
             // WAL round trip per key. See SetManyAdmittingSpanAsync.
             if (!MergeObserverActive && !LatticePreparedContext.Current && LatticeAtomicBatchContext.Current is null)
             {
-                return await SetManyAdmittingSpanAsync(entries);
+                return await SetManyAdmittingSpanAsync(entries, routing);
             }
 
             // Every split is kept, not just the last: each one names a
@@ -1483,12 +1527,12 @@ internal sealed partial class BPlusLeafGrain(
             SplitResult? splits = null;
             foreach (var entry in entries)
             {
-                splits = SplitResult.Combine(splits, await SetAsync(entry.Key, entry.Value));
+                splits = SplitResult.Combine(splits, await SetRoutedAsync(entry.Key, entry.Value, routing));
             }
             return splits;
         }
 
-        return await CommitSetManyAsync(entries);
+        return await CommitSetManyAsync(entries, routing);
     }
 
     /// <summary>
@@ -1514,8 +1558,17 @@ internal sealed partial class BPlusLeafGrain(
     /// <c>BPlusLeafGrain.SpanAdmission.cs</c> and issue #2663.
     /// </para>
     /// </summary>
-    public async Task<ConditionalSetManyResult> SetManyWherePredicateAsync(
-        List<KeyValuePair<string, byte[]>> entries, LatticePredicateNode predicate)
+    public Task<ConditionalSetManyResult> SetManyWherePredicateAsync(
+        List<KeyValuePair<string, byte[]>> entries, LatticePredicateNode predicate) =>
+        SetManyWherePredicateCoreAsync(entries, predicate, WalRoutingStamp.Unstamped);
+
+    /// <inheritdoc />
+    public Task<ConditionalSetManyResult> SetManyWherePredicateStampedAsync(
+        List<KeyValuePair<string, byte[]>> entries, LatticePredicateNode predicate, WalRoutingStamp routing) =>
+        SetManyWherePredicateCoreAsync(entries, predicate, StampedRouting(routing));
+
+    private async Task<ConditionalSetManyResult> SetManyWherePredicateCoreAsync(
+        List<KeyValuePair<string, byte[]>> entries, LatticePredicateNode predicate, WalRoutingStamp routing)
     {
         await AwaitReplayBarrierAsync();
 
@@ -1543,11 +1596,11 @@ internal sealed partial class BPlusLeafGrain(
         // no declared span - the steady state - this returns on its first line,
         // so the common path pays nothing.
         var result = ContainsOutOfSpanKey(entries)
-            ? await ForwardOutOfSpanConditionalSetManyAsync(entries, predicate)
+            ? await ForwardOutOfSpanConditionalSetManyAsync(entries, predicate, routing)
             // Every entry is in span, so the guard's "absent means non-matching"
             // inference is sound for all of them and the matched set cannot
             // straddle the span either.
-            : await SetManyWherePredicateLocalAsync(entries, predicate, mayContainOutOfSpanKey: false);
+            : await SetManyWherePredicateLocalAsync(entries, predicate, mayContainOutOfSpanKey: false, routing);
 
         return recovered is null
             ? result
@@ -1574,7 +1627,8 @@ internal sealed partial class BPlusLeafGrain(
     private async Task<ConditionalSetManyResult> SetManyWherePredicateLocalAsync(
         List<KeyValuePair<string, byte[]>> entries,
         LatticePredicateNode predicate,
-        bool mayContainOutOfSpanKey)
+        bool mayContainOutOfSpanKey,
+        WalRoutingStamp routing)
     {
         // Fast-path eligibility is a property of the predicate tree alone, so it
         // is loop-invariant across every row this call folds. Resolve it once
@@ -1630,13 +1684,13 @@ internal sealed partial class BPlusLeafGrain(
             SplitResult? splits = null;
             foreach (var entry in matched)
             {
-                splits = SplitResult.Combine(splits, await SetAsync(entry.Key, entry.Value));
+                splits = SplitResult.Combine(splits, await SetRoutedAsync(entry.Key, entry.Value, routing));
             }
             split = splits;
         }
         else
         {
-            split = await CommitSetManyAsync(matched);
+            split = await CommitSetManyAsync(matched, routing);
         }
 
         return new ConditionalSetManyResult { Split = split, WrittenKeys = writtenKeys! };
@@ -1693,7 +1747,7 @@ internal sealed partial class BPlusLeafGrain(
     /// the same <see cref="SplitResult"/> shape the per-key loop would
     /// have produced for its final overflowing entry.
     /// </summary>
-    private async Task<SplitResult?> CommitSetManyAsync(List<KeyValuePair<string, byte[]>> entries)
+    private async Task<SplitResult?> CommitSetManyAsync(List<KeyValuePair<string, byte[]>> entries, WalRoutingStamp routing)
     {
         if (await IsLatePrepareForTerminalTransactionAsync()) return null;
 
@@ -1891,6 +1945,7 @@ internal sealed partial class BPlusLeafGrain(
         // to the caller, exactly matching the per-key path's contract.
         var walStartTicks = Stopwatch.GetTimestamp();
         var writer = ResolveCommitLogWriter();
+        IReadOnlyList<long>? appendedOffsets = null;
         if (writer is not null)
         {
             // ArraySegment<T> implements IReadOnlyList<T>, so the
@@ -1903,7 +1958,7 @@ internal sealed partial class BPlusLeafGrain(
             // pool path replaces.
             try
             {
-                await writer.AppendManyAsync(new ArraySegment<WalRecord>(walEntries, 0, count));
+                appendedOffsets = await AppendManyRoutedAsync(writer, new ArraySegment<WalRecord>(walEntries, 0, count), routing);
             }
             catch (WalStampBelowFloorException refusal) when (AbsorbClockFloorRefusalAndRethrow(refusal))
             {
@@ -1974,7 +2029,7 @@ internal sealed partial class BPlusLeafGrain(
             }
             if (IsLeafOverCapacity(options.MaxLeafKeys, options.MaxLeafBytes))
             {
-                splitResult = await SplitIfNeededUnderGateAsync(options.MaxLeafKeys, options.MaxLeafBytes);
+                splitResult = await SplitIfNeededUnderGateAsync(options.MaxLeafKeys, options.MaxLeafBytes, ownMutationScopes: 1);
             }
             if (stranded is not null)
             {
@@ -1982,6 +2037,10 @@ internal sealed partial class BPlusLeafGrain(
                     splitResult,
                     await RelocateStrandedAsync(stranded, isCrossShardMigration: false));
             }
+        }
+        if (appendedOffsets is not null)
+        {
+            MarkLiveAppendApplied(walEntries, count, appendedOffsets);
         }
         RecordCommitStep("apply", applyStartTicks);
 
@@ -2089,10 +2148,18 @@ internal sealed partial class BPlusLeafGrain(
     }
 
     public async Task<bool> DeleteAsync(string key) =>
-        (await DeleteCoreAsync(key, tracked: false)).Deleted;
+        (await DeleteCoreAsync(key, tracked: false, WalRoutingStamp.Unstamped)).Deleted;
 
     public Task<LeafDeleteResult> DeleteTrackedAsync(string key) =>
-        DeleteCoreAsync(key, tracked: true);
+        DeleteCoreAsync(key, tracked: true, WalRoutingStamp.Unstamped);
+
+    /// <inheritdoc />
+    public async Task<bool> DeleteStampedAsync(string key, WalRoutingStamp routing) =>
+        (await DeleteCoreAsync(key, tracked: false, StampedRouting(routing))).Deleted;
+
+    /// <inheritdoc />
+    public Task<LeafDeleteResult> DeleteTrackedStampedAsync(string key, WalRoutingStamp routing) =>
+        DeleteCoreAsync(key, tracked: true, StampedRouting(routing));
 
     /// <summary>
     /// Shared body of <see cref="DeleteAsync"/> and
@@ -2100,7 +2167,7 @@ internal sealed partial class BPlusLeafGrain(
     /// which of the two a span forward calls on the sibling, so an untracked
     /// delete keeps the call shape an older sibling understands.
     /// </summary>
-    private async Task<LeafDeleteResult> DeleteCoreAsync(string key, bool tracked)
+    private async Task<LeafDeleteResult> DeleteCoreAsync(string key, bool tracked, WalRoutingStamp routing)
     {
         await AwaitReplayBarrierAsync();
 
@@ -2136,10 +2203,27 @@ internal sealed partial class BPlusLeafGrain(
             var sibling = grainFactory.GetGrain<IBPlusLeafGrain>(spanTarget);
             if (!tracked)
             {
-                return new LeafDeleteResult { Deleted = await sibling.DeleteAsync(key) };
+                return new LeafDeleteResult
+                {
+                    Deleted = await WalFenceSeamRetry.RunAsync(
+                        () => ForwardedStampedOrPlainAsync(
+                            spanTarget,
+                            routing,
+                            () => sibling.DeleteStampedAsync(key, routing),
+                            () => sibling.DeleteAsync(key)),
+                        WalFenceSeamRetry.CallerLeaf,
+                        state.State.TreeId),
+                };
             }
 
-            var forwarded = await sibling.DeleteTrackedAsync(key);
+            var forwarded = await WalFenceSeamRetry.RunAsync(
+                () => ForwardedStampedOrPlainAsync(
+                    spanTarget,
+                    routing,
+                    () => sibling.DeleteTrackedStampedAsync(key, routing),
+                    () => sibling.DeleteTrackedAsync(key)),
+                WalFenceSeamRetry.CallerLeaf,
+                state.State.TreeId);
             return forwarded with { Split = SplitResult.Combine(recovered, SplitResult.Forward(forwarded.Split)) };
         }
 
@@ -2164,11 +2248,11 @@ internal sealed partial class BPlusLeafGrain(
         // once with the leaf clock merged past the floor.
         try
         {
-            return await CommitDeleteAsync(key, tracked, isPrepared, recovered);
+            return await CommitDeleteAsync(key, tracked, isPrepared, recovered, routing);
         }
         catch (WalStampBelowFloorException refusal) when (TryAbsorbClockFloorRefusal(refusal))
         {
-            return await CommitDeleteAsync(key, tracked, isPrepared, recovered);
+            return await CommitDeleteAsync(key, tracked, isPrepared, recovered, routing);
         }
     }
 
@@ -2178,7 +2262,7 @@ internal sealed partial class BPlusLeafGrain(
     /// publish. Re-runnable until its WAL append succeeds, because nothing
     /// before the append changes durable or visible state.
     /// </summary>
-    private async Task<LeafDeleteResult> CommitDeleteAsync(string key, bool tracked, bool isPrepared, SplitResult? recovered)
+    private async Task<LeafDeleteResult> CommitDeleteAsync(string key, bool tracked, bool isPrepared, SplitResult? recovered, WalRoutingStamp routing)
     {
         if (await IsLatePrepareForTerminalTransactionAsync())
         {
@@ -2217,6 +2301,8 @@ internal sealed partial class BPlusLeafGrain(
         // step 1 (wal)
         var walStartTicks = Stopwatch.GetTimestamp();
         var writer = ResolveCommitLogWriter();
+        WalRecord? deleteEntry = null;
+        long deleteOffset = -1;
         if (writer is not null)
         {
             var entry = new WalRecord
@@ -2238,7 +2324,8 @@ internal sealed partial class BPlusLeafGrain(
                 IsMigrated = tombstone.IsMigrated,
                 ShardIndex = state.State.ShardIndex ?? 0,
             };
-            await writer.AppendAsync(entry);
+            deleteOffset = await AppendRoutedAsync(writer, entry, routing);
+            deleteEntry = entry;
         }
         RecordCommitStep("wal", walStartTicks);
 
@@ -2272,6 +2359,10 @@ internal sealed partial class BPlusLeafGrain(
                 relocatedSplit = await RelocateStrandedAsync(
                     stranded, isCrossShardMigration: false, completeInterruptedSplit: tracked);
             }
+        }
+        if (deleteEntry is { } appliedDelete)
+        {
+            MarkLiveAppendApplied(appliedDelete, deleteOffset);
         }
         RecordCommitStep("apply", applyStartTicks);
 
@@ -2307,11 +2398,41 @@ internal sealed partial class BPlusLeafGrain(
     /// <inheritdoc />
     public async Task<LeafRangeDeletePage> DeleteRangeAndNextSiblingAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null)
     {
-        var result = await DeleteRangeAsync(startInclusive, endExclusive, predicate);
+        var result = await DeleteRangeCoreAsync(startInclusive, endExclusive, predicate, WalRoutingStamp.Unstamped);
         return new LeafRangeDeletePage { Result = result, NextSibling = state.State.NextSibling, KeyRange = CurrentKeyRange() };
     }
 
-    public async Task<RangeDeleteResult> DeleteRangeAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null)
+    /// <inheritdoc />
+    public async Task<LeafRangeDeletePage> DeleteRangeAndNextSiblingStampedAsync(
+        string startInclusive,
+        string endExclusive,
+        LatticePredicateNode? predicate,
+        WalRoutingStamp routing)
+    {
+        // Epic #5605, member 2: a fenced range-delete walk carries the tree's
+        // range-delete generation from its open intent; the record is appended under
+        // it, so the intent's close fences it. A walk with no generation goes
+        // unstamped, as through the existing method. The admission mark is this
+        // activation's own, as for every stamped method; a caller's is never used
+        // (#5605 re-review of #5644, N-b).
+        var result = await DeleteRangeCoreAsync(
+            startInclusive, endExclusive, predicate, routing.IsSet ? StampedRouting(routing) : WalRoutingStamp.Unstamped);
+        return new LeafRangeDeletePage { Result = result, NextSibling = state.State.NextSibling, KeyRange = CurrentKeyRange() };
+    }
+
+    public Task<RangeDeleteResult> DeleteRangeAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null) =>
+        // Epic #5605, member 2 (S3, B2): a range delete reaching the leaf through an
+        // existing method was admitted under no range-delete fence (replication
+        // apply, a shadow forward, a gate-spanning fan-out, an older-build caller),
+        // so its record is appended unstamped and reported, never under the leaf's
+        // epoch alone.
+        DeleteRangeCoreAsync(startInclusive, endExclusive, predicate, WalRoutingStamp.Unstamped);
+
+    private async Task<RangeDeleteResult> DeleteRangeCoreAsync(
+        string startInclusive,
+        string endExclusive,
+        LatticePredicateNode? predicate,
+        WalRoutingStamp routing)
     {
         // Fast-path eligibility is a property of the predicate tree alone, so it
         // is loop-invariant across every row this call folds. Resolve it once
@@ -2375,6 +2496,8 @@ internal sealed partial class BPlusLeafGrain(
         // step 1 (wal)
         var walStartTicks = Stopwatch.GetTimestamp();
         var writer = ResolveCommitLogWriter();
+        WalRecord? rangeEntry = null;
+        long rangeOffset = -1;
         if (writer is not null)
         {
             // Stamp the leaf's owning chain-shard index; see SetAsync
@@ -2391,7 +2514,10 @@ internal sealed partial class BPlusLeafGrain(
                 endExclusive,
                 tombstone,
                 predicate is null ? null : keysToDelete);
-            await writer.AppendAsync(entry);
+            rangeOffset = await (writer is IRoutingStampedCommitLogWriter routed
+                ? routed.AppendAsync(entry, routing, CancellationToken.None)
+                : writer.AppendAsync(entry));
+            rangeEntry = entry;
         }
         RecordCommitStep("wal", walStartTicks);
 
@@ -2416,6 +2542,10 @@ internal sealed partial class BPlusLeafGrain(
         if (stranded is not null)
         {
             relocatedSplit = await RelocateStrandedAsync(stranded, isCrossShardMigration: false);
+        }
+        if (rangeEntry is { } appliedRange)
+        {
+            MarkLiveAppendApplied(appliedRange, rangeOffset);
         }
         RecordCommitStep("apply", applyStartTicks);
 
@@ -2898,24 +3028,102 @@ internal sealed partial class BPlusLeafGrain(
         }
     }
 
+    /// <summary>
+    /// Moves the saga shadow markers, and the isolation of the prepared buckets, that
+    /// cover <paramref name="rows"/> to the appended leaf of
+    /// <paramref name="targets"/> that will receive each row (issue #5755). The
+    /// steady state - no marker and no prepared bucket here - returns on two checks
+    /// without allocating or calling anything; otherwise one marker call per saga per
+    /// destination that holds a covered key.
+    /// </summary>
+    private async Task TransferShadowMarkersToGraftAsync(List<LwwEntry> rows, List<GraftEntry> targets)
+    {
+        if (_shadowedSagas is not { Count: > 0 } && _pendingTx is not { Count: > 0 })
+            return;
+
+        var byTarget = new Dictionary<GrainId, List<string>>();
+        foreach (var row in rows)
+        {
+            // Ascending separators, every row at or above the first: the owner is
+            // the last target whose separator is at or below the key, as the graft's
+            // relocation routes it.
+            var owner = targets[0].LeafId;
+            for (var i = 1; i < targets.Count; i++)
+            {
+                if (string.CompareOrdinal(row.Key, targets[i].SeparatorKey) < 0)
+                    break;
+                owner = targets[i].LeafId;
+            }
+
+            if (!byTarget.TryGetValue(owner, out var keys))
+                byTarget[owner] = keys = [];
+            keys.Add(row.Key);
+        }
+
+        foreach (var (target, keys) in byTarget)
+        {
+            await TransferShadowMarkersToSiblingAsync(grainFactory.GetGrain<IBPlusLeafGrain>(target), keys);
+        }
+    }
+
     /// <inheritdoc />
-    public async Task NarrowHighKeyAsync(string highKeyExclusive)
+    public async Task<LeafNarrowResult> CopyRowsForBulkLoadAsync()
+    {
+        await AwaitReplayBarrierAsync();
+        EnsureInternalOrigin(LatticeOperation.RangeRead);
+        var partitionCount = Math.Max(1, (await GetOptionsAsync()).WalPartitions);
+
+        // Issue #5766: the frontier and the rows are read in one synchronous step,
+        // frontier first, so every record at or below it is in the rows and every
+        // record this leaf has not applied lies above it.
+        var frontier = new long[partitionCount];
+        for (var p = 0; p < frontier.Length; p++)
+            frontier[p] = GetCurrentCheckpointForPartition(p);
+
+        return new LeafNarrowResult { Rows = CopyRowsAtOrAbove(string.Empty), ReadFrontier = frontier };
+    }
+
+    private bool WouldNarrowHighKey(string highKeyExclusive) =>
+        state.State.HighKeyExclusive is not { } high || string.CompareOrdinal(high, highKeyExclusive) > 0;
+
+    /// <inheritdoc />
+    public async Task<LeafNarrowResult?> NarrowHighKeyAsync(
+        string highKeyExclusive,
+        GrainId? nextSibling = null,
+        List<GraftEntry>? relocationTargets = null)
     {
         using var routingMutation = EnterLeafRoutingMutation();
         _warmCacheTopologyChanged = true;
         await AwaitReplayBarrierAsync();
         ArgumentNullException.ThrowIfNull(highKeyExclusive);
 
+        // Issue #5706: the graft captured the appended leaves' birth hint before it
+        // called here, so every commit this leaf admitted before now may hold a
+        // record below the hint. Each must have applied before the bound narrows,
+        // or a death in between leaves its record unapplied by every leaf. Drained
+        // outside the split gate, which a mutation may itself be waiting for, and
+        // only when this call would narrow: a leaf a first attempt already narrowed
+        // forwards every later out-of-span write, so it has nothing to wait for.
+        // A drain that misses its deadline narrows nothing and returns null, and
+        // the graft takes the 10.2.0 path (review B1 of #5702): a slow commit never
+        // fails a bulk chunk that succeeded on 10.2.0.
+        var drained = false;
+        if (WouldNarrowHighKey(highKeyExclusive))
+        {
+            if (!await DrainMutationsAdmittedBeforeAsync(allowance: 0))
+            {
+                return null;
+            }
+
+            drained = true;
+        }
+
+        var partitionCount = drained ? Math.Max(1, (await GetOptionsAsync()).WalPartitions) : 0;
+
         // See SetNextSiblingAsync above for the gate rationale.
         await _splitGate.WaitAsync().ConfigureAwait(true);
         try
         {
-            // Narrows only, so a re-driven graft converges rather than widening a
-            // bound a later graft has already narrowed further.
-            var prevHighKey = state.State.HighKeyExclusive;
-            if (prevHighKey is not null && string.CompareOrdinal(prevHighKey, highKeyExclusive) <= 0)
-                return;
-
             if (state.State.LowKeyInclusive is { } low && string.CompareOrdinal(highKeyExclusive, low) <= 0)
             {
                 throw new InvalidOperationException(
@@ -2923,15 +3131,135 @@ internal sealed partial class BPlusLeafGrain(
                     + $"below its low bound '{low}'.");
             }
 
-            state.State.HighKeyExclusive = highKeyExclusive;
+            // Narrows only, so a re-driven graft converges rather than widening a
+            // bound a later graft has already narrowed further.
+            var prevHighKey = state.State.HighKeyExclusive;
+            var prevNext = state.State.NextSibling;
+            var narrow = WouldNarrowHighKey(highKeyExclusive);
+            if (narrow && !drained)
+            {
+                // A widening (a reclaim absorbing a neighbour) ran between the check
+                // above and the gate. Nothing is narrowed without a drain.
+                return null;
+            }
+
+            // Issue #5654: the successor is linked in the same persist that narrows
+            // the bound. A write for a key at or above the bound that still routes
+            // here then forwards to the leaf that declares it from the moment this
+            // leaf stops declaring it, instead of failing open onto this leaf
+            // outside its span, where no read reaches it.
+            var link = nextSibling is { } next && !Equals(prevNext, next);
+
+            // Issue #5752: how far this leaf has replayed, read in the same
+            // synchronous step that narrows it. Before the narrow its replay applies
+            // every record of the range, so each one it has not applied lies above
+            // this frontier; after it, a replay skips them as out of span but still
+            // advances past them, which is why the frontier is never read later (and
+            // why a call that finds the leaf already narrowed reports none).
+            long[]? frontier = null;
+            if (narrow)
+            {
+                frontier = new long[partitionCount];
+                for (var p = 0; p < frontier.Length; p++)
+                    frontier[p] = GetCurrentCheckpointForPartition(p);
+            }
+
+            if (narrow || link)
+            {
+                if (narrow)
+                    state.State.HighKeyExclusive = highKeyExclusive;
+                if (link)
+                    state.State.NextSibling = nextSibling;
+                try
+                {
+                    await PersistAsync();
+                }
+                catch
+                {
+                    // Class B revert, as SetKeyRangeAsync reverts.
+                    state.State.HighKeyExclusive = prevHighKey;
+                    state.State.NextSibling = prevNext;
+                    throw;
+                }
+            }
+
+            // Issue #5610: a copy of every row at or above the bound, tombstones
+            // included, for the graft to relocate into the leaf that declares it.
+            // The rows stay here until the graft has delivered them and drops
+            // exactly those rows (DropRelocatedRowsAsync), so a relocation that
+            // fails, or a shard root that dies before it, loses nothing: the
+            // re-driven graft is handed the same rows again. Outside the declared
+            // span they are invisible to range-routed reads in the meantime.
+            var rows = CopyRowsAtOrAbove(state.State.HighKeyExclusive!);
+
+            // Issue #5755: each destination receives the read gates of the rows it
+            // is about to be handed before the graft merges them there, as a split
+            // and a span forward install them, so no instant exists at which a
+            // relocated row is readable without its gate.
+            if (relocationTargets is { Count: > 0 } && rows.Count > 0)
+            {
+                await TransferShadowMarkersToGraftAsync(rows, relocationTargets);
+            }
+
+            return new LeafNarrowResult { Rows = rows, ReadFrontier = frontier };
+        }
+        finally
+        {
+            _splitGate.Release();
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task DropRelocatedRowsAsync(Dictionary<string, HybridLogicalClock> relocated)
+    {
+        using var routingMutation = EnterLeafRoutingMutation();
+        await AwaitReplayBarrierAsync();
+        ArgumentNullException.ThrowIfNull(relocated);
+
+        await _splitGate.WaitAsync().ConfigureAwait(true);
+        try
+        {
+            // Only a row this leaf no longer declares, and only at the exact stamp
+            // it was handed back with: a row rewritten since, or one inside the
+            // span, is not the relocated row and stays.
+            List<(string Key, LwwValue<byte[]> Row)>? dropped = null;
+            foreach (var (key, stamp) in relocated)
+            {
+                if (!DeclaresKey(key)
+                    && Cache.TryGetRow(key, out var current)
+                    && current.Timestamp == stamp)
+                {
+                    RemoveEntry(key);
+                    (dropped ??= []).Add((key, current));
+                }
+            }
+
+            if (dropped is null)
+                return;
+
+            BumpLocalRevision();
+
+            // Persisted, as the split persists after removing the rows it moved
+            // ("leaf.split.persist-final"): the graft completes once this returns,
+            // so a drop that lived only in this activation's memory would come back
+            // with a snapshot captured before it, outside the declared span, where
+            // nothing drops it again and counts and scans include it twice.
             try
             {
                 await PersistAsync();
             }
             catch
             {
-                // Class B revert, as SetKeyRangeAsync reverts.
-                state.State.HighKeyExclusive = prevHighKey;
+                // Class B revert: the graft is still owed, and its resume hands
+                // these rows back again.
+                // Only where nothing has taken the key's place since: a write stored
+                // over it during the persist is the newer row and stays.
+                foreach (var (key, row) in dropped)
+                {
+                    if (!Cache.TryGetRow(key, out _))
+                        StoreEntry(key, row);
+                }
+                BumpLocalRevision();
                 throw;
             }
         }
@@ -2941,6 +3269,21 @@ internal sealed partial class BPlusLeafGrain(
         }
     }
 
+    /// <summary>
+    /// Returns a copy of every row whose key sorts at or above
+    /// <paramref name="keyInclusive"/>, tombstones included, preserving each
+    /// row's stamp and metadata (issue #5610). Removes nothing.
+    /// </summary>
+    private List<LwwEntry> CopyRowsAtOrAbove(string keyInclusive)
+    {
+        List<LwwEntry>? rows = null;
+        foreach (var (key, lww) in Cache.EnumerateRange(keyInclusive, null))
+        {
+            (rows ??= []).Add(new LwwEntry(key, lww));
+        }
+
+        return rows ?? [];
+    }
     /// <inheritdoc />
     public Task<LeafChainLink> GetKeyRangeAndNextSiblingAsync() =>
         Task.FromResult(new LeafChainLink
@@ -2991,12 +3334,14 @@ internal sealed partial class BPlusLeafGrain(
         // #3360).
         for (var p = 0; p < offsetsByPartition.Length; p++)
         {
+            NoteHintAtUncoveredPartition(p, offsetsByPartition[p]);
             await ApplyCheckpointHintAsync(p, offsetsByPartition[p]);
         }
     }
 
     public async Task InitializeSiblingAsync(SiblingInitialization init)
     {
+        var bornHere = false;
         using var routingMutation = EnterLeafRoutingMutation();
         _warmCacheTopologyChanged = true;
         await AwaitReplayBarrierAsync();
@@ -3028,6 +3373,8 @@ internal sealed partial class BPlusLeafGrain(
             var prevMovedSlots = state.State.MovedAwaySlots;
             var prevMovedVsc = state.State.MovedAwayVirtualShardCount;
 
+            // #5837, P1: this call performs the birth only if it seeds the unseeded range.
+            bornHere = state.State.LowKeyInclusive is null && init.LowKeyInclusive is not null;
             var changed = false;
 
             // Tree id: write-once.
@@ -3158,6 +3505,17 @@ internal sealed partial class BPlusLeafGrain(
         finally
         {
             _splitGate.Release();
+        }
+
+        // #5837, P1-P3: a split's own birth, once its persist landed, proves this
+        // activation reachable: its donor's chain reaches it, and the link follows.
+        if (bornHere && init.SplitBirth && IsPreArmGateOpen())
+        {
+            ProveReachableAtSplitBirth();
+            if (init.SpanGeneration > 0 && init.SpanShard >= 0)
+            {
+                _spanRouting = WalRoutingStamp.ForShardRoot(init.SpanShard, init.SpanGeneration);
+            }
         }
 
         // Birth seam (split sibling): durably seed a Zero "block" pin BEFORE the
@@ -3440,9 +3798,10 @@ internal sealed partial class BPlusLeafGrain(
                     };
 
                     var walStartTicks = Stopwatch.GetTimestamp();
+                    long reapOffset;
                     try
                     {
-                        await writer.AppendAsync(entry);
+                        reapOffset = await writer.AppendAsync(entry);
                     }
                     finally
                     {
@@ -3452,9 +3811,15 @@ internal sealed partial class BPlusLeafGrain(
                             LatticeMetrics.KindCompact,
                             LatticeTenantLabel.ForTree(treeId));
                     }
+
+                    RemoveEntry(key);
+                    MarkLiveAppendApplied(entry, reapOffset);
+                }
+                else
+                {
+                    RemoveEntry(key);
                 }
 
-                RemoveEntry(key);
                 entriesRemoved++;
                 if (wasExpired) expiredRemoved++; else tombstonesRemoved++;
 
@@ -3781,6 +4146,7 @@ internal sealed partial class BPlusLeafGrain(
         WalRecord[]? walEntries = null;
         var walCount = 0;
         var walRented = false;
+        var mergeAppended = false;
         if (writer is not null && entries.Count > 0)
         {
             walRented = entries.Count >= CommitSetManyPoolThreshold;
@@ -3833,7 +4199,33 @@ internal sealed partial class BPlusLeafGrain(
             var walStartTicks = Stopwatch.GetTimestamp();
             try
             {
-                await writer!.AppendManyAsync(new ArraySegment<WalRecord>(walEntries!, 0, walCount));
+                var segment = new ArraySegment<WalRecord>(walEntries!, 0, walCount);
+
+                // #5837, T1 and T3: decided in the same synchronous step as the dispatch,
+                // under the routing-mutation gate this method holds.
+                var transfer = SplitTransferRoutingFor(walEntries!, walCount);
+                IReadOnlyList<long> mergeOffsets;
+                if (transfer.IsSet)
+                {
+                    try
+                    {
+                        mergeOffsets = await AppendManyRoutedAsync(writer!, segment, transfer);
+                    }
+                    catch (WalRoutingGenerationStaleException stale)
+                    {
+                        // The span's generation was re-claimed; nothing was allocated under
+                        // it. Refresh it from the shard and retry routed once (#5851, ruling
+                        // 1); only a refresh that fails appends the transfer unstamped.
+                        mergeOffsets = await AppendTransferAfterStaleAsync(writer!, segment, walEntries!, walCount, stale);
+                    }
+                }
+                else
+                {
+                    mergeOffsets = await writer!.AppendManyAsync(segment);
+                }
+
+                NoteLiveAppendOffsets(walEntries!, walCount, mergeOffsets);
+                mergeAppended = true;
             }
             finally
             {
@@ -3874,6 +4266,11 @@ internal sealed partial class BPlusLeafGrain(
         foreach (var (key, incoming) in entries)
         {
             StoreEntry(key, incoming with { IsMigrated = true });
+        }
+
+        if (mergeAppended)
+        {
+            ReleaseLiveAppendApplied();
         }
 
         // Publish a Version advance so LeafCacheGrain delta checks detect
@@ -4337,7 +4734,14 @@ internal sealed partial class BPlusLeafGrain(
         return Task.FromResult(result);
     }
 
-    public async Task<SplitResult?> MergeManyAsync(Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration = false)
+    public Task<SplitResult?> MergeManyAsync(Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration = false) =>
+        MergeManyCoreAsync(entries, isCrossShardMigration, WalRoutingStamp.Unstamped);
+
+    /// <inheritdoc />
+    public Task<SplitResult?> MergeManyStampedAsync(Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration, WalRoutingStamp routing) =>
+        MergeManyCoreAsync(entries, isCrossShardMigration, StampedRouting(routing));
+
+    private async Task<SplitResult?> MergeManyCoreAsync(Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration, WalRoutingStamp routing)
     {
         using var routingMutation = EnterLeafRoutingMutation();
         await AwaitReplayBarrierAsync();
@@ -4400,20 +4804,20 @@ internal sealed partial class BPlusLeafGrain(
         SplitResult? forwardedSplit = null;
         if (ContainsOutOfSpanKey(entries))
         {
-            (entries, forwardedSplit) = await ForwardOutOfSpanMergeAsync(entries, isCrossShardMigration);
+            (entries, forwardedSplit) = await ForwardOutOfSpanMergeAsync(entries, isCrossShardMigration, routing);
             if (entries.Count == 0)
             {
                 return SplitResult.Combine(recovered, forwardedSplit);
             }
         }
 
-        var stranded = await MergeIntoStateAsync(entries, isCrossShardMigration);
+        var (stranded, mergeAppended) = await MergeIntoStateAsync(entries, isCrossShardMigration, routing);
 
         SplitResult? splitResult = null;
         var mergeOptions = await GetOptionsAsync();
         if (IsLeafOverCapacity(mergeOptions.MaxLeafKeys, mergeOptions.MaxLeafBytes))
         {
-            splitResult = await SplitIfNeededUnderGateAsync(mergeOptions.MaxLeafKeys, mergeOptions.MaxLeafBytes);
+            splitResult = await SplitIfNeededUnderGateAsync(mergeOptions.MaxLeafKeys, mergeOptions.MaxLeafBytes, ownMutationScopes: 1);
         }
 
         if (stranded is not null)
@@ -4423,6 +4827,12 @@ internal sealed partial class BPlusLeafGrain(
                 await RelocateStrandedAsync(stranded, isCrossShardMigration));
         }
 
+        // The batch is applied, its stranded rows relocated (issue #5572).
+        if (mergeAppended)
+        {
+            ReleaseLiveAppendApplied();
+        }
+
         return SplitResult.Combine(recovered, SplitResult.Combine(splitResult, forwardedSplit));
     }
 
@@ -4430,9 +4840,11 @@ internal sealed partial class BPlusLeafGrain(
     /// Durably commits and applies a merge batch. Returns the entries a split
     /// interleaved with the WAL append has since moved out of this leaf's
     /// declared span, or <see langword="null"/> when there are none. The
-    /// caller must hand them to <see cref="RelocateStrandedAsync"/>.
+    /// caller must hand them to <see cref="RelocateStrandedAsync"/>, and, when
+    /// the batch was appended, then release its live-append count
+    /// (<see cref="ReleaseLiveAppendApplied"/>).
     /// </summary>
-    private async Task<Dictionary<string, LwwValue<byte[]>>?> MergeIntoStateAsync(Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration)
+    private async Task<(Dictionary<string, LwwValue<byte[]>>? Stranded, bool Appended)> MergeIntoStateAsync(Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration, WalRoutingStamp routing)
     {
         // Track the high-water timestamp of the incoming batch so we can
         // (a) advance state.State.Clock past it (audit bug #3), and (b)
@@ -4483,6 +4895,7 @@ internal sealed partial class BPlusLeafGrain(
         WalRecord[]? walEntries = null;
         var walCount = 0;
         var walRented = false;
+        var appended = false;
         List<KeyValuePair<string, LwwValue<byte[]>>>? accepted = null;
         if (writer is not null && entries.Count > 0)
         {
@@ -4607,7 +5020,9 @@ internal sealed partial class BPlusLeafGrain(
             var walStartTicks = Stopwatch.GetTimestamp();
             try
             {
-                await writer!.AppendManyAsync(new ArraySegment<WalRecord>(walEntries!, 0, walCount));
+                var mergeOffsets = await AppendManyRoutedAsync(writer!, new ArraySegment<WalRecord>(walEntries!, 0, walCount), routing);
+                NoteLiveAppendOffsets(walEntries!, walCount, mergeOffsets);
+                appended = true;
             }
             finally
             {
@@ -4716,7 +5131,7 @@ internal sealed partial class BPlusLeafGrain(
         // merge is a structural apply - bypass the c2-xxviii
         // coalescing window.
         await PublishDigestUpwardInlineAsync();
-        return stranded;
+        return (stranded, appended);
     }
 
     /// <summary>
@@ -4742,6 +5157,10 @@ internal sealed partial class BPlusLeafGrain(
     private async Task ClearGrainStateCoreAsync(bool forPurge)
     {
         using var routingMutation = EnterLeafRoutingMutation();
+
+        // The tree id is cleared with the row, but the append-epoch retirement
+        // below needs it to address the tree's WAL partitions (epic #5605).
+        var fenceTreeId = state.State.TreeId;
 
         // A purge commits to clearing this leaf before anything is cleared (issue
         // #4700): the mark is what lets a recovery of the tree re-create the leaf
@@ -4839,6 +5258,19 @@ internal sealed partial class BPlusLeafGrain(
             // The applied-terminal witness sidecar is keyed by the leaf too
             // (issue #4545), and goes with it on the same terms.
             await ClearTerminalWitnessSidecarAsync();
+
+            // The leaf's WAL append-epoch entries and epoch row go with it too
+            // (epic #5605), whether or not the fence gate is open. Each partition
+            // raises its retired floor to the higher of the entry and the epoch row
+            // before deleting the entry (#5641), so neither a surviving duplicate nor
+            // one that has written its row but not yet its entry can share an epoch
+            // with a leaf re-created under this id. Best effort: a failure is logged
+            // and leaves the rows in place, which is safe, and the WAL GC's
+            // orphan-pin retirement retires what a failed clear left.
+            await RetireAppendEpochAsync(fenceTreeId);
+
+            // Its hand-off marker row goes with it too (epic #5605, member 2).
+            await ClearHandOffMarkerAsync();
 
             // The row record goes last of all (issue #4654): until it is deleted, a
             // rowless activation of this leaf fails closed, so an interrupted clear

@@ -1,0 +1,13 @@
+# Pairs with DeferredCloseMeetsCoreResolve (H -> C, #5839). H admits a write for L only within a
+# window, so while the deferred head is pending and no window is open, a write of the closed
+# window carries a stamp below the raised generation, and the resolution's re-claim refuses it.
+MODULE: DeferredCloseMeetsCoreResolveRaisedStampAdmitted
+TARGET: DeferredCloseMeetsCoreResolve
+CLASS: Invariant
+SUMMARY: H's admission bound is dropped, so a write stamped with the raised generation is allocated while the deferred head is pending and no window is open
+
+--- FIND
+        /\ pend /\ ~hoOpen => s < pendGen
+--- REPLACE
+\* MUTATION: no admission bound while the deferred head is pending.
+--- END

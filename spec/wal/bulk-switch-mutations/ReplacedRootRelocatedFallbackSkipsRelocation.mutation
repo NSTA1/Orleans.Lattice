@@ -1,0 +1,20 @@
+# Pairs with ReplacedRootRelocated (review Q2). Publishing over the root a batch
+# write seeded, rather than falling back to the switched path, leaves that
+# root's rows unrelocated.
+MODULE: ReplacedRootRelocatedFallbackSkipsRelocation
+TARGET: ReplacedRootRelocated
+CLASS: Invariant
+SUMMARY: the never-written publish over a seeded root publishes without opening the switch and relocating the root
+PERTURBS: Publish
+BOUNDS: NeverWritten = 1
+
+--- FIND
+       ELSE /\ tokOpen' = TRUE
+            /\ skip' = FALSE
+            /\ UNCHANGED <<published, phase>>
+--- REPLACE
+\* MUTATION: no fallback; published over the seeded root.
+       ELSE /\ published' = TRUE
+            /\ phase' = "finished"
+            /\ UNCHANGED <<tokOpen, skip>>
+--- END

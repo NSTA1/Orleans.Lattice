@@ -1,0 +1,18 @@
+# #5837 V3 (a5e2e2ef, #5837 comment 6654623036): the split's marker view is read after the
+# heads, possibly concurrently with the drain of its own appends.
+MODULE: SiblingHintHonestSplitViewBeforeHeads
+TARGET: SiblingHintHonest
+CLASS: Invariant
+SUMMARY: the marker view is read before the split captures its heads
+PERTURBS: SplitView
+BOUNDS: WithFreeAdvance = TRUE, WithSplitHint = TRUE, WithViewOverlap = TRUE, WithDuplicate = FALSE, WithMixedVersion = FALSE
+
+--- FIND
+    /\ WithViewOverlap
+    /\ a \in up
+    /\ sh[a] # -1
+--- REPLACE
+    /\ WithViewOverlap
+    /\ a \in up
+\* MUTATION: no ordering against the heads.
+--- END

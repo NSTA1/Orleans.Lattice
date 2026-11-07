@@ -1,0 +1,29 @@
+# #5841: an epoch-only append is fenced only by the WAL shard's entry check against
+# the donor's epoch.
+MODULE: HandOffBoundEpochOnlyWriteUnfenced
+TARGET: HandOffBound
+CLASS: Invariant
+SUMMARY: the WAL shard allocates an epoch-only append whatever its epoch, so a superseded duplicate's write is never refused
+PERTURBS: DupAlloc, DupReject
+BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1, WithRestart = FALSE
+
+--- FIND
+    /\ dpend
+    /\ dstamp >= eRow
+    /\ next < MaxOff
+--- REPLACE
+    /\ dpend
+\* MUTATION: no entry check for an epoch-only append.
+    /\ next < MaxOff
+--- END
+
+--- FIND
+    /\ dpend
+    /\ dstamp < eRow
+    /\ dpend' = FALSE
+--- REPLACE
+    /\ dpend
+\* MUTATION: never refused.
+    /\ FALSE
+    /\ dpend' = FALSE
+--- END

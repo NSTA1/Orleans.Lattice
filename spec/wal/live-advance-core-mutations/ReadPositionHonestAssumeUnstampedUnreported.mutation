@@ -1,0 +1,18 @@
+# Weakens the unstamped-report assumption in this module's environment: a 10.2.0
+# silo's unstamped append is admitted without raising the partition's watermark, as
+# a path the stamp census missed would be. No stamped response reports it, and a
+# live advance passes it. Shows the assumption is load-bearing.
+MODULE: ReadPositionHonestAssumeUnstampedUnreported
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: an unstamped append is admitted without raising the unstamped watermark
+PERTURBS: OldAlloc
+
+--- FIND
+            /\ lastU' = next
+            /\ UNCHANGED oldRejected
+--- REPLACE
+\* MUTATION: the watermark is not raised.
+            /\ lastU' = lastU
+            /\ UNCHANGED oldRejected
+--- END

@@ -224,6 +224,31 @@ public class ShipperPersistenceIntegrationTests
             Task.FromResult(new WalMoveQuiesceResult(true, Entries.Count - 1, expectedPlacementVersion, "default"));
 
         public Task DeactivateForMoveAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        public Task<WalStampedAppendResult> AppendStampedAsync(WalRecord entry, WalAppendStamp stamp, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<WalStampedBatchResult> AppendBatchStampedAsync(IReadOnlyList<WalRecord> entries, WalAppendStamp stamp, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<WalAppendFenceClaimResult> ClaimAppendEpochAsync(Guid leafId, long epoch, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<WalAppendFenceArmResult> ArmAppendEpochAsync(Guid leafId, long epoch, Guid activation, WalRoutingInitiator deferredInitiator, long deferredGeneration, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<WalAppendFenceClaimResult> ClaimRoutingGenerationAsync(WalRoutingInitiator initiator, long generation, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<WalSplitCut> GetSplitCutAsync(WalAppendStamp reader, string? lowInclusive, string? highExclusive, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<long> ReadLeafReportAsync(WalAppendStamp reader, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<long> RetireAppendEpochAsync(Guid leafId, long rowEpoch, CancellationToken cancellationToken) => Task.FromResult(0L);
+
+
+        public Task<long> RetireRoutingGenerationsAsync(int shardCount, CancellationToken cancellationToken) => Task.FromResult(0L);
     }
 
     private static WalRecord MakeEntry(string key, long ticks) => new()

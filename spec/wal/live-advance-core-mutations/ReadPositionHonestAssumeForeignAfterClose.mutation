@@ -1,0 +1,23 @@
+# Weakens H's HandOffBound in this module's environment: a foreign append is
+# allocated while L's marker is closed, above the closedAt the last close recorded.
+# Nothing holds L, so its live advance passes the foreign record. Shows the
+# assumption is load-bearing.
+MODULE: ReadPositionHonestAssumeForeignAfterClose
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: a foreign append is allocated whether or not L's marker is open
+PERTURBS: ForeignAlloc
+
+--- FIND
+ForeignAlloc ==
+    /\ UNCHANGED <<armVars, moveVars>>
+    /\ ~WithSplitBirth
+    /\ hoOpen \/ ~mInit
+
+--- REPLACE
+ForeignAlloc ==
+    /\ UNCHANGED <<armVars, moveVars>>
+    /\ ~WithSplitBirth
+\* MUTATION: no open marker needed.
+
+--- END

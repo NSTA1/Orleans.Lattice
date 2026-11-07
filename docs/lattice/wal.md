@@ -1405,6 +1405,856 @@ A floor already published stays enforced, because it is durable. If the gate clo
 
 A tree that is not replicated is never read by a shipper. Its floor stays zero, and it never refuses a write.
 
+## Append epoch fencing
+
+Orleans promises one activation per grain, but during a membership change a
+leaf can briefly run twice. A WAL partition therefore fences appends by **leaf
+activation epoch** ([epic #5605](https://github.com/NSTA1/Orleans.Lattice/issues/5605)),
+so a stale duplicate activation can never append after a newer one has claimed.
+The design note is `spec/wal/design/LiveAdvanceDesign.md`. The fence is what lets
+a leaf advance its checkpoint over its own writes without a replay; see
+[Live checkpoint advance](#live-checkpoint-advance).
+
+**The claim.** Before an activation's first append to a partition, it claims an epoch:
+
+1. **Epoch row.** The activation writes the epoch its leaf's epoch row held, plus
+   one, as a strict conditional write. Only claims write that row, so any
+   conflict means another activation claimed; this one is stale and deactivates.
+2. **Entry write.** At the partition, the claim is written to the partition's
+   durable entry for the leaf as a conditional max-merge, so the entry never
+   moves down. A claim at or below the entry, or at or below the partition's
+   **retired floor**, is refused.
+3. **Raise.** Under the lock that assigns offsets, the partition raises its
+   in-memory entry and returns its next offset as the **claim head**: everything
+   allocated before the claim lies below it.
+
+On any refusal the activation persists an epoch above the refused value and claims
+again, conditionally on the epoch row it last wrote: if that row moved, another
+activation claimed and this one was superseded. After eight refused rounds, or a
+claim that fails for any other reason (a storage fault, a timeout), the append goes
+unstamped and the activation keeps appending unstamped for 30 seconds before it
+tries again, so a faulting store costs one claim attempt per window, not one per
+write.
+
+**Stamped appends.** Every append then carries the leaf's id and epoch as a call
+argument, never in the stored record. The partition checks it in the same locked
+step that assigns the offset: an epoch below the leaf's entry is rejected and
+allocated nothing. An entry the partition has not loaded since it activated (after
+a restart, or a WAL move's cutover) rejects the append until the leaf re-presents
+its claim, which reloads the entry. The retired floor is checked at the claim, not
+at the append: it is one value per partition while epochs are per leaf, so checking
+it at every append would let one leaf's retirement supersede every live leaf below
+it ([#5635](https://github.com/NSTA1/Orleans.Lattice/issues/5635)). A retired leaf's
+own appends meet its deleted entry instead. A multi-entry stamped batch holds its
+leaf's claims back until every entry has an offset, so it is admitted whole or
+rejected at its first entry, never split by a claim.
+
+**Rejections never reach a caller.** A rejected activation deactivates, and the
+caller of the leaf write - the shard root's leaf-call step for every `ILattice`
+write, saga prepare, replication apply, view and restore, and the leaf-to-leaf,
+bulk and compaction seams - retries against the live activation until the
+operation's existing deadline: its cancellation token, or else the silo's
+configured Orleans response timeout. A rejection is not a provider failure, so it
+never feeds the WAL saturation signal. When that deadline expires the caller sees exactly
+what it sees today: a `TimeoutException` or an `OperationCanceledException`.
+The refusal itself is the leaf's existing retired-leaf refusal, marked as a
+superseded activation in two trailing fields. A shard root on an older build, which
+can reach a newer leaf while the gate races a rolling upgrade or rollback, does not
+read those fields: it sees the retired-leaf refusal it already retries until its
+deadline, and never a type it cannot resolve. A re-presented claim that is rejected
+as unloaded eight times in a row is not a supersession: the append goes unstamped
+and the activation stays.
+
+**Durable rows.** The epoch row, each partition's entries, its retired floor and
+its routing-generation table are rows of their own under reserved grain types
+(`_lattice_leaf-append-epoch`, `_lattice_wal-append-epoch`,
+`_lattice_wal-append-epoch-floor`, `_lattice_wal-routing-generations`), written
+through the tree's grain storage provider. No existing state type gains a field.
+A partition's routing generations are one row with a slot per shard-level initiator
+(each shard root, and the tree's range-delete fence)
+([#5987](https://github.com/NSTA1/Orleans.Lattice/issues/5987)). Every write to it is a
+conditional read-modify-write that raises one slot and leaves the others as read, so
+two initiators raising their slots at once both survive, and the partition loads every
+slot with one read. That read is refreshed by every claim's read of the row and re-read
+once it is five seconds old, so a raise by a duplicate activation of the partition
+reaches it within a bounded time. Every raise rewrites the whole row; raises are rare (an arm or a
+close), and at the largest tree a slot per shard (4,096 shards) still fits one Azure
+Table entity.
+The rows are keyed by tree and partition, not by WAL provider, so a WAL move
+carries them unchanged. When a leaf is cleared (purge, reclaim, orphan repair) or
+the WAL GC retires an orphaned leaf's materialiser pin, each partition raises its
+retired floor to at least the higher of the leaf's entry and its epoch row before
+deleting the entry ([#5641](https://github.com/NSTA1/Orleans.Lattice/issues/5641)).
+The clear deletes the epoch row, so a leaf re-created under the same id starts its
+epochs again from one; covering the row as well as the entry means neither a
+surviving duplicate nor one that has written its row but not yet its entry can share
+an epoch with it. An activation that keeps serving after its own clear claims afresh
+as the re-created leaf. For the GC, the partition reads the leaf's epoch row itself,
+and does nothing more for a leaf with no row - one that never claimed, or whose
+clear already retired it.
+
+**The orphaned-row sweep** ([#5634](https://github.com/NSTA1/Orleans.Lattice/issues/5634)).
+A clear on a silo running an older build, during a rollback or a rejoin after the
+gate opened, deletes none of these rows and removes the leaf's materialiser pins, so
+the GC never finds the leaf again. The rows are inert, since only that leaf's claims
+read them, but storage cannot enumerate them. Each partition therefore keeps an
+**append-epoch directory** (`_lattice_wal-append-epoch-dir`): 64 hash buckets, each a
+chain of pages of at most 384 leaves, small enough for any provider's row limits in
+binary or JSON. A partition lists a leaf before it first writes the leaf's entry and
+delists it after retiring the entry. A background sweep, registered with the WAL GC,
+walks every tree's directories once every 6 hours across the cluster; a silo claims a
+tree's sweep through a conditional write to its row (`_lattice_wal-append-fence-sweep`).
+For each leaf listed for more than 24 hours whose row is absent or has no tree id, the
+test the GC uses for an orphaned pin, the sweep runs the leaf's clear sequence above:
+retire at every partition with the epoch row's value, then delete the row
+conditionally. It examines at most 1,024 leaves per tree per sweep, resuming where the
+previous sweep stopped, so live leaves never hold an orphan back. A silo's first sweep
+comes 5 to 15 minutes after it starts, so frequent restarts cannot starve it. The fence's safety
+does not rest on that test: retiring a leaf that is still live only costs its
+activation a deactivation and a re-claim above the raised floor, and its writes are
+retried at their seams.
+
+**Unstamped appends are always admitted.** An append through the existing,
+unstamped methods - an append from a silo running an older build, one from a silo
+whose view of the gate is closed, or a write that is unstamped by design (see
+[Hand-off fences](#hand-off-fences)) - is never rejected. The partition records the
+highest such offset and reports it in every stamped response, so a later checkpoint
+advance can never skip it; an activation reports its own unstamped appends to
+itself. A saga coordinator's `TxCommit` or `TxAbort` record carries the
+**coordinator-terminal** stamp class instead: it is admitted with no entry check and
+does not raise the reported offset, because such a record carries no row data and a
+leaf holds its advance while the prepare it resolves is pending. A record of any
+other kind sent with the class is admitted unstamped and reported, so the class
+cannot bypass a fence.
+
+**Rolling upgrades.** Leaves claim and stamp only while every active silo's grain
+manifest advertises the append-fence capability. The gate is not ratcheted: if a
+silo running an older build joins, or rejoins in a rollback, it closes again by
+itself and leaves appends unstamped. If a newer silo reaches an older one before its
+gate has observed the join, the older silo refuses the unknown method while
+deserialising the request; only that definite failure is re-issued unstamped.
+Any other failure keeps today's retry semantics.
+
+**Cost.** Per stamped append: one dictionary lookup and two comparisons, under the
+lock the append already holds. Per leaf append, stamped or not, the leaf reads the
+silo's cached gate verdict without a lock, comparing two versions. Per activation:
+one epoch-row read and write, then one claim call, one entry-row read and one
+entry-row write per partition it writes. The first write after each leaf activation
+therefore waits for about four sequential storage round trips before its append, a
+latency change for cold leaves. Per leaf clear: one epoch-row read, then for a leaf
+that has claimed, one retirement call per WAL partition (a floor and an entry read,
+a floor write and an entry delete) and the epoch row's delete. A tree purge pays
+that per leaf. Per orphaned pin the WAL GC retires: one retirement call, which
+reads the leaf's epoch row at the partition and stops there when it has none.
+The directory adds a read of the leaf's bucket chain (normally one page) and a page
+write each time a partition first writes a leaf's entry, and each time it retires
+one, so a clear also reads the chain at each partition the leaf never wrote. Per tree
+every 6 hours, the sweep reads every directory page of every partition (at least 64
+reads per partition), then one leaf row per leaf it examines, up to 1,024.
+
+The fence's counters are `orleans.lattice.wal.append_fence.claims`,
+`.rejections`, `.seam_retries`, `.unstamped_reports` and `.sweeps`; see
+[Metrics](metrics.md).
+
+### Deferred claims: the pre-arm class
+
+Claiming at every partition a leaf writes is paid at every leaf birth and every
+activation, but the claim is needed only by a leaf that advances its checkpoint
+live. While every active silo also advertises the pre-arm capability, a leaf
+therefore defers its claim until it **arms** a partition
+([#5833](https://github.com/NSTA1/Orleans.Lattice/issues/5833)). If a silo without
+that capability joins, the gate closes again and leaves claim eagerly as above.
+
+- **Pre-arm appends.** Until it arms a partition, an activation appends there under
+  the pre-arm class: the stamp names the leaf and a random token per activation,
+  and no epoch. The partition checks no entry and writes no row, so a new or
+  reactivated leaf pays no claim, epoch row or directory write. The routing
+  generation is still checked, as for any stamped append. A write that carries no
+  routing generation is never pre-arm: it goes unstamped and raises the shared
+  watermark.
+- **Attribution.** For each leaf, the partition keeps in memory the two activations
+  with the highest offsets it allocated to that leaf's records, stamped or pre-arm.
+  A pre-arm record never raises the partition's shared unstamped watermark, so
+  unarmed leaves do not hold armed ones back. Instead each stamped append's
+  response reports the highest offset any *other* activation of the same leaf
+  allocated, so a duplicate activation's record is read before the leaf advances
+  over its own. After a restart everything below the recovered head counts as
+  foreign. Past 16,384 leaves the older half of the table, by highest offset, is
+  evicted, and each evicted leaf raises the floor of its own hash bucket, one of
+  1,024 per WAL shard activation (8 KB, reset with the activation, never persisted).
+  A leaf's foreign high is read against its own bucket's floor only, so an eviction
+  holds back only the leaves that share an evicted leaf's bucket, and only to that
+  bucket's newest evicted record ([#5851](https://github.com/NSTA1/Orleans.Lattice/issues/5851)).
+- **The arm.** A leaf arms only when its pin holds the partition's WAL floor: inside a
+  starvation drive (the WAL GC found it holding the floor), or on its snapshot recheck
+  tick when it has live data and no proven checkpoint on any partition. It never arms
+  on a write or a routine checkpoint. A split sibling inherits its donor's checkpoints,
+  so it is not in that state and does not arm. They are capped at the donor's
+  frontier unless the split's consistent cut shows that frontier is past every other
+  author's record (see "The claimless advance" below). The
+  leaf writes its epoch row once, then claims at every partition it is arming in one
+  parallel round, only while no hand-off is open on it. Each claim also returns the
+  leaf's foreign high, which the leaf must have replayed past before it advances live;
+  its own pre-arm records it applied itself.
+- **Deferred hand-off closes.** A split or a consolidation no longer claims at every
+  partition when it closes. A split's donor closes its sibling's window itself (see
+  "The claimless advance" below), and the shard root only raises its routing
+  generation as it links the split. For a consolidation, the shard root, in its own
+  turn as it folds the leaf, raises its routing generation without claiming it at
+  any partition, and records the close on the receiving leaf's marker with every
+  head deferred. A deferred head holds that leaf. Its arm then re-claims the generation
+  at the partition, so any write admitted before the raise is either below the
+  re-claim's head or refused, and records that head. Resizes, bulk switches and
+  range deletes still close eagerly.
+
+**Cost with the pre-arm class.** Per leaf birth or activation: nothing until it
+arms. Per stamped or pre-arm append: one further dictionary lookup under the same
+lock. Per split or consolidation: one shard-marker write and the receiver's marker
+read and write. Per arm: the epoch row read and write, one claim per armed
+partition, and one generation-row write per partition only for the first arm there
+after a deferred close.
+
+### The claimless advance
+
+Under the pre-arm class a leaf can also advance its checkpoint live **without
+arming** ([#5837](https://github.com/NSTA1/Orleans.Lattice/issues/5837)). Every
+response to a stamped append reports a bound that covers every record below the
+leaf's own append that it did not write: another activation's, an unstamped one, or
+a donor's it has not yet been released from. Once the leaf has read past that bound
+and every close head on its markers, it may advance there with no claim. A partition
+whose latest report did not cover every donor close pending on the leaf has no
+claimless view, and the leaf advances there by replay instead.
+
+- **Splits close their own window.** The donor closes its sibling's birth window
+  itself once its narrowed span is durable. It first waits for every append it
+  started before the narrow and fences its duplicate activations. Then, in one
+  marker write, it records a head one above its own highest moved-key record since
+  the split's heads (or the heads, when it wrote none), and a deferred bound: the
+  donor leaf, its own activation token, and the routing generation its writes were
+  admitted under. If an append touching the moved range failed without reporting
+  its offset, the head is the allocator head read after the wait instead. A resumed
+  close (a recovered split, or the re-drive when the shard root acknowledges the
+  link) has no such record. It closes at one above the highest offset any activation
+  of the donor allocated, never below the partition's restart or eviction floor. Its
+  bound names the shard's current routing generation. A close that fails keeps the
+  donor's link obligation, so the split re-surfaces and the link re-drives it; the
+  shard root never reads or closes the sibling's marker.
+- **The donor's stale high.** The donor's bound stays pending until the sibling's
+  own link is witnessed. The shard root records the witness on the sibling's marker
+  only after that link's raise of the routing generation is durable. A raise for any
+  other link never resolves the bound, and if the raise or the witness write fails,
+  the bound stays pending and the division re-surfaces. The witness is kept on the
+  sibling's marker as well as on the close, so a donor close written after the link
+  (a re-driven or recovered close) has its bound resolved at once.
+- **Carrying the close.** The witness ends only the bound. The sibling's stamps
+  keep carrying the close at each WAL partition until the sibling arms there,
+  re-claiming the close's shard at a generation at or above the witness. One marker
+  write then raises the close's head at that partition to the head the re-claim
+  returned and marks the partition resolved; a failed write leaves it carried. A
+  re-claim below the witness, or a witness from another shard root, resolves
+  nothing. From the first coverage-lag tick after the witness, the tick arms a
+  carried partition only while the carry **binds** there
+  ([#5851](https://github.com/NSTA1/Orleans.Lattice/issues/5851)): the leaf has an
+  own applied append above its checkpoint that the tick's advance could not pass,
+  and the bound its latest stamped response reported, which covers every close
+  carried there, lies above that checkpoint. A partition an arm has already claimed,
+  whose resolve write failed, binds too while it holds such an append, whatever its
+  bound. The tick checks this in memory first, so a
+  sibling with nothing binding reads nothing, and again on its own fresh marker
+  read, which alone triggers the re-claim. A carry that binds nothing is left in
+  place, so every stamp keeps the close. Each partition is armed once for each
+  witness, and again after a failed attempt; it never re-reads the marker for a
+  close it cannot resolve. While the close is carried, each WAL partition reports
+  the donor's **stale high** for it. That is
+  the highest offset of a donor record from any activation other than the closing
+  one, whatever routing generation admitted it: a link elsewhere in the shard can
+  raise the generation while the close is pending, and a stale duplicate's write
+  admitted under the raised one still sits above the close head. Its own forwards are excluded only when they moved keys to this
+  sibling. A stamp carries at most two pending closes; while more are pending, the
+  leaf does not advance claimlessly.
+- **Forwards.** A write a leaf forwards to another leaf before that leaf is linked
+  is attributed to every forwarder on its chain as well, up to three hops. A write
+  forwarded further is appended unstamped. The first forwarder's own forwards are
+  left out of the bound reported to it once its narrow is durable; a write that
+  reached a leaf through a later hop of a chain is never left out. That stops on any
+  ETag conflict on its state, and a new activation never assumes it.
+- **Transfers.** The rows a split donor moves into its sibling are appended under
+  the routing generation the sibling's span was established under, attributed to
+  the sibling, so they never raise the shared watermark. A transfer that is not
+  wholly inside the sibling's span is appended unstamped as before. One refused
+  because its generation was re-claimed re-reads the shard's current generation, as
+  an admission would: from the shard's marker, read fresh, with no hand-off open
+  over the span, and with descent routing both its lowest and its highest key to
+  the sibling or, before its link, both to its donor. It then retries routed once,
+  and only a failed refresh appends it unstamped.
+- **Reachability.** A sibling born by a split is proven reachable at its birth.
+  While its donor's bound is pending, a sibling that descent does not yet reach is
+  neither proven nor latched unstamped; its decision is deferred until the link.
+  Meanwhile it stamps its routed writes pre-arm, so it never raises the shared
+  watermark; it never claims or arms, and it proves again after a backoff. That
+  holds even for a sibling proven at its birth: it is deferred, and proven again
+  once its own link is witnessed and it is reachable. Reachable alone (linked, with
+  the witness not yet durable) is not enough. A leaf proven without reading its
+  marker proves again before its first claim under the eager gate, and no leaf
+  claims or arms while a donor close is pending on it. Once its link is witnessed, a leaf that
+  descent does not reach has had its keys moved, and it latches. Orphan repair
+  always latches.
+- **The split's read position.** Each partition returns its readable head with the
+  bounds the donor must have read past, all read in one turn. If the donor's
+  frontier is at or above every bound, its sibling starts at the head rather than
+  at the donor's frontier. The unstamped bound in that read is filtered by key
+  ([#5851](https://github.com/NSTA1/Orleans.Lattice/issues/5851)). The donor
+  passes the range it owns, read in the same turn: the whole pre-split range, and
+  after a fold the widened one. The partition keeps its 256 most recent
+  single-key unstamped records (a set, delete or tombstone) by key, in memory
+  only. It returns the highest of those keyed inside the range, or its floor if
+  that is higher. The floor is the restart head, raised by every record that
+  may touch other keys (a range delete, a transaction terminal, or a record
+  naming matched keys) and by every record pushed out of the table. So an
+  unstamped write elsewhere in the partition no longer holds the split back. The
+  shared watermark every stamped response reports is unchanged. An activation that
+  has not yet read its markers reads them once before it takes its first cut, so
+  the cut's view of the donor carries every close pending on it; a close recorded
+  after that read still caps the cut.
+- **Catching up.** Only a replay reads past a foreign or unstamped record, and a
+  pre-arm leaf that is neither starved nor stalled does not replay. So when the
+  claimless advance, or a split's read position, is held only by a reported bound,
+  the leaf's next coverage-lag tick runs the existing replay drive, which reads
+  past it. A hold by concrete close heads is caught up the same way
+  ([#5851](https://github.com/NSTA1/Orleans.Lattice/issues/5851)): the claimless
+  advance reads to the close head minus one once its reported bound is passed, and
+  a split's read position to the higher of that and the cut's foreign high, which
+  includes the stale highs of the closes the donor carries, once the shared
+  unstamped watermark is passed. A close head is a target only when no close
+  bearing on the leaf is deferred at any partition and no donor bound is pending: a
+  deferred head is the arm's to resolve, never a replay's. The replay leaves the
+  checkpoint at its own contiguous read position, never at the target. A drive runs
+  once for each partition and target, again only when the target rises, and never
+  on a write. A drive that is refused or deferred, or that otherwise does not run
+  its replay, leaves the target owed for the next tick.
+- **Fetching a missing report.** A leaf's claimless view at a partition is the
+  report its latest stamped append returned. An idle leaf whose latest report
+  predates a close it now carries has no covering report, and writes nothing that
+  would bring one. So on the coverage-lag tick, when that missing report is the only
+  hold (no hand-off open, the partition not latched stale, and the checkpoint at or
+  past every close head minus one and below the leaf's own high), the leaf fetches,
+  read-only, the report a pre-arm append at that partition would carry, records it as
+  that append's response, and advances to its own high when the fetched bound allows
+  it, never past it
+  ([#5851](https://github.com/NSTA1/Orleans.Lattice/issues/5851)). The fetch never
+  runs on a write, inside a starvation drive, or at a partition the activation has
+  claimed. A WAL shard on an older build that does not know the call turns the fetch
+  off for the rest of the activation; any other failure is retried on the next tick.
+
+**Cost of the claimless advance.** Per stamped or pre-arm append: one comparison
+for the reader's narrow, a request-context read for a forward chain, and a counter
+increment and decrement for the split's wait, with no allocation and no grain call.
+A pending close adds one stale-high lookup per close carried. Per forward: one
+small array per hop. Per split: one marker write closes the window, and the read of
+the heads also returns the bounds; filtering the unstamped bound by key
+scans the 256-entry table once per partition. A transfer refused stale costs one view read and
+up to four descents (two keys, against the sibling and then its donor) before it retries. A report fetch is one
+read-only, interleaving WAL shard call per held partition per tick, answered from memory. The carried-close re-claim
+reads nothing on a tick where no carried close binds. Each reported bound or close head that
+holds a leaf costs one replay drive on a tick, through the replay permit. A leaf
+allocates its two per-partition bound arrays once, on the first such hold.
+
+## Hand-off fences
+
+The epoch fence above stops a stale duplicate of a leaf. The **hand-off fences**
+stop a different author: one that appends a record a leaf will own, while handing
+keys to it ([epic #5605](https://github.com/NSTA1/Orleans.Lattice/issues/5605), the
+design note's section 2). A leaf reads the markers before it advances its checkpoint
+over its own writes ([Live checkpoint advance](#live-checkpoint-advance)); a hand-off
+in flight holds that advance, and the leaf's checkpoint advances by replay meanwhile.
+
+Every hand-off follows one protocol:
+
+1. **Open.** The initiator records an open marker on the owner before it admits a
+   write the owner will own.
+2. **Close by fence.** Once the initiator has stopped admitting writes for the
+   range, it re-claims its own epoch (a leaf initiator) or its routing generation (a
+   shard-level initiator) at every WAL partition, and records the claim heads in the
+   owner's marker. Every write admitted before the close was either allocated below
+   those heads, or carries the old epoch or generation and is rejected when it
+   arrives. A wait cannot replace this: a call can time out while its append is
+   still delivered later.
+3. **Re-arm by replay.** An owner holds while any marker overlapping it is open, and
+   may re-arm only after replaying to a close's heads.
+
+A marker is a row of its own under a reserved grain type: `_lattice_leaf-handoff`
+for a leaf, `_lattice_shard-handoff` for a shard root. A missing marker, or one whose
+state is not yet initialised, never reads as closed: it holds the owner. A marker is
+recorded only while the append-fence gate is open, and every resume path of an
+in-flight hand-off opens its marker before its next admission, so a hand-off begun
+by an older build, or while the gate was closed, opens one when it resumes.
+
+| Hand-off | Initiator | Marker | Fence at close |
+|----------|-----------|--------|----------------|
+| Leaf split | The donor leaf | The sibling's, opened at its birth | Once the donor's narrowed span is durable, the leaf's epoch row is raised above every epoch issued and the raised epoch is claimed at every partition; in pre-arm mode the donor does this in its own close, which records its deferred bound, and the shard root's link only raises its routing generation |
+| Leaf reclaim | The absorbed neighbour | The survivor's, opened before its range widens | The neighbour's entries are retired at every partition, and the allocator heads are read after the retirement |
+| Adaptive split, consolidation fold | The donor shard root | The target shard root's, opened when the migration begins | The donor raises its routing generation, after the reject phase and the drain, and re-claims it at every partition |
+| Range delete | The tree's range-delete fence | Every shard root's, range-scoped | The fence raises the tree's range-delete generation and re-claims it at every partition |
+| Bulk load, bulk append | The shard root | Its own, `bulk:{operationId}`, opened before the first leaf is created: over the whole shard for a load, from the first appended separator for an append | Once the new leaves are routable, the shard root raises its routing generation and re-claims it at every partition |
+
+**Writes are stamped at admission.** A shard root captures its routing generation
+in the same step as its phase check and passes it to the leaf through a new,
+stamped leaf write method; the leaf appends under its own epoch and that generation.
+A write that reaches a leaf through an existing leaf method carries no generation -
+an older shard root admitted it - so it is appended **unstamped** and reported,
+never under the leaf's epoch alone. A write rejected because a close re-claimed its
+generation is retried from the shard root: the phase check runs again, which
+re-routes a key whose slot moved to another shard, and the write is re-admitted under
+the current generation. If the partition refused the write at a generation above the
+one the shard root holds - its marker row was lost or restored from an older copy -
+the shard root raises its generation above that refusal before re-admitting, so a
+marker behind the WAL's rows never refuses every write until the deadline. Whoever
+calls the WAL append stamps with its own epoch, so a
+split's transfers and a relocation, which the receiving leaf appends and applies
+itself, are that leaf's own appends.
+
+A WAL partition that receives a stamped write under a generation it has not loaded
+(a fresh tree, or the partition restarted or moved) claims that generation itself,
+exactly as the writer's re-presented claim would, and then checks the write again
+from the start; a close that re-claimed a higher generation in between still rejects
+it. Claims of one initiator at a partition run one at a time, so a fresh tree's
+concurrent first writes create each generation slot once, and a claim of a generation
+the partition already holds needs no storage operation (#5831). A new tree's first
+touch reads each partition's generation table and floors once, and each shard root's
+routing floor and hand-off marker once, so its fence cost grows with shard roots plus
+partitions, not their product (#5987).
+
+**A split close does not supersede the donor.** The donor's epoch raise rejects its
+own appends stamped before it. Those are **self-fenced**: refused for the caller to
+re-admit under the current epoch, where the narrowed span forwards a moved key to
+the sibling, without the donor deactivating. The refusal has the same wire shape as
+a superseded activation's, which every caller and an older shard root already retry.
+The close's epoch raise and a raise after a floor refusal are one write: whichever
+starts second joins the first, so the two never conflict on the activation's own row.
+
+The close's heads bound every append the donor makes under its old epoch
+([#5664](https://github.com/NSTA1/Orleans.Lattice/issues/5664)):
+
+- **Admission decides the stamp.** A write is admitted against the donor's hand-off
+  closes, before its span check. If a close happens before the write reaches the WAL,
+  the write is self-fenced and re-admitted, rather than stamped with the raised epoch.
+- **Every partition is claimed.** The close claims the raised epoch at every
+  partition, including one whose claim a WAL shard restart reset and one the
+  activation never wrote, so a duplicate is refused there too. The raise is held in
+  the leaf's own entry at each partition, never in the partition's shared retired
+  floor, which every other leaf's claims are checked against.
+- **No fence, no close.** If the activation's view of the gate is closed after it has
+  stamped, the close cannot raise its epoch. The marker stays open until a later
+  close can.
+
+**A duplicate of the donor is fenced too**
+([#5841](https://github.com/NSTA1/Orleans.Lattice/issues/5841)). Another activation of
+the donor that loaded its state before the split still holds the old span. It could
+claim, or arm, after the split, then append an epoch-only write of a moved key that
+nothing routes to the sibling. Two ordered pairs prevent it:
+
+- **The split writes, then reads.** Only once its narrowed state is durable does the
+  split read the leaf's epoch row. If any activation has ever claimed, the split
+  raises the row conditionally on what it read and claims the raised epoch at every
+  partition. A duplicate that claimed before that read is refused at its next append,
+  whether or not the splitting activation itself ever claimed.
+- **A claim writes, then reads.** A claim writes the epoch row first, then reads the
+  leaf's own state row fresh. If that row's ETag is not the one the activation holds,
+  the activation is stale: it claims nowhere, and every append waiting on the claim
+  is refused. The read is serialised with the activation's own persists, so its own
+  write in flight never reads as another's.
+
+Between them, either the split sees the duplicate's claim, or the duplicate sees the
+narrowing. That needs the storage provider to give strong read-after-write across
+clients for both rows: a write that has completed is visible to any later read. The
+Azure Table and in-memory providers give it; a provider with session or eventual
+consistency does not.
+
+In pre-arm mode the live donor drops its epoch at the split's counted close, locally and
+with no I/O, just before its own close raises the row (#5837, rule S). If it had
+claimed, it adopts the raised epoch and its claims from that fence; otherwise its next
+appends go pre-arm, which the routing generation fences, and its next arm claims afresh,
+through the same write-then-read claim. A stamped append it had in flight at the dropped
+epoch is refused and retried, not treated as a supersession. If the donor re-arms before
+the link, a refusal at its new epoch, or a conflict on its next row write, gets one more
+such fresh claim per close. Without one, the live donor would deactivate on every split.
+The same rule stops a leaf from deactivating itself after it raises its epoch above
+a retired floor ([#5643](https://github.com/NSTA1/Orleans.Lattice/issues/5643)).
+
+**Range deletes are fenced at the tree.** A range-delete record is replayed by every
+overlapping leaf of every shard, so the fence belongs to the tree. Before any shard
+appends, the range delete opens an **intent** at the tree's range-delete fence grain,
+which records the range and a deadline (the silo's response timeout less a margin),
+opens a range-scoped marker on every shard root, and hands out the tree's current
+range-delete generation. Every shard's walk is stamped with it, so the close's one
+re-claim per partition fences every walk at once. The intent closes when every walk
+has returned; a per-tree reminder closes one whose deadline passed, so a fan-out
+whose caller died is closed all the same. A walk rejected after a close re-stamps
+only while its **own** intent is still open, and otherwise goes on unstamped. The
+intent is marked closing, durably, before the close's first re-claim, and the open
+check is answered by the same non-reentrant grain, so it can never hand out the
+post-close generation to a walk the close has already fenced. A range-delete walk
+that reaches a shard root through the existing method - replication apply, a resize
+or reshard shadow forward, a fan-out begun while the gate was closed, an older
+caller - is appended unstamped, by design. The record, its result and its feed are
+unchanged; range-delete records are fenced, never clipped.
+
+**The bulk birth hint.** A bulk load or bulk append records a **birth hint** - one below
+a head of every WAL partition read before its first leaf is born - in the shard's marker row,
+in the same write that opens its marker and before it creates its first leaf; a resume
+of the same operation reuses the stored hint. A lower hint is never above a record the
+leaf has not applied, it only lengthens the replay, so the consecutive chunks of a
+streaming import - a **run** - share one: the run's first chunk reads the heads, and
+each later chunk reuses the previous chunk's hint, or the heads of the fence it folds
+(below). Once the switch has moved into its new leaves every row the shard held
+in their range before it - the old rightmost leaf's rows for an append, the rows a
+batch write stored on the replaced root for a load (see
+[Bulk Loading](bulk-loading.md#rows-the-append-meets)) - each new leaf's projection
+checkpoint is set to the hint, so a cold activation replays the log from there rather
+than from its start. Every row such a leaf owns was then appended after the hint. When
+that cannot be shown - the old rightmost leaf is hosted by an older build or the gate
+was closed, so its rows were not moved, or a load crashed after publishing its root -
+the hint is not applied and the new leaves replay from the log's start, as before. A
+bulk load then closes its switch by fence, removing the hint in the same write. A bulk
+append leaves its switch open for the run, which only holds its leaves on the
+replay-based advance longer: a close per chunk would cost a claim per partition and
+two marker writes, and reject every concurrent stamped write of the shard once, per
+chunk. The completed switches of a shard are closed together, by one fence and one
+marker write, when eight have accumulated (folded into the next chunk's open write,
+whose hint then becomes the fence's heads), when no chunk has reached the shard for
+five seconds, or by the next bulk load; a fresh activation folds them into its first
+chunk. A switch that an append opened and then abandoned before it recorded its graft
+is closed the same way, without its hint. A bulk load also waits, before it reads the
+root it replaced, for the batch writes admitted before it published its own; a run's
+fence waits likewise, which only lowers the number of writes it rejects.
+
+**Writes in flight at a read position.** A leaf write checks its span, appends its WAL
+record and only then stores its row, so a head read while such a write is between its
+append and its store lies above a record the leaf has not applied. Were the activation
+to die there, a new leaf born at that head and the narrowed donor, whose span no longer
+covers the key, would both skip it. So the old rightmost leaf, before it narrows to a
+bulk append's low bound, and a dividing leaf, after it reads the heads that become its
+sibling's read position and before its intent is persisted, both wait for the writes
+they admitted earlier to finish ([#5706](https://github.com/NSTA1/Orleans.Lattice/issues/5706)).
+The wait is bounded. A narrow that times out narrows nothing, and the append links its
+leaves without narrowing and applies no hint, exactly as 10.2.0 does, so a slow write
+never fails a bulk chunk; a leaf an earlier attempt already narrowed forwards its later
+out-of-span writes and does not wait. A
+division that times out is declined (split_attempts outcome commits_in_flight)
+and retried by the next write. A division resumed from its persisted intent cannot
+wait - a write blocked on the gate it holds would be among those it waits for - so it
+gives neither leaf a read position and the sibling replays its range from the log's
+start. The marker's close heads do not cover this: they gate the live advance's arming,
+not the read position a new leaf replays from.
+
+**Records another author appended.** The drain covers the old leaf's own writes only.
+A record of the moved range that another author appended - another shard's
+range-delete walk, a duplicate activation of the old leaf, a 10.2.0 silo during an
+upgrade - and that the old leaf has not replayed lies above how far it has replayed,
+and below the heads. So a new leaf never starts reading higher than that: per WAL
+partition, an appended leaf applies the lower of the birth hint and the old rightmost
+leaf's checkpoint, read in the same step that narrows it, and a split sibling the lower
+of the heads and its donor's checkpoint, read before the division's intent is persisted
+([#5752](https://github.com/NSTA1/Orleans.Lattice/issues/5752)), and a bulk load's leaves
+the lower of the birth hint and the lowest checkpoint of the leaves of the root the load
+replaced, each read in the same call that copies that leaf's rows into the loaded tree
+([#5766](https://github.com/NSTA1/Orleans.Lattice/issues/5766)); a load that replaced no
+root, or whose replaced leaf is hosted by an older build, applies no hint. The checkpoint is
+inclusive - a leaf replays every record above it - so it is taken as it is: one above
+it is exactly the first record the old leaf had not applied. Before the narrow the old
+leaf still declares the whole range, so its replay applies such records rather than
+stepping past them; after it, a replay steps past them, which is why a graft resumed
+on a leaf an earlier attempt already narrowed applies no hint. A lower read position
+only lengthens the new leaf's first replay.
+
+The old leaf's frontier is its in-memory projection checkpoint. Its replay moves it -
+to the end of its activation replay, then by any later replay - and the live advance
+moves it over the leaf's own writes only while armed, behind the append fences; a write
+applied in memory never moves it on its own. A checkpoint hint also moves it: a split
+sibling's or bulk-born leaf's read position, and a split donor's own advance, each
+capped as described here - the donor advances to the same capped heads its sibling
+starts from, which is a no-op wherever it has a frontier
+([#5756](https://github.com/NSTA1/Orleans.Lattice/issues/5756)). So the frontier is
+contiguous: every record at or below it has been applied. A partition on which the old
+leaf has scanned nothing (it activated on an empty partition and has not replayed
+since, or was born from such a leaf) has no frontier, reported as -1. There an appended
+leaf applies no hint, as in 10.2.0. A split sibling and its donor instead take one below
+the head, as in 10.2.0: a sibling with no read position would replay the whole log and
+seed its birth pin on the sentinel that blocks the tree's WAL trim. That is the
+residue: a split on a partition its donor has never scanned can still skip another
+author's record, appended to the range after the donor activated, and a later cap at
+either leaf's frontier inherits it. The live advance closes it once it keeps frontiers
+current.
+
+A donor that no longer advances to the heads may reactivate onto a snapshot captured
+before it split, which still holds the rows the split moved to its sibling. Replay
+never removes a key outside the declared span, so rehydration drops every row at or
+above a completed split's key that the leaf no longer declares; the sibling holds all of
+them. A row below that key - one a later bulk narrow stranded, owed to the graft's
+relocation - is kept.
+
+**A hinted leaf captures before it persists**
+([#5877](https://github.com/NSTA1/Orleans.Lattice/issues/5877)). A split sibling's birth
+hint, or a bulk switch's, can give a leaf its first checkpoint at a partition that no
+durable snapshot covers. Persisted as it is, that checkpoint would sit above the leaf's
+coverage, and a kill or a failed capture before the next capture would leave the next
+activation to repair at activation or replay cold. So every flush of such a checkpoint -
+the coalescing flush, the coverage-lag tick's bank step, an explicit flush and the
+graceful-deactivation flush - first captures the leaf's cache, claiming the hinted
+checkpoint. A partition still uncovered after that capture is held back from the write
+and stays pending, so its persisted checkpoint stays at -1. A failed capture is retried
+once per coverage-lag tick or at deactivation, never once per flush, and is not charged
+to the zero-coverage repair budget. A partition a snapshot already covers pays nothing
+new, and a leaf's own split advance and its live advance keep their existing path.
+
+**A head is one past a checkpoint.** A WAL head is exclusive - the next offset the log
+will assign - while a leaf's checkpoint is inclusive - the last offset it has applied, and
+it replays every record above it. So every head a split or a bulk operation reads becomes
+a read position one below it, for the split sibling, the split donor's own advance, the
+sibling's birth pin and the bulk birth hint alike
+([#5760](https://github.com/NSTA1/Orleans.Lattice/issues/5760)). Taken as it is, a head
+would skip the record first allocated at it, which, written by another author, no leaf
+would then apply; one below re-applies at most one record, which last-writer-wins makes
+idempotent. A read position of 0 therefore means offset 0 is applied and is stamped and
+pinned as a real offset; only a negative one means nothing applied.
+
+**Coordinator terminals** carry the coordinator-terminal stamp class described in
+[Append epoch fencing](#append-epoch-fencing), so a saga does not raise the reported
+unstamped offset of every partition it touched.
+
+**Rolling upgrades.** Every new call - a stamped leaf or shard-root method, a marker
+call, the range-delete fence - is made only while the gate is open. A callee on an
+older build that answers with the definite "method unknown" failure is re-issued
+through the existing, unstamped method; any other failure keeps today's semantics.
+
+**Cost.** No allocation or grain call is added to a write: the routing stamp is a
+call argument, and the leaf's dispatch helpers are pooled. Per shard root: one
+marker-row write the first time it admits a write with the gate open. Per split:
+one marker write at the sibling's birth, one epoch-row write and one claim call per
+partition the donor had claimed, and one marker write at the close. Per reclaim: a
+marker write, a retirement call per partition and a marker write. Per slot
+migration: a marker call to the target at each phase, one generation re-claim per
+partition at the close. Per range delete: one fence-grain call to open and one to
+close, one marker write per shard to open and one to close, one generation re-claim
+per partition, and the reminder only while an intent is open. Every overlapping
+leaf of the tree is held for the delete's duration. Per purge: a read and a
+conditional delete per fence row, and a floor write per step. Per WAL partition
+activation: one floor-row read at its first routing-generation claim. Per shard root
+of a re-created tree: one floor-row read before its marker first reads initialised,
+and, when the floor is above 0, one fence-grain call and one claim per partition.
+Per bulk load: one read of each partition's head and one marker write to open, one
+checkpoint-hint call per new leaf, and one generation raise, one generation re-claim
+per partition and one marker write to close. Per bulk-append chunk that creates leaves:
+one marker write to open and one checkpoint-hint call per new leaf; the heads are read
+once per run, and the close - one generation raise, one re-claim per partition and one
+marker write - is paid once per eight chunks and once at the run's end. The old
+leaf's replay frontier rides the narrow's existing reply, and the read gates of
+relocated rows cost one marker call per saga per appended leaf, only when those rows
+carry saga state. The in-flight
+drain adds two counter updates to each leaf write, on fields the activation already
+owns, and no allocation or call.
+
+**Purging a tree's fence rows.** The per-tree rows - each shard root's
+`_lattice_shard-handoff` marker, each partition's `_lattice_wal-routing-generations`
+table with its slots for the shard roots and the range-delete fence, and the range-delete fence
+grain's own state - are retired when the tree is purged
+([#5668](https://github.com/NSTA1/Orleans.Lattice/issues/5668)), before the purge
+removes the tree's registry entry, which is what frees the id for re-use. A soft
+delete retires nothing, so a recovered tree keeps every row.
+
+The purge first reads every row. It then raises every initiator's routing floor
+(`_lattice_tree-routing-floor`, one floor per shard root and one for the range-delete
+fence) to the highest generation any row holds, in one write, before it deletes
+anything. It then retires the fence's state, the markers, and each partition's
+entries, in that order. A row that moved since the read is covered again before its
+delete. A failed step keeps the registry removal owed, and the purge's re-drive runs
+the retirement again. A partition hosted by a 10.2.0 silo answers the retirement
+call with the definite "method unknown" failure, and its rows are deleted straight
+from storage.
+
+The floors keep a purged incarnation's generations from recurring:
+
+- A WAL partition refuses a routing-generation claim at or below its initiator's
+  floor. This check is load-bearing, not an optimisation: it is the one seam every
+  generation passes before a stamped append under it is admitted.
+- A write a shard root admitted under a generation at or below that initiator's
+  floor is never re-stamped
+  ([#5705](https://github.com/NSTA1/Orleans.Lattice/issues/5705)). Its seam retry
+  surfaces the deleted-tree outcome rather than raising the generation above the
+  floor or re-admitting under the re-created tree's. A shard root that saw its marker
+  and then finds it gone under a floor covering it never re-creates it.
+- A re-created tree seeds every first generation, its shard roots' and its
+  range-delete fence's, at its initiator's floor plus one.
+- A re-created shard root's first initialisation is a fence. Before its marker reads
+  initialised, it has the range-delete fence claim its seeded generation at every
+  partition, claims its own, and records the heads as a close. So a write the purged
+  incarnation appended between the purge's log trim and the retirement lies below
+  heads the new leaves must replay past before the live advance re-arms them. A tree
+  id never purged has floor 0 and claims nothing extra.
+
+**A purge that finished on a 10.2.0 silo** retires nothing, so its markers survive.
+A shard root that re-seeds the purged root catches up before it lifts the purge
+tombstone. A marker that holds a generation or reads initialised was left by the
+earlier incarnation, since only that shard root sets either, and only after it has
+seeded. The shard root raises its own floor over that generation and resets the
+marker, so it seeds above the floor through the first-initialisation fence. It
+raises only its own floor: shards of the re-created tree re-seed one at a time while
+the tree is live, and raising any other initiator's floor could cover a generation
+that initiator already holds.
+
+Three residues remain, all bounded:
+
+- **One floor row per purged tree id.** It must outlive every row it covers.
+- **Rows a purge never retires.** That is a purge that finishes on a 10.2.0 silo, a
+  system tree's purge, or the purge of a retired physical copy whose id stays
+  registered as a live logical tree. Neither of the last two ids is freed for a
+  re-created tree. Each is bounded by the tree's shards times its partitions. The
+  fence's per-leaf rows are swept separately
+  ([#5634](https://github.com/NSTA1/Orleans.Lattice/issues/5634)).
+- **Mixed-version re-creation.** After a purge that finished on a 10.2.0 silo, two
+  cases are not caught up: a shard root whose re-seed itself ran on a 10.2.0 silo,
+  and the range-delete fence's state the earlier incarnation left. A re-created
+  incarnation can then reuse a generation that a straddling write or range-delete
+  walk of the purged incarnation still holds. To do harm, that straddler's seam
+  retry must outlast its operation's deadline across:
+  1. the gate closing for the 10.2.0 silo;
+  2. the purge settling on that silo;
+  3. the id's re-creation;
+  4. the gate reopening once the upgrade completes.
+  Do not purge trees while a rolling upgrade from 10.2.0 is in progress.
+The hand-off counters are `orleans.lattice.wal.append_fence.handoff_markers`,
+`.unstamped_appends` and `.self_fenced`; see [Metrics](metrics.md).
+
+## Live checkpoint advance
+
+A leaf whose WAL partition holds no record it has not read, other than its own
+writes, may advance its projection checkpoint over those writes without replaying
+them ([#5570](https://github.com/NSTA1/Orleans.Lattice/issues/5570),
+[#5572](https://github.com/NSTA1/Orleans.Lattice/issues/5572),
+[#5593](https://github.com/NSTA1/Orleans.Lattice/issues/5593); design note section 1).
+Before it, a leaf written only through the live path banked no usable durable pin
+until its coverage-lag timer had spent a replay permit reading its own writes back,
+so a fresh tree held its WAL floor for up to
+[`LeafSnapshotMaxCoverageLagSeconds`](configuration.md#leafsnapshotmaxcoveragelagseconds).
+
+**When a leaf may advance.** Per partition, the activation advances its checkpoint to
+the highest offset its own applied appends returned, and only when every one of these
+holds; otherwise the checkpoint advances by replay, as before. These are the rules for
+a partition the activation has claimed. Under the pre-arm class a partition it has not
+claimed can also advance, by the rules in [The claimless advance](#the-claimless-advance):
+
+1. **Claimed.** The activation holds a claim at the partition under its current epoch,
+   and its view of the append-fence gate is open.
+2. **Read to the claim head.** Its checkpoint has reached the claim head minus one:
+   it has read everything allocated before it claimed, including an acknowledged write
+   of a stale duplicate activation (#5593). A new tree's first leaf claims at head `0`
+   and needs no replay; an existing leaf replays to its claim head once.
+3. **No hand-off open.** Its marker is initialised, no token is open on it, and no
+   token on its shard root's marker overlaps its key range. An existing leaf adopts its
+   shard root's initialised flag once it has no split in flight.
+4. **Read to every close.** Its checkpoint has reached the heads every closed hand-off
+   overlapping it recorded.
+5. **Read past every reported unstamped append.** Its checkpoint is at or past the
+   highest unstamped offset the partition reported to it. A write through an unstamped
+   leaf method reports itself, so it too falls back to replay.
+6. **Quiescent.** Every own append the activation issued has been applied, none failed,
+   no saga prepare is pending, and no replay is running. An append refused before
+   anything was allocated - the self-fence of a write admitted before a hand-off close, a
+   stale routing generation, or a single-record clock-floor refusal - is released, since
+   it left nothing to apply and its write is retried (#5708). Any other failure, such as
+   a timeout, may have landed a record, so it holds the advance for the activation.
+
+The advance also holds for the whole leaf when the leaf has no shard slot, when it
+covers no key range but has siblings, when the grain storage provider's ETag check
+did not report the provider fenced at silo start
+([The grain storage provider must enforce ETags](configuration.md#the-grain-storage-provider-must-enforce-etags)),
+or when it is suspected to be an orphan: the shard root's descent for its low key does
+not reach it, or orphan repair is running. The markers and the shard root's view are
+read fresh on every attempt; the shard root answers on an interleaving, read-only call,
+so a serial shard-root turn that calls the leaf cannot deadlock against it.
+
+**An unreachable leaf never appends stamped (#5709).** An orphan - a leaf in the
+sibling chain that descent no longer reaches, often sharing a live leaf's bounds - can
+still be handed a write by a span forward from its neighbour. If it stamped that write,
+the live leaf owning the same keys could advance past it unread. So before an
+activation's first epoch claim, the leaf asks its shard root, once, whether descent for
+its low key reaches it. If it does not, and no hand-off marker is open on it, the
+activation claims nothing and appends unstamped: every append is reported to the leaves
+sharing the partition, whose replay applies it by key range before they can arm. One
+such answer leaves the leaf undecided rather than latched (#5872), because descent can
+transiently miss a leaf it reaches: for a backoff the leaf appends unstamped, never
+pre-arm and never claiming, then asks again. A reachable answer proves it; a second
+unreachable answer after the backoff latches it unstamped for the rest of its life. It
+latches on the first answer when its orphan status is structural: orphan repair is
+running on its range, a reclaim has absorbed it, or a newer activation has superseded
+this one. A split sibling the parent has not yet learned of is exempt: it is born under
+its donor's open marker and admits only keys the donor has narrowed away. The advance
+tick and a split's cut repeat the check under the same rule; an unconfirmed answer at
+the cut means the split takes no birth hint from it. If the shard root cannot be asked,
+or its descent could have taken a stale route (#5876) - through an internal node that
+has divided while its parent does not yet route to the new half (every internal node
+reports the key it divided at, and the descent checks it), or across a change to the
+shard's root, a bulk graft or a shard split - the answer is no verdict: the leaf appends unstamped and asks again after a backoff, a
+split transfer's routing is not refreshed on it, and the orphaned-leaf audit reports the
+leaf as `RoutingInMotion` rather than judging it.
+
+**Rolling upgrade.** A shard root on a build without the three-valued descent - 10.2.0, or
+any earlier build of this branch - cannot answer a leaf's reachability question: the call
+fails, and the leaf treats the failure as no verdict, appending unstamped and asking again
+after a backoff. It never proves, latches or claims on such a root, so the only cost of a
+mixed cluster is the unstamped appends until the shard root is upgraded. Orphaned-leaf repair never folds an orphan's
+rows; it clears an orphan only after proving every row it holds is readable from the
+reachable owner.
+
+**Where it runs.** On the coverage-lag tick and at the start of a starvation drive, so
+the tick banks a snapshot and a usable pin for a live-written leaf without taking a
+replay permit.
+
+**Bulk-loaded leaves** are held while their shard's `bulk:` switch is open over their
+range, and arm once it has closed and they have read to its heads and their claim head.
+Their checkpoint starts at the [bulk birth hint](#hand-off-fences) where one was
+applied, which shortens their activation replay; where none was, they replay from the
+log's start, as before. Arming needs no bulk-specific rule.
+
+A bulk operation seeds its leaves before it publishes them, and **the seed claims no
+append epoch** ([#5812](https://github.com/NSTA1/Orleans.Lattice/issues/5812)). Under
+the open switch the seed carries the shard root's routing generation, read after the
+switch's marker opened. The WAL partition admits it only when that generation matches
+the one it has loaded, never on an absent entry, and does not report it as unstamped:
+every leaf that can own a seeded row is held on the switch until it reads to the close
+heads, and every close re-claims the generation, which refuses a seed still in flight
+from an abandoned attempt. A bulk-born leaf's first claim at a partition is made by its
+first live write, once it is reachable, exactly as a normally born leaf's is. A shard
+with **no root** when a bulk load begins, such as a restore shadow or a snapshot
+destination, has no leaf for a switch to protect: the load opens no marker, stores no
+hint and runs no fence, and seeds unstamped, which every partition admits and reports.
+The load checks, in the same step that publishes its root, that no batch write seeded a
+root meanwhile; if one did, it opens its switch then, relocates that root's rows and
+closes by fence, as on any other shard.
+
+**Rolling upgrades.** Nothing arms while the gate is closed, and the leaf issues no
+marker read and no shard-root call while no partition is claimed and the pre-arm gate
+is closed, so a shard root on an
+older build is never asked for its view.
+
+**Cost.** Nothing is added to a write: the tracker is a counter and one offset per
+partition, updated as an append completes, and a refused append adds one interlocked
+increment. Only a leaf with own writes above its checkpoint does anything on a
+coverage-lag tick, and then:
+
+- the leaf reads its own marker row and makes one shard-root call;
+- the shard root reads its marker row and descends for the leaf's low key, the same
+  traversal it routes a write by, and returns only the marker's projection onto the leaf's
+  range (an immutable value, so a same-silo call copies nothing);
+- the leaf decides on a per-activation copy of its offsets and computes close heads per
+  partition, allocating no array.
+
+A leaf with nothing to advance, or with no partition claimed while the pre-arm gate is
+closed, reads nothing and makes no
+call. Once per leaf, a marker write adopts its shard root's flag. Once per activation,
+before its first claim, one shard-root call proves the leaf is reachable; a leaf that is
+not also reads its own marker row.
+
 ## Relationship to replication
 
 Cross-cluster replication is an **additional consumer** of the same WAL - not

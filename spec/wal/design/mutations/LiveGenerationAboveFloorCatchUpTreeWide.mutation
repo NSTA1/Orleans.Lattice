@@ -1,0 +1,18 @@
+# The catch-up raises a tree-wide floor instead of its own initiator's (#5697 review,
+# S2; per-initiator routing floors). Shard root s2 has already caught up and is live
+# at its own floor plus one. L's shard root then catches up over a predating marker
+# whose generation is higher, and raises the floor for every initiator. s2's live
+# generation is now at or below its floor, and the WAL refuses every claim it makes.
+MODULE: LiveGenerationAboveFloorCatchUpTreeWide
+TARGET: LiveGenerationAboveFloor
+CLASS: Invariant
+SUMMARY: a catch-up over one shard root's predating marker raises every initiator's routing floor
+PERTURBS: CatchUp
+BOUNDS: WithRecreate = TRUE, WithSecondInitiator = TRUE, WithLegacyPurge = TRUE, WithDuplicate = FALSE, WithBatch = FALSE, MaxWindows = 1
+
+--- FIND
+        /\ r2Floor' = r2Floor
+--- REPLACE
+\* MUTATION: the floor is raised tree-wide.
+        /\ r2Floor' = Max2(r2Floor, rc)
+--- END

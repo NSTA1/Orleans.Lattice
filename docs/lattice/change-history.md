@@ -34,7 +34,10 @@ live stream lets a reader follow new revisions as they happen:
    This survives source write-ahead-log (WAL) garbage collection and is bounded by
    the view's configured retention age (a rebuild of the view also collapses it to
    current source state). This is the source you enable when
-   a complete, retention-bounded audit timeline is required.
+   a complete, retention-bounded audit timeline is required. Like any materialised
+   view it is eventually consistent, so a key's newer revision can be readable
+   before an older one; see
+   [Visibility and ordering](history-views.md#visibility-and-ordering).
 2. **Retained WAL-window fallback (best-effort, no setup).** When a tree has *not*
    opted into a history view, the same read falls back to the surviving entries in
    the source tree's retained WAL window. This needs no configuration and is handy

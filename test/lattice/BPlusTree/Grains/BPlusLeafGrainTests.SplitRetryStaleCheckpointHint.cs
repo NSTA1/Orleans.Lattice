@@ -115,8 +115,8 @@ public partial class BPlusLeafGrainTests
     public async Task CompleteSplit_retry_with_stale_heads_does_not_fault_on_a_non_fresh_sibling()
     {
         // Heads captured at the ORIGINAL split. A retry re-sends them
-        // verbatim (CompleteSplitAsync only re-reads heads when the argument
-        // is null), so they are far behind where the sibling has since got to.
+        // verbatim (CompleteSplitAsync applies no heads at all when the
+        // argument is null; issue #5706), so they are far behind where the sibling has since got to.
         long[] headsAtSplit = { 19L, 19L };
         long[] siblingCheckpoints = { 8485L, 8485L };
 

@@ -1,0 +1,17 @@
+# The purge writes the routing floor after deleting the fence rows, and crashes
+# between them (#5668). Its re-drive reads the maximum over rows that are already
+# gone, so the floor is never raised and the re-created incarnation starts at the
+# old floor plus one, below the straddling write's generation.
+MODULE: ReadPositionHonestRoutingFloorAfterDeletes
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the routing floor is max-merged after the fence rows are deleted, with a crash between
+PERTURBS: Recreate
+BOUNDS: WithRecreate = TRUE, WithBatch = FALSE, MaxWindows = 1
+
+--- FIND
+    /\ LET rf == Max2(rFloor, Max2(fEpoch, fFence)) IN
+--- REPLACE
+\* MUTATION: the re-drive after the crash reads deleted rows; the floor is not raised.
+    /\ LET rf == rFloor IN
+--- END

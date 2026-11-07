@@ -1,0 +1,750 @@
+# Refinement note: the live-advance core to production
+
+This note maps [`WalLiveAdvanceCore.tla`](WalLiveAdvanceCore.tla) - when one leaf's
+activation may advance its read position over its own applied appends without reading
+the WAL, and what that does to the shared snapshot and the GC trim - to the
+Orleans.Lattice code that plays each role. It is module C of the five modules promoted
+from the design model [`design/WalLiveAdvance.tla`](design/WalLiveAdvance.tla) for epic
+#5605, and the sink of their assume-guarantee graph
+([`LiveAdvanceInterface.md`](LiveAdvanceInterface.md)). The design authority is
+[`design/LiveAdvanceDesign.md`](design/LiveAdvanceDesign.md): section 1's "Arming" list,
+section 4's unstamped watermark and self-report, and "The model". Production landed in
+#5704. Like the other notes in this directory it is a documented mapping, not a
+refinement proof: the gates check its names, detectors and coverage, and its claims were
+checked by reading production.
+
+In plain terms, the module guarantees that a leaf's live advance never moves its read
+position past a record of its range it does not hold, whoever wrote that record; that
+the shared snapshot never claims coverage of a record it lacks; that the GC never trims
+an acknowledged append the snapshot lacks; and that the append fence never rejects an
+unstamped append. It also checks that a newborn leaf's WAL pin eventually becomes usable
+through the live advance alone, without a replay from `-1`. It relies on the other four
+modules only through the guarantees they check.
+
+## Model scope in one paragraph
+
+One leaf L at one WAL partition of three offsets. Its born activation `a1` and one
+duplicate `a2`, which starts from the shared snapshot, replay, live-advance, capture into
+the shared per-leaf snapshot, and append; the GC trims below the snapshot's coverage.
+Every other author of an entry L owns is environment, constrained exactly by the
+guarantee of the module that owns it: own stamped appends by the current activation only,
+with a claim head equal to the allocator head at the raise (E); foreign appends only while
+L's marker is open or not initialised, with a close recording a head above them once it is
+(H); one hand-off window and
+a hand-off that may deliver a foreign record to an activation; a 10.2.0 silo's unstamped
+append, always admitted and raising the partition's unstamped watermark. The base adds
+nothing else. The variants add one environment each: a WAL shard restart (`Restart`), own
+unstamped appends by any running activation (`GateFlip`), L's tree purged and re-created
+with a straddler of the purged incarnation and the re-created incarnation's first
+initialisation (R and H, in three slices: `Recreate`, `RecreateSurvivor` and
+`RecreateSurvivorMixed`), and a bulk-born leaf (`Bulk`, B). The core owns
+`Armed(a)`, `LiveAdvance`, `Replay`, `Capture`, `GcTrim`, the applied-prefix tracker
+(`mine`, and the in-flight own appends), the unstamped watermark with its restart reset and
+self-report, and the duplicate. The base and the `Bulk` variant also check one liveness
+property, `NewbornPinEventuallyUsable`, under `LiveSpec`'s explicit fairness; the other
+variants check safety only.
+
+## Interface
+
+This module is C in the assume-guarantee graph of the five modules that replace the
+design model. It reads no state of the other modules: each assumption is an environment
+step or guard written in the contract's vocabulary, and the assumption mutations below
+weaken each one in turn and go red, so each is load-bearing.
+
+- **Assumptions.** Every guarantee the contract lists for C, each modelled as stated:
+
+  | Assumption | Guarantee | Discharged by | Here | Weakened by |
+  |------------|-----------|---------------|------|-------------|
+  | A claim makes one activation current, its head the allocator head at the raise | `ClaimHeadCoversPriorAppends` | E, `WalAppendEpoch` | `Claim(a)` sets `claimHead[a]` to `next` in the step that makes `a` current | `ReadPositionHonestAssumeClaimHeadBelowAllocator` |
+  | A superseded activation never allocates again; no two activations share a raised epoch | `StaleEpochNeverAppends`, `RaisedEpochUnique` | E, `WalAppendEpoch` | `OwnAlloc(a)` requires `cur = a`; a `Claim` makes the previous current activation stale, and a stale one never claims; the purge retires every raised epoch (`Recreate` leaves no activation current), but an activation that never claimed may claim afterwards, because E's clear finds no row of it | `ReadPositionHonestAssumeSupersededAllocates` |
+  | A foreign append is allocated only while L's marker is open, or below the `closedAt` its close recorded | `HandOffBound` | H, `WalHandOffFence` | `ForeignAlloc` requires `hoOpen`, or the marker not initialised, where H's guarantee is conditioned away; `Close` records any head up to `next` above every foreign offset once the marker is initialised, and any head up to `next` before | `ReadPositionHonestAssumeForeignAfterClose` (the allocation) and `ReadPositionHonestAssumeCloseHeadUnderstated` (the close) |
+  | An absent or uninitialised marker holds L | `AbsentMarkerHolds` | H, `WalHandOffFence` | the purge deletes the marker: `mInit` is `FALSE` until the first initialisation | `ReadPositionHonestAssumeUninitialisedMarkerClosed` |
+  | Every close, and the first initialisation, max-merges its heads into `closedAt`, so it never decreases within an incarnation of the marker | `CloseHeadMonotone` | H, `WalHandOffFence` | `Close` and `MarkInit` write `Max2(hoClosedAt, h)`; the purge discards the marker, so `Recreate` resets `hoClosedAt` | `ReadPositionHonestAssumeCloseReplacesHeads` |
+  | A straddler is allocated only below the heads the re-created incarnation's first initialisation records | `StraddlerBelowInit` | R, `WalRoutingFloor` | `StraddlerAlloc` requires `~reinit` | `ReadPositionHonestAssumeStraddlerAfterInit` (the allocation) and `ReadPositionHonestAssumeInitHeadsMissing` (the initialisation) |
+  | The first initialisation records a head above every offset allocated before it, whoever allocated it | `InitHeadCoversPriorAllocations` | R, `WalRoutingFloor` | `MarkInit` records any head up to `next` above every foreign and straddler offset | `ReadPositionHonestAssumeInitHeadBelowForeign` |
+  | A bulk-born leaf's birth position is at or below every record of its range it does not hold at birth | `BulkHintBound` | B, `WalBulkSwitch` | `Create` picks any read position up to the allocator head, and holds every record allocated at or below it: B's guarantee itself, not B's protocol, which starts at or below the hint minus one (#5752's cap, a timed-out or partial relocation) but does not state it | `ReadPositionHonestAssumeBulkHintAboveUnheld` |
+  | Under the lazy arm (#5833), a bulk switch's close head is above every record allocated before it | `SwitchCloseCoversPriorAllocations` | B, `WalBulkSwitch` | `Close` with `WithPreArm` and `WithBulk` records a head above every foreign and pre-existing record (`CloseCovers`) | `ReadPositionHonestAssumeBulkCloseBelowPriorAllocations` |
+  | A re-claim of a routing generation at the partition only raises the loaded value | the WAL's loaded entry is max-merged (R's cold load, C7; E's claim) | R, `WalRoutingFloor` | `OtherReceiverArm` and `ResolveDeferred` raise `gL` by max | `ReadPositionHonestAssumeLaterReclaimLowersGeneration` |
+  | Every unstamped append is reported | the stamp census | the core itself (the watermark) | `OldAlloc` and `OwnAllocUnstamped` raise `lastU`; a stamped append's response reports it; an own unstamped append reports itself | `ReadPositionHonestAssumeUnstampedUnreported` |
+
+  Four readings of the contract are worth stating. `RaisedEpochUnique` and
+  `StaleEpochNeverAppends` are modelled together as "only the current activation
+  allocates a stamped append". `BulkHintBound`'s "birth read position" is the first
+  offset the leaf reads, one above its checkpoint; every record below it is held. And a write
+  a purged incarnation's initiator allocated before the purge, in a window the purge left
+  open, is covered as a straddler: `StraddlerBelowInit` bounds every append by an initiator
+  of the purged incarnation by the first initialisation's heads, which is why
+  `ReadPositionHonestAssumeInitHeadsMissing` and
+  `ReadPositionHonestAssumeUninitialisedMarkerClosed` both find a counterexample through
+  such a write as well as through a straddler. The environment is exactly each guarantee
+  as its owning module checks it, not the protocol behind it: member 6c's composite check,
+  which copies each producer's guarantees and each of these steps, found five edges where
+  this module had assumed more, and each was widened or the producer's guarantee stated.
+  A never-claimed activation may outlive the purge (E); a foreign append and a close are
+  unconstrained while L's marker is not initialised (H, whose guarantee is conditioned on
+  the marker reading closed); the first initialisation's head covers every earlier
+  allocation (R, `InitHeadCoversPriorAllocations`, stated for this); and a bulk-born
+  leaf may start at any read position that holds every record at or below it (B; a
+  second composite pass found the hint bound is B's protocol, not its guarantee). Finally, a close and the first
+  initialisation record the weakest head their guarantee allows - any head up to `next`
+  above the offsets it bounds - rather than `next` itself. Recording `next` would make
+  `closedAt` monotone incidentally, as the allocator only grows, so the model would never
+  depend on `CloseHeadMonotone` and could not show it load-bearing: with heads chosen this
+  way and overwritten, a window opened before the re-created incarnation's first
+  initialisation and closed after it lowers the initialisation's heads below the
+  straddler (`ReadPositionHonestAssumeCloseReplacesHeads`, red in `Recreate`).
+- **Guarantees.** Four, each a checked invariant of the base and every variant, consumed
+  by no other module: `ReadPositionHonest`, `SnapshotHonest`, `NoTrimPastAcked` and
+  `OldNeverRejected`; two cost witnesses of the lazy arm (#5833), checked where their
+  environment allows them, `PreArmCostWitness` and `ReclaimCostBound`; and one liveness property, checked on the base and in `Bulk`,
+  `NewbornPinEventuallyUsable`, the armed newborn's pin becoming usable without a
+  replay from `-1`.
+- **The graph.** E <- H, E <- R, and {E, H, R, B} <- C, where E is `WalAppendEpoch`,
+  H `WalHandOffFence`, R `WalRoutingFloor` and B `WalBulkSwitch`; an arrow points from the
+  module that assumes to the module that guarantees. C assumes every other module and is
+  assumed by none, so it closes no cycle.
+
+## Variable mapping
+
+| Spec variable | Protocol role | Code counterpart |
+|---------------|---------------|------------------|
+| `next`, `author` | The WAL shard's allocator, and the author of each offset | `WalShardGrain._nextOffset`, assigned by `WalOffsetAllocationCore.Assign` under the shard's state lock. Only entries L owns are modelled; an author is whoever appended an entry L's replay applies. |
+| `inflight`, `durable`, `acked` | Allocated and not yet durable; durable; acknowledged to the writer | The shard's in-flight flush chain (`WalShardGrain.StartFlush`), the entries the partition's `IWalStorageProvider` holds, and appends whose `WalShardGrain.AppendAsync` or `WalShardGrain.AppendStampedAsync` completed. A foreign entry counts as acknowledged once handed off to L. |
+| `floor` | The GC trim floor | The prefix `LatticeWalGc.TrimShardAsync` trims, bounded by the leaf's pin at its snapshot's coverage (`WalDurability`'s `GcTrim`). |
+| `up` | L's running activations | Activations of `BPlusLeafGrain`. |
+| `cache` | Each activation's projection | `BPlusLeafGrain`'s entry cache (`LeafEntryCache`), as the set of owned offsets it holds. |
+| `rp` | Each activation's read position | `BPlusLeafGrain.GetCurrentCheckpointForPartition`; the live advance moves it through `BPlusLeafGrain.StampCheckpointHintAsync`. |
+| `mine` | The applied-prefix tracker | `BPlusLeafGrain._liveOwnHigh`, the highest own offset applied per partition, recorded by `BPlusLeafGrain.MarkLiveAppendApplied`. The in-flight own appends are `BPlusLeafGrain._liveAppendsUnapplied`, counted before every append by `BPlusLeafGrain.NoteLiveAppendIssued`. |
+| `snapCov`, `snapRows` | The shared per-leaf snapshot | `LeafSnapshotBlob.SnapshotOffsetsByPartition` and its rows, kept by `ILeafSnapshotStorageGrain.SaveAsync`. |
+| `cur`, `claimed`, `claimHead`, `stale` | E's guarantees as environment state: the current activation, each claim raised, its head, and the activations that never claim or append stamped again | `LeafAppendEpochFence.TryGetArmingView` returns the claim head under the current epoch; a superseded activation is `LeafAppendEpochFence._stale`. The epochs themselves are E's (`AppendEpochRefinement.md`). |
+| `dupUsed`, `restarted`, `oldUsed`, `spUsed`, `windows` | Environment budgets | Modelling devices. |
+| `mInit`, `hoOpen`, `hoClosedAt` | H's marker as environment state: initialised, open, and the maximum of the heads every close and the first initialisation recorded | `LeafHandOffState.Initialised` and the shard marker's flag (`ShardHandOffState.Initialised`), read with `HandOffMarkerCore.IsHeldOpen` and `HandOffMarkerCore.RequiredHead` through `BPlusLeafGrain.ReadLiveAdvanceHandOffAsync` and `ShardRootGrain.GetLiveAdvanceViewAsync` (`LeafLiveAdvanceView`). |
+| `lastU` | The partition's unstamped watermark | `WalShardGrain._unstampedWatermark`, raised under the state lock when `WalShardGrain.RaisesUnstampedWatermark` holds and returned in every stamped append's response. |
+| `uSpan`, `spanRecs`, `widened` | (#5851 K1-K6; `WithKeyFilter`.) The highest unstamped offset keyed in a span outside L's range and those records, the partition's key-range table; whether L's range has absorbed the span. `ReportU` is the high a response reports: the in-range high while L's range is unwidened; once it has absorbed the span, the widened range's high, which here is the global one | The partition's key-range unstamped table, maintained in its append turn and read with the reader's current range in the same turn (#5851's O2c member). |
+| `seenU` | The highest unstamped offset reported to each activation | `LeafAppendEpochFence.ReportedUnstamped`, raised by `LeafAppendEpochFence.OnStampedAppended` and, for an own unstamped append, `LeafAppendEpochFence.OnUnstampedAppended`. |
+| `recreated`, `reinit` | The purge, and the re-created incarnation's first initialisation | Environment state for R and H: the tree purge, and `ShardRootGrain.FenceRecreatedIncarnationAsync`. |
+| `phase`, `hint` | B's bulk switch, and the leaf's birth hint | `ShardRootGrain.CaptureBulkBirthHeadsAsync`, persisted with `ShardRootGrain.WriteBulkBirthHintAsync`. A bulk-born leaf is initialised without `SiblingInitialization.WalHeadsAtBirth`, so it seeds no birth pin; the hint reaches it after the relocation, through `ShardRootGrain.FinishBulkSwitchAsync` calling `BPlusLeafGrain.SetCheckpointOffsetHintsAsync`. For a bulk append the applied hint is capped per partition at the old leaf's replay frontier (`ShardRootGrain.CapAtReadFrontier`, #5752); that only lowers the read position, so it still satisfies `BulkHintBound` and maps to `Create`'s `hint - 1` in head terms. A bulk load caps its hint the same way, per partition at the lowest replay frontier of the leaves of the root it replaced, and applies none when it replaced no root or a replaced leaf reports no frontier (`ShardRootGrain.RetireReplacedRootAsync`, `BPlusLeafGrain.CopyRowsForBulkLoadAsync`, #5766). |
+| `oldRejected` | Ghost for `OldNeverRejected` | Modelling device. |
+| `preArm` | The offsets appended under the `PreArm` class (#5833) | `WalAppendStamp.PreArm`, admitted by `WalShardGrain.AdmitStampLocked` with no entry check and no row. |
+| `seenP` | The leaf-scoped watermark reported to each activation: its `foreignHigh` | The `ForeignHigh` the WAL shard folds into each stamped response's watermark (`WalShardGrain.ForeignHighLocked`), and the arming view it returns (`LeafAppendEpochFence.TryGetArmingView`). |
+| `startHead`, `evStart`, `evFloor` | What the WAL shard's per-leaf tracking has lost: its start head, the last eviction of L's entry, and the eviction floor | `WalShardGrain.ResetLeafAuthors` on activation (the recovered head) and `WalShardGrain.FoldLeafAuthorsLocked` (the eviction floor, bounding memory at `MaxLeafAuthors`). |
+| `gD`, `gL` | The shard root's durable routing generation, and the generation loaded at the partition | `ShardHandOffState.RoutingGeneration`, raised by the split or reclaim close; the WAL shard's loaded generation entry, raised only by a claim (`WalShardGrain.AdmitGenerationLocked`). |
+| `pend`, `pendGen` | A deferred close head on L's marker at the partition, and the generation it re-claims | `HandOffMarkerCore.CloseDeferred`, read by `HandOffMarkerCore.TryGetPendingDeferred`. |
+| `moved`, `otherMoved`, `dUsed` | Environment budgets: one key-moving close into L, one into another receiver, one stale donor write | Modelling devices. |
+| `reclaims`, `strayReclaims` | Ghosts for `ReclaimCostBound` | Modelling devices. |
+| `sHi`, `seenS` | The WAL shard's `staleHigh` for a pending key-moving close: the highest offset of the donor leaf from any token but the closing one, routed or epoch-only, under every generation while the close is pending: the one the close admitted, or a later one another split's link raised to before this split's link (`OtherLinkRaise`), never only those at or below the close's admitted generation (`cGen`; #5866 B1); and the value reported to each activation (#5837, D2) | `WalShardGrain.StaleHighLocked`, kept beside the per-leaf tracking and reported on each response of the receiver while its deferred close is pending (`LeafAppendEpochFence.TryGetPreArmView`). |
+| `cGen` | The generation the donor's close admitted its writes under, recorded with its pending close | The generation a `WalPendingClose` records, the closing activation's routing generation. Only `ReadPositionHonestStaleHighFiltersByAdmittedGeneration` reads it: `staleHigh` must not be filtered by it (#5866 B1). |
+| `ft` | Each activation's fixed free-advance target | `LeafLiveAdvanceCore.FreeTarget`, the highest own applied offset, fixed before the marker view is read. |
+| `sh`, `sibHint`, `sibRows` | A split's captured heads, the sibling's hint and the rows handed to it | `BPlusLeafGrain.CaptureSplitCutAsync`, one WAL-shard turn per partition returning the heads with the donor's bounds; the hint the sibling is seeded with (`SiblingInitialization.WalHeadsAtBirth`). |
+| `tRecs` | The split transfer's records under the per-leaf class | `BPlusLeafGrain.SplitTransferRoutingFor`, appended by the receiver's `BPlusLeafGrain.MergeEntriesAsync`. |
+| `dNarrowed`, `oblig`, `sDone`, `dKnown`, `dResumed`, `lRestart` | A split-born L's donor: its narrow and link obligation, its stragglers, the moved-key writes its closing activation knows, a resume after the heads and a restart after the close | `LeafNodeState.UnlinkedSplitSiblingId`, persisted with the narrow; the straggler sweep of `BPlusLeafGrain.CompleteSplitAsync`; `SplitInFlight` for a resume. |
+| `lat`, `eagerG`, `repair`, `tried`, `birthAct` | The #5709 reachability latch on an unlinked split-born L: its decision, the gate's flip to eager, orphan repair on its range, and whether the running activation is the one its birth created | `LeafAppendEpochFence`'s reachability proof (`BPlusLeafGrain.ProveStampReachabilityCoreAsync`, `LeafAppendEpochFence.StopStampingUnreachable`); the birth proof in `BPlusLeafGrain.InitializeSiblingAsync`. |
+| `nar`, `narWho`, `npend`, `dur`, `durWho`, `fObl`, `fTag`, `fBy`, `snapWho`, `fwdUsed` | The forward-exclusion relief (#5837): each activation's narrow in memory and whose it is, its pending persist, L's durable narrow and its obligation, each forward's narrow tag and the narrow that moved its key, and the span the snapshot reflects | `LeafNodeState`'s persisted span with `UnlinkedSplitSiblingId`; the narrow tag on `WalAppendStamp.ForwarderTag`; the reader's persisted tag on each stamped call (`LeafAppendEpochFence.PersistedNarrowTag`). |
+| `capHint` | The hint the last split's cap fallback handed its sibling (#5851 O2c); -2 none | None: proof bookkeeping for the cap's reachability witness. |
+| `svTaken`, `svOk`, `svHead` | The split's marker view (V3): taken, whether it read L's marker initialised and closed, and the close head it read | The marker read `BPlusLeafGrain.CompleteSplitAsync` makes after `BPlusLeafGrain.CaptureSplitCutAsync`, concurrently with the drain of the donor's own appends. |
+| `chainUsed` | A forward chain through L's stale activation has been made (F2') | `WalForwardChain`, the bounded list of (leaf, tag) forwarders the stamp carries. |
+| `fInUsed`, `fInRecs`, `sfUsed` | The donor's pre-link forward into L, its offsets, and a stale D''s forward of L's key into another orphan | The forward tag on `WalAppendStamp.ForwarderTag`, read against the reader's split tag by `WalShardGrain`'s per-donor `staleHigh`. |
+| `oWin`, `oHops` | An orphan sibling's marker and the forwards made into it | The orphan's `LeafHandOffState`; `BPlusLeafGrain.TryResolveSpanForwardTarget`. |
+
+## Action mapping
+
+| Spec action | Protocol step | Code counterpart | Detector |
+|-------------|---------------|------------------|----------|
+| `Create` | **Environment (B's `BulkHintBound`).** A bulk-born leaf's first activation under the switch's open marker, at any read position, holding every record at or below it | `ShardRootGrain.BeginBulkSwitchAsync` takes the hint (`ShardRootGrain.CaptureBulkBirthHeadsAsync`) with the open marker. The leaf is initialised without `SiblingInitialization.WalHeadsAtBirth` and seeds no birth pin; its read position arrives after the relocation, through `ShardRootGrain.FinishBulkSwitchAsync` calling `BPlusLeafGrain.SetCheckpointOffsetHintsAsync`. | Yes: `LiveCheckpointAdvanceIntegrationTests.A_bulk_appended_leaf_arms_once_its_switch_has_closed` and `BulkAppendExistingRowsIntegrationTests.BulkAppend_appended_leaves_start_from_the_birth_hint_and_the_runs_switches_close_by_fence`. |
+| `Claim(a)` | **Environment (E's `ClaimHeadCoversPriorAppends`, `RaisedEpochUnique`).** A claim is raised: the activation becomes current, its claim head is the allocator head, and the one it supersedes never allocates stamped again | E's three-step claim (`AppendEpochRefinement.md`); the core reads its outcome through `LeafAppendEpochFence.TryGetArmingView`, which answers only for a claim under the current epoch of an activation not stale. **Over-approximation:** each activation claims once, and any running activation not stale may claim in any order. A deferred pre-link sibling - its marker carrying the donor's pending close or an open split token - never claims or arms (#5851 D1): `LatchAdmitsClaim`. | Yes: `LiveCheckpointAdvanceIntegrationTests.A_stale_duplicates_append_before_the_claim_is_read_before_the_leaf_advances_past_it`, `WalShardGrainTests.The_claim_head_is_the_allocator_next_offset` and `LeafAppendEpochFenceTests.DeferredSiblingClaims`. |
+| `OwnAlloc(a)` | **Environment (E's `StaleEpochNeverAppends`).** The current activation's stamped append is allocated, and its response reports the unstamped watermark | `WalFencedAppendDispatch.AppendPointAsync` and `WalFencedAppendDispatch.AppendBatchAsync` pass the watermark in each stamped response to `LeafAppendEpochFence.OnStampedAppended`. | Yes: `LeafAppendEpochFenceTests.Stamped_responses_raise_the_reported_watermark`, `WalShardGrainTests.Unstamped_appends_are_always_admitted_and_reported` and `BPlusLeafGrainTests.A_reported_unstamped_append_holds_the_advance_until_a_replay_reads_past_it`. |
+| `OwnAllocUnstamped(a)` | An own append made unstamped - a closed gate view, a claim fault or exhausted rounds, an unreachable leaf - by any running activation, always admitted, raising the watermark and reporting itself | `WalFencedAppendDispatch.AppendPointAsync` and `WalFencedAppendDispatch.AppendBatchAsync` call `LeafAppendEpochFence.OnUnstampedAppended` with the offsets an unstamped append returned. | Yes: `LeafAppendEpochFenceTests.Own_unstamped_appends_report_themselves`, `BPlusLeafGrainTests.A_write_through_an_existing_leaf_method_reports_itself_and_holds_the_advance` and `BPlusLeafGrainTests.A_descent_unreachable_leaf_never_claims_and_appends_unstamped_and_reported`. |
+| `PreArmAlloc(a)` | An append of an activation that has not armed, under the `PreArm` class: no entry check and no row, admitted on its routing generation, raising only L's leaf-scoped tracking, and its response reporting the shared watermark | `WalShardGrain.AdmitStampLocked` (the `PreArm` branch to `WalShardGrain.AdmitGenerationLocked`); the tracking is `WalShardGrain.NoteLeafAuthorLocked`, run in the allocation step. **Over-approximation (#5851 D1-D4):** an unlinked L pre-arms in every latch state. Production's deferred sibling (a pending donor close or an open split token on its marker, the pre-arm gate, no orphan repair) stamps a routed write `PreArm`; a latched or repaired one, or one under the eager gate, appends unstamped, which reports itself to every reader. | Yes: `WalShardGrainTests.A_pre_arm_append_is_admitted_with_no_entry_and_writes_no_fence_row`, `WalShardGrainTests.A_routed_pre_arm_append_never_raises_the_shared_watermark_and_an_unrouted_one_does` and `LeafAppendEpochFenceTests.DeferredSiblingClaims`. |
+| `Resolve(a)` | An armed activation whose marker gained a deferred close head re-arms: it re-claims the deferred generation, or takes the loaded one when a later raise is already re-claimed (C5), and records the allocator head as a close head. `ResolveDeferred`'s head - the carried stale high plus one under the claimless advance (`sHi + 1`), the allocator head otherwise - maps to production's re-claim head, which the arm's re-claim returns in the same partition turn that records the witness generation and writes with the resolved bit (#5866 G4, A1-A3). The arm may be taken lazily, only when the carried close is the binding hold or after an idle bound (A4): C makes no claim or resolve fair under the claimless advance, so a late or absent arm is already checked; but the carry ends only with the arm's re-claim (`ReadPositionHonestResolveClearsWithoutReclaim`: the carry ended without the re-claim is red) | `WalShardGrain.ResolveDeferredGenerationAsync` from `WalShardGrain.ArmAppendEpochAsync`, then `HandOffMarkerCore.ResolveDeferred`. The same arm ends a witnessed donor close's carriage at that partition alone (a5e2e2ef's G4, A1-A6 on #5866): it re-claims the close's `AdmittedShard` at a generation at or above the witness (`HandOffMarkerCore.TryGetCarriedWitness`), and one marker write max-raises the close's head there to the head that re-claim returned and sets its resolved bit (`HandOffMarkerCore.ResolveCarried`, `HandOffClose.CarryResolvedAt`). A re-claim below the witness, or a witness from another shard root (`HandOffClose.LinkedShard`), resolves nothing; a failed write leaves the partition carried. The coverage-lag tick's backstop arms a witnessed carried partition only while the carry is binding - an own applied append above the checkpoint that the tick's advance did not pass, held by a reported bound that covers the carried close and lies above the checkpoint - judged on the backstop's own fresh read (LA2); a non-binding carry is deferred, never ended (LA1), once per (partition, witness) and again after a failed attempt (`BPlusLeafGrain.TryBackstopCarriedClosesAsync`). A split whose activation has not yet read its view reads it before taking its first cut reader, so the reader carries the closes its marker carries, and a mismatched cut is still capped (LA4; `BPlusLeafGrain.CaptureSplitCutAsync`). | Yes: `WalShardGrainTests.An_arm_resolves_a_deferred_generation_so_a_write_admitted_before_it_is_refused`, `WalShardGrainTests.An_arm_resolving_a_deferred_generation_below_a_loaded_one_takes_the_current_head`, `HandOffMarkerCoreCarryTests.An_arm_at_the_witness_raises_that_partitions_head_and_resolves_it_alone`, `LeafAppendEpochFenceTests.A_carried_close_resolved_at_one_partition_is_dropped_from_its_stamps_only`, `HandOffMarkerCoreCarryTests.A_re_claim_below_the_witness_resolves_nothing`, `HandOffMarkerCoreCarryTests.A_witness_from_another_shard_root_stays_carried_and_asks_for_no_arm`, `BPlusLeafGrainTests.The_backstop_arms_a_binding_carried_partition_once_and_resolves_it_with_the_re_claim_head`, `BPlusLeafGrainTests.LazyCarry_a_non_binding_carried_close_is_never_armed_and_stays_carried_until_a_raised_stale_high_binds_it`, `BPlusLeafGrainTests.LazyCarry_a_hold_by_a_report_not_yet_covering_the_close_does_not_bind_it`, `BPlusLeafGrainTests.LazyCarry_a_non_binding_sibling_reads_nothing_on_the_tick`, `BPlusLeafGrainTests.LazyCarry_binding_is_judged_on_the_read_that_would_trigger_the_re_claim`, `BPlusLeafGrainTests.LazyCarry_an_unarmed_siblings_split_claims_nothing_at_its_duplicate_fence`, `BPlusLeafGrainTests.CarryingReader_a_siblings_first_split_takes_a_reader_carrying_its_closes_and_uplifts`, `BPlusLeafGrainTests.CarryingReader_a_close_recorded_after_the_reader_still_caps_the_cut`, `BPlusLeafGrainTests.A_failed_resolve_write_leaves_the_partition_carried_and_the_backstop_arms_it_again` and `BPlusLeafGrainTests.A_close_witnessed_by_another_shard_root_stays_carried_and_the_backstop_does_not_loop_on_it`. |
+| `Land(o)` | The append becomes durable; an own append is applied, recorded by the tracker and acknowledged | The append site applies, then `BPlusLeafGrain.MarkLiveAppendApplied` releases the count and records the offset in `BPlusLeafGrain._liveOwnHigh`; an apply that throws leaves the count held, which turns the advance off for the activation. | Yes: `BPlusLeafGrainTests.A_live_advance_waits_until_every_issued_append_is_applied` and `BPlusLeafGrainTests.A_failed_append_turns_the_live_advance_off_for_the_activation`. |
+| `ForeignOpen` | **Environment (H).** A hand-off opens L's marker before its first admission. Its only mutation is a `TypeOK` bound (`TypeOkForeignWindowPastBound`): opening only enables `ForeignAlloc`, whose role `ReadPositionHonestAssumeForeignAfterClose` covers | `HandOffMarkerCore.Open`, on the leaf's marker or the shard's (`ShardRootGrain.OpenHandOffMarkerAsync`). | Yes: `HandOffMarkerCoreTests.An_open_is_idempotent_and_holds_only_overlapping_owners` and `BPlusLeafGrainTests.An_open_leaf_marker_holds_the_advance`. |
+| `ForeignAlloc` | **Environment (H's `HandOffBound`).** A foreign append is allocated while L's marker is open, or while it is not initialised, where `HandOffBound` constrains nothing | A hand-off initiator's stamped append, admitted at the WAL shard under its epoch or routing generation (`WalShardGrain.AppendStampedAsync`). | Yes: `BPlusLeafGrainTests.An_open_shard_marker_token_holds_only_the_leaves_it_overlaps` and `LeafHandOffFenceIntegrationTests.Every_split_opens_its_marker_at_the_siblings_birth_and_closes_it_by_the_modes_fence`. |
+| `Close` | **Environment (H's `HandOffBound` and `CloseHeadMonotone`).** The close fences and records a head, above every foreign record once the marker is initialised, max-merged into `closedAt` | `HandOffMarkerCore.Close` with the heads the initiator's re-claim returned (`ShardRootGrain.CloseHandOffMarkerAsync`); `HandOffMarkerCore.RequiredHead` takes the maximum over every retained close and the compacted heads. | Yes: `HandOffMarkerCoreTests.A_close_records_the_fence_heads_over_the_hand_off_range_and_never_reopens`, `HandOffMarkerCoreTests.A_later_close_with_lower_heads_never_lowers_the_required_heads` and `BPlusLeafGrainTests.A_close_head_above_the_checkpoint_holds_the_advance_until_a_replay_reaches_it`. |
+| `HandOff(o, a)` | **Environment.** A foreign record is delivered to an activation, which acknowledges it; it may never happen | The relocation of a hand-off's rows into the owner (a split's transfer, a reclaim's absorb, a bulk graft), which the core sees only as rows already in its projection. **Over-approximation:** any running activation may receive any durable foreign record, at any time. | Yes: `LeafHandOffFenceIntegrationTests.Every_split_opens_its_marker_at_the_siblings_birth_and_closes_it_by_the_modes_fence` and `LeafHandOffFenceIntegrationTests.Every_reclaim_opens_its_marker_on_the_survivor_and_closes_it_after_retiring_the_absorbed_leaf`. |
+| `OldAlloc` | A 10.2.0 silo's unstamped append (or any path the census classes unstamped), always admitted, raising the unstamped watermark | `WalShardGrain.AppendAsync`, whose unstamped shapes have no rejection path (the fence never rejects one), raising `WalShardGrain._unstampedWatermark`. | Yes: `WalShardGrainTests.Unstamped_appends_are_always_admitted_and_reported`, `WalAppendFenceMixedVersionTests.The_existing_unstamped_methods_keep_working_on_the_older_build` and `LiveCheckpointAdvanceIntegrationTests.A_foreign_unstamped_append_reported_after_arming_is_read_by_replay`. |
+| `Replay(a)` | Read and apply the next durable entry, never a trimmed one. It is also every catch-up (#5851 ruling 2 and its widening, a5e2e2ef's #5851 comment 6668868649): a replay to max(reported bound, close head - 1), whatever the target, read one contiguous durable entry at a time (W1); the next split's cut re-reads every cap in its own turn (W2, `SplitHeads`), and only the arm's re-claim resolves a deferred close (W3). Red: `ReadPositionHonestCatchUpCheckpointPastRead`, `SiblingHintHonestCatchUpPassesCarriedStaleHigh` and `ReadPositionHonestCatchUpTargetsDeferredHead` | `BPlusLeafGrain.ReplayPartitionAsync`, the replay-based advance the core falls back to (`WalDurability`'s `ReadStep`). A pre-arm leaf whose claimless advance or split hint is held only by a reported bound (`LeafLiveAdvanceCore.CatchUpBound`) is owed this replay once per bound value, dispatched by the coverage-lag tick through the starvation drive and never on a write, and re-armed when that drive does not run its replay (`BPlusLeafGrain.TakeReportedBoundCatchUp`; #5851, ruling 2 and N1). | Yes: `BPlusLeafGrainTests.A_catch_up_drive_refused_admission_is_owed_again`, `BPlusLeafGrainTests.A_leaf_that_has_not_read_to_its_claim_head_advances_only_by_replay`, `LiveCheckpointAdvanceIntegrationTests.A_foreign_unstamped_append_reported_after_arming_is_read_by_replay`, `BPlusLeafGrainTests.A_reported_bound_hold_is_read_past_on_the_next_tick_once`, `BPlusLeafGrainTests.A_reported_bound_hold_reads_nothing_on_the_write_path`, `BPlusLeafGrainTests.A_split_capped_only_by_its_reported_bound_owes_the_donor_a_catch_up`, `BPlusLeafGrainTests.A_split_capped_by_a_close_head_and_the_watermark_owes_no_catch_up`, `LeafLiveAdvanceCoreTests.The_catch_up_bound_is_owed_exactly_when_only_the_reported_bound_holds_the_free_advance`, `BPlusLeafGrainTests.CloseHeadCatchUp_whose_read_stops_at_a_hole_advances_only_to_the_contiguous_position` (W1), `BPlusLeafGrainTests.CloseHeadCatchUp_a_split_target_covers_every_carried_stale_high` and `BPlusLeafGrainTests.CloseHeadCatchUp_a_stale_high_risen_after_the_catch_up_caps_the_next_cut` (W2) and `BPlusLeafGrainTests.CloseHeadCatchUp_a_close_deferred_at_every_partition_is_never_a_target` (W3). |
+| `LiveAdvance(a)` | An armed activation advances its read position to its highest own applied offset without reading | `BPlusLeafGrain.TryAdvanceLiveCheckpointAsync`, deciding with `LeafLiveAdvanceCore.TargetFor`, whose arming is `Armed(a)` conjunct for conjunct: `claimRaised` and `claimHead` from `LeafAppendEpochFence.TryGetArmingView`, `handOffClear` (`mInit` and `~hoOpen`) and `closeHead` from `BPlusLeafGrain.ReadLiveAdvanceHandOffAsync`, `unstampedSeen`, and the tracker through `LeafLiveAdvanceCore.IsQuiescent`. Production holds the advance in more cases than `Armed(a)` (see the gaps). | Yes: `LeafLiveAdvanceCoreTests.The_advance_is_taken_exactly_when_the_leaf_is_armed`, `LeafLiveAdvanceCoreTests.An_armed_leaf_advances_to_its_highest_own_offset`, `BPlusLeafGrainTests.A_live_written_leaf_of_a_new_tree_advances_its_checkpoint_without_a_replay` and `BPlusLeafGrainTests.Each_partition_advances_to_its_own_highest_offset`. |
+| `Capture(a)` | The shared per-leaf snapshot keeps the highest coverage | `BPlusLeafGrain.CaptureSnapshotCoreAsync`, after the coverage-lag tick banks a live advance (`BPlusLeafGrain.OnCoverageLagTimerTickAsync`); the store never lowers coverage (`LeafSnapshotStorageGrain.MergeMonotone`). | Yes: `LiveCheckpointAdvanceIntegrationTests.A_live_written_leaf_banks_its_snapshot_without_a_replay_drive`, `BPlusLeafGrainTests.The_coverage_lag_tick_makes_a_live_written_leafs_pin_usable_without_a_replay` and `LeafSnapshotStorageGrainTests.SaveAsync_still_merges_a_regressing_capture_that_carries_every_stored_key`. |
+| `GcTrim` | Trim the next durable entry below the snapshot's coverage | `LatticeWalGc.TrimShardAsync`, bounded by the leaf's pin (`WalDurability`'s `GcTrim`). **Over-approximation:** the model trims to the shared snapshot's coverage alone. | Yes: `LeafDurablePinCoreTests.A_covered_partition_is_entitled_to_the_lower_of_its_persisted_checkpoint_and_coverage` and `BPlusLeafGrainTests.The_coverage_lag_tick_makes_a_live_written_leafs_pin_usable_without_a_replay`. |
+| `Duplicate` | A second activation of L, or the next one, starts from the shared snapshot and must claim before it appends stamped | `BPlusLeafGrain.ExecuteActivationReplayAsync` rehydrates from the snapshot (`BPlusLeafGrain.TryRehydrateFromSnapshotAsync`); its own `LeafAppendEpochFence` claims afresh. **Environment:** once in the model. | Yes: `LiveCheckpointAdvanceIntegrationTests.A_stale_duplicates_append_before_the_claim_is_read_before_the_leaf_advances_past_it` and `BPlusLeafGrainTests.Activation_rehydrates_cache_from_snapshot_when_offset_exceeds_checkpoint`. |
+| `Restart` | A WAL shard restart, a reactivation or a move's cutover, resets the in-memory unstamped watermark to the recovered allocator head minus one | `WalShardGrain.OnActivateAsync` sets `WalShardGrain._unstampedWatermark` from the recovered `WalShardGrain._nextOffset`. **Environment:** once in the model. | Yes: `WalShardGrainTests.The_unstamped_watermark_restarts_at_the_recovered_head`. |
+| `Evict` | **Environment.** The WAL shard evicts L's foreign-high entry to bound memory, raising its eviction floor to the entry's highest offset | `WalShardGrain.FoldLeafAuthorsLocked`. The model's one floor is L's: production keeps it per hash bucket of the leaf id (#5851, O2b), raised max-only by an eviction of a leaf in that bucket and read by L as the maximum of its own entry, its own bucket's floor and the restart floor, never another bucket's - the same value for L, lower for every leaf outside the evicted leaf's bucket. | Yes: `WalShardGrainTests.The_foreign_high_resets_below_the_recovered_head_and_never_drops_on_a_fold` and `WalShardGrainTests.An_eviction_raises_only_its_own_bucket_floor`. |
+| `KeyMove` | A split or consolidation hands keys to L: the shard root, in its own turn as it links the split (C6), raises its routing generation with no WAL claim, and closes L's marker with a deferred head | `ShardRootGrain.CloseDeferredSplitHandOffsAsync` from `ShardRootGrain.LinkSplitAsync`, and the pre-arm branch of `ShardRootGrain.CloseReclaimHandOffAsync`, writing `HandOffMarkerCore.CloseDeferred`. Once the raise is durable, the link witnesses each leaf sibling's own link on that sibling's donor close (`ShardRootGrain.WitnessSplitLinksAsync`, `HandOffMarkerCore.WitnessLink`, `HandOffClose.LinkedGeneration`); only that witness resolves the donor bound (`HandOffMarkerCore.IsPendingDonorBound`), never a raise for another link, and a failed raise or witness re-surfaces the division with the bound pending (a5e2e2ef's B2 on #5866). The witness is also held at marker level (`LeafHandOffState.SiblingLinkedGeneration`), so one that lands before the donor's close is inherited by the close written later (G1). The witness ends the bound - the exemption, the latch, demotion and promotion - but never the close's carriage: the sibling's stamps keep it at each partition until `Resolve(a)` there (G4; `LeafAppendEpochFence.SetCarriedCloses`, `HandOffMarkerCore.CollectCarriedDonorCloses`). | Yes: `HandOffMarkerCoreDonorBoundTests.A_witness_that_lands_before_the_donors_close_resolves_the_close_written_after_it`, `HandOffMarkerCoreCarryTests.A_witnessed_close_stays_carried_until_its_siblings_arm`, `BPlusLeafGrainTests.A_witnessed_close_unarmed_at_a_partition_is_still_carried_by_its_stamps`, `BPlusLeafGrainTests.A_link_witnessed_before_the_donors_close_leaves_no_close_pending`, `HandOffMarkerCoreDeferredTests`, `WalShardGrainTests.An_arm_resolves_a_deferred_generation_so_a_write_admitted_before_it_is_refused`, `HandOffMarkerCoreDonorBoundTests.A_donor_bound_stays_pending_until_its_own_link_is_witnessed`, `ShardRootGrainSplitLinkTests.A_split_link_never_closes_its_sibling_marker_and_witnesses_its_own_link_after_the_raise` and `ShardRootGrainSplitLinkTests.A_split_link_whose_witness_fails_leaves_its_donor_unacknowledged_and_the_bound_pending`. |
+| `OtherReceiverArm` | **Environment (C5).** A later key-moving close into another receiver, whose arm re-claims that later generation at the partition first | Another receiver's `WalShardGrain.ArmAppendEpochAsync`. | Yes: `WalShardGrainTests.An_arm_resolving_a_deferred_generation_below_a_loaded_one_takes_the_current_head`. |
+| `OtherLinkRaise` | **Environment (L1; #5866 B1, B2).** After the donor's close and before L's link, another split's link raises the shard root's routing generation, so a stale donor's routed write of L's keys is admitted above the generation the close admitted. The donor's bound on L's marker stays pending: no raise but L's own link's resolves it | Another split's `ShardRootGrain.CloseDeferredSplitHandOffsAsync` raising the shard root's generation. | Yes: `WalShardGrainTests.A_non_closing_record_admitted_at_a_later_generation_is_counted_while_the_close_is_pending`. |
+| `LinkWitness` | **(#5866 B2).** After L's own link's raise succeeded, the shard root records it on L's marker; only that witness resolves the donor's bound (`BoundPending`). After the link the receiver still carries the key-moving close's deferred head (`CloseCarried`) until its arm resolves it | `ShardRootGrain.WitnessSplitLinksAsync`, after the batch's raise is durable, writes `HandOffClose.LinkedGeneration` on each linked sibling's donor close (`HandOffMarkerCore.WitnessLink`); `HandOffMarkerCore.IsPendingDonorBound` reads the bound as pending until then, for the claim, the stamp's pending closes and the exemption alike. | Yes: `HandOffMarkerCoreDonorBoundTests.A_donor_bound_stays_pending_until_its_own_link_is_witnessed`, `ShardRootGrainSplitLinkTests.A_split_link_never_closes_its_sibling_marker_and_witnesses_its_own_link_after_the_raise`, `ShardRootGrainSplitLinkTests.A_split_link_whose_witness_fails_leaves_its_donor_unacknowledged_and_the_bound_pending` and `BPlusLeafGrainTests.A_deferred_sibling_is_proven_again_once_its_own_link_is_witnessed_and_reachable`. |
+| `StaleRouteAlloc` | **Environment.** A stale donor activation still routes L's keys to itself and appends one under the old generation as `PreArm`: admitted only while the loaded generation is not above it. The WAL counts it in `staleHigh` whatever generation admitted it, a raise another split's link made since the close included (#5866 B1) | `WalShardGrain.AdmitGenerationLocked`; `WalShardGrain.StaleHighLocked`. | Yes: `WalShardGrainTests.An_arm_resolves_a_deferred_generation_so_a_write_admitted_before_it_is_refused` and `WalShardGrainTests.A_non_closing_record_admitted_at_a_later_generation_is_counted_while_the_close_is_pending`. |
+| `UnroutedAlloc` | **Environment (C4).** The stale donor's write with no routing stamp, appended truly unstamped, raising the shared watermark. The writer stands for any leaf other than L, a deferred orphan sibling's included: a write with no routing generation goes unstamped whatever the writer's fence returns, `PreArm` from a deferred sibling's fence too (#5851 D5), since attributed to that sibling it would be invisible to the owner | `WalFencedAppendDispatch` takes the unstamped method for a `PreArm` write with no routing (`WalShardGrain.RaisesUnstampedWatermark` defends it at the WAL). | Yes: `WalShardGrainTests.A_routed_pre_arm_append_never_raises_the_shared_watermark_and_an_unrouted_one_does` and `LeafAppendEpochFenceTests.DeferredSiblingStampsUnrouted`. |
+| `SpanUnstampedAlloc` | **Environment (#5851 K1).** An unstamped write of a key in a span outside L's range - a latched or orphaned author's, a C4 unrouted one - tabled by its key; a reader whose range excludes the key skips it (K2) | The partition's key-range unstamped table (#5851's O2c member). | Yes: `WalShardGrainTests.UnstampedSpanWriteUntabled`. |
+| `Widen` | **Environment (#5851 K4).** L's range absorbs the span (a fold, merge or restore): the widening path drains the span's appends in flight and hands L every applied record of it, and from then on L's reads, passing the range it owns now in the same turn, cover the absorbed span | The widening paths' hand-off (fold, merge, restore), and the reader's range passed with its read (#5851's O2c member). | Yes: `BPlusLeafGrainTests.UnstampedFilterUsesStaleRange` and `BPlusLeafGrainTests.WidenWithoutDrain`. |
+| `Recreate` | **Environment (H's `AbsentMarkerHolds`).** L's tree is purged and re-created: its marker is deleted and so not initialised, and the purge retires every raised epoch, so no activation is current; one that never claimed may claim afterwards | The leaf's clear deletes its marker row (`BPlusLeafGrain.ClearHandOffMarkerAsync`, `HandOffMarkerRows.ClearLeafAsync`), and the re-seeded shard root retires a predating marker (`ShardRootGrain.RetirePredatingHandOffMarkerAsync`); the epoch retirement is E's. | Yes: `TreeFenceRowPurgeIntegrationTests.A_purge_retires_every_fence_row_and_the_re_created_tree_starts_above_the_floor`, `TreeFenceRowPurgeIntegrationTests.A_tree_re_created_after_a_purge_that_retired_nothing_never_adopts_its_markers` and `BPlusLeafGrainTests.An_uninitialised_leaf_marker_holds_until_the_leaf_adopts_its_shards_flag`. |
+| `StraddlerAlloc` | **Environment (R's `StraddlerBelowInit`).** A write a shard root of the purged incarnation admitted is allocated, only before the re-created incarnation's first initialisation | The WAL refuses a straddler at or below its initiator's routing floor (`WalShardGrain._generationFloors`), and its seam retry never re-stamps it (`ShardRootGrain.ThrowIfAdmittedUnderPurgedIncarnationAsync`). | Yes: `TreeFenceRowPurgeIntegrationTests.A_shard_root_of_a_tree_id_with_a_floor_seeds_and_claims_its_first_generation_above_it` and `TreeFenceRowPurgeIntegrationTests.A_purge_retires_every_fence_row_and_the_re_created_tree_starts_above_the_floor`. |
+| `MarkInit` | **Environment (R's `InitHeadCoversPriorAllocations` and H).** The re-created incarnation's first initialisation claims its seeded generation everywhere, records heads above every earlier allocation as a close, max-merged into `closedAt` like any other, and initialises the marker state | `ShardRootGrain.FenceRecreatedIncarnationAsync`, then `ShardRootGrain.TryInitialiseHandOffMarkerAsync`; the leaf adopts the shard's flag in `BPlusLeafGrain.ReadLiveAdvanceHandOffAsync`. | Yes: `TreeFenceRowPurgeIntegrationTests.A_shard_root_of_a_tree_id_with_a_floor_seeds_and_claims_its_first_generation_above_it` and `BPlusLeafGrainTests.An_uninitialised_leaf_marker_holds_until_the_leaf_adopts_its_shards_flag`. |
+| `FreeTarget(a)` | The claimless live advance (#5837) fixes its target: the highest own applied append | `LeafLiveAdvanceCore.FreeTarget`. | Yes: `BPlusLeafGrainTests.FreeAdvanceViewBeforeHeads`. |
+| `FreeCommit(a)` | After the target, the advance reads L's marker view and moves the read position to the target, with no claim, iff the marker is initialised with no window open, and the read position is at or above the close heads, the reported `foreignHigh`, the shared watermark and, while a deferred close is pending, the reported `staleHigh`, with every own append at or below the target applied | `LeafLiveAdvanceCore.TryFreeAdvance` from `BPlusLeafGrain.TryAdvanceLiveCheckpointAsync`. | Yes: `BPlusLeafGrainTests.FreeAdvanceIgnoresForeignHigh`, `BPlusLeafGrainTests.FreeAdvanceIgnoresCloseHeads`, `LeafAppendEpochFenceTests.A_claimless_view_needs_a_report_that_carried_every_pending_close` and `LeafAppendEpochFenceTests.More_pending_closes_than_a_stamp_carries_hold_the_claimless_advance`. |
+| `FetchReport(a)` | **(#5851 R4.)** A leaf with no own append in flight fetches, read-only on the tick, the report an append response carries - the foreign high, the carried stale high and the unstamped high - and takes the allocator head as its free advance's target; `FreeCommit` admits the advance only past those bounds, so an idle leaf's pin moves without a write. **Over-approximation:** production is stricter in two ways, so the model checks a superset of its behaviours: its target is the leaf's own high, never the head (F1), and it reports the shared unstamped watermark, as the append response does (R1), which is at or above the key-filtered high the model reports. A claimed partition never fetches in production; the model lets any activation fetch. A fetch that omits any bound an append response carries, or a reader that fetches without the close it carries, loses a write (`ReadPositionHonestFetchReportOmitsStaleHigh`, `ReadPositionHonestFetchReportOmitsUnstampedHigh`, `ReadPositionHonestFetchReportReaderWithoutCarriedClose`; a5e2e2ef's F1-F7) | The report fetch of #5851's R4 member on the coverage-lag tick: `LeafAppendEpochFence.TryGetReportReader` supplies the reader the fetch carries. | Yes: `WalShardGrainTests.ReportFetch_equals_the_report_an_append_by_the_same_reader_would_carry`, `BPlusLeafGrainTests.ReportFetch_a_carried_stale_high_above_the_checkpoint_holds_the_advance`, `WalShardGrainTests.ReportFetch_reports_the_shared_unstamped_watermark`, `LeafAppendEpochFenceTests.ReportFetch_the_reader_is_the_stamp_a_pre_arm_append_would_carry`, `LeafAppendEpochFenceTests.ReportFetch_a_report_whose_reader_did_not_carry_a_close_carried_now_does_not_count`, `BPlusLeafGrainTests.ReportFetch_an_idle_leaf_whose_report_predates_its_carried_close_advances_on_the_tick_to_its_own_high` and `BPlusLeafGrainTests.ReportFetch_never_raises_the_target_above_the_own_high`. |
+| `SplitHeads(a)` | A split captures each partition's allocator head with the donor's `foreignHigh`, shared watermark and `staleHigh`, in one WAL-shard turn (D4) | `BPlusLeafGrain.CaptureSplitCutAsync`. | Yes: `WalShardGrainTests.A_split_cut_reads_the_head_and_every_bound_in_one_turn`. |
+| `SplitView(a)` | After the heads, the split reads L's marker view, possibly while the drain of its own appends is still applying them (V3); the commit evaluates the guard after the drain | The marker read in `BPlusLeafGrain.CompleteSplitAsync`, after `BPlusLeafGrain.CaptureSplitCutAsync`. | Yes: `BPlusLeafGrainTests.SplitViewBeforeHeads`. |
+| `SplitCap(a)` | The split's fallback when the hint guard fails (#5851 O2c): only after the drain of the donor's own appends below the heads, the donor hands the sibling its committed read frontier as the hint and its rows at or below it; a free advance just before the narrow raises that frontier first. The cap rests on the frontier advancing only over a contiguous applied prefix (a replay of the durable prefix, or the applied-prefix tracker), so its rows reach only offsets at or below it and every own append still in flight is above it: `SplitCap` without the drain holds in C. The drain (#5706) stays a production precondition, load-bearing for the D4 hint and for the by-key transfer: production moves the range from the donor's cache by key, not by offset, and an apply-before-append path (the batched CRDT apply `LeafAppendEpochFence.OnStale` retries) can hold a row whose append has not resolved, which without the drain would reach the sibling and make a write reported as failed visible. The by-key transfer's own detector, and those of the cap's mutations, come with #5851's O1 member, built only if the combined S2 timing needs it | `ShardRootGrain.CapAtReadFrontier`, after the drain in `BPlusLeafGrain.CompleteSplitAsync`. | Yes: `BPlusLeafGrainTests.Split_caps_the_sibling_hint_at_the_donors_replay_frontier`, `BPlusLeafGrainTests.Split_does_not_advance_the_donor_past_its_own_replay_frontier` and `LeafAppendEpochFenceTests.A_drain_waits_for_the_appends_that_started_before_it_only`. |
+| `SplitCommit(a)` | After the cut, the donor reads its marker view and, under the advance's guard with the heads in place of the target, hands the sibling the heads minus one as its hint | `BPlusLeafGrain.CompleteSplitAsync`, advance before the cap (`ShardRootGrain.CapAtReadFrontier` otherwise). | Yes: `BPlusLeafGrainTests.SplitHintWithoutBound` and `BPlusLeafGrainTests.SplitHintAboveHeads`. |
+| `DonorAlloc` | **Environment.** The live donor admits a write for L's keys after the split's heads and before its narrow, attributed to the donor | `BPlusLeafGrain.SetStampedAsync` on the donor. | Yes: `LeafAppendEpochFenceTests.The_split_window_records_each_own_moved_key_offset`. |
+| `DonorNarrow` | The donor narrows its span, persisting its link obligation in the same write (transfer condition (a)) | `BPlusLeafGrain.CompleteSplitAsync`, the narrow's persist with `LeafNodeState.UnlinkedSplitSiblingId`. | Yes: `BPlusLeafGrainTests.PreArmDonorFencesAfterPersistBeforeClose`. |
+| `DonorClose` | After the narrow and the drain, the donor closes L's birth window, in one conditional marker write, with the head one above its moved-key writes since the heads (all tokens', on a resumed split) and the deferred bound (rule S) | `BPlusLeafGrain.CloseSplitHandOffAsync`, writing `HandOffMarkerCore.CloseWithDeferredBound`. The conditional write is on the ETag of the row the donor activation's own open wrote in this split (`HandOffMarkerRows.UpdateLeafFromAsync`, a5e2e2ef's E1-E5): on a resumed or recovered split, or when the open wrote nothing, it reads the row first, and any ETag miss re-reads it and re-checks the token, a closed token being already settled. | Yes: `LeafAppendEpochFenceTests.A_drain_waits_for_the_appends_that_started_before_it_only`, `HandOffMarkerCoreDonorBoundTests.A_donor_close_records_its_heads_and_bound_in_one_change`, `ClaimlessSplitIntegrationTests.A_pre_arm_split_closes_its_sibling_with_the_donor_bound_in_one_write`, `WalShardGrainTests.A_resumed_close_reads_every_activation_s_records_never_below_the_floor`, `BPlusLeafGrainTests.A_fresh_split_closes_from_its_own_open_row_and_an_intervening_write_forces_the_read`, `BPlusLeafGrainTests.A_resumed_split_closes_on_the_read_path` and `BPlusLeafGrainTests.A_marker_copy_carries_every_property`. |
+| `DonorRestart` | **Environment.** The donor restarts after taking the heads and a new activation resumes the split from `SplitInFlight` | `BPlusLeafGrain.CompleteRecoverySplitUnderGateAsync`. | Yes: `WalShardGrainTests.A_resumed_close_reads_every_activation_s_records_never_below_the_floor`. |
+| `LinkRestart` | **Environment.** The donor restarts after closing L and before the link; the link is re-driven from the durable obligation (transfer condition (b), L3) | `BPlusLeafGrain.CompleteRecoverySplitUnderGateAsync` from `LeafNodeState.UnlinkedSplitSiblingId`. | Yes: `BPlusLeafGrainTests.PreArmDonorFenceFailureLeavesSiblingOpenAndObligationPending` and `ShardRootGrainSplitLinkTests.A_split_link_whose_raise_fails_leaves_its_donor_unacknowledged`. |
+| `Straggler(a)` | The donor's writes since the heads reach L as an append of L's own activation, applied in the same call, under the per-leaf transfer class: in its tracker and its token's `foreignHigh`, never a claim, never the shared watermark (T1-T3) | `BPlusLeafGrain.MergeEntriesAsync` under the routing-mutation gate, checking its current span and stamping the routing generation it was established under. A transfer refused stale refreshes that generation as an admission would (`BPlusLeafGrain.TryRefreshSpanRoutingAsync`: the shard's marker read fresh, no hand-off open over the span, then descent for the transfer's lowest and highest keys both to L or, before the link, both to its donor, a5e2e2ef's F1) and retries routed once; only a failed refresh appends it unstamped (#5851, ruling 1). The refresh trusts only a decided descent (#5876): `ShardRootGrain.IsReachableByDescentAsync` answers false on an undecided one, so a refresh whose descent passes an internal node at or above its declared high bound - a node divided while its parent does not yet route to the right half - is refused (V1); a refresh that succeeds is re-checked against the receiver's current span before the routed retry (`BPlusLeafGrain.SplitTransferRoutingFor`). | Yes: `BPlusLeafGrainTests.TransferNotInForeignHigh`, `ClaimlessSplitIntegrationTests.A_pre_arm_split_transfer_never_raises_the_shared_watermark`, `BPlusLeafGrainTests.A_stale_transfer_refreshes_its_span_generation_and_retries_routed`, `BPlusLeafGrainTests.A_pre_link_sibling_refreshes_through_its_donors_reachability`, `BPlusLeafGrainTests.A_stale_receiver_whose_upper_keys_moved_is_never_routed`, `BPlusLeafGrainTests.A_stale_transfer_without_an_admissible_refresh_appends_unstamped`, `BPlusLeafGrainTests.An_F1_refresh_during_a_link_batch_does_not_route` and `BPlusLeafGrainTests.A_refreshed_transfer_whose_keys_left_the_receivers_span_appends_unstamped`. |
+| `OrphanForward` | **Environment.** A stale duplicate forwards an acknowledged write to an orphan sibling; the record is attributed to the first forwarder under the empty token while the orphan's marker holds the token open or the donor's close pending (condition 4, F1-F2) | `BPlusLeafGrain.TryResolveSpanForwardTarget` to `BPlusLeafGrain.SetStampedAsync` with `WalAppendStamp.Forwarder`; `WalShardGrain.NoteLeafAuthorLocked` under the forwarder and the empty token (an empty GUID). Production never ends the attribution's scope (F1 is not implemented): a superset of the modelled attribution, at cost only. | Yes: `WalShardGrainTests.A_forwarded_record_is_foreign_to_every_activation_of_its_forwarder`, `WalShardGrainTests.A_re_forward_is_foreign_to_every_forwarder_on_its_chain` and `WalForwardChainTests.A_stamp_carries_every_hop_of_its_chain_in_order`. |
+| `OrphanClose` | **Environment.** The orphan's donor closes its window, leaving its deferred close pending | `BPlusLeafGrain.CloseSplitHandOffAsync` on the stale duplicate. | Yes: `WalShardGrainTests.A_forwarded_record_is_foreign_to_every_activation_of_its_forwarder`. |
+| `ProveReach` | An unlinked L's reachability proof after its donor's close: proven once linked; left undecided, and retried, while the donor's close is pending, the gate is in pre-arm and no orphan repair has begun; latched otherwise | `BPlusLeafGrain.ProveStampReachabilityCoreAsync`, deferring through `LeafAppendEpochFence.OnReachabilityDeferred`: a deferred activation stamps `PreArm` under the pre-arm gate only (an unrouted write still goes unstamped, C4), never claims, arms or advances claimlessly, and proves again after a backoff; a latch is never undone (a5e2e2ef's D1-D5 on #5851). The live-advance view applies the same rule (`BPlusLeafGrain.ReadLiveAdvanceHandOffAsync`): a P1-proven activation with a pending bound is demoted to deferred, so it never claims before its own link (C's `UnlinkedNeverClaims`), and `LeafAppendEpochFence.PromoteDeferredReachable` proves it again once reachable with no bound pending (G2: linked is not witnessed); a witnessed bound latches (B2). An activation proven without reading its marker - at its split birth (P1) or under the pre-arm gate - proves again, with the marker, before its first eager claim, and neither a claim nor an arm is taken while a bound is pending (`LeafAppendEpochFence.HasPendingCloses`; G3). An unreachable verdict with no structural witness is confirmed before it latches (#5872, a5e2e2ef's R1-R5): `LeafAppendEpochFence.OnUnreachableVerdict` leaves the first undecided, appending unstamped and never pre-arm for the backoff, and latches only a second one after it; `BPlusLeafGrain.OnUnreachableVerdict` latches at once on orphan repair, a reclaim's absorption (`LeafNodeState.ReclaimRetired`) or a superseded activation, from the proof path and the view path alike, and a reachable view drops the suspicion (`LeafAppendEpochFence.OnReachableVerdict`). C's reachability is exact, so this confirmation is a gap entry, not a step. The descent verdict is three-valued (#5876, a5e2e2ef's D1-D3 as revised by V1-V5): `ShardRootGrain.GetDescentVerdictAsync` answers `DescentVerdict.Undecided` when the key lies at or above the declared high bound of an internal node on its path (`RoutingTableSnapshot.HighKeyExclusive`: the node divided and its parent does not yet route to the right half), or when a root-identity mutation (`ShardRootGrain.EnterStructuralRouting`) was in flight before or after the descent or completed during it; a link batch elsewhere leaves it decided. A deferred activation is demoted on an unreachable suspicion too (S1), and the proof and the view (`LeafLiveAdvanceView.ReachabilityUndecided`) treat it as no verdict: unstamped for the backoff, no latch, no proof. A second unreachable verdict must be decided and from a later read. | Yes: `BPlusLeafGrainTests.PendingDonorCloseMarksProven`, `BPlusLeafGrainTests.LatchUnreachableWithPendingDonorClose`, `BPlusLeafGrainTests.A_pre_link_sibling_with_a_pending_donor_bound_is_deferred_and_stamps`, `LeafAppendEpochFenceTests.DeferredSiblingStampsUnrouted`, `LeafAppendEpochFenceTests.A_deferred_sibling_stamps_only_under_the_pre_arm_gate` and `LeafAppendEpochFenceTests.A_deferred_sibling_proves_again_after_its_backoff_and_a_latch_wins`, `BPlusLeafGrainTests.A_birth_proven_sibling_whose_shard_raised_for_another_link_defers_and_never_claims`, `BPlusLeafGrainTests.A_deferred_sibling_is_proven_again_once_its_own_link_is_witnessed_and_reachable`, `BPlusLeafGrainTests.A_sibling_whose_own_link_is_witnessed_but_is_unreachable_latches`, `BPlusLeafGrainTests.A_reachable_sibling_whose_link_is_unwitnessed_stays_deferred_and_never_claims_under_the_eager_gate`, `BPlusLeafGrainTests.A_birth_proven_sibling_never_claims_before_its_link_after_the_gate_turns_eager`, `BPlusLeafGrainTests.A_reachable_leaf_whose_view_reads_unreachable_once_appends_unstamped_then_is_proven`, `BPlusLeafGrainTests.A_leaf_unreachable_on_both_reads_across_the_backoff_latches`, `BPlusLeafGrainTests.A_structural_witness_latches_on_the_first_unreachable_verdict`, `BPlusLeafGrainTests.A_transient_unreachable_verdict_at_the_split_cut_takes_no_hint_and_does_not_latch`, `LeafAppendEpochFenceTests.An_undecided_activation_stamps_null_never_pre_arm`, `ShardRootGrainDescentVerdictTests.A_parent_lagging_a_completed_internal_split_yields_undecided_never_a_non_owner`, `ShardRootGrainDescentVerdictTests.A_link_batch_in_another_subtree_leaves_the_descent_decided`, `BPlusInternalGrainTests.A_split_publishes_its_narrowed_bound_with_its_children_in_one_step`, `ShardRootGrainOrphanAuditGapTests.An_audit_descent_through_a_parent_lagging_an_internal_split_finds_nothing`, `ShardRootGrainDescentVerdictTests.A_routing_mutation_completing_mid_descent_is_undecided`, `ShardRootGrainDescentVerdictTests.After_the_batch_a_descent_is_decided_as_before`, `ShardRootGrainDescentVerdictTests.Every_routing_structure_mutation_site_is_bracketed`, `BPlusLeafGrainTests.Two_undecided_or_same_turn_reads_never_latch` and `LeafAppendEpochFenceTests.A_deferred_activation_suspected_unreachable_never_stamps_pre_arm_after_its_backoff`. |
+| `GateToEager` | **Environment.** The gate's view flips from pre-arm to eager | `ClusterManifestWalAppendFenceGate.IsPreArmOpen`. | Yes: `BPlusLeafGrainTests.PendingDonorCloseMarksProven`. |
+| `StartRepair` | **Environment.** Orphan repair begins on L's range; L's next proof latches | `LeafLiveAdvanceView.For`. | Yes: `BPlusLeafGrainTests.PendingExemptionOverridesOrphanRepair`. |
+| `Reactivate` | **Environment.** L's birth activation deactivates, and a later call - a re-init, a recovery re-call, a stale donor's late `InitializeSiblingAsync` - activates it again, unproven (P1, P3) | `BPlusLeafGrain.InitializeSiblingAsync`, proving only on the call that seeds the write-once slots. | Yes: `BPlusLeafGrainTests.BirthProofOnReinit`. |
+| `NarrowMem(a)` | An activation of L narrows its span in memory for a split, stamping the narrow's identity (the sibling id) as its tag | `BPlusLeafGrain.CompleteSplitAsync`, the in-memory narrow. | Yes: `LeafAppendEpochFenceTests.A_stamp_carries_the_persisted_narrow_until_an_etag_conflict_withdraws_it`. |
+| `PersistNarrow(a)` | It persists the narrow with its link obligation in one conditional write; the first to persist wins, the other keeps only its in-memory narrow | `BPlusLeafGrain.CompleteSplitAsync`, the narrow's persist with `LeafNodeState.UnlinkedSplitSiblingId`. | Yes: `BPlusLeafGrainTests.ForwardExcludedWithoutObligation`, `WalShardGrainTests.A_forwarder_excludes_only_the_forwards_of_its_own_persisted_narrow` and `WalShardGrainTests.A_stamped_append_excludes_its_own_narrow_from_the_foreign_high_it_reports`. |
+| `EvictTag` | **Environment.** A third narrow tag evicts one from the WAL shard's per-(leaf, partition) top-two forward table, and the evicted tag's forward high folds into the floor every reader counts (X6) | `WalShardGrain.LeafAuthors.WithForwardHop`, its fold into `WalShardGrain.FoldLeafAuthorsLocked`'s eviction floor. | Yes: `WalShardGrainTests.A_displaced_narrow_tag_folds_into_a_high_no_reader_excludes`. |
+| `ReforwardChain(h)` | L's stale activation forwards one of L's keys on, and the chain runs h hops: the stamp carries every forwarder up to k, each attributed under the empty token with its own hop's tag, and a chain past k goes unstamped (F2', C4) | `WalForwardChain` built by `BPlusLeafGrain.TryResolveSpanForwardTarget`; `WalShardGrain`'s attribution to each forwarder. Production never excludes a chain hop from a reader's `foreignHigh` (S-b): the per-hop X1 exclusion is not taken, at a cost only. | Yes: `LeafLiveAdvanceCoreTests.ChainHopsAreNeverExcluded`, `WalShardGrainTests.A_re_forward_is_foreign_to_every_forwarder_on_its_chain`, `WalForwardChainTests.A_stamp_carries_every_hop_of_its_chain_in_order`, `WalForwardChainTests.A_forward_past_the_bound_overflows_the_chain_and_is_never_stamped` and `LeafAppendEpochFenceTests.A_write_past_the_forward_bound_appends_unstamped`. |
+| `ForwardIntoL(a)` | Before the link, L's donor forwards a new write of L's keys into L: L appends and applies it as its own, and the WAL attributes it to the donor under the empty token with the tag of the split that created L, which L's `staleHigh` excludes; the response carries the donor's `staleHigh`, as every routed response does (MF1) | `WalShardGrain`'s per-donor `staleHigh` read, excluding forwards tagged with the reader's own split. | Yes: `WalShardGrainTests.The_stale_high_excludes_only_the_forwards_of_the_split_that_created_the_receiver` and `WalShardGrainTests.A_forward_into_its_receiver_reports_the_donor_stale_high`. |
+| `StaleForwardOther` | A stale D' forwards one of L's keys into another orphan under that orphan's split tag; L's `staleHigh` counts it | The same read: only the reader's own split tag is excluded. | Yes: `WalShardGrainTests.The_stale_high_excludes_only_the_forwards_of_the_split_that_created_the_receiver`. |
+| `StaleEpochOnlyAlloc` | A stale duplicate of the donor, under a non-closing token, makes an epoch-only write of one of L's keys before the link's fence; the WAL counts it in the donor's `staleHigh` (the obligation carried from #5841, a5e2e2ef's H2) | `WalShardGrain.NoteLeafAuthorLocked` for a `WalRoutingStamp.None` append; `WalShardGrain.StaleHighLocked`. | Yes: `WalShardGrainTests.StaleHighOmitsEpochOnlyNonClosingToken`. |
+| `StaleRefreshAlloc` | The stale donor's transfer, refused as stale after L's re-claim, is refreshed at the current generation and re-admitted only while a descent for the batch's min and max keys still reaches the donor; once the key-moving close has moved them the write is forwarded instead (#5851 F1). The descent is assumed exact when it decides: a descent read while a link batch, a child link or a routing mutation is in flight, or across a moved routing sequence, is Undecided and refuses the refresh (#5876's D1 rule). `ReadPositionHonestRefreshTrustsUndecidedDescent` is red, and its mutant also breaks `SnapshotHonest` and `NoTrimPastAcked`: the GC trims the acknowledged write. Its author is a stale duplicate of the donor that still declares the old span (`StaleDonor`): after a successful refresh production re-checks the batch against the author's own declared span before the routed retry (`BPlusLeafGrain.AppendTransferAfterStaleAsync`, `BPlusLeafGrain.SplitTransferRoutingFor`), so a live donor that has narrowed falls back to unstamped, which raises the watermark L replays; only a duplicate holding the old span passes that re-check, and the model's stale author is that duplicate | The stale-generation transfer refresh, `BPlusLeafGrain.TryRefreshSpanRoutingAsync`, with its reachability descent. | Yes: `BPlusLeafGrainTests.A_stale_receiver_whose_upper_keys_moved_is_never_routed`. |
+| `ForwardMoved(a)` | It forwards a new acknowledged write of a moved key, attributed to L under the empty token and its narrow's tag, before or after its persist; a reader excludes it only when its own persisted span is that narrow (X1-X4) | `BPlusLeafGrain.TryResolveSpanForwardTarget`; `WalShardGrain.LeafAuthors.WithForwardHop` per tag, excluded in `WalShardGrain.ForeignHighLocked`. | Yes: `WalShardGrainTests.A_forwarder_excludes_only_the_forwards_of_its_own_persisted_narrow` and `WalShardGrainTests.A_stamped_append_excludes_its_own_narrow_from_the_foreign_high_it_reports`. |
+| `Stutter` | Natural termination | Not a protocol step; a stuttering successor so TLC does not report a quiescent state as a deadlock. | Not applicable: not a protocol step, so there is no production behaviour to detect. |
+
+## Property mapping
+
+| Spec property | Production property | Detector |
+|---------------|--------------------|----------|
+| `ReadPositionHonest` | No running activation's checkpoint passes a durable entry it owns and does not hold, acknowledged or not, whoever appended it: a duplicate, a foreign author, a straddler, a 10.2.0 silo or itself. | Yes: `LiveCheckpointAdvanceIntegrationTests.A_stale_duplicates_append_before_the_claim_is_read_before_the_leaf_advances_past_it`, `LiveCheckpointAdvanceIntegrationTests.A_foreign_unstamped_append_reported_after_arming_is_read_by_replay`, `LiveCheckpointAdvanceIntegrationTests.An_orphans_append_is_unstamped_so_the_reachable_owner_reads_it_before_it_advances`, `BPlusLeafGrainTests.A_close_head_above_the_checkpoint_holds_the_advance_until_a_replay_reaches_it`, `LeafLiveAdvanceCoreTests.The_advance_is_taken_exactly_when_the_leaf_is_armed` and `WalShardGrainTests.A_non_closing_record_admitted_at_a_later_generation_is_counted_while_the_close_is_pending` (B1). |
+| `SnapshotHonest` | The shared snapshot never claims coverage of a durable entry it lacks: the live advance never passes an own append still in flight. | Yes: `BPlusLeafGrainTests.A_live_advance_waits_until_every_issued_append_is_applied`, `BPlusLeafGrainTests.A_failed_append_turns_the_live_advance_off_for_the_activation` and `LeafLiveAdvanceCoreTests.Each_quiescence_condition_holds_the_advance`. |
+| `NoTrimPastAcked` | The GC never trims an acknowledged append the leaf's snapshot lacks, after a live advance as after a replay. | Yes: `LiveCheckpointAdvanceIntegrationTests.A_live_written_leaf_banks_its_snapshot_without_a_replay_drive`, `LiveCheckpointAdvanceIntegrationTests.A_stale_duplicates_append_before_the_claim_is_read_before_the_leaf_advances_past_it` and `BPlusLeafGrainTests.The_coverage_lag_tick_makes_a_live_written_leafs_pin_usable_without_a_replay`. |
+| `NewbornPinEventuallyUsable` | A live-written leaf's own applied appends are eventually covered by its banked snapshot, so its WAL pin becomes usable without a replay from `-1`: the leaf arms, advances live and the coverage-lag tick captures. | Yes: `BPlusLeafGrainTests.The_coverage_lag_tick_makes_a_live_written_leafs_pin_usable_without_a_replay` and `LiveCheckpointAdvanceIntegrationTests.A_live_written_leaf_banks_its_snapshot_without_a_replay_drive`. |
+| `PreArmCostWitness` | A `PreArm` append never raises the partition's shared unstamped watermark, so no activation is told to replay past its own `PreArm` appends (#5833's hard requirement). | Yes: `WalShardGrainTests.A_routed_pre_arm_append_never_raises_the_shared_watermark_and_an_unrouted_one_does`. |
+| `ReclaimCostBound` | A key-moving close writes no WAL generation claim, an append never claims a higher generation it carries (C1), and an arm's deferred re-claim writes the generation row at most once per raise and partition. | Yes: `WalShardGrainTests.A_stamped_append_under_an_unloaded_generation_loads_it_and_is_admitted` and `WalAppendFenceFirstTouchCostIntegrationTests`. |
+| `SiblingHintHonest` | A split's sibling is handed every durable record at or below its hint (#5752 for splits). | Yes: `BPlusLeafGrainTests.SplitHintWithoutBound`. |
+| `TransferCostWitness` | A split transfer never raises the partition's shared watermark (#5837's 976 declines). | Yes: `ClaimlessSplitIntegrationTests.A_pre_arm_split_transfer_never_raises_the_shared_watermark`. |
+| `DeferredHeadCostWitness` | A split-born receiver's close heads never exceed the donor's moved-key high and the stale donors' `staleHigh`, plus one (#5837's 792 declines). | Yes: `BPlusLeafGrainTests.ResolveAtPartitionHead`. |
+| `SoleActivationNeverFallsOff` | A sole running activation never falls off the log: the widened liveness excuse covers duplicates only. | Yes: `WalMaterialiserPinGrainTests.ReportManyAsync_offset_never_regresses_on_a_stale_report` and `WalGcTrimFloorCoyoteTests.Min_cursor_floor_never_trims_past_the_slowest_consumer`. |
+| `NarrowObligated` | A donor's narrow is durable only with its link obligation. | Yes: `BPlusLeafGrainTests.PreArmDonorFencesAfterPersistBeforeClose`. |
+| `UnlinkedNeverClaims` | An unlinked L takes no epoch, except its birth activation under the eager gate before its donor's close; with the donor's bound pending, a birth-proven activation defers and never claims before its own link (#5866 B2). | Yes: `BPlusLeafGrainTests.PendingDonorCloseMarksProven`, `BPlusLeafGrainTests.ExemptLeafArmsUnreachable`, `BPlusLeafGrainTests.BirthProofOnReinit`, `LeafAppendEpochFenceTests.DeferredSiblingClaims`, `LeafAppendEpochFenceTests.A_proven_activation_with_a_pending_bound_is_demoted_and_never_claims` and `BPlusLeafGrainTests.A_birth_proven_sibling_whose_shard_raised_for_another_link_defers_and_never_claims`. |
+| `RepairLatches` | Orphan repair always latches L. | Yes: `BPlusLeafGrainTests.PendingExemptionOverridesOrphanRepair`. |
+| `PendingCloseNotLatched` | An unlinked L with its donor's close pending, under pre-arm and with no orphan repair, is never latched, a raise of the shard's generation by another split's link notwithstanding (#5866 B2). | Yes: `BPlusLeafGrainTests.LatchUnreachableWithPendingDonorClose` and `BPlusLeafGrainTests.A_birth_proven_sibling_whose_shard_raised_for_another_link_defers_and_never_claims`. |
+| `ForwardHonest` | No running activation passes a forward of a key L owns, or of a key its own span still holds, without holding it (#5837's forward-exclusion relief). | Yes: `WalShardGrainTests.A_forwarder_excludes_only_the_forwards_of_its_own_persisted_narrow`, `WalShardGrainTests.A_stamped_append_excludes_its_own_narrow_from_the_foreign_high_it_reports`, `LeafAppendEpochFenceTests.A_stamp_carries_the_persisted_narrow_until_an_etag_conflict_withdraws_it` and `BPlusLeafGrainTests.ForwardExcludedWithoutObligation`. |
+| `StaleHighExcludesReceiverTag` | A split-born receiver's `staleHigh` never counts its donor's forwards into itself, which it applied as its own, so a receiver that took a pre-link forward is not sent to replay past its own writes (cost, a5e2e2ef's ruling with F2'). | Yes: `WalShardGrainTests.The_stale_high_excludes_only_the_forwards_of_the_split_that_created_the_receiver`. |
+| `SnapshotForwardHonest` | The shared snapshot never covers such a forward without holding it. | Yes: `WalShardGrainTests.A_forwarder_excludes_only_the_forwards_of_its_own_persisted_narrow` and `WalShardGrainTests.A_stamped_append_excludes_its_own_narrow_from_the_foreign_high_it_reports`. |
+| `SplitEventuallyLinked` | A split-born L is eventually linked. | Yes: `BPlusLeafGrainTests.PreArmDonorFenceFailureLeavesSiblingOpenAndObligationPending` and `ShardRootGrainSplitLinkTests.A_split_link_whose_raise_fails_leaves_its_donor_unacknowledged`. |
+| `OldNeverRejected` | An unstamped append - a 10.2.0 silo's, or any while the gate is closed - is never rejected by the append fence. | Yes: `WalShardGrainTests.Unstamped_appends_are_always_admitted_and_reported` and `WalAppendFenceMixedVersionTests.The_existing_unstamped_methods_keep_working_on_the_older_build`. |
+
+## Excluded properties
+
+| Spec property | Reason |
+|---------------|--------|
+| `TypeOK` | Finite-domain model sanity, not a production representation. It retains its own paired experiment. |
+
+<a id="property-classification"></a>
+
+## Property classification (issue #2321)
+
+`TypeOK` and the four invariants are state safety, reached and checked on the base and
+re-checked in each variant. `NewbornPinEventuallyUsable` is liveness, checked on the base
+and re-checked in `Bulk`, whose bulk-born leaf is a newborn too; the other variants leave
+it out (below). The base carries the duplicate, one hand-off window and a
+10.2.0 silo's append; each variant adds one environment (a restart, own unstamped appends,
+the purge, a bulk birth), because the combinations are larger than the CI budget allows
+for one case. The design model's combined configurations stay as local evidence in the
+design note.
+
+**Structural, not loss, properties.** `UnlinkedNeverClaims` is structural: it states
+that no unlinked activation takes an epoch, not that a write is lost. The loss it guards
+against, a claimed orphan's epoch-only writes invisible to the eventual owner (#5841), is
+outside this module. Its mutations are therefore structural detectors, not loss
+detectors. `UnlinkedNeverClaimsProvenSiblingClaimsPreLink` (#5866 B2) is the clearest
+case: the base was clean, `ReadPositionHonest` included, while C still admitted that
+claim. Checked against every other invariant, its mutant is clean in the latch shape
+(1,424,887 states). With another split's link raise it also violates the cost property
+`ReclaimCostBound`: the pre-link claim resolves the donor's bound on that raise, so the
+link's deferred head costs a second re-claim. With `ReclaimCostBound` dropped as well it
+is clean on `ReadPositionHonest` and every loss property (6,619,845 states). It is a
+structural and cost detector, never a loss detector. The same holds for
+`UnlinkedNeverClaimsDeferredSiblingClaims` (#5851 D5).
+
+**The lazy arm (#5833).** `WithPreArm` turns it on. A leaf claims at a partition only
+when it arms there. Its appends before that are `PreArm` (`PreArmAlloc`), and the arm
+replays to `foreignHigh` (`seenP`) rather than to the claim head. `foreignHigh` is the
+highest offset any other activation of L allocated, stamped or `PreArm`, never below what
+the WAL shard's memory lost (`startHead - 1`, the eviction floor). Key-moving closes defer
+their fence to the receiver's arm (`WithKeyMove`).
+
+The base, `KeyMove`, `PreArmRestart`, `PreArmBulk`, `PreArmRecreate` and `PreArmGateFlip`
+check the lazy arm; the other six configurations check today's eager arm
+(`WithPreArm = FALSE`, the path the gate keeps until every silo carries the capability).
+Mutations that test an eager-only assumption are bound to it for the same reason.
+
+**The claimless advance (#5837).** `WithFreeAdvance`, under the lazy arm, adds
+`FreeTarget` and `FreeCommit`: the advance needs no claim, only the bounds the responses
+to the leaf's own appends report. `WithSplitHint` adds the split's hint, `WithSplitBirth`
+a split-born receiver with its live donor, `WithDonorRestart` the donor's restarts,
+`WithLatch` the reachability latch on the unlinked receiver and `WithBirthProof` its
+birth proof, and `WithOrphanForward` a stale duplicate's forward into an orphan.
+`WithFwdExclusion` adds the relief that lets a donor exclude its own forwards once its
+narrow is durable: `ReadPositionHonest`, `SnapshotHonest` and `NoTrimPastAcked` then skip
+only the forwards of keys L no longer owns, which `ForwardHonest` and
+`SnapshotForwardHonest` state. `WithDuplicate` and `WithEvict` exist to slice. Fifteen variants check it, each within the
+case budget:
+
+| Variant | Adds | States |
+|---------|------|--------|
+| `Free` | the advance on the base, safety only | 4,680,662 |
+| `FreeKeyMove` | a pending key-moving close; liveness with no claim fair | 2,386,428 |
+| `FreeSplitHint` | the split's hint | 3,562,343 |
+| `FreeSplitBirth` | a split-born receiver and a duplicate, no link; liveness | 2,146,154 |
+| `FreeSplitLink` | the link and both donor restarts, no duplicate; liveness and `SplitEventuallyLinked` | 428,890 |
+| `FreeLatch` | the latch, the gate flip, orphan repair and the birth proof | 892,259 |
+| `FreeOrphan` | the orphan's forward and re-forward | 707,726 |
+| `FreeRestart` | a WAL shard restart and an eviction | 3,855,129 |
+| `FreeRestartKeyMove` | a deferred close pending across a WAL shard restart | 477,300 |
+| `FreeRecreate` | the purge, claimed slice | 1,715,417 |
+| `FreeRecreateSurvivor` | the purge, unclaimed slice | 4,908,025 |
+| `FreeBulk` | a bulk birth | 3,309,965 |
+| `FreeGateFlip` | own unstamped appends | 1,904,304 |
+| `FreeFwdExclusion` | the forward-exclusion relief: two divergent narrows, a forward before or after the persist | 4,217,142 |
+| `FreeTagEvict` | the relief's WAL-side table: a tag's eviction (X6) and a WAL shard restart (X8) | 821,800 |
+| `FreeReforward` | a forward chain at depths 2, 3 and 4 against k = 3 (F2') | 1,795,034 |
+| `FreeChainEvict` | the chain with an eviction (`WithEvictAlone`: no WAL shard restart), without the orphan's own forward: the fold of the chain's records (S-a) | 1,993,821 |
+| `FreeOrphanEvict` | an orphan's forward with an eviction and no WAL shard restart: the fold of the orphan's forward (S-a). With `FreeChainEvict` it replaces one variant combining both with a restart, which measured 46,514,214 states; the chain with a restart alone measured 12,065,410, and the restart's own floors are checked in `FreeRestart` | 3,045,174 |
+| `FreeForwardIn` | the donor's pre-link forward into L and a stale D''s into another orphan (the `staleHigh` tag exclusion) | 1,032,584 |
+| `FreeEpochOnly` | a stale duplicate's epoch-only write before the link, in the donor's `staleHigh` | 712,124 |
+| `FreeSplitView` | the split's view read concurrently with the drain (V3), with a hand-off window, and the split's cap fallback when the hint guard fails (#5851 O2c) | 1,159,405 |
+| `FreeOtherLinkRaise` | another split's link raising the shard root's generation between the donor's close and L's link, and L's link witness, under the latch and without the birth proof (#5866 B1, B2) | 1,056,232 |
+| `FreeKeyFilter` | the key-range-filtered unstamped high: an unstamped write keyed in a span outside L's range, and L's range absorbing the span (#5851 K1-K6) | 8,791 |
+| `FreeReportFetch` | an idle leaf's report fetch and free advance to the head, with a key-moving close and its stale donor (#5851 R4) | 24,397 |
+
+Under the claimless advance an activation learns its bounds only from the responses to
+its own appends, which carry `foreignHigh` and the shared watermark together, so either
+restart floor alone suffices: `ReadPositionHonestPreArmWatermarkNotReset` and
+`ReadPositionHonestRestartForgetsUnstamped` are clean under it, and
+`ReadPositionHonestFreeAdvanceRestartForgetsBothFloors` is red. With no claim there may be
+no current activation, so `CurrentFellOffLog` excuses any running one, as production's
+per-activation #3477 latch does; `SoleActivationNeverFallsOff` bounds that to duplicates.
+
+The lazy arm makes two of the eager arm's guards redundant for `ReadPositionHonest`, and
+their mutations stay clean under `WithPreArm` (they are red under `WithPreArm = FALSE`):
+- `ReadPositionHonestAssumeSupersededAllocates`: `foreignHigh` counts a superseded
+  activation's stamped appends, so E's "a superseded activation never allocates" is no
+  longer what keeps them read.
+- `ReadPositionHonestRestartForgetsUnstamped`: `foreignHigh`'s restart floor covers the
+  offsets the shared watermark's reset covers.
+
+The liveness property is unchanged in form. Under the lazy arm a claim's fairness is
+conditioned on `ArmTrigger(a)`: an own durable append that no shared snapshot covers, so
+the leaf's pin holds the floor. No safety property reads `ArmTrigger`, so every invariant
+holds for any trigger, including one that fires on every tick. Production arms on two
+signals, each of which implies `ArmTrigger(a)` at the partitions it arms:
+
+- **The starved tick.** On the coverage-lag tick, `BPlusLeafGrain.TryAdvanceLiveCheckpointAsync`
+  finds the leaf holding live data with no proven checkpoint on any partition
+  (`BPlusLeafGrain.IsStarvedOfDurableCheckpoint`), and calls
+  `BPlusLeafGrain.ArmForLiveAdvanceAsync`.
+- **The GC drive.** The WAL GC's floor-holder report names the leaf's pin as holding a
+  partition's floor and drives the leaf (`IBPlusLeafGrain.DriveStarvedCheckpointAsync`, whose
+  drive calls `BPlusLeafGrain.TryAdvanceLiveCheckpointAsync` before it replays). The same
+  drive runs from the coverage-lag timer for a leaf starved of a durable checkpoint.
+
+Either signal arms only the partitions where the leaf has an own append above its
+checkpoint, which is `ArmTrigger(a)` at that partition, and only while `handOff.Clear`
+holds, which is C's `~pend` and its no-open-window guard. An arm restricted to some
+partitions satisfies the arm guard at each partition it arms, and a leaf not armed at a
+partition keeps appending `PreArm` there. The fairness the liveness property needs is that
+one signal recurs while `ArmTrigger(a)` holds, and the GC drive recurs on every pass while
+the pin holds the floor. Firing more often than `ArmTrigger` costs only claims, never
+safety: one epoch row per activation, and the generation re-claims `ReclaimCostBound`
+limits to one per (raise, partition).
+`NewbornPinEventuallyUsableDeferredHeadRefusedBelowLoaded` shows C5 is needed for liveness.
+
+Building the lazy arm found that a bulk-born leaf's pre-switch records above its birth
+read position were covered only by the claim-head replay: under the lazy arm they rest on
+the switch's close head, now B's guarantee `SwitchCloseCoversPriorAllocations`.
+
+**The purge, in three slices.** Since the environment admits a never-claimed activation
+that outlives the purge, the purge alone (9,028,464 states) is over the 5M-state case
+budget. Two constants select the purge's shape, decided at the step itself, so the slices
+split the purged behaviours exactly: `WithClaimedPurge` for a purge that finds `a1`
+claimed (with only the duplicate, if any, unclaimed), `WithUnclaimedSurvivor` for one
+that finds `a1` unclaimed. The base and the other variants allow both.
+- `Recreate` checks the claimed purge with the full environment: 3,693,715 states.
+- `RecreateSurvivor` checks the unclaimed survivor without the 10.2.0 silo: 4,638,713.
+- `RecreateSurvivorMixed` checks it with the silo and no hand-off window: 1,622,161.
+- **Bounded out of CI:** the unclaimed survivor with both a hand-off window and the silo.
+  It was checked locally and is clean at 8,913,193 distinct states (232 seconds), which is
+  over the 5M-state case budget; the gap register below records it.
+
+Measured with tla2tools v1.7.4 on two workers, the three slices take 2 minutes, 3
+minutes and 1 minute.
+
+**The liveness property** (member 6b) is the design note's: under weak fairness of the
+claim, replay, apply and live-advance steps, an armed activation's newborn pin eventually
+becomes usable without a replay from `-1`. It is checked as `<>[]`: eventually, always,
+the shared snapshot covers every durable own append. The base cfg's specification is
+`LiveSpec`, `Spec` with one condition, `WF_vars(Progress)`:
+- `Progress` is the disjunction of the leaf's own steps (`Claim`, `Land`, `LiveAdvance`,
+  `Capture`), the environment steps that end a hold (`Close`, `Create`, `MarkInit`), and
+  a replay **only while a bound the arming list names lies above the read position**
+  (`ReplayNeeded`: the claim head, the close heads, a reported unstamped offset).
+  This is a **deliberate under-approximation**, not a statement about production:
+  production's starvation drive also replays from the checkpoint to the head, over the
+  leaf's own appends. The property assumes no replay beyond the arming bounds, so it
+  shows that the live advance alone makes the pin usable; the starvation drive is a
+  further fallback it does not rely on. It is what keeps the property non-vacuous: with
+  replay fair unconditionally, `NewbornPinEventuallyUsableAdvanceNeverFires` comes out
+  clean (778,329 states, checked by the independent review). Weakening a fairness
+  assumption only strengthens a liveness claim, so the restriction is sound.
+- One condition over the disjunction forces the same quiescent end as one per step,
+  and costs TLC one temporal branch instead of eleven. **Precondition:** every step but
+  `Stutter` can be taken only finitely often in every configuration (`next` is bounded;
+  each one-shot environment step fires once; `ForeignOpen` is bounded by `MaxWindows`;
+  `Land` and `HandOff` consume their offsets; `rp`, `snapCov` and `floor` only rise,
+  within bounds). A configuration with an unbounded step would need one condition per
+  step.
+- **Exclusion:** the property is discharged once the current activation has fallen off
+  the log (`CurrentFellOffLog`: the GC trimmed an entry it must still replay). The state
+  is reachable in production: the leaf's WAL pin is one per-leaf row merged
+  monotonic-max, so a duplicate activation's capture can raise it past the current
+  activation's checkpoint and let the GC trim past it. Production's response is the
+  existing #3477 path: the partition latches stale and refuses hints and the live
+  advance, and deactivation clears it, the reactivation rehydrating from the newer
+  snapshot. The gap register below records the exclusion and the detectors that pin
+  that path. Without the exclusion TLC reports exactly this behaviour; with the GC
+  additionally bounded by every running activation's read position, the property holds
+  without it (550,843 states, checked by the independent review).
+- **Cost, measured** (tla2tools v1.7.4, two workers, liveness included): the base finds
+  778,329 distinct states to depth 25 in 1 minute 27 seconds, and `Bulk` 1,114,185 to
+  depth 25 in 2 minutes 38 seconds (re-measured with TLC 2.19). Stated as three
+  leads-to formulas the base took 4 minutes, and with
+  one fairness condition per step as well, 11.
+- **Bounded out:** `Restart` holds the property too, but takes 7 minutes 18 seconds
+  locally, too close to the 20-minute case budget on a CI runner, so it checks safety
+  only. `GateFlip` and `Recreate` are outside the property's premise, a leaf born while
+  the gate is open: `GateFlip`'s own appends are made under a closed gate view, and
+  `Recreate` ends the newborn's incarnation.
+- Its two experiments each break progress and go red in about five seconds:
+  `NewbornPinEventuallyUsableAdvanceNeverFires` (the live advance never enabled, as
+  before #5572) and `NewbornPinEventuallyUsableArmingNeverEnabled` (the claim-head
+  conjunct asks for a read the driven replay never reaches).
+
+Every experiment is an anchored perturbation. Seven edit the `Armed` predicate rather
+than an action, so they name no perturbed action: `NewbornPinEventuallyUsableArmingNeverEnabled`,
+`ReadPositionHonestNoClaimHeadReplay`,
+`SnapshotHonestNoOwnTracker`, `ReadPositionHonestUnstampedNotReported`,
+`ReadPositionHonestNoMarkerInit`, `ReadPositionHonestArmsUnderOpenMarker` and
+`ReadPositionHonestArmsBelowCloseHead`. `NoTrimPastAckedLiveAdvance5578` edits both the
+predicate and `OwnAlloc`. A clean coverage run (`-coverage`) of the base and each variant
+confirms every action the configuration enables is taken, `LiveAdvance` included.
+
+## Design mutations moved here
+
+The design model's mutations the contract assigns to this module were moved, re-targeted
+where needed and re-anchored on this module's text.
+
+| Design mutation | Here |
+|-----------------|------|
+| `NoTrimPastAckedLiveAdvance5578` | Same name. It replaces `Armed` with #5578's rule and drops the current-activation guard from `OwnAlloc`, the environment's form of the epoch check it removed. |
+| `ReadPositionHonestNoClaimHeadReplay` | Same name; edits `Armed`. |
+| `SnapshotHonestNoOwnTracker` | Same name; edits `Armed`. |
+| `ReadPositionHonestNoSelfReport` | Same name; anchored on `OwnAllocUnstamped`, with `WithGateFlip`. |
+| `ReadPositionHonestUnstampedNotReported` | Same name; edits `Armed`. The base carries the 10.2.0 silo's append, so it needs no bound. |
+| `ReadPositionHonestRestartForgetsUnstamped` | Same name; anchored on `Restart`, with `WithRestart`. |
+| `OldNeverRejectedRejectedOnceFenced` | Same name; the edit is the admission in `OldAlloc`, and the partition is fenced once any claim of L has been raised there. |
+
+Two of the design's redundancy checks bear on `Armed`. `ReadPositionHonestNoMarkerInit`,
+clean in the design's legacy hand-off configuration, is red here: with the purge in the
+environment, the initialised guard is what holds a re-created incarnation while a write of
+the purged one is still allocated, so it is a mutation in this module.
+`ReadPositionHonestArmsWithoutClaim` stays a redundancy check: run locally against this
+module's base and its four variants as member 6a landed them it is clean, because an activation that has not claimed has only
+unstamped own appends, each reporting itself, so it never arms past one. It is kept, as the
+design keeps it, because arming without a claim is meaningless, and it is not in the
+mutation directory, which holds only experiments that must go red.
+
+`ReadPositionHonestAssumePurgeSparesClaimed` is a redundancy check too: with the purge
+leaving the current activation's epoch raised (`Recreate` keeping `cur`), the `Recreate`
+slice stays clean. The core's properties do not tell incarnations apart: the purged
+activation's later appends are its own, applied by it and below every later claim head,
+so retiring the purged epoch protects the re-created tree's identity, which E and R
+check, not any read position here. It is kept out of the mutation directory for the same
+reason as the one above.
+
+## Deliberate abstraction gaps
+
+- **A hinted sibling's own capture and persist are not modelled (#5877; a5e2e2ef's H1-H5).**
+  C checks what a split hint may claim - every durable record at or below it is in the rows
+  handed to the sibling (`SiblingHintHonest`) - and that a capture claims only the read
+  position over rows held (`SnapshotHonest`). It does not model the sibling as an
+  activation that persists its own checkpoint, so the order production needs at a
+  partition never persisted and not yet covered - a capture of the sibling's own cache
+  covering the hint lands before the hinted checkpoint is persisted, a failed or declined
+  capture persists -1, and every flush path takes that order - is unchecked here. H1 is
+  held at the donor: the hint never exceeds the donor's applied frontier unless the cut
+  proves the donor read past every bound, pinned by `BPlusLeafGrainTests.SplitHintWithoutBound`,
+  `BPlusLeafGrainTests.SplitHintAboveHeads` and
+  `BPlusLeafGrainTests.Split_caps_the_sibling_hint_at_the_donors_replay_frontier`, and end
+  to end - the sibling's first capture claiming the hint holds every row its donor handed
+  it - by
+  `BPlusLeafGrainTests.A_hinted_siblings_capture_holds_every_row_its_donor_handed_it_at_coverage_of_at_least_the_hint`.
+  The order is pinned by
+  `BPlusLeafGrainTests.A_deactivating_hinted_sibling_captures_before_it_persists_its_hint`,
+  `BPlusLeafGrainTests.A_due_flush_of_a_hinted_sibling_captures_before_it_persists_its_hint`,
+  `BPlusLeafGrainTests.A_hinted_sibling_whose_capture_fails_persists_its_checkpoint_at_minus_one`,
+  `BPlusLeafGrainTests.A_failing_store_is_asked_for_a_hint_capture_once_per_tick_never_once_per_flush`,
+  `BPlusLeafGrainTests.A_cold_restart_after_a_failed_deactivation_capture_needs_no_repair_for_a_hinted_sibling`
+  and `BPlusLeafGrainTests.A_hint_at_a_covered_partition_persists_with_no_new_capture`.
+  Production symbols: `BPlusLeafGrain.SetCheckpointOffsetHintsAsync`,
+  `BPlusLeafGrain.NoteHintAtUncoveredPartition`,
+  `BPlusLeafGrain.CaptureUncoveredHintsBeforePersistAsync`,
+  `BPlusLeafGrain.HoldBackUncoveredHints`, `BPlusLeafGrain.RestoreHeldHints`,
+  `BPlusLeafGrain.IsHeldUncoveredHint`, `BPlusLeafGrain.FlushPendingCheckpointAsync`.
+- **The refresh's descent is exact when it decides (#5876; a5e2e2ef's D1 rule and V1-V5).**
+  C's `RefreshReaches` reads whether the batch's keys still reach the stale donor exactly.
+  Production's descent resolves to the routing owner, which is the key's owner or a leaf
+  that does not own it: before the link the narrowed donor still receives its moved keys
+  (359c7fd5's S2 probe: no negative descent named the owner), and a parent that has not yet
+  received a completed internal split's separator routes past the narrowed node. In C the
+  refresh is reachable only after L's re-claim of the link's generation, so after the link,
+  where a decided descent names the owner. Production keeps that exact when it decides
+  without settling the whole shard: every internal node on the path answers with its
+  declared bounds and a key outside them makes the descent Undecided (V1), a split
+  publishes its narrowed bound with its children in one step (V2), only the root-identity
+  sites still bracket the descent (V3), the leaf level never chases (V4), and the orphan
+  audit uses the same descent (V5). An Undecided descent refuses the refresh, gives the cut
+  no hint and lets the orphan audit find nothing. Trusting it is
+  `ReadPositionHonestRefreshTrustsUndecidedDescent`, red here against `ReadPositionHonest`,
+  `SnapshotHonest` and `NoTrimPastAcked`; the lagging parent is that trace's descent, so it
+  needs no step of its own. V1 bounds only the internal levels, so while a split's link
+  is held a narrowed donor R is still reached for its unlinked sibling S's keys, and a
+  stale activation R' of R whose span predates the narrow can refresh on that positive and
+  append an S key as an R write. That is safe by rule S, not by the descent: S's stamps
+  carry R's donor close, the WAL shard counts every R activation but the closing one in the
+  stale high (B1) and S carries the close until its arm resolves it (G4), so the bound
+  reported to S covers R''s write; and the current R's span re-check refuses the key.
+  Pinned by
+  `WalShardGrainTests.A_stale_donor_activation_refreshing_for_a_held_links_sibling_key_is_counted_in_the_siblings_bound`
+  (a5e2e2ef's S1 on #5904). Production pins it:
+  `ShardRootGrainDescentVerdictTests.A_parent_lagging_a_completed_internal_split_yields_undecided_never_a_non_owner`,
+  `ShardRootGrainDescentVerdictTests.A_link_batch_in_another_subtree_leaves_the_descent_decided`,
+  `ShardRootGrainDescentVerdictTests.A_routing_mutation_completing_mid_descent_is_undecided`,
+  `BPlusInternalGrainTests.A_split_publishes_its_narrowed_bound_with_its_children_in_one_step`,
+  `ShardRootGrainOrphanAuditGapTests.An_audit_descent_through_a_parent_lagging_an_internal_split_finds_nothing`
+  and `BPlusLeafGrainTests.An_F1_refresh_during_a_link_batch_does_not_route`, and the
+  single-activation case, a donor that narrows while its refresh is in flight, by the
+  post-refresh span re-check:
+  `BPlusLeafGrainTests.A_refreshed_transfer_whose_keys_left_the_receivers_span_appends_unstamped`.
+  No production symbol: C reads reachability as exact, and the descent's verdict is a shard-root guard outside the model.
+- **Reachability is exact, with no transient verdict (#5872; a5e2e2ef's R1-R5).** C's
+  `ProveReach` reads L's reachability exactly. Production may read a transient unreachable
+  verdict, so it never latches on one: the leaf goes undecided, appends unstamped through a
+  backoff - never `PreArm`, never a claim - and latches only on a second unreachable read
+  or a structural witness. That only delays the latch toward the safe side, since an
+  unstamped write is reported to every reader. Stamping `PreArm` while undecided would hide
+  a real orphan's writes from their owner, the shape
+  `ReadPositionHonestDeferredSiblingStampsUnrouted` already makes red here, so a transient
+  step would repeat that trace. Production pins it:
+  `BPlusLeafGrainTests.A_reachable_leaf_whose_view_reads_unreachable_once_appends_unstamped_then_is_proven`,
+  `BPlusLeafGrainTests.A_leaf_unreachable_on_both_reads_across_the_backoff_latches`,
+  `BPlusLeafGrainTests.A_structural_witness_latches_on_the_first_unreachable_verdict`,
+  `BPlusLeafGrainTests.A_transient_unreachable_verdict_at_the_split_cut_takes_no_hint_and_does_not_latch`
+  and `LeafAppendEpochFenceTests.An_undecided_activation_stamps_null_never_pre_arm`.
+  Production symbols: `BPlusLeafGrain.ReadLiveAdvanceHandOffAsync`.
+- **A key-moving link is one atomic step (#5866 G1, G2; a5e2e2ef's AG1).** `KeyMove` links
+  L, raises the shard's routing generation and closes L's marker in one turn, and
+  `LinkWitness` follows it. C therefore checks neither a witness that lands before the
+  donor's close (G1) nor a sibling reachable while its own raise has failed (G2): `moved`
+  in `LatchAdmitsClaim` implies a durable raise here, not in production. Production pins
+  both: `ShardRootGrainSplitLinkTests.A_split_link_never_closes_its_sibling_marker_and_witnesses_its_own_link_after_the_raise`,
+  `HandOffMarkerCoreDonorBoundTests.A_witness_that_lands_before_the_donors_close_resolves_the_close_written_after_it`
+  and `BPlusLeafGrainTests.A_link_witnessed_before_the_donors_close_leaves_no_close_pending`
+  for G1; `ShardRootGrainSplitLinkTests.A_split_link_whose_raise_fails_leaves_its_donor_unacknowledged`
+  and `BPlusLeafGrainTests.A_reachable_sibling_whose_link_is_unwitnessed_stays_deferred_and_never_claims_under_the_eager_gate`
+  for G2.
+  Production symbols: `ShardRootGrain.WitnessSplitLinksAsync`, `HandOffMarkerCore.IsPendingDonorBound`.
+- **One partition carries the close (#5866 G4; a5e2e2ef's AG2).** C has one WAL partition,
+  so the carried close's per-partition resolution - an arm at one partition resolves it
+  there alone while another stays carried - is unchecked: here resolution at the
+  partition ends the carry. Production pins it:
+  `HandOffMarkerCoreCarryTests.An_arm_at_the_witness_raises_that_partitions_head_and_resolves_it_alone`,
+  `LeafAppendEpochFenceTests.A_carried_close_resolved_at_one_partition_is_dropped_from_its_stamps_only`
+  and `BPlusLeafGrainTests.The_backstop_arms_a_binding_carried_partition_once_and_resolves_it_with_the_re_claim_head`.
+  Production symbols: `HandOffMarkerCore.WitnessLink`.
+- **The key-range table has one single-key record and no overflow (#5851 K1, K3, K5).** C
+  tables one unstamped record of one key, never overflows the table, and never evicts it.
+  A multi-key record (a batch, an atomic prepare) must count for every reader whose range
+  overlaps any of its keys or go to the floor (K3), and an overflow max-folds into the
+  floor (K1); both only raise the high a reader reads, so neither can lose a write the
+  model would find. A WAL shard restart floors every high at the restart floor (K5), as
+  `Restart` already does for `lastU`. Production pins them:
+  `WalShardGrainTests.UnstampedMultiKeyRecordBoundsEveryReader` (K3),
+  `WalShardGrainTests.UnstampedBatchWriteTabledByKey`,
+  `WalShardGrainTests.UnstampedTableOverflowFoldsIntoFloor` (K1) and
+  `WalShardGrainTests.UnstampedFilterRestartFloor` (K5).
+  No production symbol: the key-range table is new in #5851's O2c member; this gap is about the model's single-record table.
+- **A linked L never becomes unreachable (#5866 B2).** C models no unlink, fold or
+  orphaning after L's link, so a leaf whose donor's bound has resolved is always reachable
+  and proven. The rule that an unreachable leaf with a resolved close latches, as #5709
+  requires, rather than deferring, has no red trace here: a resolved close that kept
+  deferring (the ResolvedCloseStillDefers mutation) would let a leaf stamp PreArm for keys another
+  leaf owns, visible only through its own scoped watermark, and C has no second owner to
+  miss them. `BPlusLeafGrainTests.A_sibling_whose_own_link_is_witnessed_but_is_unreachable_latches`
+  pins it in production.
+  Production symbols: `HandOffMarkerCore.IsPendingDonorBound`, `LeafAppendEpochFence.OnReachabilityDeferred`, `BPlusLeafGrain.ReadLiveAdvanceHandOffAsync`.
+- **The claimless advance's tracking is one entry per role (#5837).** One donor leaf, one
+  key-moving close and one stale donor stand for the WAL shard's per-donor `staleHigh`
+  table (top two tokens per generation, with the restart and eviction floors), and one
+  orphan for every forward chain. The forwarder attribution needs a WAL-shard capability
+  that honours the stamp's forwarder field; without it a pre-link forward falls back to
+  unstamped (F3), which the model does not represent. The read of `staleHigh + 1` in the
+  re-claim's own WAL turn is one step here.
+  Production symbols: `WalShardGrain.StaleHighLocked`, `WalShardGrain.NoteLeafAuthorLocked`.
+- **The forward-exclusion relief's table (#5837, X5-X8).** One tag eviction and one WAL
+  shard restart stand for the top-two per-tag forward table's evictions and losses. Two
+  rows are refinement obligations the model does not represent: the reader's tag comes
+  only from a narrow whose persist succeeded (X7), and a WAL shard restart forgets the
+  table into the start-head floor (X8), which the model checks only through `Restart`'s
+  floors (`ForwardHonestForwardTableLostOnRestart`). The model found that evicting a
+  leaf's foreign-high entry must fold its forwards' high, the empty token's, with its
+  activations' (`ForwardHonestEvictionDropsForwardHigh`).
+  Production symbols: `WalShardGrain.FoldLeafAuthorsLocked`, `WalShardGrain.ResetLeafAuthors`.
+- **The eviction floor is per leaf here and bucketed in production (#5851 O2b).** C keeps L's
+  own floor at exactly L's evicted high, the tightest sound value. Production may fold an
+  evicted leaf into one of a fixed array of hashed buckets, each the maximum of the highs
+  evicted into it; a reader counts only its own leaf's bucket. That refines C's floor,
+  because a bucket's floor is at least the evicted high of every leaf hashing to it, under
+  a5e2e2ef's four conditions (#5851 comment 6665050221): buckets only max-merge, a reader
+  uses only its own bucket, the bucket count is fixed for an activation, and a WAL shard
+  restart resets every bucket to the start-head floor. A fold to the minimum of the evicted
+  highs does not refine it: it is `ReadPositionHonestEvictionDropsForeignHigh` when L is not
+  the minimum. Which leaf is evicted (median, LRU, or a larger table) is a cost choice the
+  nondeterministic `Evict` already covers.
+  Production symbols: `WalShardGrain.FoldLeafAuthorsLocked`.
+- **The forward relief's assumptions and limits (#5837; a5e2e2ef's S-b, N-a to N-d).**
+  Chain hops are never excluded (S-b): F2' allows each hop's reader to exclude the records
+  of the narrow its persisted span is (X1, per hop), but the model counts every chain
+  record in L's `foreignHigh` (`ChainFwd`), and production does the same, at the cost of
+  at most a replay past a record the reader already applied;
+  `LeafLiveAdvanceCoreTests.ChainHopsAreNeverExcluded` pins it, so a later exclusion comes
+  back to the model first. `EvictTag` folds every tag's forward high into the floor every
+  reader counts (N-c), where production's table folds only the evicted tag's, a subset,
+  so the model's floor over-approximates. `ReadPositionHonest`, `SnapshotHonest` and
+  `NoTrimPastAcked` skip a donor's forward of a key L no longer owns (N-b), which is sound
+  only because the sibling that owns the key applies it and pins the WAL until it does
+  (condition (c) of the split's transfer); `ForwardHonest` and `SnapshotForwardHonest`
+  check the forwards L does own. `StaleHighExcludesReceiverTag` holds while the WAL
+  shard's per-tag table holds the forward (N-a); after a WAL shard restart the table is
+  gone and `staleHigh` falls back to the start-head floor, which counts the receiver's own
+  forwards too, so the exclusion is a cost relief and the fallback only over-counts. A
+  reactivated reader excludes by the tag of its persisted narrow (N-d), read from durable
+  state that survives the link (`LeafNodeState`); a reader with no durable tag counts
+  every forward, which costs a replay and never passes a record.
+  Production symbols: `WalShardGrain.StaleHighLocked`, `LeafAppendEpochFence.PersistedNarrowTag`, `LeafNodeState`.
+
+- **The liveness property excludes a current activation that has fallen off the log.**
+  `NewbornPinEventuallyUsable` is discharged by `CurrentFellOffLog`: the GC trimmed an
+  entry the current activation must still replay. Production reaches that state through a
+  duplicate activation. The leaf's WAL pin is one per-leaf row merged monotonic-max
+  (`WalMaterialiserPinGrain`), so the duplicate's capture raises it past the current
+  activation's checkpoint and the GC trims past it. Production's response is the
+  existing #3477 path: the replay throws `LeafProjectionStaleException`, the warm rescue
+  (`BPlusLeafGrain.TryRescueWarmStaleLeafAsync`) declines, and the partition is latched
+  stale (`BPlusLeafGrain.LatchProjectionStaleDrive`). The latch
+  (`BPlusLeafGrain.IsPartitionStaleLatched`) refuses checkpoint hints and the live advance
+  until deactivation, and the reactivation rehydrates from the newer snapshot. No
+  progress is owed meanwhile. The path is driven end to end, with the real WAL store, pin
+  grain, snapshot storage and GC, by
+  `BPlusLeafGrainTests.A_duplicate_activations_pin_trims_the_current_activation_off_the_log_and_it_latches_stale`
+  (the latch, the refused hint and the refused live advance) and
+  `BPlusLeafGrainTests.A_reactivation_after_the_duplicate_trim_rehydrates_the_newer_snapshot_and_loses_no_key`
+  (every key of both activations served after the rehydrate). Disabling the latch turns
+  both red, and that red proof ran in CI: run 41693299334 failed all four
+  parameterised cases of those two tests. The latch's own detectors are
+  `BPlusLeafGrainTests.A_stale_latched_partition_never_live_advances`,
+  `BPlusLeafGrainTests.A_checkpoint_hint_does_not_advance_a_stale_latched_partition` and
+  `BPlusLeafGrainTests.A_latched_stale_leaf_still_faults_a_direct_drive_without_replaying`;
+  rehydrating from a newer snapshot is pinned by
+  `BPlusLeafGrainTests.Activation_rehydrates_cache_from_snapshot_when_offset_exceeds_checkpoint`
+  and `LeafSnapshotRehydrateIntegrationTests.Snapshot_capture_persists_blob_and_rehydrate_serves_keys_after_deactivation`.
+  Production symbols: `WalMaterialiserPinGrain`, `LeafProjectionStaleException`, `BPlusLeafGrain.TryRescueWarmStaleLeafAsync`, `BPlusLeafGrain.LatchProjectionStaleDrive`, `BPlusLeafGrain.IsPartitionStaleLatched`.
+- **CI does not check a purge's unclaimed survivor with both a hand-off window and a 10.2.0 silo.**
+  When the purge finds the born activation unclaimed, it may claim afterwards as the
+  re-created incarnation's. That slice with every other environment of `Recreate` was
+  checked locally and is clean at 8,913,193 distinct states (232 seconds), but it is over
+  the 5M-state case budget, and cannot be cut further by
+  scenario: splitting it by whether the window opens, or the silo appends, before or
+  after the purge, or by whether the duplicate exists at the purge, leaves each half at
+  6.5M to 7.5M, because those reachable states coincide whatever the order of the
+  steps. It is checked in two halves instead: `RecreateSurvivor` (4,638,713 states) gives
+  the survivor the hand-off window without the silo, and `RecreateSurvivorMixed`
+  (1,622,161) gives it the silo's unstamped append without the window. What the
+  survivor adds to the purge - its claim after it, its own appends, and the claim head,
+  close heads and reported unstamped offsets it must read before it arms - meets each
+  of those environments in one of them. Only an interleaving needing a foreign record
+  and the silo's append at once, around the survivor's claim, is left to the local check;
+  the claimed purge (`Recreate`) checks that interleaving in CI for every other activation.
+  No production symbol: a model-budget scoping of which environments one configuration combines, not a production mechanism.
+- **Production holds the advance in more cases than `Armed`.** The model arms on the
+  design's six conditions. Production also holds the advance while a saga prepare is
+  pending, while another replay or a warm rescue is in flight, while the partition is
+  latched stale, while the leaf may share keys with another live leaf (no shard index, a
+  rangeless leaf with siblings, a suspected orphan), while the storage provider is not
+  known to enforce ETags, and while one advance is already deciding. Each only holds the
+  advance, so the model over-approximates production here.
+  Production symbols: `LeafLiveAdvanceCore.IsQuiescent`, `BPlusLeafGrain.IsLiveAdvanceOverlapExcluded`, `BPlusLeafGrain.IsLiveAdvanceQuiescent`, `GrainStorageFencingCheck`.
+- **The marker read is atomic with the advance.** Production reads the leaf's marker and
+  its shard root's view fresh, after snapshotting its own appends, and then stamps the
+  target; a hand-off that opens between the read and the stamp allocates only above every
+  own append the snapshot holds. That holds because the snapshot
+  (`BPlusLeafGrain.SnapshotLiveAdvanceCandidates`) is taken synchronously before the
+  marker read is awaited, every target is capped at the snapshot's own high offset, and the
+  arming view (`LeafAppendEpochFence.TryGetArmingView`) is read after the marker, so only
+  fresher. The model reads the marker in the step that advances, so it cannot express that
+  order. The detector
+  `BPlusLeafGrainTests.A_hand_off_opening_during_the_marker_read_cannot_carry_the_advance_past_its_foreign_record`
+  (#5768) pins it: a hand-off opens while
+  the marker read is in flight, allocates a foreign record, and an own append lands above
+  it, and the advance must stay below that record. Taking the snapshot after the read turns
+  it red. The design's `FrozenView`, a superseded activation that keeps the marker
+  state it last saw, is not carried: production reads
+  fresh on every tick, and a superseded activation never arms at all, because
+  `LeafAppendEpochFence.TryGetArmingView` answers false once it is stale. The model's
+  `Armed` still lets a stale but claimed activation arm, a safe over-approximation.
+  Production symbols: `BPlusLeafGrain.TryAdvanceLiveCheckpointAsync`, `BPlusLeafGrain.ReadLiveAdvanceHandOffAsync`, `ShardRootGrain.GetLiveAdvanceViewAsync`, `BPlusLeafGrain.SnapshotLiveAdvanceCandidates`, `LeafAppendEpochFence.TryGetArmingView`.
+- **Refusals that allocate nothing.** A definite refusal - a self-fenced append, a stale
+  generation, a clock-floor refusal - leaves no own record, and production releases its
+  tracker count. Here an own append is always allocated, so the release is not modelled;
+  a refusal released wrongly would be an apply the tracker never saw.
+  Production symbols: `BPlusLeafGrain.DrainRefusedUnallocatedAppends`, `LeafAppendEpochFence.TakeRefusedUnallocated`.
+- **One partition, one leaf, two activations.** Production advances each partition over
+  its own appends with its own claim head, close heads and watermark; the model has one.
+  Other leaves of the partition appear only as authors of entries L does not own, which
+  L's replay skips, and are not modelled. Each environment step happens at most once, and
+  the variants do not combine.
+  Production symbols: `BPlusLeafGrain._liveOwnHigh`.
+- **Re-claims.** Each activation claims once. Production re-claims after a WAL shard
+  restart unloads its entry, after a bump, and after its own hand-off close, each moving
+  the claim head up and disarming the activation until it replays to it. The model keeps
+  the first claim head across a restart, which arms more often, so the watermark's reset
+  is load-bearing here (`ReadPositionHonestRestartForgetsUnstamped`).
+  Production symbols: `LeafAppendEpochFence.OnUnloaded`, `LeafAppendEpochFence.FenceSplitAsync`.
+- **The duplicate's own snapshot and the purge's trim.** The re-created incarnation's
+  activation starts from the shared snapshot the purged one left, and the purge trims no
+  entry here; production clears the purged tree's snapshot and trims its WAL. Both only
+  remove entries the model keeps for the re-created incarnation to read.
+  Production symbols: `LeafSnapshotStorageGrain.MergeMonotone`, `LatticeWalGc.TrimShardAsync`.
+- **The unreachable leaf's tick re-check.** A leaf whose tick finds it unreachable stops
+  stamping for the activation (#5709); the model covers its appends as own unstamped appends
+  (`OwnAllocUnstamped`) and does not model reachability.
+  Production symbols: `LeafAppendEpochFence.StopStampingUnreachable`.
+- **The lazy arm's tracking and partitions are abstracted (#5833).** The WAL shard keeps
+  the top two distinct activations of a leaf by high offset, keyed by a per-activation
+  token; the model reads `foreignHigh` off the authors of every offset since the shard
+  last forgot, which is the value the top two return. One partition stands for each the
+  leaf arms at: a batched arm across partitions is a production cost decision, and a
+  partition the batch misses is an arm without a claim there
+  (`ReadPositionHonestArmWithoutClaim`). The arm's epoch claim is E's; the core models its
+  outcome. One stale donor write and one later receiver bound the key-moving environment.
+  Production symbols: `WalShardGrain.NoteLeafAuthorLocked`, `WalShardGrain.ForeignHighLocked`, `LeafAppendEpochFence.ArmAsync`, `BPlusLeafGrain.ArmForLiveAdvanceAsync`.

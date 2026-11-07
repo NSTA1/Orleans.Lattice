@@ -39,11 +39,15 @@ public interface IWalCursorRegistry
         => Task.FromResult<IReadOnlyList<string>?>(null);
 
     /// <summary>
-    /// Reports an HLC and a partition's inclusive durable checkpoint offset.
-    /// Offsets advance independently of HLCs and affect only advisory drain age;
-    /// existing causal vectors and blocked-floor pins are preserved. A checkpoint
-    /// of -1 has consumed no entries. Legacy implementations may forward only the
-    /// HLC, in which case offset-based drain age is explicitly unavailable.
+    /// Reports an HLC and a partition's inclusive applied checkpoint offset.
+    /// Offsets advance independently of HLCs and affect only advisory drain age:
+    /// the offset is never a retention floor, and a reporter may report a position
+    /// it has applied but not yet persisted. Existing causal vectors and
+    /// blocked-floor pins are preserved. A checkpoint of -1 is "no claim" - nothing
+    /// consumed, or a leaf born with no checkpoint at the partition - and the
+    /// drain-lag sampler counts it as unclaimed rather than as lag. Legacy
+    /// implementations may forward only the HLC, in which case offset-based drain
+    /// age is explicitly unavailable.
     /// </summary>
     Task ReportCheckpointAsync(
         string treeName,
@@ -53,6 +57,25 @@ public interface IWalCursorRegistry
         long checkpointOffset,
         CancellationToken cancellationToken = default)
         => ReportCursorAsync(treeName, consumerId, cursor, cancellationToken);
+
+    /// <summary>
+    /// Withdraws <paramref name="consumerId"/>'s checkpoint offset claim for
+    /// <paramref name="walPartition"/>, leaving its cursor and every other partition's offset
+    /// as they are. A consumer reports this when its checkpoint moved for a reason that is no
+    /// claim about undrained work - a resident leaf whose checkpoint the live advance moves
+    /// applies its own writes synchronously (issue #5981) - so offset-based drain age stops
+    /// measuring it against a position it no longer claims. The next
+    /// <see cref="ReportCheckpointAsync"/> claims an offset again. Advisory only, like the
+    /// offsets themselves: never a retention floor. Idempotent; a no-op for an unknown
+    /// consumer. The default implementation does nothing, which leaves a custom registry's
+    /// drain age as conservative as before.
+    /// </summary>
+    Task ClearCheckpointAsync(
+        string treeName,
+        string consumerId,
+        int walPartition,
+        CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
 
     /// <summary>
     /// Reports the current cursor position for <paramref name="consumerId"/>

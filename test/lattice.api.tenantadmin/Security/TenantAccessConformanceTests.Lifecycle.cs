@@ -138,21 +138,33 @@ public sealed partial class TenantAccessConformanceTests
 
         Assert.That(afterRemoval, Is.Null, "the tenant admin sees the rule gone");
 
-        IReadOnlyList<EntryRevision> history = [];
+        // The policy tree's durable history view is eventually consistent, and its
+        // maintainer applies the revision rows of one drain batch concurrently (they
+        // are distinct view keys), so the Delete row can be readable before the Set
+        // row when both land in one batch (#5688). Wait for the trail to converge on
+        // both, then assert their order; a missing Set still fails at the deadline.
+        EntryHistoryPage history = new();
         await TestPoll.UntilAsync(
             async () =>
             {
                 history = await _fixture.RuleHistoryAsync(orders, fullId);
-                return history.Any(r => r.Kind == HistoryRowKind.Delete);
+                return history.Revisions.Any(r => r.Kind == HistoryRowKind.Delete)
+                    && history.Revisions.Any(r => r.Kind == HistoryRowKind.Set);
             },
-            "the policy tree's per-key history records the break-glass delete",
+            "the policy tree's per-key history records both the rule's write and its break-glass delete",
             Deadline);
 
-        var kinds = history.Select(r => r.Kind).ToList();
-        Assert.That(
-            kinds.IndexOf(HistoryRowKind.Set),
-            Is.GreaterThanOrEqualTo(0).And.LessThan(kinds.LastIndexOf(HistoryRowKind.Delete)),
-            "the rule's audit trail shows its write and then its removal");
+        var kinds = history.Revisions.Select(r => r.Kind).ToList();
+        Assert.Multiple(() =>
+        {
+            Assert.That(history.Source, Is.EqualTo(EntryHistorySource.View),
+                "the audit trail is read from the policy tree's durable history view, not a best-effort log window");
+            Assert.That(history.Truncated, Is.False);
+            Assert.That(
+                kinds.IndexOf(HistoryRowKind.Set),
+                Is.GreaterThanOrEqualTo(0).And.LessThan(kinds.LastIndexOf(HistoryRowKind.Delete)),
+                "the rule's audit trail shows its write and then its removal");
+        });
     }
 
     private async Task<IReadOnlyList<string>> TenantRuleIdsAsync(string rulePrefix)

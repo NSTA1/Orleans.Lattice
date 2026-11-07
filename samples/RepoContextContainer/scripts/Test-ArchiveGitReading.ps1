@@ -64,8 +64,19 @@ param()
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+# Progress markers go to stderr, which the gate captures but never parses, so a run
+# killed at its timeout says how far it got and when (#5783). [Console]::Error is
+# used rather than Write-Error, which would terminate under the Stop preference.
+$script:_Clock = [System.Diagnostics.Stopwatch]::StartNew()
+function _Progress {
+	param([Parameter(Mandatory)] [string] $Step)
+	[Console]::Error.WriteLine(("progress +{0} ms: {1}" -f $script:_Clock.ElapsedMilliseconds, $Step))
+}
+_Progress 'started'
+
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 . (Join-Path $here '_provenance.ps1')
+_Progress 'loaded _provenance.ps1'
 
 # ---------------------------------------------------------------------------
 # The production reader under test, Get-ArchiveGitReading, lives in
@@ -149,6 +160,7 @@ if ($_missing.Count -gt 0) {
 	throw ("the extracted functions call production functions that were NOT extracted: " +
 		($_missing -join ', ') + ". Add them to `$_extractedNames in this file.")
 }
+_Progress 'extracted the production reader and checked its closure'
 
 # ---------------------------------------------------------------------------
 # The pinned constants are read out of the pure suite rather than re-declared,
@@ -172,6 +184,7 @@ function Get-PinnedConstant {
 $pinnedMiss = Get-PinnedConstant -Name '_gitMissStderr'
 $pinnedOrphan = Get-PinnedConstant -Name '_gitOrphanStderr'
 $pinnedCorrupt = Get-PinnedConstant -Name '_gitCorruptStderr'
+_Progress 'read the pinned constants'
 
 # The load-bearing substrings, matched with .Contains (literal) so the
 # parentheses need no regex escaping. These are what the recognition turns on.
@@ -214,6 +227,7 @@ function _Assert {
 
 function _Section {
 	param([Parameter(Mandatory)] [string] $Name)
+	_Progress $Name
 	Write-Host ''
 	Write-Host $Name -ForegroundColor Cyan
 }
@@ -222,8 +236,13 @@ function _Section {
 # git must be present. A silent skip on an absent git would be counted as
 # coverage, so absence is announced loudly and exits with a distinct code the
 # gate reads as "ignored", never as "passed".
+#
+# -CommandType Application confines the lookup to PATH. Without it Get-Command
+# also resolves cmdlets and functions, which can mean enumerating every module
+# on PSModulePath, an unbounded cost on a host with many installed (#5783).
 # ---------------------------------------------------------------------------
-$gitPresent = $null -ne (Get-Command git -ErrorAction SilentlyContinue)
+$gitPresent = $null -ne (Get-Command git -CommandType Application -ErrorAction SilentlyContinue)
+_Progress ("located git: {0}" -f $gitPresent)
 if (-not $gitPresent) {
 	Write-Host ''
 	Write-Host 'SKIPPED: git was not found on PATH.' -ForegroundColor Yellow
@@ -256,6 +275,7 @@ function Invoke-Git {
 function New-GitRepo {
 	param([switch] $Detached, [switch] $WithLinkedWorktree)
 
+	_Progress ("building a repository (detached: {0}, linked worktree: {1})" -f [bool] $Detached, [bool] $WithLinkedWorktree)
 	$dir = New-ScratchDir
 	Register-Scratch $dir
 	Invoke-Git -Dir $dir -GitArgs @('init', '-q') | Out-Null
@@ -277,18 +297,22 @@ function New-GitRepo {
 }
 
 # Run `git rev-parse --show-toplevel` exactly as the reader's probe does, under
-# a pinned C locale, and return the raw reading. This is the conformance arm's
-# own probe; it must match the locale the production reader uses or it compares
-# against a different git.
+# a pinned C locale and with discovery crossing filesystem boundaries, and
+# return the raw reading. This is the conformance arm's own probe; it must match
+# the environment the production reader uses or it compares against a different
+# git. Without the boundary pin a temp directory on its own filesystem reads as
+# git's mount-point form rather than the genuine miss (issue #5785).
 function Get-ToplevelProbe {
 	param([Parameter(Mandatory)] [string] $Dir)
 
 	$savedLcAll = $env:LC_ALL
 	$savedLang = $env:LANG
+	$savedAcrossFilesystem = $env:GIT_DISCOVERY_ACROSS_FILESYSTEM
 	$stderrFile = [System.IO.Path]::GetTempFileName()
 	try {
 		$env:LC_ALL = 'C'
 		$env:LANG = 'C'
+		$env:GIT_DISCOVERY_ACROSS_FILESYSTEM = '1'
 		$out = & git -C $Dir rev-parse --show-toplevel 2>$stderrFile
 		$code = $LASTEXITCODE
 		$err = [string] (Get-Content -Raw -LiteralPath $stderrFile -ErrorAction SilentlyContinue)
@@ -297,6 +321,7 @@ function Get-ToplevelProbe {
 	finally {
 		$env:LC_ALL = $savedLcAll
 		$env:LANG = $savedLang
+		$env:GIT_DISCOVERY_ACROSS_FILESYSTEM = $savedAcrossFilesystem
 		Remove-Item -LiteralPath $stderrFile -Force -ErrorAction SilentlyContinue
 	}
 }
@@ -407,6 +432,7 @@ _Assert -Name 'reader: genuine miss is Exists=true, Examinable=true, Toplevel em
 	-Condition ($rMiss.Exists -and $rMiss.Examinable -and [string]::IsNullOrWhiteSpace($rMiss.Toplevel)) `
 	-Detail ("exists={0} examinable={1} toplevel=[{2}]" -f $rMiss.Exists, $rMiss.Examinable, $rMiss.Toplevel)
 
+
 # --- Orphaned linked worktree: NOT examinable under either supported diagnostic.
 #     Treating the bare phrase as a genuine miss is the fail-open to prevent.
 $rOrphan = Get-ArchiveGitReading -Path $orphanBuild.Worktree
@@ -430,6 +456,68 @@ _Assert -Name 'reader: healthy primary checkout is Examinable=true with a toplev
 _Assert -Name 'reader: a primary checkout is NOT reported as a linked worktree' `
 	-Condition (-not $rHealthy.IsLinkedWorktree) `
 	-Detail ("isLinkedWorktree={0}" -f $rHealthy.IsLinkedWorktree)
+
+# --- Filesystem boundary (issue #5785). On a host whose path sits on its own
+#     filesystem, git's default discovery stops at the mount and emits the
+#     mount-point form without searching above it. The predicate rightly
+#     refuses that form, so the reader must make git search past the boundary.
+#     Most hosts cannot build the state, so `git` is shadowed here by a function
+#     that answers with the exact boundary text whenever the reader has NOT set
+#     GIT_DISCOVERY_ACROSS_FILESYSTEM=1, and defers to the real git when it has.
+#     Two archives are read this way, as if each sat on its own mount:
+#       - one outside every checkout, which must be examinable and NOT refused;
+#       - one INSIDE a checkout, which must still be refused AS a checkout. A
+#         boundary stop must never hide the checkout above it, so this fails
+#         both if the reader's pin is dropped (the reading turns unexaminable)
+#         and if the predicate is relaxed to accept the boundary form.
+$insideCheckoutDir = Join-Path $healthyDir 'memory-archive'
+New-Item -ItemType Directory -Path $insideCheckoutDir | Out-Null
+$realGit = (Get-Command git -CommandType Application | Select-Object -First 1).Source
+$shellPath = (Get-Process -Id $PID).Path
+$script:_ShadowGitCalls = 0
+function git {
+	$script:_ShadowGitCalls++
+	if ($env:GIT_DISCOVERY_ACROSS_FILESYSTEM -eq '1') {
+		& $realGit @args
+		return
+	}
+	& $shellPath -NoProfile -NonInteractive -Command ("[Console]::Error.WriteLine('fatal: not a git repository (or any parent up to mount point /)'); " +
+		"[Console]::Error.WriteLine('Stopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).'); exit 128")
+}
+try {
+	$rBoundaryOutside = Get-ArchiveGitReading -Path $missDir
+	$rBoundaryInside = Get-ArchiveGitReading -Path $insideCheckoutDir
+}
+finally {
+	Remove-Item -LiteralPath Function:\git
+}
+
+_Assert -Name 'PRECONDITION the reader ran both probes through the shadowed git' `
+	-Condition ($script:_ShadowGitCalls -ge 2) `
+	-Detail ("shadow calls={0}" -f $script:_ShadowGitCalls)
+
+_Assert -Name 'reader: past a filesystem boundary, a path outside every checkout is Examinable=true' `
+	-Condition ($rBoundaryOutside.Exists -and $rBoundaryOutside.Examinable -and [string]::IsNullOrWhiteSpace($rBoundaryOutside.Toplevel)) `
+	-Detail ("exists={0} examinable={1} toplevel=[{2}]" -f $rBoundaryOutside.Exists, $rBoundaryOutside.Examinable, $rBoundaryOutside.Toplevel)
+
+$outsideViolations = (Get-ArchiveDurabilityViolation -ArchiveDestination '/memory-archive' -ArchiveSource $missDir `
+		-ArchiveMountType 'bind' -GitToplevel $rBoundaryOutside.Toplevel -IsLinkedWorktree $rBoundaryOutside.IsLinkedWorktree `
+		-SourceExistsOnHost $rBoundaryOutside.Exists -GitReadingExaminable $rBoundaryOutside.Examinable)
+_Assert -Name 'archive check: an archive on its own mount, outside every checkout, is NOT refused' `
+	-Condition ($outsideViolations.Count -eq 0) `
+	-Detail ($outsideViolations -join ' | ')
+
+_Assert -Name 'reader: past a filesystem boundary, a path inside a checkout reports that checkout as its toplevel' `
+	-Condition ($rBoundaryInside.Examinable -and -not $rBoundaryInside.IsLinkedWorktree `
+			-and ($rBoundaryInside.Toplevel -replace '\\', '/') -eq ($rHealthy.Toplevel -replace '\\', '/')) `
+	-Detail ("examinable={0} toplevel=[{1}] expected=[{2}]" -f $rBoundaryInside.Examinable, $rBoundaryInside.Toplevel, $rHealthy.Toplevel)
+
+$insideViolations = (Get-ArchiveDurabilityViolation -ArchiveDestination '/memory-archive' -ArchiveSource $insideCheckoutDir `
+		-ArchiveMountType 'bind' -GitToplevel $rBoundaryInside.Toplevel -IsLinkedWorktree $rBoundaryInside.IsLinkedWorktree `
+		-SourceExistsOnHost $rBoundaryInside.Exists -GitReadingExaminable $rBoundaryInside.Examinable)
+_Assert -Name 'archive check: an archive on its own mount INSIDE a checkout is still refused, as a checkout' `
+	-Condition ($insideViolations.Count -eq 1 -and $insideViolations[0].Contains('inside the GIT CHECKOUT')) `
+	-Detail ($insideViolations -join ' | ')
 
 # --- Detached HEAD: the corpus is pinned detached and this path runs against
 #     it, so it must read exactly like an attached checkout.
@@ -463,9 +551,11 @@ _Assert -Name 'reader: a non-existent path is Exists=FALSE and Examinable=FALSE'
 #     these two red.
 $savedLcAll = $env:LC_ALL
 $savedLang = $env:LANG
+$savedAcrossFilesystem = $env:GIT_DISCOVERY_ACROSS_FILESYSTEM
 try {
 	$env:LC_ALL = 'argr-sentinel-lc'
 	$env:LANG = 'argr-sentinel-lang'
+	$env:GIT_DISCOVERY_ACROSS_FILESYSTEM = 'argr-sentinel-fs'
 	$null = Get-ArchiveGitReading -Path $healthyDir
 	_Assert -Name 'reader: restores the caller LC_ALL after pinning C for its git call' `
 		-Condition ($env:LC_ALL -eq 'argr-sentinel-lc') `
@@ -473,10 +563,14 @@ try {
 	_Assert -Name 'reader: restores the caller LANG after pinning C for its git call' `
 		-Condition ($env:LANG -eq 'argr-sentinel-lang') `
 		-Detail ("LANG after call=[{0}]" -f $env:LANG)
+	_Assert -Name 'reader: restores the caller GIT_DISCOVERY_ACROSS_FILESYSTEM after pinning it for its git call' `
+		-Condition ($env:GIT_DISCOVERY_ACROSS_FILESYSTEM -eq 'argr-sentinel-fs') `
+		-Detail ("GIT_DISCOVERY_ACROSS_FILESYSTEM after call=[{0}]" -f $env:GIT_DISCOVERY_ACROSS_FILESYSTEM)
 }
 finally {
 	$env:LC_ALL = $savedLcAll
 	$env:LANG = $savedLang
+	$env:GIT_DISCOVERY_ACROSS_FILESYSTEM = $savedAcrossFilesystem
 }
 
 # ---------------------------------------------------------------------------

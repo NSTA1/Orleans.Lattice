@@ -1,0 +1,13 @@
+# #5837, the claimless advance and the split hint.
+MODULE: ReadPositionHonestResolveHeadBelowStaleHigh
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: resolving a deferred close records the staleHigh itself as the head, one below the stale donor's record
+BOUNDS: WithFreeAdvance = TRUE, WithKeyMove = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
+
+--- FIND
+    /\ hoClosedAt' = Max2(hoClosedAt, IF FreeOn THEN sHi + 1 ELSE next)
+--- REPLACE
+\* MUTATION: the head is the staleHigh, not one above it.
+    /\ hoClosedAt' = Max2(hoClosedAt, IF FreeOn THEN sHi ELSE next)
+--- END

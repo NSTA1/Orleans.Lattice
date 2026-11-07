@@ -642,6 +642,18 @@ function Test-ProvenancePathIsAbsolute {
 	Verified against git on all three inputs: a genuine miss emits the
 	parenthetical; an orphaned linked worktree emits the bare form only; a corrupt
 	`.git` file emits "invalid gitfile format" and matches neither.
+
+	The FILESYSTEM-BOUNDARY form is deliberately NOT recognised either:
+
+		fatal: not a git repository (or any parent up to mount point /)
+		Stopping at filesystem boundary (GIT_DISCOVERY_ACROSS_FILESYSTEM not set).
+
+	git emits it when discovery stops at a mount without searching the
+	directories above, so it does not mean "outside every checkout": a
+	filesystem mounted inside a checkout reads exactly this way. The reader
+	avoids it by setting GIT_DISCOVERY_ACROSS_FILESYSTEM=1 for its probe
+	(issue #5785), which makes git walk to the real root; should the form ever
+	reach this predicate, it reports unexaminable, the safe direction.
 #>
 function Test-GitReadingIsExaminable {
 	[CmdletBinding()]

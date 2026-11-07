@@ -1,0 +1,13 @@
+# #5833. foreignHigh attributes every PreArm append to the claimant, so another
+# activation's PreArm append is never counted. It edits an operator, not an action.
+MODULE: ReadPositionHonestForeignHighIgnoresOtherToken
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: foreignHigh attributes every PreArm append to the claimant
+
+--- FIND
+    Max({startHead - 1, evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts \ {a}}
+--- REPLACE
+\* MUTATION: PreArm appends are taken as the claimant's own.
+    Max({startHead - 1, evFloor} \cup {o \in Offs : o >= TrackStart /\ o \notin preArm /\ author[o] \in Acts \ {a}}
+--- END

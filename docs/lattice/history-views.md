@@ -199,6 +199,49 @@ data came from and whether it is complete:
 | `Truncated` | Always `false` on the `View` path - the timeline is never cut off below by WAL garbage collection; it is bounded by the configured retention age and by any rebuild that collapsed it, including a rebuild after the view fell behind a WAL retention trim (see [the accumulative guard](#the-accumulative-guard) and [WAL retention bounds the timeline](#limitations)). `true` on the `WalWindow` fallback when garbage collection has trimmed older entries. |
 | `EarliestAvailable` | On a truncated `WalWindow` read, the oldest hybrid-logical-clock still readable; `HybridLogicalClock.Zero` otherwise. |
 
+### Visibility and ordering
+
+The history view is a materialised view, so it is eventually consistent with its
+source, and that includes the order in which one key's revisions become
+readable. A page is ordered by revision clock, but it is not guaranteed to hold
+every revision older than its newest one:
+
+- The maintainer applies the revisions of one drain pass concurrently, so two
+  revisions of the same key written close together, such as a set and the delete
+  that follows it, can become readable in either order.
+- A revision can be applied with a clock older than one the view has already
+  recorded: a write that keeps an older clock (`ILattice.MergeAsync`), a write
+  replicated from a peer region that arrives after a newer local one, or a
+  committed atomic batch, which is applied after the same pass's ordinary writes.
+
+Short of the rebuilds described under [the accumulative guard](#the-accumulative-guard),
+every revision appears once the maintainer applies it, so a missing revision below
+the newest one means only that it has not been applied yet. To read a timeline that holds every
+revision committed before a point, call `WaitForSourceHeadAsync` on the history
+view's handle first, as [Reading your own writes](materialised-views.md#reading-your-own-writes)
+describes, then read:
+
+```csharp verify
+using Microsoft.Extensions.DependencyInjection;
+
+var factory = client.ServiceProvider.GetRequiredService<ILatticeViewFactory>();
+ILatticeView history = await factory.GetAsync("orders-history", cancellationToken)
+    ?? throw new InvalidOperationException("History is not enabled.");
+
+// Wait until the view has applied every revision committed before this call.
+await history.WaitForSourceHeadAsync(TimeSpan.FromSeconds(5), cancellationToken);
+EntryHistoryPage settled = await tree.ScanEntryHistoryAsync(
+    "order-42", null, null, 100, null, cancellationToken);
+```
+
+For the same reason, a revision clock is not a resume cursor. An incremental
+reader that polls with `fromHlc` set just past the newest clock it has seen can
+permanently miss a revision that is applied later with an older clock. No clock
+marks the point below which a timeline is final, so either follow the
+[live feed](change-history.md#where-a-timeline-comes-from) for new revisions, or
+re-read the timeline from a clock far enough back to cover your replication lag
+and de-duplicate by revision clock.
+
 ### Fallback without a history view
 
 For a tree that has **not** opted into a history view, the same method falls back,

@@ -1,0 +1,14 @@
+# #5833. The lazy arm drops its replay to foreignHigh: the activation passes an append
+# another activation of the leaf made before the arm. It edits the Armed predicate, not
+# an action, so it names no perturbed action.
+MODULE: ReadPositionHonestArmWithoutForeignHighReplay
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the lazy arm skips the replay to foreignHigh
+
+--- FIND
+    /\ IF WithPreArm THEN rp[a] >= seenP[a] ELSE rp[a] >= claimHead[a] - 1
+--- REPLACE
+\* MUTATION: no replay to foreignHigh.
+    /\ IF WithPreArm THEN TRUE ELSE rp[a] >= claimHead[a] - 1
+--- END

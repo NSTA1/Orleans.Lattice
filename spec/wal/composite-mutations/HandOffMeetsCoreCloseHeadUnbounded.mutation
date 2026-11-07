@@ -1,0 +1,25 @@
+# Pairs with HandOffMeetsCoreClose (H -> C). HandOffBound is dropped, so a close records a
+# head at or below a foreign append of its window.
+MODULE: HandOffMeetsCoreCloseHeadUnbounded
+TARGET: HandOffMeetsCoreClose
+CLASS: Invariant
+SUMMARY: HandOffBound is dropped
+
+--- FIND
+Guarantees ==
+    /\ ClaimHeadCoversPriorAppends
+    /\ RaisedEpochUnique
+    /\ StaleEpochNeverAppends
+    /\ HandOffBound
+    /\ DeferredHeadAtRaisedGeneration
+    /\ StraddlerBelowInit
+    /\ BulkHintBound
+--- REPLACE
+Guarantees ==
+    /\ ClaimHeadCoversPriorAppends
+    /\ RaisedEpochUnique
+    /\ StaleEpochNeverAppends
+    /\ DeferredHeadAtRaisedGeneration
+    /\ StraddlerBelowInit
+    /\ BulkHintBound
+--- END

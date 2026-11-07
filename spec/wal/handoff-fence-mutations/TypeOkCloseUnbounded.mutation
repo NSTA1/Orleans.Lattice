@@ -1,0 +1,20 @@
+# Pairs with TypeOK. The close's bound on the bump is dropped, so a close at the
+# top of the generation domain bumps past it. The bound stands for the finite
+# generations of the model; the mutation checks that the domain bound is real.
+MODULE: TypeOkCloseUnbounded
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: the close bumps the generation with no room check and leaves the generation domain
+PERTURBS: Close
+
+--- FIND
+    /\ hoOpen
+    /\ ~closing
+    /\ fEpoch < MaxEpoch
+    /\ fAdmit' = FALSE
+--- REPLACE
+    /\ hoOpen
+    /\ ~closing
+\* MUTATION: no bound on the bump.
+    /\ fAdmit' = FALSE
+--- END

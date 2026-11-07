@@ -29,9 +29,11 @@ internal sealed class GrainStorageFencingCheck(
 {
     /// <summary>
     /// The verdict of the probe this silo ran, or <see langword="null"/> when it
-    /// has not run (not yet started, or disabled).
+    /// has not run (not yet started, or disabled). A leaf arms its live checkpoint
+    /// advance only on <see cref="GrainStorageFencingVerdict.Fenced"/> (epic #5605).
     /// </summary>
-    internal GrainStorageFencingProbeResult? LastResult { get; private set; }
+    /// <remarks>Settable internally as a test seam.</remarks>
+    internal GrainStorageFencingProbeResult? LastResult { get; set; }
 
     /// <inheritdoc />
     public void Participate(ISiloLifecycle lifecycle)

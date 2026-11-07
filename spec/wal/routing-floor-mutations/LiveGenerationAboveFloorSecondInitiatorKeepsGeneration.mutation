@@ -1,0 +1,17 @@
+# Another shard root's re-created incarnation initialises without seeding its
+# floor plus one: it keeps the generation it cached, the purged incarnation's,
+# which the purge or its own catch-up has already covered with the floor. Its
+# generation is at or below its floor, so the WAL refuses every claim it makes.
+# The re-creation must start above the floor on every initialisation path.
+MODULE: LiveGenerationAboveFloorSecondInitiatorKeepsGeneration
+TARGET: LiveGenerationAboveFloor
+CLASS: Invariant
+SUMMARY: another shard root's first initialisation keeps its cached generation
+PERTURBS: S2Init
+
+--- FIND
+        /\ gen' = [gen EXCEPT !["s2"] = rf2 + 1]
+--- REPLACE
+\* MUTATION: the cached generation is kept.
+        /\ gen' = gen
+--- END

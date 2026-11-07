@@ -1,0 +1,14 @@
+# Pairs with BulkHintBound. A replay step that advances the read position
+# without applying the record.
+MODULE: BulkHintBoundReplaySkipsRecord
+TARGET: BulkHintBound
+CLASS: Invariant
+SUMMARY: the appended leaf advances its read position past a record without applying it
+PERTURBS: Replay
+
+--- FIND
+    /\ heldN' = heldN \cup {rpN + 1}
+--- REPLACE
+\* MUTATION: the record is not applied.
+    /\ heldN' = heldN
+--- END

@@ -1,0 +1,35 @@
+{
+  "mutations": "handoff-fence-mutations",
+  "refinement": "HandOffFenceRefinement.md",
+  "nonBehaviouralActions": [
+    "Stutter"
+  ],
+  "counts": {
+    "invariants": 6,
+    "properties": 1,
+    "actions": 37,
+    "mutations": 48,
+    "behaviourRows": 42,
+    "distinctStates": 8826
+  },
+  "variants": {
+    "WideWindows": {
+      "distinctStates": 47000
+    },
+    "StaleDonor": {
+      "distinctStates": 574540
+    },
+    "StaleDonorPreArm": {
+      "distinctStates": 2651431
+    },
+    "StaleDonorRearmRace": {
+      "distinctStates": 64825
+    },
+    "DeferredClose": {
+      "distinctStates": 3836
+    },
+    "StaleDonorDonorFence": {
+      "distinctStates": 2294406
+    }
+  }
+}

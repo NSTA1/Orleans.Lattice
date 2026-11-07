@@ -1,0 +1,16 @@
+# #5866 B1 (a5e2e2ef, #5866 comment 6667634946): staleHigh counts a stale donor's routed record
+# whatever generation admitted it while the close is pending, not only generations at or below
+# the close's admitted one (LeafAuthors.StaleHigh's HighAtOrBelow filter).
+MODULE: ReadPositionHonestStaleHighFiltersByAdmittedGeneration
+TARGET: ReadPositionHonest
+CLASS: Invariant
+PERTURBS: StaleRouteAlloc
+SUMMARY: another split's link raises the shard root's generation between the donor's close and L's link; a stale duplicate donor's write for a moved key is admitted under the raised generation, which staleHigh filters out, and L free-advances past it unapplied
+BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithKeyMove = TRUE, MaxWindows = 1, WithMixedVersion = FALSE, WithDuplicate = FALSE, WithLatch = TRUE, WithOtherLinkRaise = TRUE
+
+--- FIND
+    /\ sHi' = IF FreeOn THEN next ELSE sHi
+--- REPLACE
+\* MUTATION: staleHigh counts only generations at or below the close's admitted one.
+    /\ sHi' = IF FreeOn /\ (IF moved THEN pendGen - 1 ELSE gD) <= cGen THEN next ELSE sHi
+--- END

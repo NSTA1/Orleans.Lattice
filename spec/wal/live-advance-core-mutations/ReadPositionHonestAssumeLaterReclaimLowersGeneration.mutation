@@ -1,0 +1,18 @@
+# #5833, C5. Weakens the assumption that a re-claim max-merges the loaded generation:
+# another receiver's arm leaves it below the generation L's key-moving close raised, so
+# the stale donor's write under the old generation is admitted after L armed.
+MODULE: ReadPositionHonestAssumeLaterReclaimLowersGeneration
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: another receiver's re-claim lowers the loaded generation
+PERTURBS: OtherReceiverArm
+BOUNDS: WithKeyMove = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
+
+--- FIND
+    /\ gL' = gD + 1
+    /\ UNCHANGED <<pend, pendGen, moved, dUsed, reclaims, strayReclaims, cGen, lw>>
+--- REPLACE
+\* MUTATION: the re-claim sets the loaded generation back to the first one.
+    /\ gL' = 1
+    /\ UNCHANGED <<pend, pendGen, moved, dUsed, reclaims, strayReclaims, cGen, lw>>
+--- END

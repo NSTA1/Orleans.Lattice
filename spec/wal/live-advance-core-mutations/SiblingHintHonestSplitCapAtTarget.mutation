@@ -1,0 +1,19 @@
+# #5851 O2c (a5e2e2ef, #5851 comment 6665050221): the split's cap fallback hands the sibling
+# the donor's read frontier, and only after the drain of the donor's own appends.
+MODULE: SiblingHintHonestSplitCapAtTarget
+TARGET: SiblingHintHonest
+CLASS: Invariant
+SUMMARY: the cap hands the sibling the donor's free-advance target as its hint, before the advance to it has committed, so records between the read frontier and the target are not in the rows
+PERTURBS: SplitCap
+BOUNDS: WithMixedVersion = FALSE, WithFreeAdvance = TRUE, WithSplitHint = TRUE, WithDuplicate = FALSE, WithViewOverlap = TRUE, WithSplitCap = TRUE
+
+--- FIND
+    /\ sibHint' = rp[a]
+    /\ sibRows' = {o \in cache[a] : o <= rp[a]}
+    /\ capHint' = rp[a]
+--- REPLACE
+\* MUTATION: the cap reads the target, not the committed frontier.
+    /\ sibHint' = Max2(rp[a], ft[a])
+    /\ sibRows' = {o \in cache[a] : o <= Max2(rp[a], ft[a])}
+    /\ capHint' = Max2(rp[a], ft[a])
+--- END

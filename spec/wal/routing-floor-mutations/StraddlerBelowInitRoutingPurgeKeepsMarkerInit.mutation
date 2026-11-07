@@ -1,0 +1,18 @@
+# The purge deletes L's marker but L's marker state still reads initialised
+# (#5668): an absent marker is read as closed, against the hand-off fence's rule 2.
+# A re-created leaf then arms with no close above the purged incarnation's
+# appends. Moved from the design's ReadPositionHonestRoutingPurgeKeepsMarkerInit.
+MODULE: StraddlerBelowInitRoutingPurgeKeepsMarkerInit
+TARGET: StraddlerBelowInit
+CLASS: Invariant
+SUMMARY: a purge that deletes a leaf's marker leaves its marker state initialised
+PERTURBS: Purge
+
+--- FIND
+    /\ closedAt' = 0
+    /\ mInit' = FALSE
+--- REPLACE
+    /\ closedAt' = 0
+\* MUTATION: the deleted marker still reads initialised.
+    /\ mInit' = TRUE
+--- END

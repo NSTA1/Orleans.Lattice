@@ -1,0 +1,18 @@
+# The shared snapshot is replaced by any activation's capture, not only one that
+# raises its coverage. A duplicate behind the GC floor captures, and the trimmed,
+# acknowledged entries are in no snapshot.
+MODULE: NoTrimPastAckedCaptureRegresses
+TARGET: NoTrimPastAcked
+CLASS: Invariant
+SUMMARY: a capture may lower the shared snapshot's coverage
+PERTURBS: Capture
+
+--- FIND
+    /\ a \in up
+    /\ rp[a] > snapCov
+    /\ snapCov' = rp[a]
+--- REPLACE
+    /\ a \in up
+\* MUTATION: the coverage may regress.
+    /\ snapCov' = rp[a]
+--- END

@@ -30,7 +30,7 @@ public sealed class U2Contract() : ChapterContract("U2")
         if (!ContosoSchema.SameAs(await schema.GetPolicyAsync(orders), ContosoSchema.OrdersRevised))
         {
             var remediation = await schema.StartRemediationAsync(orders, ContosoSchema.NegativeTotalToZero, ContosoSchema.OrdersBaseline);
-            await ContractWait.SucceededAsync("the negative-total remediation", () => schema.GetSchemaOperationStatusAsync(remediation.OperationId), OperationPatience);
+            await AwaitRemediationAsync(schema, remediation.OperationId, "the negative-total remediation");
             await schema.SetPolicyAsync(orders, ContosoSchema.OrdersRevised);
         }
 
@@ -46,6 +46,85 @@ public sealed class U2Contract() : ChapterContract("U2")
         await schema.ClearPolicyAsync(Names.Trees.FactoryOrdersArchive);
         await schema.ClearVersionConfigAsync(Names.Trees.FactoryOrdersArchive);
     }
+
+    /// <summary>
+    /// How long a remediation may go without its phase or scanned count moving. The driver
+    /// runs one slice at a time, each bounded under the 30 s grain call timeout, reports
+    /// progress after every slice, and fails the run after five consecutive slice timeouts
+    /// (<c>SchemaRemediationDriver.MaxConsecutiveSliceTimeouts</c>): three minutes without a
+    /// change is a remediation that has stopped, not a slow one.
+    /// </summary>
+    private static readonly TimeSpan RemediationStall = TimeSpan.FromMinutes(3);
+
+    /// <summary>
+    /// How long a remediation's backlog (its phase total less its completed values) may go
+    /// without reaching a new low. A build copies the source as it finds it, so live writes
+    /// to keys past its cursor grow the total while it runs; a build that keeps advancing
+    /// but never gains on them would pass the stall check for ever. Five minutes is several
+    /// times the slice cadence, so a converging build sets a new low well inside it.
+    /// </summary>
+    private static readonly TimeSpan RemediationConvergence = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// The hang guard on a remediation that keeps advancing and converging. It is not a
+    /// length estimate: the stall and convergence checks decide whether a remediation is
+    /// healthy, and this only stops one that would otherwise run into the leg's hang
+    /// timeout. The slowest healthy remediation observed on the contract estate, C1's
+    /// negative-total remediation of the restored orders (run 41771641475), needed about
+    /// 600 s to reach cutover while chasing live line-feed writes; twenty minutes is twice
+    /// that. A contract test may run for 50 minutes (the leg's hang budget,
+    /// <c>HANGS["contract"]</c> in <c>explorer-journeys-plan.py</c>): C3's prerequisites
+    /// up to C1's remediation took about 15 minutes there, so 15 + 20 + 8 (C1's
+    /// re-migration ceiling) + about 4 (C3 itself) is 47, inside it.
+    /// </summary>
+    private static readonly TimeSpan RemediationCeiling = TimeSpan.FromMinutes(20);
+
+    /// <summary>
+    /// Waits for a remediation to succeed while it advances and converges: it fails when
+    /// the operation's phase and scanned count stop moving for <see cref="RemediationStall"/>,
+    /// when its backlog sets no new low for <see cref="RemediationConvergence"/>, or at
+    /// <see cref="RemediationCeiling"/>, naming the trajectory it observed.
+    /// </summary>
+    /// <param name="schema">The Schema API.</param>
+    /// <param name="operationId">The remediation's operation id.</param>
+    /// <param name="what">The remediation, for messages.</param>
+    /// <param name="aliasWait">
+    /// How to judge the remediation's wait for another operation's alias reservation on its
+    /// tree; see <see cref="ContractWait.ExternalWait"/>. <see langword="null"/> when the
+    /// stall check alone applies.
+    /// </param>
+    public static Task AwaitRemediationAsync(
+        Orleans.Lattice.Api.Schema.Grpc.LatticeSchemaApiGrpcClient schema,
+        string operationId,
+        string what,
+        ContractWait.ExternalWait? aliasWait = null) =>
+        ContractWait.SucceededWhileAdvancingAsync(
+            what, () => schema.GetSchemaOperationStatusAsync(operationId), RemediationStall, RemediationCeiling,
+            convergence: RemediationConvergence, externalWait: aliasWait);
+
+    /// <summary>
+    /// How long a remediation may wait in <c>WaitingForAliasOperation</c> on one named holder of
+    /// its tree's alias. After a coordinated restore the peer re-seeds the tree, and the
+    /// re-seed's bootstrap copy reserves the alias for the whole copy: minutes on the contract
+    /// estate (more than eight on main, run 41806502191). Ten minutes lets a slow copy finish,
+    /// still leaves room under <see cref="RemediationCeiling"/>, and the timeout names the
+    /// holder so a copy that never ends is told apart from a remediation that stopped.
+    /// </summary>
+    public static readonly TimeSpan AliasWaitCeiling = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// The alias wait for a remediation of <paramref name="treeId"/>: the holder the harness can
+    /// name is the tree's resize or replication re-seed bootstrap copy, both of which run through
+    /// the tree's resize grain and reserve its alias.
+    /// </summary>
+    /// <param name="admin">The Tree Admin API.</param>
+    /// <param name="treeId">The remediated tree.</param>
+    public static ContractWait.ExternalWait AliasWaitOn(
+        Orleans.Lattice.Api.TreeAdmin.Grpc.LatticeTreeAdminApiGrpcClient admin, string treeId) =>
+        new("WaitingForAliasOperation", AliasWaitCeiling, async () =>
+            await admin.GetResizeStatusAsync(treeId) is { InProgress: true } resize
+                ? $"the resize or re-seed bootstrap copy of {treeId} (undo requested: {resize.UndoRequested})"
+                : null);
 
     /// <summary>
     /// A whole-tree migration saturates the journey estate (#5569): its own calls then time out

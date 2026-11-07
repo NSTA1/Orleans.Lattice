@@ -58,10 +58,22 @@ internal interface ILeafCursorReporter
         HybridLogicalClock cursor,
         CancellationToken cancellationToken);
 
-    /// <summary>Reports the inclusive persisted checkpoint independently of the applied HLC.</summary>
+    /// <summary>
+    /// Reports the inclusive applied checkpoint independently of the applied HLC. The offset is
+    /// advisory: only the drain-lag sampler reads it, and it is never a retention floor (the
+    /// durable pin carries the persisted checkpoint). <c>-1</c> is "no claim".
+    /// </summary>
     Task ReportCheckpointAsync(
         string treeName, string consumerId, HybridLogicalClock cursor,
         int walPartition, long checkpointOffset, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Withdraws the consumer's advisory checkpoint offset claim for a partition
+    /// (<see cref="IWalCursorRegistry.ClearCheckpointAsync"/>): a resident leaf whose checkpoint
+    /// the live advance moved makes no claim about undrained work there (issue #5981).
+    /// </summary>
+    Task ClearCheckpointAsync(
+        string treeName, string consumerId, int walPartition, CancellationToken cancellationToken);
 
     /// <summary>
     /// Removes <paramref name="consumerId"/>'s registration for

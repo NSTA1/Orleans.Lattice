@@ -1,0 +1,20 @@
+# Pairs with ReplacedRootRelocated (issue #5819). A root seed that does not
+# re-check under the gate replaces the loaded root after the publish.
+MODULE: ReplacedRootRelocatedSeedAfterPublish
+TARGET: ReplacedRootRelocated
+CLASS: Invariant
+SUMMARY: a batch write seeds a root after the load has published, overwriting the loaded root
+PERTURBS: BatchMidLoad
+BOUNDS: NeverWritten = 1
+
+--- FIND
+    /\ WithSkip
+    /\ ~oUp
+    /\ ~published
+    /\ phase \in {"begun", "created", "retry"}
+--- REPLACE
+    /\ WithSkip
+    /\ ~oUp
+\* MUTATION: the root seed does not see the published root (issue #5819).
+    /\ phase \in {"begun", "created", "retry", "finished"}
+--- END

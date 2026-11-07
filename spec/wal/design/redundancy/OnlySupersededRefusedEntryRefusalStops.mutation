@@ -1,0 +1,22 @@
+# Revision 5's refusal rule: only a refusal by the floor alone bumps, and a
+# refusal by the leaf's entry stops the activation. In the purge straddle - a
+# pre-purge duplicate writes the row, the purge retires the entry and deletes the
+# row, then the duplicate's entry write lands above the floor - the re-created
+# incarnation is refused by the duplicate's entry and stops, although its own
+# row write still holds. Since #5641 a retirement raises the floor to the epoch row,
+# which refuses the duplicate's straddling entry write, so in this model no entry is
+# ever above a held row and this is clean: a redundancy check.
+MODULE: OnlySupersededRefusedEntryRefusalStops
+TARGET: OnlySupersededRefused
+CLASS: Invariant
+EXPECT: clean (a redundancy check: the guard is implied in the model and kept for the reason in LiveAdvanceDesign.md)
+SUMMARY: an entry refusal stops the activation even while its row write still holds
+PERTURBS: ClaimBump, ClaimRefuse
+BOUNDS: WithRecreate = TRUE, WithBatch = FALSE, MaxWindows = 1
+
+--- FIND
+CanBump(a) == Refused(a) /\ RowHolds(a) /\ BumpEpoch <= MaxEpoch
+--- REPLACE
+\* MUTATION: only a floor-only refusal bumps.
+CanBump(a) == FloorRefuses(a) /\ RowHolds(a) /\ BumpEpoch <= MaxEpoch
+--- END

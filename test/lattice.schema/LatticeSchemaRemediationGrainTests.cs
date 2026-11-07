@@ -69,6 +69,25 @@ public partial class LatticeSchemaRemediationGrainTests
         }
     }
 
+    /// <summary>
+    /// Serves each batched destination write as one point write per entry, in order, so
+    /// a test asserts the values the build wrote, and fails a key's write, per key. A
+    /// point write that throws fails the batch at that entry, with the entries before it
+    /// written, as a partly applied batch does (issue #5802).
+    /// </summary>
+    internal static void ForwardBatchesToPointWrites(ILattice destination)
+    {
+        destination.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>(), Arg.Any<CancellationToken>())
+            .Returns(async ci =>
+            {
+                var cancellationToken = ci.ArgAt<CancellationToken>(1);
+                foreach (var entry in ci.ArgAt<List<KeyValuePair<string, byte[]>>>(0))
+                {
+                    await destination.SetAsync(entry.Key, entry.Value, cancellationToken);
+                }
+            });
+    }
+
     private sealed class Harness
     {
         public required LatticeSchemaRemediationGrain Grain { get; init; }
@@ -158,6 +177,7 @@ public partial class LatticeSchemaRemediationGrainTests
             new RoutingInfo(TreeId, new ShardMap { Slots = new[] { 0 } })));
 
         var destination = Substitute.For<ILattice>();
+        ForwardBatchesToPointWrites(destination);
         // The destination's own routing, which the cutover carries onto the
         // logical entry (#4250).
         destination.GetRoutingAsync(true).Returns(new ValueTask<RoutingInfo>(
@@ -579,7 +599,12 @@ public partial class LatticeSchemaRemediationGrainTests
         Assert.That(report.Reason, Is.Not.Null.And.Not.Empty);
 
         // No destination was built and nothing was cut over: the original is untouched.
+        // The build is never entered, so the destination is never registered, written or
+        // discarded (a build writes nothing before an offender in its chunk, issue #5802).
         await h.Destination.DidNotReceive().SetAsync(Arg.Any<string>(), Arg.Any<byte[]>());
+        await h.Destination.DidNotReceiveWithAnyArgs().SetManyAsync(default!, default);
+        await h.Destination.DidNotReceiveWithAnyArgs().DeleteTreeAsync(default);
+        await h.Registry.DidNotReceive().RegisterAsync(Arg.Is<string>(id => id.StartsWith(TreeId + "/remediated/", StringComparison.Ordinal)), Arg.Any<TreeRegistryEntry?>());
         await h.Registry.DidNotReceive().SwapAliasAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
         await h.PolicyStore.DidNotReceive().SetPolicyAsync(Arg.Any<string>(), Arg.Any<LatticeSchemaPolicy>(), Arg.Any<CancellationToken>());
 
@@ -804,8 +829,10 @@ public partial class LatticeSchemaRemediationGrainTests
 
         await h.Grain.RunRemediationPassAsync();
 
-        // k1 was written before k2 failed; the partial destination is discarded.
-        await h.Destination.Received(1).SetAsync("k1", Arg.Any<byte[]>());
+        // k1 shares k2's chunk, so it is never written: the destination is discarded
+        // anyway (issue #5802 writes a chunk only once every value in it passed).
+        await h.Destination.DidNotReceive().SetAsync("k1", Arg.Any<byte[]>(), Arg.Any<CancellationToken>());
+        Assert.That(h.State.State.LastReport!.Value.ScannedCount, Is.EqualTo(2), "reported at the position the per-value loop reported");
         await h.Destination.Received(1).DeleteTreeAsync(Arg.Any<CancellationToken>());
         await h.Registry.DidNotReceive().SwapAliasAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
         await h.PolicyStore.DidNotReceive().SetPolicyAsync(Arg.Any<string>(), Arg.Any<LatticeSchemaPolicy>(), Arg.Any<CancellationToken>());

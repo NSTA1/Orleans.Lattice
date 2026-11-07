@@ -355,6 +355,7 @@ internal static class TypeAliases
     internal const string LeafChainLink = "ol.lcl";
     internal const string LeafDeltaPage = "ol.ldn";
     internal const string LeafPrevChainLink = "ol.lpl";
+    internal const string LeafNarrowResult = "ol.lnr";
     internal const string LeafCompactionPage = "ol.lcn";
     internal const string LeafRangeDeletePage = "ol.lrx";
     internal const string LeafClockPage = "ol.lcq";
@@ -931,4 +932,110 @@ internal static class TypeAliases
 
     /// <summary>Alias for the transient alias-reservation refusal (issue #5750).</summary>
     internal const string LatticeAliasOperationInProgress = "ol.aop";
+
+    // WAL append epoch fencing (epic #5605, member 1).
+
+    /// <summary>Alias for a leaf's durable append epoch row.</summary>
+    internal const string LeafAppendEpochState = "ol.xfl";
+
+    /// <summary>Alias for a WAL partition's durable epoch entry for one leaf.</summary>
+    internal const string WalAppendEpochEntryState = "ol.xfe";
+
+    /// <summary>Alias for a WAL partition's durable retired-epoch floor.</summary>
+    internal const string WalAppendEpochFloorState = "ol.xff";
+
+    /// <summary>
+    /// Alias for a WAL partition's durable routing-generation table, a slot per initiator
+    /// (#5987). It replaced the per-initiator entry row and its alias <c>ol.xfg</c> before
+    /// either was released: no build that shipped ever wrote or read them.
+    /// </summary>
+    internal const string WalRoutingGenerationsState = "ol.xft";
+
+    /// <summary>Alias for the fence stamp a stamped WAL append carries.</summary>
+    internal const string WalAppendStamp = "ol.xfs";
+
+    /// <summary>Alias for the shard-level initiator a routing generation belongs to.</summary>
+    internal const string WalRoutingInitiator = "ol.xfi";
+
+    /// <summary>Alias for the kind of a routing-generation initiator.</summary>
+    internal const string WalRoutingInitiatorKind = "ol.xfj";
+
+    /// <summary>Alias for the outcome of a stamped WAL append.</summary>
+    internal const string WalAppendFenceOutcome = "ol.xfo";
+
+    /// <summary>Alias for the result of a single stamped WAL append.</summary>
+    internal const string WalStampedAppendResult = "ol.xfr";
+
+    /// <summary>Alias for the result of a stamped WAL batch append.</summary>
+    internal const string WalStampedBatchResult = "ol.xfb";
+
+    /// <summary>Alias for the result of an epoch or generation claim at a WAL partition.</summary>
+    internal const string WalAppendFenceClaimResult = "ol.xfc";
+
+    /// <summary>Alias for the result of an arm at a WAL partition (#5833).</summary>
+    internal const string WalAppendFenceArmResult = "ol.xfa";
+
+    /// <summary>Alias for the append-fence capability marker grain interface.</summary>
+    internal const string IWalAppendFenceCapable = "ol.xfk";
+
+    /// <summary>Alias for the pre-arm stamp class capability marker grain interface (#5833).</summary>
+    internal const string IWalAppendFencePreArmCapable = "ol.xfp";
+
+    /// <summary>Alias for a page of a WAL partition's append-epoch directory (#5634).</summary>
+    internal const string WalAppendEpochDirectoryPageState = "ol.xfd";
+
+    /// <summary>Alias for a tree's append-fence sweep claim row (#5634).</summary>
+    internal const string WalAppendFenceSweepState = "ol.xfw";
+
+    // Hand-off markers and fences (epic #5605, member 2).
+
+    /// <summary>Alias for one open hand-off on a marker.</summary>
+    internal const string HandOffMarkerRange = "ol.xhr";
+
+    /// <summary>Alias for one closed hand-off on a marker, with its fence heads.</summary>
+    internal const string HandOffClose = "ol.xhc";
+
+    /// <summary>Alias for a shard root's durable hand-off marker row.</summary>
+    internal const string ShardHandOffState = "ol.xhs";
+
+    /// <summary>Alias for a leaf's durable hand-off marker row.</summary>
+    internal const string LeafHandOffState = "ol.xhl";
+
+    /// <summary>Alias for the routing part of a stamped WAL append.</summary>
+    internal const string WalRoutingStamp = "ol.xhw";
+
+    /// <summary>Alias for the rejection of a write admitted under a re-claimed routing generation.</summary>
+    internal const string WalRoutingGenerationStaleException = "ol.xhx";
+
+    /// <summary>Alias for a donor's deferred split close pending in a receiver's marker (#5837).</summary>
+    internal const string WalPendingClose = "ol.xpc";
+
+    /// <summary>Alias for a WAL partition's consistent cut for a splitting leaf (#5837).</summary>
+    internal const string WalSplitCut = "ol.xsc";
+
+    /// <summary>Alias for one open intent on a tree's range-delete fence.</summary>
+    internal const string TreeRangeDeleteIntent = "ol.xhi";
+
+    /// <summary>Alias for a tree's range-delete fence state.</summary>
+    internal const string TreeRangeDeleteFenceState = "ol.xhd";
+
+    /// <summary>Alias for the tree range-delete fence grain interface.</summary>
+    internal const string ITreeRangeDeleteFenceGrain = "ol.xhg";
+
+    /// <summary>Alias for what a fenced range-delete walk carries to a shard root.</summary>
+    internal const string RangeDeleteFenceTicket = "ol.xht";
+
+    /// <summary>Alias for a tree id's routing-generation floor, written when a purge retires its fence rows (#5668).</summary>
+    internal const string TreeRoutingFloorState = "ol.xrf";
+
+    // The live checkpoint advance (epic #5605, member 4).
+
+    /// <summary>Alias for a shard root's answer to a leaf's live-advance read.</summary>
+    internal const string LeafLiveAdvanceView = "ol.xlv";
+
+    /// <summary>Alias for a shard root's answer to whether a bulk operation is running or completed (#5812).</summary>
+    internal const string BulkOperationStatus = "ol.xbs";
+
+    /// <summary>Alias for a shard root's three-valued answer to whether descent reaches a leaf (#5876).</summary>
+    internal const string DescentVerdict = "ol.xdv";
 }

@@ -45,6 +45,10 @@ public partial class DataKeysPanel : IDisposable
     private EntryScanMode _mode = EntryScanMode.Live;
     private int _pageSize = DataPaging.DefaultPageSize;
     private bool _loading;
+
+    // Whether the scan now loading was started by the change feed rather than by the
+    // user; pausing live updates discards only such a scan (#5798).
+    private bool _changeScanLoading;
     private bool _refreshing;
     private bool _pendingRefresh;
     private int _changeRefreshFailures;
@@ -312,7 +316,9 @@ public partial class DataKeysPanel : IDisposable
         }
     }
 
-    private async Task ResetAsync()
+    private Task ResetAsync() => ReadFirstPageAsync(changeDriven: false);
+
+    private async Task ReadFirstPageAsync(bool changeDriven)
     {
         if (Workspace is not { } workspace)
         {
@@ -329,6 +335,7 @@ public partial class DataKeysPanel : IDisposable
         var token = _scans.Renew();
         var pager = new DataPager(_reader);
         _loading = true;
+        _changeScanLoading = changeDriven;
         _error = null;
         _cursorExpired = false;
         _stale = false;
@@ -472,9 +479,30 @@ public partial class DataKeysPanel : IDisposable
         _live = live;
         _liveNote = null;
         _liveRestartable = false;
+        if (!live)
+        {
+            DiscardChangeRefresh();
+        }
+
         if (RestartFollow())
         {
             await CatchUpAsync();
+        }
+    }
+
+    /// <summary>
+    /// On a pause, drops what the change feed has already set in motion: a scan it started is
+    /// abandoned, so its page is never drawn, and a queued re-read is forgotten. A scan the user
+    /// started still lands. Resuming reads the page again, so nothing written meanwhile is lost.
+    /// </summary>
+    private void DiscardChangeRefresh()
+    {
+        _pendingRefresh = false;
+        if (_loading && _changeScanLoading)
+        {
+            _scans.Renew();
+            _loading = false;
+            _changeScanLoading = false;
         }
     }
 
@@ -599,10 +627,11 @@ public partial class DataKeysPanel : IDisposable
             do
             {
                 _pendingRefresh = false;
-                await ResetAsync();
+                await ReadFirstPageAsync(changeDriven: true);
                 StateHasChanged();
             }
             while (_pendingRefresh
+                && _live
                 && !_lifetime.IsLeft
                 && (_error is null || DateTimeOffset.UtcNow >= _nextChangeRefreshUtc));
         }

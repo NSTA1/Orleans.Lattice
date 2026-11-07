@@ -116,6 +116,29 @@ public sealed class CiClosingKeywordGuardTests
     }
 
     /// <summary>
+    /// Commits already reachable from the default branch are exempt - their
+    /// keywords were honoured when they landed there - and only those. When the
+    /// default branch cannot be resolved nothing is exempted.
+    /// </summary>
+    [Test]
+    public void The_closing_keyword_gate_exempts_only_commits_reachable_from_the_default_branch()
+    {
+        var step = Step(GuardStep);
+
+        Assert.That(step, Does.Contain("\"^\" + default_ref"),
+            $"the '{GuardStep}' step in {WorkflowPath} must exclude commits reachable from "
+            + "the default branch with a negative rev-list ref. A merge of the default "
+            + "branch into an integration branch brings commits whose keywords were already "
+            + "honoured there and cannot be reworded; without the exclusion every such sync "
+            + "fails the gate on history nobody can change.");
+
+        Assert.That(step, Does.Contain("if own.returncode == 0:"),
+            $"the '{GuardStep}' step in {WorkflowPath} must exempt nothing when the "
+            + "default branch cannot be resolved. A missing ref must widen the scan to "
+            + "every commit in the range, never narrow it to none.");
+    }
+
+    /// <summary>
     /// The gate's behavioural self-test must be invoked by the workflow. An
     /// uninvoked detector and a clean repository produce the same silence.
     /// </summary>

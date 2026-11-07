@@ -54,9 +54,15 @@ internal sealed class EnumerableMemoryGrainStorage : IGrainStorage
         return Task.CompletedTask;
     }
 
+    private int _writes;
+
+    /// <summary>How many writes this storage has accepted.</summary>
+    public int Writes => Volatile.Read(ref _writes);
+
     /// <inheritdoc />
     public Task WriteStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
     {
+        Interlocked.Increment(ref _writes);
         var key = (stateName, grainId);
         var copy = Copier.Value.Copy(grainState.State)!;
         var etag = Guid.NewGuid().ToString("N");

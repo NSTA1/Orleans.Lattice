@@ -1,0 +1,19 @@
+# Pairs with InitHeadCoversPriorAllocations. The first initialisation records the
+# heads its marker already held, not its claim's allocator head, as if it took a head
+# read before the claim. After the purge the marker held none, so every allocation
+# before the initialisation, the purged incarnation's included, lies at or above the
+# recorded head.
+MODULE: InitHeadCoversPriorAllocationsStaleHead
+TARGET: InitHeadCoversPriorAllocations
+CLASS: Action
+SUMMARY: the first initialisation records a stale head, not its claim's
+PERTURBS: FirstInit
+
+--- FIND
+    /\ closedAt' = next
+    /\ mInit' = TRUE
+--- REPLACE
+\* MUTATION: a stale head is recorded.
+    /\ closedAt' = closedAt
+    /\ mInit' = TRUE
+--- END

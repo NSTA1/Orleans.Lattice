@@ -1,0 +1,17 @@
+# An activation stops at its claim although its epoch row is as it read it: the
+# conflict check is dropped, so a claimant nothing superseded deactivates.
+MODULE: OnlySupersededRefusedConflictWithoutMove
+TARGET: OnlySupersededRefused
+CLASS: Invariant
+SUMMARY: ClaimConflict stops an activation whose epoch row has not moved
+PERTURBS: ClaimConflict
+
+--- FIND
+    /\ cstage[a] = 0
+    /\ ~RowUnmoved(a)
+    /\ StopAct(a)
+--- REPLACE
+    /\ cstage[a] = 0
+\* MUTATION: no conflict needed.
+    /\ StopAct(a)
+--- END

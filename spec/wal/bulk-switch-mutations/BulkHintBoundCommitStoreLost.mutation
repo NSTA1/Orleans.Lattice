@@ -1,0 +1,14 @@
+# Pairs with BulkHintBound. The old leaf completes an admitted commit without
+# storing its row, so the narrow hands back nothing for it.
+MODULE: BulkHintBoundCommitStoreLost
+TARGET: BulkHintBound
+CLASS: Invariant
+SUMMARY: an admitted commit is never stored on the old leaf
+PERTURBS: CommitStore
+
+--- FIND
+    /\ rowsO' = rowsO \cup {CHOOSE o \in Offs : author[o] = "c"}
+--- REPLACE
+\* MUTATION: the commit's row is not stored.
+    /\ rowsO' = rowsO
+--- END

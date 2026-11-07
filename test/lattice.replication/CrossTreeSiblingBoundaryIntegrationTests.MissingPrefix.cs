@@ -32,6 +32,8 @@ public partial class CrossTreeSiblingBoundaryIntegrationTests
         using var observation = BeginNaturalObservation(tree, sibling);
         var services = NaturalServices(_siteB);
         var trace = services.GetRequiredService<NaturalObservationTrace>();
+        // Natural passes over the sibling are deferred until the explicit trim below; see HoldNaturalCollection.
+        using var naturalHold = trace.HoldNaturalCollection(sibling);
         using var warnings = new MissingPrefixWarnings($"shipper {sibling}/{SiteAClusterId}");
         services.GetRequiredService<ILoggerFactory>().AddProvider(warnings);
         RequireMissingPrefixEligible(services.GetRequiredService<IOptionsMonitor<LatticeOptions>>()
@@ -84,7 +86,11 @@ public partial class CrossTreeSiblingBoundaryIntegrationTests
         RequireMissingPrefixEligible(beforeBinding is not null && beforeBinding.PhysicalTreeId == physical
                 && beforeBinding.Lineage == binding.Lineage, "binding changed during materialisation");
 
-        var report = await services.GetRequiredService<ILatticeWalGc>().RunOnceAsync(physical);
+        LatticeWalGcReport report;
+        using (ObservedNaturalGc.Explicit())
+        {
+            report = await services.GetRequiredService<ILatticeWalGc>().RunOnceAsync(physical);
+        }
         trace.Record($"{mode}-explicit-gc-report", new { report });
         var after = await CaptureNaturalLogAsync(services, _siteB.Client, trace, $"{mode}-after-gc-before-reader", physical);
         var afterBinding = await registry.GetEntryAsync(sibling);
@@ -116,6 +122,7 @@ public partial class CrossTreeSiblingBoundaryIntegrationTests
                 && after[seedPartition].ProviderWatermark >= seeds[0].Sequence,
             "actual removed rows and both watermarks must prove the real seed prefix is gone");
         TestContext.WriteLine($"{mode}-control-setup:ELIGIBLE;real covered prefix trimmed before reverse registration");
+        naturalHold.Dispose();
 
         foreach (var treeName in new[] { tree, sibling })
         {

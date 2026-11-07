@@ -89,9 +89,9 @@ failure_modes:
     effect: "No batch runs."
     response: "Correct the argument; pass ResumeFrom back unaltered or restart from null."
   - id: verdict-gaps
-    signal: "The report carries Gaps, or the tracked result's gaps is non-zero; reasons include ShardSplitInProgress, ShardPassAlreadyRunning, ChainTruncated, ChainTruncatedUnrecoverable, WalkBudgetExhaustedWithoutResumePosition, LeafBoundsUndecidable and EntryLeafUnreachable."
+    signal: "The report carries Gaps, or the tracked result's gaps is non-zero; reasons include ShardSplitInProgress, ShardPassAlreadyRunning, ChainTruncated, ChainTruncatedUnrecoverable, WalkBudgetExhaustedWithoutResumePosition, LeafBoundsUndecidable, EntryLeafUnreachable and RoutingInMotion."
     effect: "The pass established no verdict over those regions, so zero findings there is not evidence of health."
-    response: "Re-run once a shard split settles or the other pass finishes; report the remaining gap reasons, shards and leaf ids to an operator."
+    response: "Re-run once a shard split settles, the other pass finishes or the shard's routing stops changing; report the remaining gap reasons, shards and leaf ids to an operator."
   - id: refused-leaves
     signal: "Findings with disposition RefusedUnverifiedKeys, RefusedKeyCountExceeded, RefusedBlockingState, RefusedChainRace or RefusedRoutingContradiction."
     effect: "Those leaves are left unchanged and keep holding the WAL trim floor."

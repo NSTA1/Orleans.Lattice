@@ -87,6 +87,144 @@ internal interface IWalShardGrain : IGrainWithStringKey
     Task<IReadOnlyList<long>> AppendBatchAsync(IReadOnlyList<WalRecord> entries, CancellationToken cancellationToken);
 
     /// <summary>
+    /// The stamped counterpart of <see cref="AppendAsync"/> (epic #5605): appends
+    /// <paramref name="entry"/> only if <paramref name="stamp"/> passes the append
+    /// fence, checked under the same lock that assigns the offset. The stored record
+    /// is unchanged; the stamp is never persisted.
+    /// </summary>
+    /// <param name="entry">The captured mutation record.</param>
+    /// <param name="stamp">The authoring leaf, its claimed epoch, and optionally a routing generation.</param>
+    /// <param name="cancellationToken">Cancellation token propagated from the originating call.</param>
+    /// <returns>
+    /// The allocated offset with the partition's unstamped watermark, or the reason
+    /// the entry was rejected. A rejected entry was not allocated.
+    /// </returns>
+    /// <remarks>Called only while the caller's <see cref="IWalAppendFenceGate"/> is open.</remarks>
+    Task<WalStampedAppendResult> AppendStampedAsync(WalRecord entry, WalAppendStamp stamp, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The stamped counterpart of <see cref="AppendBatchAsync"/> (epic #5605): each
+    /// entry is checked against the append fence under the same lock that assigns
+    /// its offset. The admitted entries are always a prefix; the result carries the
+    /// per-entry outcome and the partition's unstamped watermark.
+    /// </summary>
+    /// <param name="entries">The captured mutation records, all authored under <paramref name="stamp"/>.</param>
+    /// <param name="stamp">The authoring leaf, its claimed epoch, and optionally a routing generation.</param>
+    /// <param name="cancellationToken">Cancellation token propagated from the originating call.</param>
+    /// <returns>The per-entry offsets, the admitted prefix length, the watermark and the outcome.</returns>
+    /// <remarks>Called only while the caller's <see cref="IWalAppendFenceGate"/> is open.</remarks>
+    [AlwaysInterleave]
+    Task<WalStampedBatchResult> AppendBatchStampedAsync(
+        IReadOnlyList<WalRecord> entries,
+        WalAppendStamp stamp,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Claims append epoch <paramref name="epoch"/> for leaf <paramref name="leafId"/>
+    /// at this partition (epic #5605): writes it to the partition's durable entry
+    /// row as a conditional max-merge, then raises the in-memory entry under the
+    /// offset lock and returns the allocator's next offset as the claim head. A
+    /// re-presented claim (the same epoch, already durable) loads an entry this
+    /// activation has not loaded.
+    /// </summary>
+    /// <param name="leafId">The claiming leaf's grain key.</param>
+    /// <param name="epoch">The epoch the leaf's activation persisted in its epoch row; at least 1.</param>
+    /// <param name="cancellationToken">Cancellation token propagated from the originating call.</param>
+    /// <returns>
+    /// Accepted with the claim head, or refused with the higher of the entry and the
+    /// partition's retired floor, which the claim must exceed.
+    /// </returns>
+    /// <remarks>Called only while the caller's <see cref="IWalAppendFenceGate"/> is open.</remarks>
+    [AlwaysInterleave]
+    Task<WalAppendFenceClaimResult> ClaimAppendEpochAsync(Guid leafId, long epoch, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Arms <paramref name="leafId"/>'s activation at this partition (#5833, revision 2):
+    /// the epoch claim of <see cref="ClaimAppendEpochAsync"/>, then, when
+    /// <paramref name="deferredInitiator"/> is set, the re-claim of a deferred hand-off
+    /// close's routing generation (C2), and the leaf's foreign high read after both (B1).
+    /// A deferred generation below one this partition has already loaded is presented at
+    /// the loaded value, so the arm takes the current head rather than being refused (C5).
+    /// </summary>
+    /// <param name="leafId">The arming leaf's grain key.</param>
+    /// <param name="epoch">The epoch the leaf's activation persisted in its epoch row; at least 1.</param>
+    /// <param name="activation">The arming activation's token (<see cref="WalAppendStamp.Activation"/>).</param>
+    /// <param name="deferredInitiator">The initiator of a deferred close the leaf must resolve here, or <see cref="WalRoutingInitiator.None"/>.</param>
+    /// <param name="deferredGeneration">That close's raised generation; ignored when the initiator is not set.</param>
+    /// <param name="cancellationToken">Cancellation token propagated from the originating call.</param>
+    /// <returns>The arm's outcome; see <see cref="WalAppendFenceArmResult"/>.</returns>
+    /// <remarks>Called only while the caller's <see cref="IWalAppendFenceGate.IsPreArmOpen"/> holds.</remarks>
+    [AlwaysInterleave]
+    Task<WalAppendFenceArmResult> ArmAppendEpochAsync(
+        Guid leafId,
+        long epoch,
+        Guid activation,
+        WalRoutingInitiator deferredInitiator,
+        long deferredGeneration,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Claims (or re-claims) routing generation <paramref name="generation"/> for
+    /// <paramref name="initiator"/> at this partition (epic #5605), with the
+    /// semantics of <see cref="ClaimAppendEpochAsync"/>, with the initiator's
+    /// routing floor under the tree id (#5668, <see cref="RetireRoutingGenerationsAsync"/>)
+    /// in place of the retired-epoch floor: a claim at or below it is refused. A
+    /// re-claim at a hand-off close fences every write admitted under an older
+    /// generation, and returns the allocator head the close records.
+    /// </summary>
+    /// <param name="initiator">The shard-level initiator; must be set.</param>
+    /// <param name="generation">The generation to claim; at least 1.</param>
+    /// <param name="cancellationToken">Cancellation token propagated from the originating call.</param>
+    /// <returns>Accepted with the head, or refused with the entry the claim must exceed.</returns>
+    /// <remarks>Called only while the caller's <see cref="IWalAppendFenceGate"/> is open.</remarks>
+    [AlwaysInterleave]
+    Task<WalAppendFenceClaimResult> ClaimRoutingGenerationAsync(
+        WalRoutingInitiator initiator,
+        long generation,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Retires leaf <paramref name="leafId"/>'s epoch entry at this partition (epic
+    /// #5605): raises the partition's durable retired floor to at least the higher of
+    /// the entry and <paramref name="rowEpoch"/>, then deletes the entry row and
+    /// delists the leaf from the partition's append-epoch directory (#5634). Called
+    /// when the leaf is retired, whether or not the fence gate is open; idempotent,
+    /// and a no-op for a leaf with neither an entry nor an epoch row.
+    /// </summary>
+    /// <param name="leafId">The retired leaf's grain key.</param>
+    /// <param name="rowEpoch">
+    /// The value the retirement read from the leaf's epoch row; 0 when it has none;
+    /// or <see cref="WalAppendFenceRows.RowEpochUnread"/> to have the partition read
+    /// the row itself and return at once, with no floor or entry I/O, when the leaf
+    /// has no row - it never claimed, or its clear already retired it.
+    /// The floor must cover it as well as the entry (#5641): the clear deletes the
+    /// epoch row, so a re-created incarnation starts again from 1, and a duplicate
+    /// activation that wrote its row but not yet its entry here would otherwise
+    /// share that epoch with it.
+    /// </param>
+    /// <param name="cancellationToken">Cancellation token propagated from the originating call.</param>
+    /// <returns>The partition's retired floor after the retirement.</returns>
+    [AlwaysInterleave]
+    Task<long> RetireAppendEpochAsync(Guid leafId, long rowEpoch, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Retires every routing-generation entry this partition holds for its tree (epic
+    /// #5605, #5668), when the tree is purged: raises each entry's initiator's durable
+    /// routing floor to at least the entry, durable or loaded, then drops the loaded
+    /// entries and deletes the entry rows. From then on this partition refuses a
+    /// generation claim at or below its initiator's floor. Idempotent.
+    /// </summary>
+    /// <param name="shardCount">
+    /// One past the highest shard index the tree ever allocated: the partition retires
+    /// the entry of each of those shard roots and of the range-delete fence, plus any
+    /// other initiator it has loaded.
+    /// </param>
+    /// <param name="cancellationToken">Cancellation token propagated from the originating call.</param>
+    /// <returns>The highest of the tree id's routing floors after the retirement.</returns>
+    [AlwaysInterleave]
+    Task<long> RetireRoutingGenerationsAsync(int shardCount, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Returns up to <paramref name="maxEntries"/> entries with sequence
     /// number greater than or equal to <paramref name="fromSequence"/>,
     /// in ascending sequence order. The returned page carries the
@@ -193,6 +331,32 @@ internal interface IWalShardGrain : IGrainWithStringKey
     /// of entries currently persisted. <c>0</c> when the WAL is empty.
     /// </summary>
     ValueTask<long> GetNextSequenceAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The consistent cut a splitting leaf reads (#5837, D4): the readable head, the
+    /// highest offset an author other than <paramref name="reader"/>'s activation may have
+    /// allocated for its leaf - with its persisted narrow's forwards excluded and the stale
+    /// high of each donor close it carries included - and the unstamped high for the keys
+    /// in <c>[<paramref name="lowInclusive"/>, <paramref name="highExclusive"/>)</c>
+    /// (#5851, K1-K6; both <see langword="null"/> reads every key), all in one turn. The
+    /// reader passes the range it owns, read in the same turn as the call. A silo running
+    /// an earlier build does not have it; the leaf then reads the heads alone and caps
+    /// them at its own frontier, as before.
+    /// </summary>
+    Task<WalSplitCut> GetSplitCutAsync(WalAppendStamp reader, string? lowInclusive, string? highExclusive, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The report a stamped append by <paramref name="reader"/> would carry back in this
+    /// turn (#5851, R1), without appending: the shared unstamped watermark and the
+    /// highest offset another author may have allocated for the reader's leaf - its
+    /// foreign high for the reader's activation and narrow tag, never below the leaf's
+    /// eviction floor, and the stale high of each donor close the reader carries. Read
+    /// with the code the append response uses; attributes nothing. <c>-1</c> for a reader
+    /// naming no leaf or no activation. A silo running an earlier build does not have it;
+    /// the leaf then treats its partition as unreported, as before.
+    /// </summary>
+    [AlwaysInterleave]
+    Task<long> ReadLeafReportAsync(WalAppendStamp reader, CancellationToken cancellationToken);
 
     /// <summary>
     /// Returns the head a reader may resume from: one past the highest sequence a
