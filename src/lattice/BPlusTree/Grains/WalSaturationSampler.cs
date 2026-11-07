@@ -588,11 +588,6 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
                         // first append, which would count every freshly built leaf
                         // (#5969), nor incomplete history, which would warn on every
                         // fresh resize. It is counted as unclaimed for the holder log.
-                        if (offset.Value < 0)
-                        {
-                            unclaimed++;
-                            continue;
-                        }
 
                         if (appendTimes is null || !appendTimes.TryGetValue(offset.Key, out var timeline))
                         {

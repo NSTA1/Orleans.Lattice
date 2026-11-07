@@ -178,7 +178,7 @@ internal sealed partial class BPlusLeafGrain
                 // until a capture covers it (#5877, H2) does not read as lagging
                 // from the partition's first append (#5969).
                 await reporter.ReportCheckpointAsync(treeId, consumerId, clock,
-                    partition, GetCurrentCheckpointForPartition(partition), CancellationToken.None);
+                    partition, GetPersistedCheckpointForPartition(partition), CancellationToken.None);
             }
             catch (Exception ex)
             {
