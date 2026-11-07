@@ -209,6 +209,16 @@ public interface ILattice : IGrainWithStringKey
     /// faults the call still awaits every one of them, because the per-entry
     /// <c>Set</c> events are published only once all shard writes have committed.
     /// </para>
+    /// <para>
+    /// <b>Partial admission.</b> A batch refused with
+    /// <see cref="Orleans.Lattice.LatticeSaturatedException"/> lists, in
+    /// <see cref="Orleans.Lattice.LatticeSaturatedException.UnappliedKeys"/>, a
+    /// superset of its keys that may not have landed, so a caller can retry only
+    /// those keys rather than the whole batch. The keys left out landed, and their
+    /// <c>Set</c> events were published before the refusal. The list is
+    /// <see langword="null"/> when that cannot be determined, and retrying the
+    /// whole batch is always correct.
+    /// </para>
     /// </summary>
     Task SetManyAsync(List<KeyValuePair<string, byte[]>> entries, CancellationToken cancellationToken = default);
 
