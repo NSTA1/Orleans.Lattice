@@ -71,7 +71,7 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
     /// (see <see cref="AzureTableWalStorageProvider.IsIdempotentPhaseTwoReplayAsync"/>),
     /// or <see langword="null"/> when a failed submit is never re-examined.
     /// </summary>
-    private readonly Func<IReadOnlyList<TableTransactionAction>, CancellationToken, Task<bool>>? _verifyReplay;
+    private readonly Func<IReadOnlyList<TableTransactionAction>, CancellationToken, Task<PhaseTwoReplayProof>>? _verifyReplay;
     private readonly string _manifestPartitionKey;
     private readonly Channel<PhaseTwoCommit> _arrivals;
     private readonly Task _drainLoop;
@@ -248,7 +248,7 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
             async (actions, cancellationToken) =>
             {
                 var table = await tableProvider(cancellationToken).ConfigureAwait(false);
-                return await AzureTableWalStorageProvider.IsIdempotentPhaseTwoReplayAsync(table, actions, cancellationToken)
+                return await AzureTableWalStorageProvider.ProvePhaseTwoReplayAsync(table, actions, cancellationToken)
                     .ConfigureAwait(false);
             },
             fence,
@@ -284,7 +284,7 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
         TimeSpan coalescingWindow,
         TimeSpan? commitTimeout = null,
         TimeSpan? abandonedSubmitSettleCap = null,
-        Func<IReadOnlyList<TableTransactionAction>, CancellationToken, Task<bool>>? verifyReplay = null)
+        Func<IReadOnlyList<TableTransactionAction>, CancellationToken, Task<PhaseTwoReplayProof>>? verifyReplay = null)
         : this(
             async (actions, cancellationToken) =>
             {
@@ -337,7 +337,7 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
         TimeSpan coalescingWindow,
         TimeSpan? commitTimeout = null,
         TimeSpan? abandonedSubmitSettleCap = null,
-        Func<IReadOnlyList<TableTransactionAction>, CancellationToken, Task<bool>>? verifyReplay = null,
+        Func<IReadOnlyList<TableTransactionAction>, CancellationToken, Task<PhaseTwoReplayProof>>? verifyReplay = null,
         WalShardCommitFence? fence = null,
         WalShardFailedBatches? failedBatches = null)
     {
@@ -812,10 +812,7 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
 
                 if (fenced)
                 {
-                    throw new InvalidOperationException(
-                        $"Phase-2 commit for partition '{_manifestPartitionKey}' was refused: its batches were claimed before "
-                        + "another writer moved TAIL, or before this instance knew TAIL, so they may overlap a batch committed "
-                        + "since. The shard must resync from storage (issue #5810).");
+                    throw FenceRefusal(cause: null);
                 }
             }
 
@@ -1015,6 +1012,14 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
             // batches claimed under it are refused (issue #5810).
             _fence?.Invalidate();
 
+            // A fenced TAIL write refused with 412 is the commit fence refusing at the
+            // store: another writer moved TAIL (issue #5810). Surfaced as the fence's
+            // own refusal, a retryable transient (#5605 W7).
+            if (_fence is not null && ex is RequestFailedException { Status: 412 })
+            {
+                ex = FenceRefusal(ex);
+            }
+
             // The producer will resync from the persisted TAIL, so the
             // worker can no longer vouch for anything above what it
             // actually committed.
@@ -1072,6 +1077,23 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
                 });
         }
     }
+
+    /// <summary>
+    /// The commit fence's refusal of a phase-2 commit (issue #5810): its batches were
+    /// claimed before another writer moved <c>TAIL</c>, or before this instance knew
+    /// <c>TAIL</c>, so it is never submitted. It is a retryable transient, never a
+    /// terminal error (#5605 W7): the batches' entry rows are durable, and the shard's
+    /// resync from storage rolls each forward or back, so, as for a phase-2 commit that
+    /// outran its deadline, its outcome is decided by that resync and the write may be
+    /// retried.
+    /// </summary>
+    private TimeoutException FenceRefusal(Exception? cause) =>
+        new(
+            $"Phase-2 commit for partition '{_manifestPartitionKey}' was refused: its batches were claimed before "
+            + "another writer moved TAIL, or before this instance knew TAIL, so they may overlap a batch committed "
+            + "since. The shard resyncs from storage, which decides the batches' outcome; the write may be retried "
+            + "(issue #5810).",
+            cause);
 
     /// <summary>
     /// Maps a provider exception to a low-cardinality
@@ -1140,17 +1162,17 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
         }
         catch (RequestFailedException rfe) when (_verifyReplay is not null && rfe.Status is 409 or 404 or 412)
         {
-            bool isReplay;
+            PhaseTwoReplayProof proof;
             try
             {
-                isReplay = await _verifyReplay(actions, cancellationToken).ConfigureAwait(false);
+                proof = await _verifyReplay(actions, cancellationToken).ConfigureAwait(false);
             }
             catch (RequestFailedException)
             {
-                isReplay = false;
+                proof = default;
             }
 
-            if (!isReplay)
+            if (!proof.Proven)
             {
                 throw;
             }
@@ -1165,8 +1187,11 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
                     _tenantTag,
                 });
 
-            // Proven durable, but the ETag the landed attempt left on TAIL is unknown.
-            return null;
+            // Proven durable. The proof read TAIL; when it still holds exactly what this
+            // transaction wrote, its ETag conditions the next commit as the landed
+            // attempt's response would have (#5605 W7). Otherwise it is unknown, and the
+            // fence is invalidated (issue #5810).
+            return proof.TailETag;
         }
     }
 

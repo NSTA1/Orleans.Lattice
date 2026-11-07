@@ -109,6 +109,44 @@ public class AzureTableWalStorageProviderPhaseTwoReplayTests
     }
 
     [Test]
+    public async Task A_batch_claimed_while_an_earlier_commit_is_resent_commits_once_that_commit_is_proven_durable()
+    {
+        // #5605 W7: a proven replay is a commit that landed. The commit fence (#5810)
+        // must treat it as one: a batch claimed while it was in flight, under the same
+        // generation, is not a stale claim, and refusing it fails a healthy append with
+        // a "must resync" error the caller cannot retry.
+        var (provider, table) = CreateProvider();
+        await using var _ = provider;
+
+        Task? second = null;
+        var resends = 0;
+        table.ResendAfterCommit = actions =>
+        {
+            if (!IsManifestCommit(actions) || Interlocked.CompareExchange(ref resends, 1, 0) != 0)
+            {
+                return false;
+            }
+
+            // The next batch is claimed while the first commit's response is lost.
+            second = provider.AppendBatchAsync(TreeId, ShardIndex, Entries(3, 2), CancellationToken.None);
+            return true;
+        };
+
+        await provider.AppendBatchAsync(TreeId, ShardIndex, Entries(0, 3), CancellationToken.None);
+        await provider.FlushPhaseTwoAsync(CancellationToken.None);
+        Assert.That(second, Is.Not.Null, "precondition: the second batch was claimed during the resend");
+        Assert.That(resends, Is.EqualTo(1), "precondition: the first manifest commit was resent");
+
+        Assert.That(async () =>
+        {
+            await second!;
+            await provider.FlushPhaseTwoAsync(CancellationToken.None);
+        }, Throws.Nothing, "a batch claimed during a commit that landed was refused by the commit fence");
+        Assert.That(await provider.GetHighestOffsetAsync(TreeId, ShardIndex, CancellationToken.None), Is.EqualTo(4L));
+        Assert.That(ManifestRows(table), Has.Count.EqualTo(2));
+    }
+
+    [Test]
     public async Task Append_fails_loudly_and_overwrites_nothing_when_the_manifest_row_records_another_batch()
     {
         var (provider, table) = CreateProvider();

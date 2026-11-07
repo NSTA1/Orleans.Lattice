@@ -33,18 +33,35 @@ public sealed partial class AzureTableWalStorageProvider
     internal static async Task<bool> IsIdempotentPhaseTwoReplayAsync(
         TableClient table,
         IReadOnlyList<TableTransactionAction> actions,
+        CancellationToken cancellationToken) =>
+        (await ProvePhaseTwoReplayAsync(table, actions, cancellationToken).ConfigureAwait(false)).Proven;
+
+    /// <summary>
+    /// <see cref="IsIdempotentPhaseTwoReplayAsync"/>, also returning the ETag of the
+    /// <c>TAIL</c> row it read when that row holds exactly the value the transaction
+    /// wrote (issue #5810, #5605 W7). No commit of this shard can have landed since
+    /// without raising <c>TAIL</c> above that value, so the ETag conditions the next
+    /// commit exactly as the landed attempt's own response would have, and the commit
+    /// fence advances instead of refusing every batch claimed meanwhile. A higher
+    /// <c>TAIL</c>, or a transaction without one, yields no ETag.
+    /// </summary>
+    internal static async Task<PhaseTwoReplayProof> ProvePhaseTwoReplayAsync(
+        TableClient table,
+        IReadOnlyList<TableTransactionAction> actions,
         CancellationToken cancellationToken)
     {
         if (actions.Count == 0)
         {
-            return false;
+            return default;
         }
+
+        ETag? tailETag = null;
 
         for (var i = 0; i < actions.Count; i++)
         {
             if (actions[i].Entity is not AzureTableWalEntity expected)
             {
-                return false;
+                return default;
             }
 
             var resident = await TryReadEntityAsync(table, expected.PartitionKey, expected.RowKey, cancellationToken)
@@ -64,11 +81,16 @@ public sealed partial class AzureTableWalStorageProvider
                 };
             if (!effectResident)
             {
-                return false;
+                return default;
+            }
+
+            if (expected.RowKey == TailRowKey && resident!.Offset == expected.Offset)
+            {
+                tailETag = resident.ETag;
             }
         }
 
-        return true;
+        return new PhaseTwoReplayProof(Proven: true, tailETag);
     }
 
     private static async Task<AzureTableWalEntity?> TryReadEntityAsync(
