@@ -1494,15 +1494,26 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     internal static ReplayPermitDrainVerdict ClassifyReplayPermitQueueDrainWithoutSideEffects(
         TimeSpan maxQueueWait, out TimeSpan sinceLastProgress)
+        => ClassifyReplayPermitQueueDrainAt(maxQueueWait, Stopwatch.GetTimestamp(), out sinceLastProgress);
+
+    /// <summary>
+    /// <see cref="ClassifyReplayPermitQueueDrainWithoutSideEffects"/> judged at
+    /// <paramref name="now"/>, a <see cref="Stopwatch"/> timestamp, so a test can
+    /// age the samples without waiting (issue #5992, A1).
+    /// </summary>
+    internal static ReplayPermitDrainVerdict ClassifyReplayPermitQueueDrainAt(
+        TimeSpan maxQueueWait, long now, out TimeSpan sinceLastProgress)
     {
         var lastProgress = Volatile.Read(ref _lastReplayPermitProgress);
-        sinceLastProgress = lastProgress == 0 ? TimeSpan.Zero : Stopwatch.GetElapsedTime(lastProgress);
+        sinceLastProgress = lastProgress == 0 ? TimeSpan.Zero : Stopwatch.GetElapsedTime(lastProgress, now);
 
         if (maxQueueWait <= TimeSpan.Zero)
             return ReplayPermitDrainVerdict.Draining;
 
+        // The reading expires once its samples age out: a mean sampled more than
+        // maxQueueWait before now says nothing about the queue now.
         var sample = Volatile.Read(ref _replayPermitWaitSample);
-        var meanIsCurrent = sample != 0 && Stopwatch.GetElapsedTime(sample) < maxQueueWait;
+        var meanIsCurrent = sample != 0 && Stopwatch.GetElapsedTime(sample, now) < maxQueueWait * 3; // RED A1e: the reading outlives its samples
         if (meanIsCurrent && Volatile.Read(ref _replayPermitWaitEwmaTicks) >= maxQueueWait.Ticks)
             return ReplayPermitDrainVerdict.WaitExceeded;
 
@@ -1510,7 +1521,7 @@ internal sealed partial class BPlusLeafGrain
             return ReplayPermitDrainVerdict.Draining;
 
         var holderProgress = Volatile.Read(ref _lastReplayHolderProgress);
-        return holderProgress != 0 && Stopwatch.GetElapsedTime(holderProgress) < maxQueueWait
+        return holderProgress != 0 && Stopwatch.GetElapsedTime(holderProgress, now) < maxQueueWait
             ? ReplayPermitDrainVerdict.HoldersSlow
             : ReplayPermitDrainVerdict.NoProgress;
     }
@@ -1583,6 +1594,13 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     internal static TimeSpan ReplayPermitWaitMeanForTest
         => TimeSpan.FromTicks(Volatile.Read(ref _replayPermitWaitEwmaTicks));
+
+    /// <summary>
+    /// Test-only view of the <see cref="Stopwatch"/> timestamp of the sample
+    /// behind <see cref="_replayPermitWaitEwmaTicks"/>, or <c>0</c> for none.
+    /// </summary>
+    internal static long ReplayPermitWaitSampleTimestampForTest
+        => Volatile.Read(ref _replayPermitWaitSample);
 
     /// <summary>
     /// Test-only view of how long ago the sample behind
@@ -1756,6 +1774,32 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// Whether a replay permit is free with no waiter parked ahead of an
+    /// arrival, in which case admission never refuses (issue #5992, A1): a
+    /// refusal there sheds no load, since the caller retries, and leaves the
+    /// permit idle.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Read at the decision, in the same synchronous step as the refusal it
+    /// overrides, so it cannot be a stale reading. A wait-arm verdict is about
+    /// the queue as it was when its samples were taken, and the admitted-waiter
+    /// count can include arrivals that are not parked; neither says a permit is
+    /// free now.
+    /// </para>
+    /// <para>
+    /// A free count implies no waiter is parked: <see cref="SemaphoreSlim"/>
+    /// hands a released permit directly to a parked waiter rather than raising
+    /// <see cref="SemaphoreSlim.CurrentCount"/>. Every acquire of the replay gate
+    /// is either a queued <c>WaitAsync</c> or a zero-timeout probe that never
+    /// overtakes a parked waiter, so a positive count is a permit nobody is
+    /// queued for.
+    /// </para>
+    /// </remarks>
+    private static bool IsReplayPermitFreeWithNoWaiterAhead()
+        => Volatile.Read(ref _replayConcurrencyGate) is { CurrentCount: > 0 };
+
+    /// <summary>
     /// Applies the replay admission decision (issue #3284) and throws the
     /// refusal when it refuses: past the depth bound with the holders stalled or
     /// slow, or a current smoothed wait at or above the bound.
@@ -1782,8 +1826,9 @@ internal sealed partial class BPlusLeafGrain
                 ? ClassifyReplayPermitQueueDrainWithoutSideEffects(options.WalReplayPermitMaxQueueWait, out sinceProgress)
                 : ClassifyReplayPermitQueueDrain(options.WalReplayPermitMaxQueueWait, out sinceProgress)
             : ReplayPermitDrainVerdict.Draining;
-        if (verdict == ReplayPermitDrainVerdict.WaitExceeded
-            || (!belowBound && verdict is ReplayPermitDrainVerdict.NoProgress or ReplayPermitDrainVerdict.HoldersSlow))
+        if ((verdict == ReplayPermitDrainVerdict.WaitExceeded
+                || (!belowBound && verdict is ReplayPermitDrainVerdict.NoProgress or ReplayPermitDrainVerdict.HoldersSlow))
+            /* RED A1r: no work-available re-check */)
         {
             _replayAdmissionPhase = ReplayAdmissionPhase.RefusedAdmission;
 

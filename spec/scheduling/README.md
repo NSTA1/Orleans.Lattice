@@ -12,7 +12,7 @@ TurnOccupancy is a fully discovered module, not a helper exemption.
 | TurnOccupancy | 4 | 1 | 8 | 7 | 11 | 961 |
 | WalAdmission | 4 | 8 | 11 | 16 | 21 | 86496 |
 | WalBackPressure | 6 | 16 | 18 | 34 | 38 | 135464 |
-| ReplayPermits | 9 | 11 | 20 | 29 | 38 | 695064 |
+| ReplayPermits | 9 | 12 | 20 | 30 | 39 | 695064 |
 | MaterialiserDrain | 6 | 8 | 21 | 21 | 33 | 1076 |
 | SagaReadProgress | 3 | 5 | 6 | 11 | 12 | 2451 |
 | TagIndexReconcile | 3 | 6 | 12 | 15 | 19 | 2784 |
@@ -266,11 +266,13 @@ holders remain reachable. Fair opportunities are not bounded wall-clock service.
 | TwoPartitions | 2,762,408 | 26,786,445 |
 | PartialPrefix | 1,038,664 | 9,888,749 |
 
-All three configurations retain all nine invariants, eleven properties and five
+All three configurations retain all nine invariants, twelve properties and five
 temporal branches. PartialPrefix requires multiple completed slices to finish
-one coverage gap. Twenty-nine one-target paired experiments cover the checked
-clauses and environment steps; Stutter alone is non-behavioural. The thirty-eight
-behaviour rows map to sixteen distinct production methods. The actual-gate
+one coverage gap. Thirty one-target paired experiments cover the checked
+clauses and environment steps; Stutter alone is non-behavioural. The thirty-nine
+behaviour rows map to seventeen distinct production methods.
+`WorkConservingRefusal` (#5992 A1) re-checks a free permit with no waiter ahead
+at every refusal decision; it changes transitions, not the reachable states. The actual-gate
 Coyote fixture lives in the core package's BPlusTree/Coyote directory.
 
 The unchanged 1,800MB/two-worker periodic policy completed the three full
@@ -410,7 +412,7 @@ production units, paired counterexamples and cooperative Coyote boundary.
 
 All scheduling-directory bases, variants and mutations route before the broad
 Wal prefix to five deterministic-only shards, partitioning the ten-module
-population 106/86/1/27/1 (221 cases): TlcShardScheduling holds ReplayPermits
+population 106/87/1/27/1 (222 cases): TlcShardScheduling holds ReplayPermits
 base/PartialPrefix and WalBackPressure, MaterialiserDrain, WalAdmission,
 WalGcStarvationDriveWitness and TurnOccupancy; TlcShardSchedulingWorkloadB holds
 ReplayPermits mutations plus WalGcStarvationDrive, SagaReadProgress and
