@@ -505,6 +505,41 @@ internal sealed partial class BPlusLeafGrain
         }
     }
 
+    /// <summary>
+    /// The partitions whose latest checkpoint advance came from the live advance (#5572), not
+    /// from a replay or a hint. Activation memory. A resident leaf applies its own writes
+    /// synchronously, so the live advance's checkpoint is no claim about undrained work: the
+    /// cursor report for such a partition carries the HLC only and withdraws its advisory
+    /// offset (#5981). A later replay or hint advance claims an offset again.
+    /// </summary>
+    private HashSet<int>? _liveAdvancedPartitions;
+
+    /// <summary>
+    /// The one stamp the live advance is about to make, set immediately before its call into
+    /// <see cref="ILeafProjection.SetCheckpointOffsetAsync"/> and consumed there before any await.
+    /// The origin travels with that call alone: <c>_liveAdvanceInFlight</c> stays set across the
+    /// live advance's awaits, so a replay or hint advance interleaving on this
+    /// <c>[AlwaysInterleave]</c> activation must not read it (#5981, S1).
+    /// </summary>
+    private (int Partition, long Offset)? _liveAdvanceStamp;
+
+    /// <summary>Records whether <paramref name="partition"/>'s latest advance was the live advance's.</summary>
+    private void NoteCheckpointAdvanceOrigin(int partition, bool live)
+    {
+        if (live)
+        {
+            (_liveAdvancedPartitions ??= new HashSet<int>()).Add(partition);
+        }
+        else
+        {
+            _liveAdvancedPartitions?.Remove(partition);
+        }
+    }
+
+    /// <summary>Whether <paramref name="partition"/>'s latest advance was the live advance's.</summary>
+    private bool IsLiveAdvancedPartition(int partition) =>
+        _liveAdvancedPartitions is { } live && live.Contains(partition);
+
     private long GetPersistedCheckpointForPartition(int partition)
     {
         if (partition == 0)
@@ -584,6 +619,10 @@ internal sealed partial class BPlusLeafGrain
 
     async Task ILeafProjection.SetCheckpointOffsetAsync(long offset, CancellationToken cancellationToken)
     {
+        // Consumed before the first await, so no interleaved caller can inherit the live
+        // advance's origin (#5981, S1).
+        var liveStamp = _liveAdvanceStamp;
+        _liveAdvanceStamp = null;
         cancellationToken.ThrowIfCancellationRequested();
         var partition = LatticeApplyOffsetContext.CurrentPartition ?? 0;
         var persisted = GetPersistedCheckpointForPartition(partition);
@@ -632,6 +671,7 @@ internal sealed partial class BPlusLeafGrain
         }
 
         (_pendingCheckpointOffsetsByPartition ??= new Dictionary<int, long>())[partition] = offset;
+        NoteCheckpointAdvanceOrigin(partition, live: liveStamp == (partition, offset));
 
         // Coalescing predicate: persist if either threshold has been
         // exceeded. Zero interval means every-entry mode.

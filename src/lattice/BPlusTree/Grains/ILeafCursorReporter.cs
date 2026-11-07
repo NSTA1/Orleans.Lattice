@@ -68,6 +68,14 @@ internal interface ILeafCursorReporter
         int walPartition, long checkpointOffset, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Withdraws the consumer's advisory checkpoint offset claim for a partition
+    /// (<see cref="IWalCursorRegistry.ClearCheckpointAsync"/>): a resident leaf whose checkpoint
+    /// the live advance moved makes no claim about undrained work there (issue #5981).
+    /// </summary>
+    Task ClearCheckpointAsync(
+        string treeName, string consumerId, int walPartition, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Removes <paramref name="consumerId"/>'s registration for
     /// <paramref name="treeName"/>. Idempotent: unregistering a consumer
     /// that has not been registered (or was already unregistered) is a

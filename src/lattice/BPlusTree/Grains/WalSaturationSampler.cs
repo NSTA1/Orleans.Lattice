@@ -183,7 +183,7 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
         string treeId,
         long lagTicks,
         int laggingConsumers,
-        int unclaimedCheckpoints,
+        int unclaimedConsumers,
         in WalCursorSnapshot minHolder,
         DateTimeOffset observedAt,
         Guid observationId,
@@ -195,11 +195,11 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
             : null;
 
         _logger.LogWarning(
-            "Materialiser drain lag for tree {TreeId} is over the threshold at {DrainLagSeconds:F1}s across {LaggingConsumers} lagging consumer(s), {UnclaimedCheckpoints} unclaimed partition checkpoint(s) not counted. Holder {HolderRank}/{HolderCount}: {ConsumerId} at cursor {Cursor}; last report {ReportAgeSeconds:F1}s ago, position last advanced {PositionAgeSeconds}s ago (null when not observed since registration). Observation {ObservationId} at {ObservedAtUtc:O}.",
+            "Materialiser drain lag for tree {TreeId} is over the threshold at {DrainLagSeconds:F1}s across {LaggingConsumers} lagging consumer(s), {UnclaimedConsumers} consumer(s) with no checkpoint claim not counted. Holder {HolderRank}/{HolderCount}: {ConsumerId} at cursor {Cursor}; last report {ReportAgeSeconds:F1}s ago, position last advanced {PositionAgeSeconds}s ago (null when not observed since registration). Observation {ObservationId} at {ObservedAtUtc:O}.",
             treeId,
             TimeSpan.FromTicks(lagTicks).TotalSeconds,
             laggingConsumers,
-            unclaimedCheckpoints,
+            unclaimedConsumers,
             holderRank,
             holderCount,
             minHolder.ConsumerId,
@@ -575,10 +575,22 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
                     eligible = true;
                     if (entry.CheckpointOffsets is not { Count: > 0 } offsets)
                     {
-                        incomplete = true;
+                        // An empty map is a withdrawn claim (ClearCheckpointAsync, #5981):
+                        // a resident leaf the live advance moved. Only a null map - a
+                        // legacy HLC-only consumer - is unknown history.
+                        if (entry.CheckpointOffsets is null)
+                        {
+                            incomplete = true;
+                        }
+                        else
+                        {
+                            unclaimed++;
+                        }
+
                         continue;
                     }
                     long? age = null;
+                    var claims = false;
                     foreach (var offset in offsets)
                     {
                         // A negative checkpoint is "no claim": a leaf born with no
@@ -587,12 +599,13 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
                         // yet. It is its own case - neither lag from the partition's
                         // first append, which would count every freshly built leaf
                         // (#5969), nor incomplete history, which would warn on every
-                        // fresh resize. It is counted as unclaimed for the holder log.
+                        // fresh resize.
                         if (offset.Value < 0)
                         {
-                            unclaimed++;
                             continue;
                         }
+
+                        claims = true;
 
                         if (appendTimes is null || !appendTimes.TryGetValue(offset.Key, out var timeline))
                         {
@@ -603,6 +616,13 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
                         incomplete |= missingHistory;
                         if (partitionAge is { } knownAge)
                             age = Math.Max(age ?? 0, knownAge);
+                    }
+                    // Unclaimed counts consumers, as lagging does: one with no claim at
+                    // any partition, like one that withdrew its claim above.
+                    if (!claims)
+                    {
+                        unclaimed++;
+                        continue;
                     }
                     if (age is not { } consumerLag)
                         continue;
