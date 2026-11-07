@@ -383,6 +383,12 @@ public partial class ReplicationShipperGrainTests
         public ValueTask<long> GetNextSequenceAsync(CancellationToken cancellationToken) =>
             ValueTask.FromResult((long)Entries.Count);
 
+        public ValueTask<long> GetIncarnationAsync(CancellationToken cancellationToken) => ValueTask.FromResult(0L);
+
+
+        public Task<long> AdvanceIncarnationAsync(CancellationToken cancellationToken) => Task.FromResult(1L);
+
+
         public ValueTask<long> GetReadableHeadAsync(CancellationToken cancellationToken) =>
             ValueTask.FromResult((long)Entries.Count);
 

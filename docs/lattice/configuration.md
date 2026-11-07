@@ -269,6 +269,7 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`WalReplayPermitMaxQueueWait`](#walreplaypermitmaxqueuewait) | `TimeSpan` | 5 seconds | Yes |
 | [`WalReplayMaxRecordsPerTurn`](#walreplaymaxrecordsperturn) | `int` | 256 | Yes |
 | [`WalReplaySliceBudget`](#walreplayslicebudget) | `int` | 256 | Yes |
+| [`WalReplayPageRingBytes`](#walreplaypageringbytes) | `long` | 64 MiB (`0` disables) | Yes (on the next coordinator activation) |
 | [`WalSaturationAcuteOnly`](#walsaturationacuteonly) | `bool` | `true` | Yes (set it globally - see below) |
 | [`WalSaturationDispatchTimeoutThreshold`](#walsaturationdispatchtimeoutthreshold) | `int` | 1 | Yes (global; read from the default options) |
 | [`WalSaturationFlushLatencySampleWindows`](#walsaturationflushlatencysamplewindows) | `int` | 3 | Yes (global; read from the default options) |
@@ -1897,6 +1898,17 @@ That matters because both ends of the one dial you do have are failure modes, so
 The configured width is a starting point, not a floor: a replay whose slice read fails for memory pressure narrows its own width to a quarter and retries the same range (issue #2742), a reactive, per-replay, per-activation adaptation that widens back towards the configured width on success and starts afresh at it on the next activation. Setting the option lowers the ceiling that adaptation works down from; it does not disable it. Whether it is engaging at all is visible in `orleans.lattice.wal.replay.slice_narrowings`, tagged by tree and partition and primed at zero, which is the instrument to read before concluding that a memory-pressure failure was caused by the slice width - a flat zero alongside climbing activation failures means the failing allocation was somewhere else and the width is not the lever. See [Metrics](metrics.md).
 
 The narrowing reached only the **activation-time** replay when it was introduced. Two further replay sites - the snapshot-cursor rebuild and the frozen-baseline tail fold - kept a constant of the same name and the same value and passed it straight through, so for a period the recovery path was the one without the resilience, and every check that compared the two *values* passed while the *behaviour* had diverged. All three sites now read through one shared reader that owns the width, the retry, the widening and the counter's priming together (issue #2899), and all three honour this option.
+
+### `WalReplayPageRingBytes`
+
+Estimated bytes of WAL pages the per-partition replay coordinators of one silo may hold (default: 64 MiB, issue #5896). Every leaf replaying a WAL partition reads its slices through that partition's coordinator, and without a cache each leaf read every page of the partition for itself, so a cold restart cost the number of leaves times the depth of the log in storage round trips (issue #5877). The coordinator now keeps the unfiltered pages it reads and projects each leaf's filtered slice from them, applying exactly the rule a filtered storage read applies, so each page is read once however many leaves replay it.
+
+- **Coverage.** A page covers only up to the last entry its read actually returned, never the upper bound it asked for, so an offset that was not yet readable is never served as empty: anything above a page is read from storage.
+- **Incarnation.** Each WAL partition carries a durable incarnation that every path resetting it advances (today, a tree purge, after trimming the partition). A page is served only while its partition is at the incarnation it was read at, checked in memory on every serve, so a purge and a recreate of the same tree id never serve the purged log, not even from a second, transient activation of the coordinator.
+- **Memory.** One coordinator never holds more than this budget, evicting its lowest pages first, and all of a silo's coordinators together never hold more than it either: a page that would exceed it is served without being cached. A read in flight additionally holds the page it is reading, bounded by [`WalReplaySliceBudget`](#walreplayslicebudget) entries.
+- **Isolation.** Each leaf receives its own copy of every value buffer and version vector it is served, so nothing one leaf does to its slice reaches another.
+
+Set to `0` to disable the cache; every replay then reads storage itself, as before. A WAL wiped **out of band**, behind the library's back rather than through a purge, is not detected: restart the silo, or set this to `0`, before doing that.
 
 ### `WalReplayServiceRateControllerEnabled`
 

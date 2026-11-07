@@ -191,10 +191,40 @@ public sealed class LeafReplayCoordinatorGrainInterleaveTests
         });
     }
 
+    /// <summary>
+    /// Every leaf replaying one partition is served from one storage read of
+    /// each page (issue #5896): many concurrent replays of the same window, each
+    /// with its own ownership, cost the partition one read.
+    /// </summary>
+    [Test]
+    public async Task Cold_restart_replays_each_partition_page_from_storage_once()
+    {
+        var coordinator = _cluster.Client.GetGrain<ILeafReplayCoordinatorGrain>($"cold-restart-{Guid.NewGuid():N}/0");
+        var filters = Enumerable.Range(0, 13)
+            .Select(i => new WalKeyFilter(((char)('a' + (2 * i))).ToString(), i == 12 ? null : ((char)('a' + (2 * i) + 2)).ToString()))
+            .ToList();
+
+        var leaves = filters.Select(f => coordinator.ReadSliceAsync(-1, 99, 100, f, CancellationToken.None)).ToList();
+        await _reader.WaitForInFlightAsync(1, OverlapBudget);
+        await Task.Delay(TimeSpan.FromMilliseconds(500));
+        _reader.ReleaseAll();
+        var slices = await Task.WhenAll(leaves);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(_reader.Reads, Is.EqualTo(1), "thirteen leaves, one storage read of the page");
+            Assert.That(slices.Sum(s => s.Count(e => e.Mutation.Value is not null)), Is.EqualTo(100),
+                "every entry of the window reached exactly its owning leaf");
+        });
+    }
+
     private static Task Issue(ILeafReplayCoordinatorGrain coordinator, CoordinatorCall call) => call switch
     {
-        CoordinatorCall.UnfilteredSlice => coordinator.ReadSliceAsync(-1, 50, 16, CancellationToken.None),
-        CoordinatorCall.FilteredSlice => coordinator.ReadSliceAsync(-1, 100, 16, new WalKeyFilter("m", "z"), CancellationToken.None),
+        // A different start offset than the parked read: a read from the same
+        // offset joins the parked fill by design (issue #5896), whatever its
+        // filter or ceiling, since the ring caches unfiltered pages.
+        CoordinatorCall.UnfilteredSlice => coordinator.ReadSliceAsync(200, 250, 16, CancellationToken.None),
+        CoordinatorCall.FilteredSlice => coordinator.ReadSliceAsync(200, 300, 16, new WalKeyFilter("m", "z"), CancellationToken.None),
         CoordinatorCall.Head => coordinator.GetHeadOffsetAsync(CancellationToken.None),
         CoordinatorCall.Tail => coordinator.GetTailOffsetAsync(CancellationToken.None),
         _ => throw new ArgumentOutOfRangeException(nameof(call)),
@@ -293,6 +323,16 @@ public sealed class LeafReplayCoordinatorGrainInterleaveTests
             await ParkAsync();
             return 1000;
         }
+
+        /// <summary>The partition incarnation (issue #5896); this fake never resets.</summary>
+
+        public ValueTask<long> GetIncarnationAsync(string treeId, int shardIndex, CancellationToken cancellationToken = default) => ValueTask.FromResult(Incarnation);
+
+
+        /// <summary>The incarnation <see cref="GetIncarnationAsync"/> reports.</summary>
+
+        public long Incarnation { get; set; }
+
 
         public async Task<long> GetTailOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken = default)
         {

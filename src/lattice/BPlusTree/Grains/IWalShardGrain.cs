@@ -207,6 +207,27 @@ internal interface IWalShardGrain : IGrainWithStringKey
     ValueTask<long> GetReadableHeadAsync(CancellationToken cancellationToken);
 
     /// <summary>
+    /// Returns the partition's durable incarnation (issue #5896, condition I3):
+    /// the in-memory copy of <see cref="WalShardFloorState.Incarnation"/>, so the
+    /// call touches no storage. A replay page cached at one incarnation is never
+    /// served at another.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    [AlwaysInterleave]
+    ValueTask<long> GetIncarnationAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Durably advances the partition's incarnation (issue #5896, condition I1)
+    /// and returns the new value. Called by every path that resets, truncates or
+    /// rewrites the partition under the same physical tree id, after the change
+    /// and before the partition admits a new append. The value is persisted
+    /// before it is published, and a failed write leaves it where it was and
+    /// throws, so the caller fails closed.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<long> AdvanceIncarnationAsync(CancellationToken cancellationToken);
+
+    /// <summary>
     /// Returns the state observer's resume floor in one grain call: the next
     /// assigned sequence, sampled first, minus the trim-aware <i>live</i> entry
     /// count read after it. The live count is the number of entries between the

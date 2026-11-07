@@ -141,22 +141,30 @@ internal sealed partial class WalShardGrain
     /// </summary>
     private async Task PersistClockFloorAsync(HybridLogicalClock target)
     {
-        var previous = floorState.State.Floor;
-        if (target <= previous)
-        {
-            return;
-        }
-
-        floorState.State.Floor = target;
+        await _floorStateWriteGate.WaitAsync().ConfigureAwait(true);
         try
         {
-            await floorState.WriteStateAsync().ConfigureAwait(true);
+            var previous = floorState.State.Floor;
+            if (target <= previous)
+            {
+                return;
+            }
+
+            floorState.State.Floor = target;
+            try
+            {
+                await floorState.WriteStateAsync().ConfigureAwait(true);
+            }
+            catch (Exception ex)
+            {
+                floorState.State.Floor = previous;
+                Trace($"clock-floor.persist-failed tree={_treeId} shard={_shardIndex} error={ex.GetType().Name}: {ex.Message}");
+                return;
+            }
         }
-        catch (Exception ex)
+        finally
         {
-            floorState.State.Floor = previous;
-            Trace($"clock-floor.persist-failed tree={_treeId} shard={_shardIndex} error={ex.GetType().Name}: {ex.Message}");
-            return;
+            _floorStateWriteGate.Release();
         }
 
         lock (_stateGate)

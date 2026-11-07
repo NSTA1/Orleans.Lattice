@@ -104,6 +104,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
+- **WAL replay - One storage read per page however many leaves replay a partition.** A silo restarted cold under write load did not recover, because every leaf replaying a WAL partition read every page of it for itself, so replay cost the number of leaves times the depth of the log. The per-partition replay coordinator now caches the pages it reads, up to `WalReplayPageRingBytes` per silo (default 64 MiB; `0` disables it), and serves each leaf's slice from them exactly as a storage read would. A page is served only at its WAL partition's current durable incarnation, which a tree purge now advances, so a recreated tree never sees its predecessor's log. ([#5896](https://github.com/NSTA1/Orleans.Lattice/issues/5896), [#5877](https://github.com/NSTA1/Orleans.Lattice/issues/5877)) (`Orleans.Lattice`)
+
 - **WAL replay - Per-partition replay reads no longer serialise.** The per-partition replay coordinator served one slice read at a time, so a silo replayed at most one slice per WAL partition however many replay permits it had; on a cold restart, 16 times the permits bought 4.7 times the reads and slowed every replay. Its reads now interleave. ([#5877](https://github.com/NSTA1/Orleans.Lattice/issues/5877)) (`Orleans.Lattice`)
 
 - **WAL replay - Admission before the snapshot rehydrate.** A re-armed leaf replay that replay admission would refuse is now refused before it spends a snapshot rehydrate, which during a cold restart under write load had cost each refused attempt 9-37 s of snapshot reads. ([#5877](https://github.com/NSTA1/Orleans.Lattice/issues/5877)) (`Orleans.Lattice`)
