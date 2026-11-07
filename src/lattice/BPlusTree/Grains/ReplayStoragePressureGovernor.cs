@@ -157,7 +157,11 @@ internal enum ReplayStoragePressureReason
     /// <summary>The storage provider retried throttled or unavailable requests.</summary>
     Throttle,
 
-    /// <summary>Replay slice-read p99 rose well above its unpressured baseline.</summary>
+    /// <summary>
+    /// Replay slice-read p99 rose well above its unpressured baseline. Measured
+    /// around the whole read, so in-process queueing counts as well as storage
+    /// time; tagged <c>replay_latency</c>.
+    /// </summary>
     Latency,
 
     /// <summary>Enough consecutive unpressured windows to return a permit.</summary>

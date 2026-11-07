@@ -3636,7 +3636,7 @@ public static class LatticeMetrics
     /// Their difference is the service-owned level; memory recovery cannot
     /// restore that capacity. Sum all triggers for the combined withheld level.
     /// Its storage-pressure half (#5877) has a third ledger, withholding under
-    /// <c>trigger=storage_throttle</c> or <c>storage_latency</c> and restoring
+    /// <c>trigger=storage_throttle</c> or <c>replay_latency</c> and restoring
     /// under <c>storage_recovery</c> or <c>storage_idle</c>. Service-time and
     /// storage arms are zero-primed only when the controller is enabled.
     /// </para>
@@ -3666,7 +3666,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> WalReplayPermitAdaptations =
         Meter.CreateCounter<long>("orleans.lattice.wal.replay.permit_adaptations", unit: "{permit}",
-            description: "Adaptations to the per-silo WAL replay concurrency gate, tagged by outcome. Memory withholding carries trigger=fault or occupancy; memory restores are untagged because those permits are fungible. The replay concurrency controller (on by default) tags both outcomes trigger=service_time, withholds under storage_throttle or storage_latency, and restores under storage_recovery or storage_idle. Memory arms are zero-primed when the gate is sized; controller arms only when it is enabled. Sum all triggers for the combined level.");
+            description: "Adaptations to the per-silo WAL replay concurrency gate, tagged by outcome. Memory withholding carries trigger=fault or occupancy; memory restores are untagged because those permits are fungible. The replay concurrency controller (on by default) tags both outcomes trigger=service_time, withholds under storage_throttle or replay_latency, and restores under storage_recovery or storage_idle. Memory arms are zero-primed when the gate is sized; controller arms only when it is enabled. Sum all triggers for the combined level.");
 
     /// <summary>
     /// The name of the observable gauge reporting the number of replay permits
