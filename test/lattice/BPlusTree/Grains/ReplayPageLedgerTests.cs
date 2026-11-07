@@ -149,14 +149,14 @@ public sealed class ReplayPageLedgerTests
     {
         var workingSet = new LeafResidentWorkingSet(1L << 30);
         var ring = Ring(workingSet);
-        ring.NoteDemand("leaf-a", 4, leaseTicks: 1);
-        var deadline = System.Diagnostics.Stopwatch.GetTimestamp() + 2;
-        while (System.Diagnostics.Stopwatch.GetTimestamp() < deadline)
-        {
-        }
+        const long declaredAt = 1_000;
+        const long lease = 500;
+        ring.NoteDemand("leaf-a", 4, lease, now: declaredAt);
 
         lock (workingSet.Gate)
-            Assert.That(ring.LiveDemandLocked(System.Diagnostics.Stopwatch.GetTimestamp()), Is.Empty);
+            Assert.That(ring.LiveDemandLocked(declaredAt + lease - 1), Is.EqualTo(new[] { 4L }), "live inside its lease");
+        lock (workingSet.Gate)
+            Assert.That(ring.LiveDemandLocked(declaredAt + lease), Is.Empty, "lapsed at the end of its lease");
         Assert.That(ring.DemandCount, Is.Zero, "a lapsed declaration is dropped");
     }
 
@@ -177,6 +177,34 @@ public sealed class ReplayPageLedgerTests
                 Assert.That(ring.LiveDemandLocked(System.Diagnostics.Stopwatch.GetTimestamp()), Does.Not.Contain(-100L), "the oldest lease is the one dropped");
             });
         }
+    }
+
+    [Test]
+    public void The_demand_lease_is_a_named_ten_minute_constant()
+        => Assert.That(LeafReplayCoordinatorGrain.ReplayDemandLease, Is.EqualTo(TimeSpan.FromMinutes(10)));
+
+    [Test]
+    public async Task A_replay_slice_read_carries_the_reader_id_on_that_call_only()
+    {
+        var coordinator = NSubstitute.Substitute.For<ILeafReplayCoordinatorGrain>();
+        string? seen = "unset";
+        NSubstitute.SubstituteExtensions.Returns(
+            coordinator.ReadSliceAsync(
+                NSubstitute.Arg.Any<long>(), NSubstitute.Arg.Any<long>(), NSubstitute.Arg.Any<int>(), NSubstitute.Arg.Any<CancellationToken>()),
+            _ =>
+            {
+                seen = LeafReplayReaderContext.Current;
+                return Task.FromResult<IReadOnlyList<CommitLogSliceEntry>>([]);
+            });
+        var reader = new ReplaySliceReader(coordinator, Tree, 0, reader: "leaf-x");
+
+        await reader.ReadSliceAsync(-1, 10, onNarrowed: null, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(seen, Is.EqualTo("leaf-x"), "the read call carries the reader");
+            Assert.That(LeafReplayReaderContext.Current, Is.Null, "and nothing after it does");
+        });
     }
 
     [Test]

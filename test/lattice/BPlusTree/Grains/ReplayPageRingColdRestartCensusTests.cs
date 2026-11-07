@@ -64,6 +64,24 @@ public sealed class ReplayPageRingColdRestartCensusTests
             "a wave may re-read only what the cache could not hold, not the whole log");
     }
 
+    /// <summary>
+    /// Non-regression at the same bound for strictly sequential waves, which do
+    /// not discriminate eviction policies (lowest-first meets the bound too) but
+    /// must never exceed it.
+    /// </summary>
+    [Test]
+    public async Task A_cold_restart_in_sequential_waves_stays_within_the_same_bound()
+    {
+        const int waves = 8;
+        const double fraction = 0.25;
+        var logBytes = (Entries * (96L + (2 * 6) + 1)) + ((Entries / SliceBudget) * 64L);
+
+        var readsPerEntry = await RunCensusAsync(
+            (long)(logBytes * fraction), waveSize: Leaves / waves, declareQueued: true);
+
+        Assert.That(readsPerEntry, Is.LessThanOrEqualTo(1 + ((1 - fraction) * (waves - 1)) + 0.5));
+    }
+
     private static async Task<double> RunCensusAsync(long ringBytes, int waveSize, bool declareQueued, bool overlap = false)
     {
         CountingWalStorageProvider.Reset();

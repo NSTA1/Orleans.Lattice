@@ -3602,7 +3602,6 @@ internal sealed partial class BPlusLeafGrain
                 "leaf.replay.wal",
                 context.GrainId,
                 AwaitDiagnostics.Enabled ? (replayCheckpointOverride == -1L ? "cold" : "warm") : null))
-            using (LeafReplayReaderContext.BeginScope(ReplayReaderId))
             {
                 advanced = await ReplayWalSinceCheckpointAsync(replayCheckpointOverride, cancellationToken);
             }
@@ -7116,7 +7115,8 @@ internal sealed partial class BPlusLeafGrain
             MetricTreeId,
             partition,
             (await GetOptionsAsync()).WalReplaySliceBudget,
-            replayOwnership.Filter);
+            replayOwnership.Filter,
+            ReplayReaderId);
 
         // Reuse the head the sweep-order pre-pass already probed when it has
         // one, so ordering the sweep costs no extra grain call. A head probed

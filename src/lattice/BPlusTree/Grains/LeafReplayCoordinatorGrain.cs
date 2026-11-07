@@ -182,7 +182,7 @@ internal sealed class LeafReplayCoordinatorGrain(
         // The reader's position orders eviction only (issue #5877): it is
         // recorded before the read and advanced past what it was served.
         var reader = LeafReplayReaderContext.Current;
-        if (reader is null)
+        if (string.IsNullOrEmpty(reader))
             return await ServeFromRingAsync(ring, fromOffsetExclusive, toOffsetInclusive, budget, filter, cancellationToken);
 
         ring.NoteDemand(reader, fromOffsetExclusive, ReplayDemandLeaseTicks);

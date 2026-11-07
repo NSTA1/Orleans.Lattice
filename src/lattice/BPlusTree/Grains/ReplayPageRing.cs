@@ -156,12 +156,13 @@ internal sealed class ReplayPageRing
     /// <summary>
     /// Records that <paramref name="reader"/> will next read this partition
     /// after <paramref name="nextExclusive"/>, until <paramref name="leaseTicks"/>
-    /// from now unless renewed.
+    /// from now unless renewed. <paramref name="now"/> is a
+    /// <see cref="Stopwatch"/> timestamp; tests supply their own clock.
     /// </summary>
-    public void NoteDemand(string reader, long nextExclusive, long leaseTicks)
+    public void NoteDemand(string reader, long nextExclusive, long leaseTicks, long? now = null)
     {
         ArgumentNullException.ThrowIfNull(reader);
-        var now = Stopwatch.GetTimestamp();
+        var at = now ?? Stopwatch.GetTimestamp();
         lock (_ledger.Gate)
         {
             if (!_demand.ContainsKey(reader) && _demand.Count >= MaxDemandEntries)
@@ -177,7 +178,7 @@ internal sealed class ReplayPageRing
                 _demand.Remove(oldest!);
             }
 
-            _demand[reader] = (nextExclusive, now + leaseTicks);
+            _demand[reader] = (nextExclusive, at + leaseTicks);
             _liveDemand = null;
         }
     }
