@@ -170,7 +170,7 @@ design relies on. See [Backward compatibility](#backward-compatibility).
 | `_lattice_leaf-append-epoch` | Leaf id | The leaf's append epoch | Claims only, by conditional write |
 | `_lattice_wal-append-epoch` | WAL shard key and leaf id | The partition's epoch entry for the leaf | The claim at the WAL shard (conditional max-merge), and entry retirement |
 | `_lattice_wal-append-epoch-floor` | WAL shard key | The partition's retired-epoch floor | Entry retirement only (max-merge) |
-| `_lattice_wal-routing-generation` | WAL shard key and initiator id (a shard root, or a tree for its range-delete generation) | The partition's generation entry for a shard-level initiator, or for the tree's range-delete fence | The initiator's re-claim (conditional max-merge), and retirement at the tree's purge (#5668) |
+| `_lattice_wal-routing-generations` | WAL shard key | The partition's generation table: a slot per shard-level initiator (a shard root, or the tree's range-delete fence), one row per partition (#5987; it replaced a per-initiator row before release) | The initiator's re-claim (a conditional read-modify-write raising its own slot and leaving the others as read), and retirement at the tree's purge (#5668) |
 | `_lattice_leaf-handoff` | Leaf id | The leaf's hand-off marker: initialised flag, open tokens and per-partition close heads | Hand-off initiators, and the leaf's birth |
 | `_lattice_shard-handoff` | Shard root id | The shard-level marker (the re-seed incarnation that seeded it (#5716), initialised flag, open tokens with their key ranges, close heads), the shard's routing generation, and each in-flight bulk operation's birth hint | The shard root, and the range-delete fence |
 | `_lattice_tree-routing-floor` | Tree id | A map from initiator tag (`s{i}` for shard root i, `t0` for the range-delete fence) to that initiator's routing floor (#5668, #5703) | The purge (one write raising every initiator's floor, before any delete) and the re-seed catch-up (its own initiator only). Read by every first-generation initialisation and by `NextRoutingRetryAsync`'s floor check, and loaded by each WAL shard activation |
@@ -499,7 +499,7 @@ anything: split commits never take `_splitGate`, the adaptive split's reject pha
 only flips a phase, and the fold's serial-turn guard excludes point writes.
 
 **The routing generation is durable (S1).** A shard-level initiator's generation entry
-at a partition lives in `_lattice_wal-routing-generation`, with the same semantics as
+at a partition lives in its slot of the partition's `_lattice_wal-routing-generations` row (#5987), with the same semantics as
 a leaf's entry: a conditional max-merge write, an in-memory copy raised under the
 lock, an unloaded entry that rejects until a re-presented re-claim reloads it, and no
 loss across a restart or a move. If a restart lost it, a write admitted before a close
@@ -811,8 +811,8 @@ implied by rule 1 in the model (see [Redundancy checks](#redundancy-checks)); it
 kept because a resume path the census misses would otherwise read as closed.
 
 **Purging a tree's fence rows (#5668, #5703).** The per-tree rows (each shard root's
-`_lattice_shard-handoff` marker, every partition's `_lattice_wal-routing-generation`
-entries, and the `TreeRangeDeleteFenceGrain` state) are retired by the purge, before
+`_lattice_shard-handoff` marker, every partition's `_lattice_wal-routing-generations`
+table, and the `TreeRangeDeleteFenceGrain` state) are retired by the purge, before
 its registry removal and re-driven while `RegistryUnregisterPending`:
 1. **Floors first.** The purge reads every row: the fence grain's generation, every
    shard root's marker, and every partition's generation entries (each shard-root
@@ -1930,7 +1930,7 @@ Each production member carries detectors proven red. They land in this order:
 | B2 hand-off in flight across the gate | Section 2, "Hand-offs in flight across the gate": resume opens the marker; absence never means closed, a positive initialised state is required. Modelled by `WithLegacyHandOff` (`LegacyWrite`, `OpenGate`, `Resume`, `LegacyComplete`, `MarkInit`); the window opens with no marker before the gate and continues after it. Clean, 20,828,314 states. Mutation `ResumeWithoutMarker` (17 states); rule 2 is a redundancy row. |
 | B3 claim entry write not monotone | Section 1: the claim is three steps, the entry write is a conditional max-merge refused against the higher of the loaded entry, the durable entry and the floor. The model splits `Claim` into `ClaimRow`, `ClaimWrite`, `ClaimRaise`. Mutation `ClaimEntryOverwrite` (12 states). Splitting the claim also exposed a retired-floor window, now closed (`IgnoresRetiredFloor`, 8 states). |
 | B4 rejections escaping `ShardActivationRetry` | Section 5: retried at the seam that raises them, until the operation's existing deadline; a table of every caller of the leaf write surface, its exposure and its retry. Saga prepares retry rather than nack. Changes 1 and 2 restated. |
-| S1 routing generation not durable | `_lattice_wal-routing-generation`, with the leaf entry's semantics. The model keeps `fFence` across `Restart`. Mutation `GenerationNotDurable` (14 states). |
+| S1 routing generation not durable | A slot of the partition's `_lattice_wal-routing-generations` row (#5987), with the leaf entry's semantics. The model keeps `fFence` across `Restart`. Mutation `GenerationNotDurable` (14 states). |
 | S2 gate flips | Own unstamped appends self-report; an explicit claim guard in `Armed`. `WithGateFlip` configuration, clean (7,609,129). Mutation `NoSelfReport` (13 states); the claim guard is a redundancy row. |
 | S3 stamp contract | Unstamped leaf methods append unstamped. `AppendBatchStampedAsync` named, with per-entry stamps checked under `_stateGate` and a per-entry outcome. |
 | S4 racing the gate | Pinned by a mixed-version test in member 1; re-issued unstamped only on the definite "method unknown" failure; anything else follows today's retry semantics. |

@@ -202,6 +202,8 @@ public sealed class WalAppendFenceFirstTouchCostIntegrationTests
         });
     }
 
+    private static readonly TimeSpan ReadLatency = TimeSpan.FromMilliseconds(5);
+
     private static CountingStorage Storage { get; } = new();
 
     private sealed record CountSnapshot(IReadOnlyDictionary<string, int> Values)
@@ -236,10 +238,17 @@ public sealed class WalAppendFenceFirstTouchCostIntegrationTests
     {
         private readonly EnumerableMemoryGrainStorage _inner = new();
 
-        public Task ReadStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
+        public async Task ReadStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
         {
-            Count("R", stateName, grainId);
-            return _inner.ReadStateAsync(stateName, grainId, grainState);
+            if (Count("R", stateName, grainId))
+            {
+                // A real provider's read takes time (about 10 ms on Azure Table), so
+                // concurrent first touches overlap an in-flight read; the in-memory store
+                // completes at once and would hide a missing single-flight (#5987).
+                await Task.Delay(ReadLatency);
+            }
+
+            await _inner.ReadStateAsync(stateName, grainId, grainState);
         }
 
         public async Task WriteStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
