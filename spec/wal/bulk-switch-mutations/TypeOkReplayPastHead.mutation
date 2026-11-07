@@ -1,0 +1,14 @@
+# Pairs with TypeOK. The replay step's guard dropped: the appended leaf advances
+# its read position past the allocator head, out of the read position's domain.
+MODULE: TypeOkReplayPastHead
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: the appended leaf's replay advances past the WAL head
+PERTURBS: Replay
+
+--- FIND
+    /\ rpN + 1 < next
+--- REPLACE
+\* MUTATION: no head bound.
+    /\ rpN < MaxOff
+--- END

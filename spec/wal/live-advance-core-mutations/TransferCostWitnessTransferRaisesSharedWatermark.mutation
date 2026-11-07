@@ -1,0 +1,23 @@
+# #5837, the claimless advance: the split transfer and the receiver's close heads.
+MODULE: TransferCostWitnessTransferRaisesSharedWatermark
+TARGET: TransferCostWitness
+CLASS: Invariant
+SUMMARY: the transfer is appended unstamped and shared, as C4 has it today: every split raises the partition's shared watermark
+PERTURBS: Straggler
+BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithKeyMove = TRUE, MaxWindows = 1, WithMixedVersion = FALSE, WithDuplicate = FALSE
+
+--- FIND
+    /\ seenU' = [seenU EXCEPT ![a] = Max2(@, ReportU)]
+    /\ ReportForeign(a)
+    /\ ReportStale(a)
+    /\ UNCHANGED <<durable, acked, floor, up, rp, mine, snapCov, snapRows, epochVars, handVars>>
+    /\ UNCHANGED <<lastU, oldUsed, restarted, oldRejected, envVars, moveVars>>
+--- REPLACE
+\* MUTATION: the transfer raises the shared watermark.
+    /\ lastU' = next
+    /\ seenU' = [seenU EXCEPT ![a] = Max2(@, next)]
+    /\ ReportForeign(a)
+    /\ ReportStale(a)
+    /\ UNCHANGED <<durable, acked, floor, up, rp, mine, snapCov, snapRows, epochVars, handVars>>
+    /\ UNCHANGED <<oldUsed, restarted, oldRejected, envVars, moveVars>>
+--- END

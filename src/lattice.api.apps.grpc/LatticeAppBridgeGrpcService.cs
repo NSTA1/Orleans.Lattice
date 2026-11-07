@@ -74,6 +74,13 @@ internal sealed class LatticeAppBridgeGrpcService(
             logger.LogWarning(ex, "Api.Apps: gRPC call to {Method} timed out inside the cluster; outcome unknown.", context.Method);
             throw new RpcException(AppBridgeGrpcStatus.ToStatus(AppBridgeFailure.Unavailable));
         }
+        catch (LatticeWalQuiescingException ex)
+        {
+            // A WAL shard quiesced for a placement move refused the write without committing it
+            // (#5800): transient and self-healing, so the retryable Unavailable, never a server error.
+            logger.LogWarning(ex, "Api.Apps: gRPC call to {Method} hit a WAL shard quiesced for a placement move.", context.Method);
+            throw new RpcException(AppBridgeGrpcStatus.ToStatus(AppBridgeFailure.Unavailable));
+        }
         catch (OrleansMessageRejectionException ex)
         {
             // A silo was unavailable or rejected the message (#5742): transient, sent as the retryable Unavailable.
@@ -137,6 +144,13 @@ internal sealed class LatticeAppBridgeGrpcService(
             // A grain-call timeout (#5742). The bridge's closed failure vocabulary has no outcome-unknown code, so it
             // is sent as the retryable Unavailable, but logged as the transient fault it is rather than as an error.
             logger.LogWarning(ex, "Api.Apps: gRPC call to {Method} timed out inside the cluster; outcome unknown.", context.Method);
+            throw new RpcException(AppBridgeGrpcStatus.ToStatus(AppBridgeFailure.Unavailable));
+        }
+        catch (LatticeWalQuiescingException ex)
+        {
+            // A WAL shard quiesced for a placement move refused the write without committing it
+            // (#5800): transient and self-healing, so the retryable Unavailable, never a server error.
+            logger.LogWarning(ex, "Api.Apps: gRPC call to {Method} hit a WAL shard quiesced for a placement move.", context.Method);
             throw new RpcException(AppBridgeGrpcStatus.ToStatus(AppBridgeFailure.Unavailable));
         }
         catch (OrleansMessageRejectionException ex)

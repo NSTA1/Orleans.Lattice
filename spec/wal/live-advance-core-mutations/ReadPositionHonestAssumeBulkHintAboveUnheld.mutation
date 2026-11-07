@@ -1,0 +1,17 @@
+# Weakens B's BulkHintBound in this module's environment: the bulk-born leaf is born
+# at a position at or below its hint, but need not hold every record at or below it,
+# so its read position lies above a record it does not hold at birth. Shows the
+# assumption, in exactly the form B guarantees, is load-bearing.
+MODULE: ReadPositionHonestAssumeBulkHintAboveUnheld
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the bulk-born leaf is born above a record it does not hold
+PERTURBS: Create
+BOUNDS: WithBulk = TRUE
+
+--- FIND
+        /\ \A o \in Allocated : o <= r => o \in held
+--- REPLACE
+\* MUTATION: the leaf need not hold the records at or below its birth position.
+        /\ TRUE
+--- END

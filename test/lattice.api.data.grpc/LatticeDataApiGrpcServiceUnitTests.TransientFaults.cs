@@ -56,4 +56,23 @@ public sealed partial class LatticeDataApiGrpcServiceUnitTests
             Assert.That(ex.Status.Detail, Does.Not.Contain("secret-enumerator"));
         });
     }
+
+    [Test]
+    public void Set_maps_a_wal_shard_quiesced_for_a_move_to_unavailable()
+    {
+        // #5800: a WAL shard quiesced for a placement move refuses the append without
+        // committing it, and lifts within the move's lease. The client must retry, so the
+        // fault is the retryable Unavailable - not the Internal the catch-all reported.
+        _api.SetAsync("t", "k", Arg.Any<byte[]>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException(new LatticeWalQuiescingException("WAL shard secret-tree/0 quiesced for a placement move")));
+
+        var ex = Assert.ThrowsAsync<RpcException>(
+            () => _service.Set(new DataSetRequest { TreeId = "t", Key = "k", Value = [1] }, Context()));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.Unavailable));
+            Assert.That(ex.Status.Detail, Does.Not.Contain("secret-tree"));
+        });
+    }
 }

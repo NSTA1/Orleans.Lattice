@@ -58,8 +58,10 @@ installing a new app never adds a new service, credential bridge or interceptor.
   `KeyNotFoundException` `NotFound`, an `InvalidOperationException`
   `FailedPrecondition`, a grain-call `TimeoutException` `DeadlineExceeded` (the outcome
   is unknown, so confirm state before retrying a write), an
-  `OrleansMessageRejectionException` such as `SiloUnavailableException`, or an
-  `EnumerationAbortedException`, the retryable `Unavailable`, and anything else
+  `OrleansMessageRejectionException` such as `SiloUnavailableException`, an
+  `EnumerationAbortedException`, or a `LatticeWalQuiescingException` (a WAL shard
+  briefly quiesced for a placement move, matched before the
+  `InvalidOperationException` arm, #5800), the retryable `Unavailable`, and anything else
   `Internal`. A failed activation or a
   [tree ownership](../lattice.apps/README.md#tree-ownership) conflict on install, upgrade
   or enable is therefore `FailedPrecondition`; `Describe` returns each tree's

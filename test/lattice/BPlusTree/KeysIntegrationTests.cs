@@ -566,12 +566,13 @@ public class KeysPrefetchTests
         foreach (var k in items)
             await tree.SetAsync(k, Encoding.UTF8.GetBytes(k));
 
+        // ScanKeysAsync, not the raw stream: this test's subject is prefetch equivalence, which it forwards unchanged (#5786, #5282).
         var withoutPrefetch = new List<string>();
-        await foreach (var k in tree.KeysAsync(prefetch: false))
+        await foreach (var k in tree.ScanKeysAsync(prefetch: false))
             withoutPrefetch.Add(k);
 
         var withPrefetch = new List<string>();
-        await foreach (var k in tree.KeysAsync(prefetch: true))
+        await foreach (var k in tree.ScanKeysAsync(prefetch: true))
             withPrefetch.Add(k);
 
         Assert.That(withPrefetch, Is.EqualTo(withoutPrefetch));

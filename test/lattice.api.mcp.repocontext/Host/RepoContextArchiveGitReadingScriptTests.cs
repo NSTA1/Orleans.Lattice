@@ -89,11 +89,19 @@ public sealed class RepoContextArchiveGitReadingScriptTests
             Assert.Ignore("git is not available on this host, so the git-message conformance guard cannot run.");
         }
 
+        // The budget is sized from measurement, not guessed (#5783). The suite spawns about
+        // 25 short-lived git processes, so its wall time scales with CPU contention rather
+        // than with its own work: about 6 s idle on a Linux CI leg and about 20 s idle on a
+        // Windows workstation, but 254 s at worst on that workstation with twice as many
+        // CPU-bound threads as cores. 120 s was below that worst case and was exceeded on a
+        // pooled CI leg. 300 s clears it and still sits well under the leg's 10 m hang
+        // timeout, so a genuinely wedged suite fails here, with ScriptSuiteProcess's account
+        // of where it was, rather than as an anonymous hang dump.
         var (exitCode, stdout, stderr) = ScriptSuiteProcess.Run(
             shell!,
             SuitePath,
             ScriptsDirectory,
-            120_000);
+            300_000);
 
         // A git that vanished between the check above and the run, or a hand-run on a host
         // without git, exits with the distinct skip code. Honour it as an ignore, not a

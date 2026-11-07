@@ -118,6 +118,22 @@ internal sealed class LatticeSchemaRemediationGrain(
     internal int SliceSize { get; set; } = DefaultSliceSize;
 
     /// <summary>
+    /// The number of source keys a slice reads, and the number of values it writes in one
+    /// batch, before it checks its time budget (issue #5802). A slice reads its source a
+    /// chunk at a time and only as far as it writes, so every key is read once per phase
+    /// however slow the writes are. Reading the whole slice up front and writing only
+    /// what fit the budget re-read every unwritten key on the next slice, which made a
+    /// loaded tree of N keys cost on the order of N squared point reads.
+    /// </summary>
+    internal const int DefaultChunkSize = 32;
+
+    /// <summary>
+    /// The chunk size; <see cref="DefaultChunkSize"/> by default. Unit tests lower it to
+    /// drive a slice one value at a time.
+    /// </summary>
+    internal int ChunkSize { get; set; } = DefaultChunkSize;
+
+    /// <summary>
     /// The default wall-clock budget of one slice: a third of Orleans' default 30 second
     /// response timeout, so a slice slowed by a loaded cluster still returns well inside
     /// the caller's grain-call timeout (issue #5440).
@@ -126,10 +142,11 @@ internal sealed class LatticeSchemaRemediationGrain(
 
     /// <summary>
     /// The wall-clock budget of one slice. Once it is spent, a slice stops after the
-    /// value it is processing, persists its cursor there and returns, and the driver
-    /// continues it with the next slice; a slice always processes at least one value,
-    /// so every slice makes progress. Defaults to <see cref="DefaultSliceTimeBudget"/>;
-    /// unit tests lower it to <see cref="TimeSpan.Zero"/> to drive one value per slice.
+    /// chunk it is processing (<see cref="ChunkSize"/>), persists its cursor there and
+    /// returns, and the driver continues it with the next slice; a slice always
+    /// processes at least one chunk, so every slice makes progress. Defaults to
+    /// <see cref="DefaultSliceTimeBudget"/>; unit tests lower it to
+    /// <see cref="TimeSpan.Zero"/> to drive one chunk per slice.
     /// </summary>
     internal TimeSpan SliceTimeBudget { get; set; } = DefaultSliceTimeBudget;
 
@@ -544,9 +561,10 @@ internal sealed class LatticeSchemaRemediationGrain(
 
     /// <summary>
     /// Runs one slice of the read-only dry-run gate: up to <see cref="SliceSize"/>
-    /// values after the durable cursor, each rewritten and revalidated, stopping early
-    /// once <see cref="SliceTimeBudget"/> is spent. Aborts on the first offender with
-    /// no destination built and the original tree untouched; advances to the build once
+    /// values after the durable cursor, read a <see cref="ChunkSize"/> chunk at a time,
+    /// each rewritten and revalidated, stopping after the chunk in which
+    /// <see cref="SliceTimeBudget"/> is spent. Aborts on the first offender with no
+    /// destination built and the original tree untouched; advances to the build once
     /// the source is exhausted, recording the dry run's count as the build's total;
     /// otherwise records how far it got.
     /// </summary>
@@ -554,90 +572,96 @@ internal sealed class LatticeSchemaRemediationGrain(
     {
         var started = Stopwatch.GetTimestamp();
         var source = grainFactory.GetGrain<ILattice>(TreeId);
-        var rewrite = await CreateRewriteAsync();
-        var decode = TransformInputDecoderOrNull();
-        var policyView = PolicyViewOrNull();
-        var compiled = CompiledPolicyOrNull();
+        var remediate = await CreateValueRemediationAsync();
         var sliceSize = Math.Max(1, SliceSize);
+        var chunkSize = Math.Max(1, ChunkSize);
+        var storedForm = ReadsStoredForm;
         var done = 0;
+        var read = 0;
         string? lastKey = null;
-        Offender? offender = null;
-        var budgetSpent = false;
+        var stop = SliceStop.Continue;
+        Offender offender = default;
+        ExceptionDispatchInfo? fault = null;
 
-        var slice = await ReadSliceAsync(source, sliceSize);
-        try
+        await using (var keys = ScanKeysAfterCursorAsync(source, storedForm).GetAsyncEnumerator())
         {
-            foreach (var entry in slice.Entries)
+            try
             {
-                SchemaRestampInput input;
-                byte[] rewritten;
-                try
+                while (stop == SliceStop.Continue)
                 {
-                    input = decode is null ? Undecoded(entry.Value) : await decode(entry.Value);
-                    rewritten = rewrite(input.Body);
-                }
-                catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException)
-                {
-                    offender = new Offender(entry.Key, ex.Message, Preview(entry.Value));
-                    break;
-                }
+                    var chunk = await ReadChunkAsync(source, keys, Math.Min(chunkSize, sliceSize - read), storedForm);
+                    read += chunk.KeysRead;
+                    foreach (var entry in chunk.Entries)
+                    {
+                        var value = await remediate.RunAsync(entry);
+                        if (value.Offender is { } failed)
+                        {
+                            offender = failed;
+                            stop = SliceStop.Offender;
+                            break;
+                        }
 
-                var validated = policyView is null ? rewritten : policyView(rewritten);
-                if (compiled?.Validate(validated) is { } reason)
-                {
-                    offender = new Offender(entry.Key, reason, Preview(validated));
-                    break;
-                }
+                        done++;
+                        lastKey = entry.Key;
+                    }
 
-                done++;
-                lastKey = entry.Key;
-                if (done < slice.Entries.Count && SliceBudgetSpent(started))
-                {
-                    budgetSpent = true;
-                    break;
+                    stop = stop == SliceStop.Offender ? stop : NextStop(chunk, read, sliceSize, started, ref lastKey, ref fault);
                 }
             }
-        }
-        catch
-        {
-            await BankSliceProgressAsync(done, lastKey);
-            throw;
+            catch
+            {
+                await BankSliceProgressAsync(done, lastKey);
+                throw;
+            }
         }
 
         var scanned = state.State.ScannedCount + done;
-        if (offender is { } failed)
+        switch (stop)
         {
-            await AbortAsync(scanned + 1, failed.Key, failed.Reason, failed.Preview);
-        }
-        else if (budgetSpent)
-        {
-            // The rest of the slice, and any fault the scan met beyond it, is the next
-            // slice's: it resumes after the last value this one processed.
-            await RecordSliceProgressAsync(scanned, lastKey);
-        }
-        else if (slice.Fault is { } fault)
-        {
-            await BankSliceProgressAsync(done, lastKey);
-            fault.Throw();
-        }
-        else if (slice.Exhausted)
-        {
-            await AdvancePhaseAsync(LatticeSchemaRemediationPhase.Build, scannedCount: 0, phaseTotal: scanned);
-        }
-        else
-        {
-            await RecordSliceProgressAsync(scanned, slice.LastScannedKey);
+            case SliceStop.Offender:
+                await AbortAsync(scanned + 1, offender.Key, offender.Reason, offender.Preview);
+                break;
+            case SliceStop.Faulted:
+                await BankSliceProgressAsync(done, lastKey);
+                fault!.Throw();
+                break;
+            case SliceStop.Exhausted:
+                await AdvancePhaseAsync(LatticeSchemaRemediationPhase.Build, scannedCount: 0, phaseTotal: scanned);
+                break;
+            case SliceStop.Paused:
+                await RecordSliceProgressAsync(scanned, lastKey);
+                break;
+            default:
+                throw new InvalidOperationException($"A slice stopped in the unexpected state {stop}.");
         }
     }
 
     /// <summary>
     /// Runs one slice of the destination build: up to <see cref="SliceSize"/> values
-    /// after the durable cursor, each rewritten, revalidated and written to the
-    /// destination. Aborts on the first offender, discarding the partial destination;
+    /// after the durable cursor, read a <see cref="ChunkSize"/> chunk at a time, each
+    /// rewritten and revalidated, and each chunk written to the destination in one
+    /// batch. Aborts on the first offender, discarding the partial destination;
     /// advances to cutover once the source is exhausted; otherwise records how far it
-    /// got. A slice re-run after a fault rewrites at most the values the fault
-    /// interrupted, and a destination write is idempotent. Like the dry run, a slice
-    /// stops early once <see cref="SliceTimeBudget"/> is spent (issue #5440).
+    /// got. A slice stops after the chunk in which <see cref="SliceTimeBudget"/> is
+    /// spent (issue #5440), and reads no further than it writes, so a slow destination
+    /// never makes a later slice re-read what this one read and did not write
+    /// (issue #5802).
+    /// <para>
+    /// A chunk's batch is the per-value writes the build always made, sent in one call:
+    /// each value is the rewritten copy of what that key's point read returned, written
+    /// unconditionally, as one <c>SetAsync</c> per value wrote it. Nothing else writes
+    /// the destination during the build (the concurrent-writes contract in the type
+    /// remarks), and the read's version was never a condition of the write, so batching
+    /// changes no outcome. A write that lands on the source after its key's chunk was
+    /// read is not carried, as it was not when the whole slice was read up front; one
+    /// that lands before its key's chunk is read is now carried.
+    /// </para>
+    /// <para>
+    /// Progress is banked per written chunk. A fault inside a chunk's batch may have
+    /// written part of it; the slice banks only the chunks before it, and the next slice
+    /// writes the whole chunk again, which is idempotent: each key gets the same value,
+    /// and the scanned count counts each value once.
+    /// </para>
     /// </summary>
     private async Task RunBuildSliceAsync()
     {
@@ -663,90 +687,139 @@ internal sealed class LatticeSchemaRemediationGrain(
 
         var source = grainFactory.GetGrain<ILattice>(TreeId);
         var destination = grainFactory.GetGrain<ILattice>(state.State.DestinationTreeId!);
-        var compiled = CompiledPolicyOrNull();
-        var policyView = PolicyViewOrNull();
-        var rewrite = await CreateRewriteAsync();
-        var decode = TransformInputDecoderOrNull();
+        var remediate = await CreateValueRemediationAsync();
         var sliceSize = Math.Max(1, SliceSize);
+        var chunkSize = Math.Max(1, ChunkSize);
+        var storedForm = ReadsStoredForm;
         var done = 0;
+        var read = 0;
         string? lastKey = null;
-        Offender? offender = null;
-        var budgetSpent = false;
+        var stop = SliceStop.Continue;
+        Offender offender = default;
+        ExceptionDispatchInfo? fault = null;
 
-        var slice = await ReadSliceAsync(source, sliceSize);
-        try
+        await using (var keys = ScanKeysAfterCursorAsync(source, storedForm).GetAsyncEnumerator())
         {
-            foreach (var entry in slice.Entries)
+            try
             {
-                SchemaRestampInput input;
-                byte[] rewritten;
-                try
+                while (stop == SliceStop.Continue)
                 {
-                    input = decode is null ? Undecoded(entry.Value) : await decode(entry.Value);
-                    rewritten = rewrite(input.Body);
-                }
-                catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException)
-                {
-                    offender = new Offender(entry.Key, ex.Message, Preview(entry.Value));
-                    break;
-                }
+                    var chunk = await ReadChunkAsync(source, keys, Math.Min(chunkSize, sliceSize - read), storedForm);
+                    read += chunk.KeysRead;
+                    var batch = new List<KeyValuePair<string, byte[]>>(chunk.Entries.Count);
+                    foreach (var entry in chunk.Entries)
+                    {
+                        var value = await remediate.RunAsync(entry);
+                        if (value.Offender is { } failed)
+                        {
+                            // The values before it in this chunk are not written: the
+                            // abort discards the destination anyway, and it is
+                            // reported at the same index the per-value loop reported.
+                            offender = failed;
+                            stop = SliceStop.Offender;
+                            done += batch.Count;
+                            break;
+                        }
 
-                var validated = policyView is null ? rewritten : policyView(rewritten);
-                if (compiled?.Validate(validated) is { } reason)
-                {
-                    offender = new Offender(entry.Key, reason, Preview(validated));
-                    break;
-                }
+                        // On a versioned tree this is one header-prefixed array per value, the
+                        // same intrinsic cost the version write interceptor charges every write
+                        // to an opted-in tree; an at-target value's body was read as a view past
+                        // its header, so its per-value array count is unchanged (#5243).
+                        batch.Add(new KeyValuePair<string, byte[]>(entry.Key, value.Input.Restamp(value.Rewritten!)));
+                    }
 
-                // On a versioned tree this is one header-prefixed array per value, the
-                // same intrinsic cost the version write interceptor charges every write
-                // to an opted-in tree; an at-target value's body was read as a view past
-                // its header, so its per-value array count is unchanged (#5243).
-                await destination.SetAsync(entry.Key, input.Restamp(rewritten));
-                done++;
-                lastKey = entry.Key;
-                if (done < slice.Entries.Count && SliceBudgetSpent(started))
-                {
-                    budgetSpent = true;
-                    break;
+                    if (stop == SliceStop.Offender)
+                    {
+                        break;
+                    }
+
+                    if (batch.Count > 0)
+                    {
+                        await destination.SetManyAsync(batch);
+                        done += batch.Count;
+                        lastKey = batch[^1].Key;
+                    }
+
+                    stop = NextStop(chunk, read, sliceSize, started, ref lastKey, ref fault);
                 }
             }
-        }
-        catch
-        {
-            await BankSliceProgressAsync(done, lastKey);
-            throw;
+            catch
+            {
+                await BankSliceProgressAsync(done, lastKey);
+                throw;
+            }
         }
 
         var scanned = state.State.ScannedCount + done;
-        if (offender is { } failed)
+        switch (stop)
         {
-            await DiscardDestinationAsync(destination);
-            await AbortAsync(scanned + 1, failed.Key, failed.Reason, failed.Preview);
-        }
-        else if (budgetSpent)
-        {
-            await RecordSliceProgressAsync(scanned, lastKey);
-        }
-        else if (slice.Fault is { } fault)
-        {
-            await BankSliceProgressAsync(done, lastKey);
-            fault.Throw();
-        }
-        else if (slice.Exhausted)
-        {
-            await AdvancePhaseAsync(LatticeSchemaRemediationPhase.Cutover, scanned, phaseTotal: null);
-        }
-        else
-        {
-            await RecordSliceProgressAsync(scanned, slice.LastScannedKey);
+            case SliceStop.Offender:
+                await DiscardDestinationAsync(destination);
+                await AbortAsync(scanned + 1, offender.Key, offender.Reason, offender.Preview);
+                break;
+            case SliceStop.Faulted:
+                await BankSliceProgressAsync(done, lastKey);
+                fault!.Throw();
+                break;
+            case SliceStop.Exhausted:
+                await AdvancePhaseAsync(LatticeSchemaRemediationPhase.Cutover, scanned, phaseTotal: null);
+                break;
+            case SliceStop.Paused:
+                await RecordSliceProgressAsync(scanned, lastKey);
+                break;
+            default:
+                throw new InvalidOperationException($"A slice stopped in the unexpected state {stop}.");
         }
     }
 
+    /// <summary>Why a slice's chunk loop stopped.</summary>
+    private enum SliceStop
+    {
+        /// <summary>The slice reads its next chunk.</summary>
+        Continue,
+
+        /// <summary>The slice reached its size or spent its budget; it records its cursor.</summary>
+        Paused,
+
+        /// <summary>The scan reached the end of the source.</summary>
+        Exhausted,
+
+        /// <summary>A value could not be remediated.</summary>
+        Offender,
+
+        /// <summary>The scan faulted after some keys; the slice banks them and rethrows.</summary>
+        Faulted,
+    }
+
     /// <summary>
-    /// Reads the next slice of the source after the durable cursor: up to
-    /// <paramref name="sliceSize"/> keys in key order from a scan, each with the
-    /// value a point read returns for it (issue #4361).
+    /// What a slice does after processing <paramref name="chunk"/>: rethrow its scan
+    /// fault, finish the phase, pause at the slice's size or budget, or read the next
+    /// chunk. A chunk that ends without a fault moves the cursor to the last key it
+    /// scanned, including a key its point read found absent.
+    /// </summary>
+    private SliceStop NextStop(
+        SourceChunk chunk, int read, int sliceSize, long started, ref string? lastKey, ref ExceptionDispatchInfo? fault)
+    {
+        if (chunk.Fault is { } chunkFault)
+        {
+            fault = chunkFault;
+            return SliceStop.Faulted;
+        }
+
+        if (chunk.Exhausted)
+        {
+            return SliceStop.Exhausted;
+        }
+
+        lastKey = chunk.LastScannedKey ?? lastKey;
+        return read >= sliceSize || SliceBudgetSpent(started) ? SliceStop.Paused : SliceStop.Continue;
+    }
+
+    /// <summary>
+    /// Reads the next chunk of the source from the slice's open key scan: up to
+    /// <paramref name="count"/> keys in key order, each with the value a point read
+    /// returns for it (issue #4361). A slice reads chunk by chunk, so it point-reads
+    /// only the keys it goes on to process (issue #5802).
     /// <para>
     /// The scan supplies the order and the resumable position only. Its values are
     /// not used: a full scan merges every shard's rows, and a shard can hold a stale
@@ -781,21 +854,23 @@ internal sealed class LatticeSchemaRemediationGrain(
     /// leaving the remediation in flight holding the alias reservation (issue #5252).
     /// </para>
     /// </summary>
-    private async Task<SourceSlice> ReadSliceAsync(ILattice source, int sliceSize)
+    private async Task<SourceChunk> ReadChunkAsync(
+        ILattice source, IAsyncEnumerator<string> scan, int count, bool storedForm)
     {
-        var keys = new List<string>(Math.Min(sliceSize, 1024));
-        var storedForm = state.State.Mode == SchemaRemediationMode.SchemaVersionMigration
-            || TransformDecoderActive;
+        var keys = new List<string>(count);
+        var ended = false;
         ExceptionDispatchInfo? fault = null;
         try
         {
-            await foreach (var key in ScanKeysAfterCursorAsync(source, storedForm))
+            while (keys.Count < count)
             {
-                keys.Add(key);
-                if (keys.Count == sliceSize)
+                if (!await scan.MoveNextAsync())
                 {
+                    ended = true;
                     break;
                 }
+
+                keys.Add(scan.Current);
             }
         }
         catch (Exception ex) when (keys.Count > 0)
@@ -805,10 +880,9 @@ internal sealed class LatticeSchemaRemediationGrain(
             fault = ExceptionDispatchInfo.Capture(ex);
         }
 
-        var exhausted = fault is null && keys.Count < sliceSize;
         if (keys.Count == 0)
         {
-            return new SourceSlice([], LastScannedKey: null, exhausted, Fault: null);
+            return new SourceChunk([], LastScannedKey: null, KeysRead: 0, Exhausted: ended, Fault: null);
         }
 
         var values = storedForm
@@ -823,8 +897,16 @@ internal sealed class LatticeSchemaRemediationGrain(
             }
         }
 
-        return new SourceSlice(entries, keys[^1], exhausted, fault);
+        return new SourceChunk(entries, keys[^1], keys.Count, Exhausted: ended && fault is null, fault);
     }
+
+    /// <summary>
+    /// Whether a slice reads the source's stored form: a schema-version migration, and
+    /// a transform remediation whose read-path decoder is active (see
+    /// <see cref="ReadChunkAsync"/>).
+    /// </summary>
+    private bool ReadsStoredForm =>
+        state.State.Mode == SchemaRemediationMode.SchemaVersionMigration || TransformDecoderActive;
 
     /// <summary>
     /// The source's keys after the durable cursor, in key order. A slice that reads
@@ -880,15 +962,16 @@ internal sealed class LatticeSchemaRemediationGrain(
     }
 
     /// <summary>
-    /// One slice of the source: its entries, with point-read values; the last key
-    /// the scan reached, which the durable cursor resumes after even when that key
-    /// read absent; whether the scan reached the end of the source; and the fault
-    /// that cut the scan short after some keys were read, rethrown once the slice
-    /// has banked them.
+    /// One chunk of the source: its entries, with point-read values; the last key the
+    /// scan reached, which the durable cursor resumes after even when that key read
+    /// absent; how many keys the scan yielded; whether the scan reached the end of the
+    /// source; and the fault that cut the scan short after some keys were read,
+    /// rethrown once the slice has banked them.
     /// </summary>
-    private sealed record SourceSlice(
+    private sealed record SourceChunk(
         List<KeyValuePair<string, byte[]>> Entries,
         string? LastScannedKey,
+        int KeysRead,
         bool Exhausted,
         ExceptionDispatchInfo? Fault);
     /// <summary>
@@ -903,6 +986,53 @@ internal sealed class LatticeSchemaRemediationGrain(
 
     /// <summary>The first value a slice found it could not remediate.</summary>
     private readonly record struct Offender(string Key, string Reason, byte[] Preview);
+
+    /// <summary>
+    /// One value's remediation: its decoded input and rewritten body, or the reason it
+    /// cannot be remediated.
+    /// </summary>
+    private readonly record struct RemediatedValue(SchemaRestampInput Input, byte[]? Rewritten, Offender? Offender);
+
+    /// <summary>
+    /// Snapshots the per-value decode, rewrite and revalidation the dry run and the
+    /// build apply to every value, once per slice.
+    /// </summary>
+    private async Task<ValueRemediation> CreateValueRemediationAsync() =>
+        new(this, await CreateRewriteAsync(), TransformInputDecoderOrNull(), PolicyViewOrNull(), CompiledPolicyOrNull());
+
+    /// <summary>The per-value remediation of one slice; see <see cref="CreateValueRemediationAsync"/>.</summary>
+    private sealed class ValueRemediation(
+        LatticeSchemaRemediationGrain owner,
+        Func<ReadOnlyMemory<byte>, byte[]> rewrite,
+        Func<byte[], ValueTask<SchemaRestampInput>>? decode,
+        Func<byte[], byte[]>? policyView,
+        CompiledSchemaPolicy? compiled)
+    {
+        /// <summary>
+        /// Decodes, rewrites and revalidates <paramref name="entry"/>'s value. A value
+        /// the decoder cannot upcast or the transform cannot apply to, and one the
+        /// target policy rejects, is the slice's offender.
+        /// </summary>
+        public async ValueTask<RemediatedValue> RunAsync(KeyValuePair<string, byte[]> entry)
+        {
+            SchemaRestampInput input;
+            byte[] rewritten;
+            try
+            {
+                input = decode is null ? Undecoded(entry.Value) : await decode(entry.Value);
+                rewritten = rewrite(input.Body);
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or NotSupportedException)
+            {
+                return new RemediatedValue(default, null, new Offender(entry.Key, ex.Message, owner.Preview(entry.Value)));
+            }
+
+            var validated = policyView is null ? rewritten : policyView(rewritten);
+            return compiled?.Validate(validated) is { } reason
+                ? new RemediatedValue(input, rewritten, new Offender(entry.Key, reason, owner.Preview(validated)))
+                : new RemediatedValue(input, rewritten, null);
+        }
+    }
 
     /// <summary>Persists a slice's progress within the current phase.</summary>
     private async Task RecordSliceProgressAsync(int scannedCount, string? lastKey)

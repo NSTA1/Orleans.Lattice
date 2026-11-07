@@ -436,6 +436,116 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task<ShardRangeDeletePage> DeleteRangeBoundedAsync(string startInclusive, string endExclusive, LatticePredicateNode? predicate = null);
 
     /// <summary>
+    /// The fenced counterpart of <see cref="DeleteRangeBoundedAsync"/> (epic #5605,
+    /// member 2): one page of a range delete whose intent is open at the tree's
+    /// range-delete fence. Every leaf record the walk appends is stamped with the
+    /// tree's range-delete generation the <paramref name="ticket"/> carries, trusted as
+    /// given. A record rejected because a close re-claimed the generation is re-stamped
+    /// only while the walk's own intent is still open (rule 3), and otherwise appended
+    /// unstamped. The existing method stays unfenced and appends unstamped (B2).
+    /// </summary>
+    /// <remarks>Called only while the caller's append-fence gate is open.</remarks>
+    Task<ShardRangeDeletePage> DeleteRangeBoundedStampedAsync(
+        string startInclusive,
+        string endExclusive,
+        LatticePredicateNode? predicate,
+        Grains.RangeDeleteFenceTicket ticket);
+
+    /// <summary>
+    /// Reads this shard root's hand-off marker fresh from storage (epic #5605, member
+    /// 2): whether its state is initialised, the open shard-level hand-offs with their
+    /// ranges, the recent closes with their fence heads, and the routing generation. A
+    /// leaf reads it before any live advance, after the last own append it would
+    /// advance over.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="AlwaysInterleaveAttribute"/> and <see cref="ReadOnlyAttribute"/>: it
+    /// is a new leaf-to-shard-root wait-for edge, and a serial shard-root turn that
+    /// calls the leaf must not deadlock against it.
+    /// </remarks>
+    [AlwaysInterleave]
+    [ReadOnly]
+    Task<State.ShardHandOffState> GetHandOffMarkerAsync();
+
+    /// <summary>
+    /// A leaf's live-advance read (epic #5605, member 4): this shard's hand-off marker,
+    /// read fresh, and whether <paramref name="leafId"/> is suspected to be an orphan:
+    /// descent for <paramref name="lowKeyInclusive"/> does not reach it, or orphan repair
+    /// is in progress. The leaf holds its live advance on any doubt.
+    /// </summary>
+    /// <param name="leafId">The asking leaf.</param>
+    /// <param name="lowKeyInclusive">The leaf's declared low bound; <see langword="null"/> for the leftmost leaf.</param>
+    /// <param name="highKeyExclusive">The leaf's declared high bound; <see langword="null"/> for the rightmost leaf.</param>
+    /// <remarks>
+    /// <see cref="AlwaysInterleaveAttribute"/> and <see cref="ReadOnlyAttribute"/>, as
+    /// <see cref="GetHandOffMarkerAsync"/>: a serial shard-root turn that calls the leaf
+    /// must not deadlock against the leaf's read. Called only while the caller's
+    /// append-fence gate is open.
+    /// </remarks>
+    [AlwaysInterleave]
+    [ReadOnly]
+    Task<LeafLiveAdvanceView> GetLiveAdvanceViewAsync(GrainId leafId, string? lowKeyInclusive, string? highKeyExclusive);
+
+    /// <summary>
+    /// Whether descent for <paramref name="lowKeyInclusive"/> reaches
+    /// <paramref name="leafId"/> over a settled routing structure (epic #5605, #5709,
+    /// #5876): <see langword="false"/> both when it does not and when the structure was in
+    /// motion, so a caller that acts only on <see langword="true"/> - a span-routing
+    /// refresh - never trusts an undecided descent. A caller that must tell the two apart
+    /// asks <see cref="GetDescentVerdictAsync"/>.
+    /// </summary>
+    /// <param name="leafId">The asking leaf.</param>
+    /// <param name="lowKeyInclusive">The leaf's declared low bound; <see langword="null"/> for the leftmost leaf.</param>
+    /// <remarks>
+    /// <see cref="AlwaysInterleaveAttribute"/> and <see cref="ReadOnlyAttribute"/>, as
+    /// <see cref="GetLiveAdvanceViewAsync"/>: the leaf asks from inside a write the shard
+    /// root may itself be awaiting. Called only while the caller's append-fence gate is open.
+    /// </remarks>
+    [AlwaysInterleave]
+    [ReadOnly]
+    Task<bool> IsReachableByDescentAsync(GrainId leafId, string? lowKeyInclusive);
+
+    /// <summary>
+    /// The three-valued answer to whether descent for <paramref name="lowKeyInclusive"/>
+    /// reaches <paramref name="leafId"/> (#5876, a5e2e2ef's D1): undecided when a mutation
+    /// of the shard's routing structure was in flight before or after the descent, or
+    /// completed during it. A leaf's reachability proof acts on it: undecided is no
+    /// verdict, and the leaf appends unstamped for a backoff before it asks again.
+    /// </summary>
+    /// <param name="leafId">The asking leaf.</param>
+    /// <param name="lowKeyInclusive">The leaf's declared low bound; <see langword="null"/> for the leftmost leaf.</param>
+    /// <returns>The verdict.</returns>
+    /// <remarks>
+    /// <see cref="AlwaysInterleaveAttribute"/> and <see cref="ReadOnlyAttribute"/>, as
+    /// <see cref="IsReachableByDescentAsync"/>.
+    /// </remarks>
+    [AlwaysInterleave]
+    [ReadOnly]
+    Task<DescentVerdict> GetDescentVerdictAsync(GrainId leafId, string? lowKeyInclusive);
+
+    /// <summary>
+    /// Opens a shard-level hand-off marker <paramref name="token"/> over
+    /// <c>[low, high)</c>, idempotently (epic #5605, member 2). Called by the tree's
+    /// range-delete fence for every shard of the tree.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="AlwaysInterleaveAttribute"/>: the range-delete fence calls it while
+    /// a walk of this shard root may itself be waiting on that fence. Marker updates
+    /// are serialised by the shard root itself.
+    /// </remarks>
+    [AlwaysInterleave]
+    Task OpenHandOffMarkerAsync(string token, string? lowInclusive, string? highExclusive);
+
+    /// <summary>
+    /// Records the close of shard-level hand-off marker <paramref name="token"/> with the
+    /// heads its fence returned, indexed by WAL partition (epic #5605, member 2).
+    /// Idempotent.
+    /// </summary>
+    /// <remarks><see cref="AlwaysInterleaveAttribute"/>, as for <see cref="OpenHandOffMarkerAsync"/>.</remarks>
+    [AlwaysInterleave]
+    Task CloseHandOffMarkerAsync(string token, long[] heads);
+
+    /// <summary>
     /// Work-bounded probe for a range delete's issue stamp (issue #4530): walks
     /// the same leaves <see cref="DeleteRangeBoundedAsync"/> would for
     /// [<paramref name="startInclusive"/>, <paramref name="endExclusive"/>) and
@@ -761,21 +871,44 @@ internal interface IShardRootGrain : IGrainWithStringKey
     Task BulkLoadRawAsync(string operationId, List<LwwEntry> sortedEntries);
 
     /// <summary>
+    /// Whether the bulk load <paramref name="operationId"/> is running on this shard,
+    /// has completed, or neither (#5812). A caller whose
+    /// <see cref="BulkLoadRawAsync"/> or <see cref="BulkLoadAsync"/> outran the response
+    /// timeout reads this instead of re-issuing a call that would queue behind the
+    /// first: the shard root is not reentrant, so the re-issued call cannot start
+    /// before the first ends. Interleaves with the running load and reads only
+    /// activation memory and the persisted completion id, so it costs no storage read.
+    /// A load reads as running until its whole call has ended, its switch's tail
+    /// included, even though it records itself complete when it publishes its root.
+    /// </summary>
+    /// <param name="operationId">The bulk load's operation id.</param>
+    /// <returns>The load's status on this shard.</returns>
+    [AlwaysInterleave]
+    [ReadOnly]
+    Task<BulkOperationStatus> GetBulkOperationStatusAsync(string operationId);
+
+    /// <summary>
     /// Appends a sorted batch of key-value pairs to the right edge of this shard's
-    /// B+ tree. All keys in <paramref name="sortedEntries"/> must be greater than
-    /// every existing key in the shard. Creates new leaves as needed and propagates
-    /// separators into internal nodes. Used by the streaming bulk-load extension method.
+    /// B+ tree. Creates new leaves as needed and propagates separators into
+    /// internal nodes. Used by the streaming bulk-load extension method.
     /// <para>
-    /// Re-delivery is a no-op whatever its operation id: entries at or below the
-    /// shard's highest key are recognised as already grafted and skipped, so a
-    /// resumed stream that re-sends a superseded batch, or a retry after a fault
-    /// part-way through an append, grafts nothing twice (issue #5460). A skipped
-    /// entry that the shard holds no row for is a batch out of order, and is
-    /// refused with <see cref="InvalidOperationException"/>.
+    /// Re-delivery is a no-op whatever its operation id: when the shard holds every
+    /// entry at or below its highest live key with the identical value, those entries
+    /// are recognised as already grafted and skipped, so a resumed stream that re-sends a superseded
+    /// batch, or a retry after a fault part-way through an append, grafts nothing
+    /// twice (issue #5460).
+    /// </para>
+    /// <para>
+    /// Nothing is refused (issue #5610). Entries at or below the shard's highest
+    /// key that are not a re-delivery are merged into the leaves that own their
+    /// keys, and the rows the rightmost leaf holds in the appended range are moved
+    /// into the appended leaves. Every key resolves last-writer-wins on its stamp,
+    /// so the later-stamped of a bulk entry and an existing row wins, as it does on
+    /// every replica.
     /// </para>
     /// </summary>
     /// <param name="operationId">Unique ID for idempotency. Retries with the same ID are no-ops.</param>
-    /// <param name="sortedEntries">The entries to append, already sorted in ascending key order and all greater than every existing key in the shard.</param>
+    /// <param name="sortedEntries">The entries to append, sorted in ascending key order.</param>
     Task BulkAppendAsync(string operationId, List<KeyValuePair<string, byte[]>> sortedEntries);
 
     /// <summary>

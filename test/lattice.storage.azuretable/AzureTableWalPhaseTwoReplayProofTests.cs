@@ -127,7 +127,7 @@ public class AzureTableWalPhaseTwoReplayProofTests
             verifyReplay: (_, _) =>
             {
                 Interlocked.Increment(ref verified);
-                return Task.FromResult(false);
+                return Task.FromResult<PhaseTwoReplayProof>(default);
             });
 
         Assert.That(
@@ -143,7 +143,7 @@ public class AzureTableWalPhaseTwoReplayProofTests
             (_, _) => throw new RequestFailedException(409, "EntityAlreadyExists", "EntityAlreadyExists", innerException: null),
             "manifest",
             TimeSpan.Zero,
-            verifyReplay: (_, _) => Task.FromResult(true));
+            verifyReplay: (_, _) => Task.FromResult(new PhaseTwoReplayProof(true, null)));
 
         Assert.That(async () => await worker.EnqueueAsync(0L, 2L, hasCandidateRow: false, payloadBytes: 30L), Throws.Nothing);
     }
@@ -159,7 +159,7 @@ public class AzureTableWalPhaseTwoReplayProofTests
             verifyReplay: (_, _) =>
             {
                 Interlocked.Increment(ref verified);
-                return Task.FromResult(true);
+                return Task.FromResult(new PhaseTwoReplayProof(true, null));
             });
 
         Assert.That(

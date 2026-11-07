@@ -1,0 +1,14 @@
+# Witness for ClaimHeadMeetsHandOffClose. The edge's check is replaced by FALSE, so the
+# invariant fails exactly when a kept step of its kind - a foreign close - is
+# reachable under every guarantee. A clean base run with this mutant red
+# shows the edge was checked on real steps, not vacuously.
+MODULE: ClaimHeadMeetsHandOffCloseWitness
+TARGET: ClaimHeadMeetsHandOffClose
+CLASS: Invariant
+SUMMARY: a foreign close is reachable: the edge's check is not vacuous
+
+--- FIND
+Fails("ClaimHeadMeetsHandOffClose", claimHead'["F"] \in CloseHeads)
+--- REPLACE
+Fails("ClaimHeadMeetsHandOffClose", FALSE)
+--- END

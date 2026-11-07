@@ -1,0 +1,17 @@
+# Pairs with DeferredCloseMeetsCoreResolve (H -> C, #5839): the lazy key-moving close raises, defers
+# L's head at the raised generation, and L's arm resolves it at the allocator head.
+MODULE: DeferredCloseMeetsCoreResolveHeadUncovered
+TARGET: DeferredCloseMeetsCoreResolve
+CLASS: Invariant
+SUMMARY: E's ClaimHeadCoversPriorAppends is dropped, so the resolution records a head below the allocator's
+
+--- FIND
+Guarantees ==
+    /\ ClaimHeadCoversPriorAppends
+    /\ RaisedEpochUnique
+
+--- REPLACE
+Guarantees ==
+    /\ RaisedEpochUnique
+
+--- END

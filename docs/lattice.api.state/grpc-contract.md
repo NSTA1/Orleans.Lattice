@@ -52,6 +52,7 @@ The service maps facade outcomes onto explicit gRPC statuses rather than letting
 | `OperationCanceledException` | `Cancelled` | The unary RPCs. On `ObserveChanges` and `ObserveMetrics` a cancellation ends the stream cleanly instead. |
 | `TimeoutException` | `DeadlineExceeded` | Every RPC: a grain call timed out inside the cluster, so the outcome is unknown and a write may already have applied. Retry an idempotent read; confirm state before retrying a write. Logged at Warning (#5742). |
 | `OrleansMessageRejectionException` (including `SiloUnavailableException`) or `EnumerationAbortedException` | `Unavailable` | Every RPC: a silo was unavailable or rejected the message, or a remote enumerator was lost to a grain deactivation mid-read: a transient cluster fault. Retry after a short backoff. Logged at Warning (#5742). |
+| `LatticeWalQuiescingException` | `Unavailable` | A WAL shard is briefly quiesced for a placement move: the write was refused without being applied and the shard accepts writes again once the move lifts its fence. Retry after a short backoff. Logged at Warning (#5800). |
 | anything else | `Internal` | Logged server-side and returned with a generic message, without echoing the exception text. |
 
 The authorization interceptor's refusal is a `PermissionDenied` as well.

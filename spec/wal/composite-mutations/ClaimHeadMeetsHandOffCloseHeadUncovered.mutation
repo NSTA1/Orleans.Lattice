@@ -1,0 +1,14 @@
+# Pairs with ClaimHeadMeetsHandOffClose (E -> H). ClaimHeadCoversPriorAppends no longer
+# covers F, so F's close re-claims with a head at or below a foreign append it allocated.
+MODULE: ClaimHeadMeetsHandOffCloseHeadUncovered
+TARGET: ClaimHeadMeetsHandOffClose
+CLASS: Invariant
+SUMMARY: E's claim head no longer covers F's prior appends
+
+--- FIND
+ClaimHeadCoversPriorAppends ==
+    \A a \in Claimants : cstage[a] = 3 => \A o \in prior[a] : o < claimHead[a]
+--- REPLACE
+ClaimHeadCoversPriorAppends ==
+    \A a \in Claimants \ {"F"} : cstage[a] = 3 => \A o \in prior[a] : o < claimHead[a]
+--- END

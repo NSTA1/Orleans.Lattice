@@ -1,0 +1,17 @@
+# Issue #5610: a bulk append grafts its leaf over a range an existing leaf already
+# holds rows in, without relocating them. The birth hint lies above those rows,
+# so the bulk leaf starts past them unread. The fix relocates them into the bulk
+# leaf at its birth, as a split relocates; refusing the chunk instead would fail
+# a call that succeeds today.
+MODULE: ReadPositionHonestBulkAppendDropsExistingRows
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the bulk leaf is born without the rows the range already held
+PERTURBS: Create
+
+--- FIND
+    /\ cache' = [cache EXCEPT !["a1"] = {o \in Offs : author[o] = PreAuthor}]
+--- REPLACE
+\* MUTATION: the existing rows are not relocated.
+    /\ cache' = cache
+--- END

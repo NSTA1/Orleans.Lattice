@@ -1,0 +1,17 @@
+# The live advance targets the allocator head rather than the activation's
+# highest own applied append, so it passes an entry another writer appended after
+# the activation's last own append, which no response has reported.
+MODULE: ReadPositionHonestAdvanceToHead
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the live advance moves the read position to the allocator head
+PERTURBS: LiveAdvance
+
+--- FIND
+    /\ Max(mine[a]) > rp[a]
+    /\ rp' = [rp EXCEPT ![a] = Max(mine[a])]
+--- REPLACE
+\* MUTATION: the target is the head, not the highest own append.
+    /\ next - 1 > rp[a]
+    /\ rp' = [rp EXCEPT ![a] = next - 1]
+--- END

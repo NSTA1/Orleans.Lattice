@@ -605,7 +605,11 @@ The safe technique for editing long markdown files (`docs/**/*.md`) - determinis
       pull request whose base is not the default branch and whose body - or any
       of its own commit messages - carries a closing keyword GitHub would honour,
       so writing `Closes #N` on a member
-      pull request is caught rather than merged. Its predicate mirrors GitHub's
+      pull request is caught rather than merged. Its own commits are the range
+      `BASE_SHA..HEAD_SHA` minus everything reachable from the default branch: a
+      sync of `main` into an integration branch brings commits whose keywords
+      were honoured when they landed, so they are exempt, and when the default
+      branch cannot be resolved nothing is. Its predicate mirrors GitHub's
       own parser rather than approximating it: fenced blocks, blockquotes, and
       inline code spans are stripped first, because GitHub does not act on a
       reference inside them either - so a pull request that *discusses* this

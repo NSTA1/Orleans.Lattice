@@ -208,6 +208,7 @@ internal sealed partial class ShardRootGrain
     /// <inheritdoc />
     public async Task RetireAsync()
     {
+        using var structuralRouting = EnterStructuralRouting(); // #5876
         EnsureInternalOrigin(LatticeOperation.Admin);
 
         if (!state.State.IsRetired)
@@ -257,6 +258,7 @@ internal sealed partial class ShardRootGrain
     /// <inheritdoc />
     public async Task ReviveAsync(int[] ownedSlots, int virtualShardCount)
     {
+        using var structuralRouting = EnterStructuralRouting(); // #5876
         ArgumentNullException.ThrowIfNull(ownedSlots);
         if (virtualShardCount <= 0)
             throw new ArgumentOutOfRangeException(nameof(virtualShardCount), "Must be greater than 0.");
@@ -306,6 +308,7 @@ internal sealed partial class ShardRootGrain
     /// <inheritdoc />
     public async Task FenceMovedSlotsAsync(int[] slots, int[] newOwners, int virtualShardCount)
     {
+        using var structuralRouting = EnterStructuralRouting(); // #5876
         ArgumentNullException.ThrowIfNull(slots);
         ArgumentNullException.ThrowIfNull(newOwners);
         if (slots.Length != newOwners.Length)
@@ -383,6 +386,7 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     private async Task ReleaseRetiredStorageAsync()
     {
+        using var structuralRouting = EnterStructuralRouting(); // #5876
         // A routing mutation for the whole walk: an interleaved optimistic read
         // that overlaps it fails its epoch check and retries serially, queueing
         // behind this call and then meeting the retired gate.
@@ -394,6 +398,7 @@ internal sealed partial class ShardRootGrain
 
             // Keep the moved-away fence, the delete flag and the registration;
             // drop everything that described the cleared topology.
+            NoteStructuralRoutingChange(); // #5876
             state.State.RootNodeId = null;
             state.State.RootIsLeaf = false;
             state.State.PendingPromotion = null;
@@ -439,6 +444,7 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     private async Task ClearTopologyAsync(bool forPurge, List<GrainId>? purgeClearedLeafIds = null)
     {
+        using var structuralRouting = EnterStructuralRouting(); // #5876
         if (state.State.RootNodeId is null)
         {
             return;
@@ -534,11 +540,13 @@ internal sealed partial class ShardRootGrain
     /// against a tree that is already offline by contract, so nothing observes an
     /// intermediate state of this sweep either way.
     /// </remarks>
-    private Task ClearInternalNodesAsync(List<GrainId> internalNodeIds) =>
-        BoundedFanOut.ForEachAsync(
+    private async Task ClearInternalNodesAsync(List<GrainId> internalNodeIds)
+    {
+        await BoundedFanOut.ForEachAsync(
             internalNodeIds,
             BoundedFanOut.DefaultWidth,
             id => grainFactory.GetGrain<IBPlusInternalGrain>(id).ClearGrainStateAsync());
+    }
 
     /// <summary>
     /// Collects every internal node id beneath <paramref name="rootNodeId"/>

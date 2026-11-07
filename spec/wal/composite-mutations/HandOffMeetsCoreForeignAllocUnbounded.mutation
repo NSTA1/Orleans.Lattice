@@ -1,0 +1,25 @@
+# Pairs with HandOffMeetsCoreForeignAlloc (H -> C). HandOffBound is dropped, so a foreign
+# append is allocated while L's marker reads closed.
+MODULE: HandOffMeetsCoreForeignAllocUnbounded
+TARGET: HandOffMeetsCoreForeignAlloc
+CLASS: Invariant
+SUMMARY: HandOffBound is dropped
+
+--- FIND
+Guarantees ==
+    /\ ClaimHeadCoversPriorAppends
+    /\ RaisedEpochUnique
+    /\ StaleEpochNeverAppends
+    /\ HandOffBound
+    /\ DeferredHeadAtRaisedGeneration
+    /\ StraddlerBelowInit
+    /\ BulkHintBound
+--- REPLACE
+Guarantees ==
+    /\ ClaimHeadCoversPriorAppends
+    /\ RaisedEpochUnique
+    /\ StaleEpochNeverAppends
+    /\ DeferredHeadAtRaisedGeneration
+    /\ StraddlerBelowInit
+    /\ BulkHintBound
+--- END

@@ -504,9 +504,37 @@ public partial class BPlusLeafGrainTests
         return (grain, state, siblingMock, coordinator);
     }
 
-    [Test]
-    public async Task Split_advances_donor_checkpoint_to_wal_head()
+    private static void SeedDonorFrontier(FakePersistentState<LeafNodeState> state, long frontier)
     {
+        state.State.ProjectionCheckpointOffset = frontier;
+        state.State.ProjectionCheckpointOffsetAssigned = true;
+    }
+
+    [Test]
+    public async Task Split_does_not_advance_the_donor_past_its_own_replay_frontier()
+    {
+        // Issue #5756: a record of the range the donor keeps that another author
+        // appended below the heads, and that the donor has not replayed, lies above
+        // its frontier; advancing the donor to the heads would skip it on its next
+        // cold replay, and no other leaf declares its key.
+        var (grain, state, _, _) = BuildSplitFixture(walHead: 42L);
+        SeedDonorFrontier(state, 30);
+
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
+        var result = await grain.SetAsync("d", Encoding.UTF8.GetBytes("4"));
+
+        Assert.That(result, Is.Not.Null, "split should have occurred");
+        Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(30L));
+    }
+
+    [Test]
+    public async Task Split_advances_a_donor_with_no_frontier_to_one_below_the_wal_head()
+    {
+        // A donor that has scanned nothing on a partition has no frontier there; it
+        // advances to one below the head, as in 10.2.0 (a head is exclusive and a
+        // checkpoint inclusive, issue #5760). This is the documented residue of #5756.
         var (grain, state, _, _) = BuildSplitFixture(walHead: 42L);
 
         await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
@@ -515,13 +543,36 @@ public partial class BPlusLeafGrainTests
         var result = await grain.SetAsync("d", Encoding.UTF8.GetBytes("4"));
 
         Assert.That(result, Is.Not.Null, "split should have occurred");
-        // Donor's checkpoint advanced to the WAL head captured at split time.
-        Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(42L));
+        Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(41L),
+            "a checkpoint at the head would skip the record first allocated there");
     }
 
     [Test]
-    public async Task Split_stamps_sibling_checkpoint_hint_to_wal_head()
+    public async Task Split_caps_the_sibling_hint_at_the_donors_replay_frontier()
     {
+        // Issue #5752: a record of the moved range that another author appended below
+        // the head and the donor never applied lies above the donor's frontier, so a
+        // sibling that starts there replays it. Starting at the head it would not.
+        var (grain, state, siblingMock, _) = BuildSplitFixture(walHead: 42L);
+        SeedDonorFrontier(state, 30);
+
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
+        var result = await grain.SetAsync("d", Encoding.UTF8.GetBytes("4"));
+
+        Assert.That(result, Is.Not.Null, "split should have occurred");
+        await siblingMock.Received(1).SetCheckpointOffsetHintsAsync(
+            Arg.Is<long[]>(heads => heads.Length == 1 && heads[0] == 30L));
+    }
+
+    [Test]
+    public async Task Split_keeps_the_sibling_hint_one_below_the_head_when_the_donor_has_no_frontier()
+    {
+        // A donor that has scanned nothing on a partition has no frontier there.
+        // Capping at -1 would make the sibling replay the whole log and seed its birth
+        // pin on the sentinel, blocking the tree's WAL trim (#3094), so the sibling
+        // keeps one below the head, as in 10.2.0 (the #5752 residue tracked in #5756).
         var (grain, _, siblingMock, _) = BuildSplitFixture(walHead: 42L);
 
         await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
@@ -530,10 +581,45 @@ public partial class BPlusLeafGrainTests
         var result = await grain.SetAsync("d", Encoding.UTF8.GetBytes("4"));
 
         Assert.That(result, Is.Not.Null, "split should have occurred");
-        // Sibling received the WAL-head hint so its first activation can
-        // skip replaying the entire shard history.
         await siblingMock.Received(1).SetCheckpointOffsetHintsAsync(
-            Arg.Is<long[]>(heads => heads.Length == 1 && heads[0] == 42L));
+            Arg.Is<long[]>(heads => heads.Length == 1 && heads[0] == 41L));
+    }
+
+    [Test]
+    public async Task A_checkpoint_hint_of_zero_is_stamped_as_applied_through_offset_zero()
+    {
+        // Issue #5760: a hint is one below a head, so 0 means offset 0 is applied; only
+        // a negative hint means nothing applied and is ignored.
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state);
+
+        await grain.SetCheckpointOffsetHintsAsync([0L]);
+        Assert.That(grain.GetCurrentCheckpointForPartition(0), Is.EqualTo(0L));
+
+        var other = CreateGrain(new FakePersistentState<LeafNodeState>());
+        await other.SetCheckpointOffsetHintsAsync([-1L]);
+        Assert.That(other.GetCurrentCheckpointForPartition(0), Is.EqualTo(-1L));
+    }
+
+    [Test]
+    public async Task Split_stamps_the_sibling_hint_one_below_the_wal_head()
+    {
+        // The other half of the minimum: a donor whose checkpoint is above the head
+        // read for the split hands the sibling one below the head (issue #5760). The
+        // head is the next offset the log assigns, so a sibling checkpointed at it would
+        // skip the record allocated there, which, written by another author, no leaf
+        // would then apply.
+        var (grain, state, siblingMock, _) = BuildSplitFixture(walHead: 42L);
+        SeedDonorFrontier(state, 50);
+
+        await grain.SetAsync("a", Encoding.UTF8.GetBytes("1"));
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("2"));
+        await grain.SetAsync("c", Encoding.UTF8.GetBytes("3"));
+        var result = await grain.SetAsync("d", Encoding.UTF8.GetBytes("4"));
+
+        Assert.That(result, Is.Not.Null, "split should have occurred");
+        await siblingMock.Received(1).SetCheckpointOffsetHintsAsync(
+            Arg.Is<long[]>(heads => heads.Length == 1 && heads[0] == 41L));
     }
 
     [Test]

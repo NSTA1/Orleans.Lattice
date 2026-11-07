@@ -1,0 +1,12 @@
+# Witness for ColdLoadMeetsCoreStraddler. The check is reduced to the entry's provenance, so the
+# invariant fails exactly when a straddler is admitted through a cold-loaded entry.
+MODULE: ColdLoadMeetsCoreStraddlerWitness
+TARGET: ColdLoadMeetsCoreStraddler
+CLASS: Invariant
+SUMMARY: a straddler admitted through a cold-loaded entry is reachable: the edge's check is not vacuous
+
+--- FIND
+Fails("ColdLoadMeetsCoreStraddler", ~cold["S"] \/ CStraddlerAlloc)
+--- REPLACE
+Fails("ColdLoadMeetsCoreStraddler", ~cold["S"])
+--- END

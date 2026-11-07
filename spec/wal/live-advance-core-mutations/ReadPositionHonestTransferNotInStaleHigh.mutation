@@ -1,0 +1,14 @@
+# #5837, the claimless advance: the split transfer and the receiver's close heads.
+MODULE: ReadPositionHonestTransferNotInStaleHigh
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: a transfer under the old generation is admitted but not counted in the WAL's staleHigh
+PERTURBS: StaleRouteAlloc
+BOUNDS: WithFreeAdvance = TRUE, WithKeyMove = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
+
+--- FIND
+    /\ sHi' = IF FreeOn THEN next ELSE sHi
+--- REPLACE
+\* MUTATION: not counted in the staleHigh.
+    /\ UNCHANGED sHi
+--- END

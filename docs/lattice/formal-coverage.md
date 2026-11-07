@@ -5,11 +5,12 @@ agent_spec: "docs/agents/api/lattice.json"
 # Formal Coverage
 
 Orleans.Lattice checks its most concurrency-sensitive protocols formally, not
-only with prose and chaos tests. Epic #4430 extended that coverage from the
-atomic-commit protocol to five more areas. The B+ tree topology census now also
-checks cascading splits through a fan-out-three instance reaching its six-level
-bound, and durable leaf-reclaim recovery through successor back-link repair.
-This page indexes what each area checks, how much, which production defects the
+only with prose and chaos tests: each protocol's safety properties are model-checked
+by TLC against a bounded instance, every property and protocol step is shown to be
+load-bearing by a deliberate defect that breaks it, and every modelled step is mapped
+to the production code and tests that implement it. Epic #4430 first extended that
+coverage beyond the atomic-commit protocol; the [areas table](#areas) lists every area
+checked today. This page indexes what each area checks, how much, which production defects the
 checking found, and, just as prominently, what each area does **not** cover.
 
 ## How every area is checked
@@ -61,7 +62,7 @@ once, either here or in the
 | Area | Modules | Mutations | Behaviour rows | Detector tests | Page |
 |------|---------|-----------|----------------|----------------|------|
 | Single-cluster atomic commit | 1 | 21 | 17 | 40 | [Verified Atomic-Commit](verified-atomic-commit.md) |
-| WAL durability lifecycle | 3 | 92 | 87 | 187 | [Verified WAL](verified-wal.md#the-tla-specification-and-the-scope-of-the-assurance) |
+| WAL durability lifecycle | 9 | 395 | 295 | 515 | [Verified WAL](verified-wal.md#the-tla-specification-and-the-scope-of-the-assurance) |
 | Shard ownership | 5 | 124 | 124 | 201 | [Verified Shard Ownership](verified-shard-ownership.md) |
 | Cross-cluster atomic visibility | 1 | 66 | 43 | 150 | [Verified Atomic-Commit: the replicated half](verified-atomic-commit.md#scope-the-single-cluster-protocol-and-the-replicated-half-checked-separately) |
 | Replication convergence | 4 | 91 | 71 | 206 | [Replication: formal verification](../lattice.replication/architecture.md#formal-verification) |
@@ -392,24 +393,77 @@ and each module's refinement note under its section on deliberate abstraction
 gaps, states its full scope.
 
 - **WAL durability lifecycle** ([`spec/wal/`](../../spec/wal/README.md)).
+  - **Guarantees checked:** no acknowledged write is lost or skipped by a leaf's
+    replay, and the GC never trims an entry a consumer still needs; a WAL move
+    keeps every acknowledged write; an orphaned materialiser pin is never retired
+    from a leaf re-created under the same grain id; and a leaf's live checkpoint
+    advance never moves its read position past a record it does not hold.
   - **Covers:** a leaf's lifecycle under crash-anywhere recovery, across one WAL
-    partition shared by two leaves, including snapshot and row loss and a purge;
-    a WAL shard move with a durable fence, a shard crash and the loss of its
-    coordinator; and the GC's retirement of orphaned materialiser pins - the bulk
-    sweep and the starvation drive, with their token, leaf read and fenced removal
-    as separate steps and two sweepers racing - against a leaf's fold, purge,
-    discard and re-creation under the same grain id, and a completed purge's
-    tree-level tail re-driven onto a reused tree id.
+    partition shared by two leaves, including snapshot and row loss and a purge,
+    and the WAL shard's allocator re-seeded past abandoned flushes still in motion
+    after a flush failure or a lost activation, on the same silo or another, with
+    the store's create-only rows and, across silos, the Azure Table provider's
+    `TAIL` commit fence (`WalDurability`); a WAL shard move with a durable fence, a shard crash and the
+    loss of its coordinator (`WalMove`); the GC's retirement of orphaned
+    materialiser pins - the bulk sweep and the starvation drive, with their token,
+    leaf read and fenced removal as separate steps and two sweepers racing -
+    against a leaf's fold, purge, discard and re-creation under the same grain id,
+    and a completed purge's tree-level tail re-driven onto a reused tree id
+    (`WalPinRetirement`); and the fenced live checkpoint advance, as five modules
+    joined by an assume-guarantee contract
+    ([`LiveAdvanceInterface.md`](../../spec/wal/LiveAdvanceInterface.md)) and a sixth
+    that checks the contract:
+    - the append epoch (`WalAppendEpoch`): an activation's claim, its bump, stale
+      and unloaded rejections and re-presented claim, against a WAL shard
+      restart, another leaf's retirement and the leaf's three-step clear;
+    - the hand-off fence (`WalHandOffFence`): a foreign author's writes bounded by
+      the owner's durable marker, stamped at admission and closed by a generation
+      re-claim that records the allocator head, with another shard's range-delete
+      walk, a WAL shard restart and a hand-off spanning the fence gate;
+    - the routing floor (`WalRoutingFloor`): a tree's purge raising each shard
+      root's routing floor before it retires their rows, the floor checked where a
+      generation is claimed, a straddling write's seam retry that never re-stamps
+      it, and the re-created incarnation's first initialisation, against a second
+      shard root, a purge that finished on 10.2.0 with the re-seed catch-up, and a
+      WAL shard restart;
+    - the bulk switch (`WalBulkSwitch`): a bulk append's leaf born from the old
+      rightmost leaf's range with its birth hint capped at the old leaf's read
+      frontier, the drain before the narrow, the relocation of the rows the range
+      held and the batched close, against a crash of the shard root and a drain
+      past its deadline; and the bulk seed, which claims no append epoch, admitted
+      under the switch's routing generation and refused once a close re-claims it,
+      or unstamped and reported on a never-written shard, with a batch write seeding
+      a root mid-load and an abandoned attempt and its retry (#5812);
+    - the core (`WalLiveAdvanceCore`): an activation's arming, the live advance
+      over its own applied appends, replay, the shared snapshot and the GC trim,
+      the applied-prefix tracker and the unstamped watermark with its restart
+      reset and self-report, with the other four modules' guarantees as
+      environment constraints, and that a newborn leaf's pin eventually becomes
+      usable without a replay from -1;
+    - the composite interface check (`WalLiveAdvanceComposite`): every producer
+      guarantee as a step constraint, checked against every assumption a consumer
+      takes of it, edge by edge.
   - **Does not cover:** more than two partitions; splits, resharding and saga
-    state; replication consumers, beyond their effect on the trim floor; for pin
+    state, except where a live-advance module models a split's or a bulk switch's
+    hand-off; replication consumers, beyond their effect on the trim floor; for pin
     retirement, several leaves or partitions per leaf, the pin's HLC frontier and
-    override holds, the in-memory cursor registry, the order of the steps
-    inside a purge's tree-level tail, and a resized tree's logical purge
-    completion (both pinned by tests instead), or how long a live leaf's pin
-    stays at the block value before its first WAL replay; nor the replay read
-    path's shared per-partition page cache (#5877 A), which refines to the
-    model's read step by slice equivalence and is served only at the
-    partition's current durable incarnation, both pinned by tests instead.
+    override holds, the in-memory cursor registry, the order of the steps inside a
+    purge's tree-level tail, and a resized tree's logical purge completion (both
+    pinned by tests instead), or how long a live leaf's pin stays at the block
+    value before its first WAL replay; nor the replay read path's shared
+    per-partition page cache (#5877 A), which refines to the model's read step by
+    slice equivalence and is served only at the partition's current durable
+    incarnation, both pinned by tests instead; for the live advance, the fences'
+    scheduling rather than their effect at the partition (seam retries,
+    multi-entry stamped batches, the leaf's gate that serialises its own clear
+    with its claims, the purge's steps one by one, the range-delete fence as a
+    separate initiator), more than one initiator, owner leaf or partition, the
+    holds production adds beyond the design's arming list, re-claims, several
+    keys or appended leaves in a bulk switch, and the combinations of
+    environments larger than one CI case, which are checked in separate
+    variants or, for one, locally. The
+    [gap register](../../spec/wal/README.md#the-live-advances-gap-register) lists
+    every module's gaps.
 - **Shard ownership** ([`spec/shard-ownership/`](../../spec/shard-ownership/README.md)).
   - **Covers:** who serves a key across an adaptive split, an online shard
     fold, an online reshard, an online resize and its undo, with stale routers
@@ -467,7 +521,17 @@ gaps, states its full scope.
     across a whole restore cutover, an operator's explicit backup delete,
     catalog rebuild and scrub (each serialised per backup id with retention, but
     not modelled), mixed-version silos during a rolling upgrade, and retention
-    over a sink shared between clusters.
+    over a sink shared between clusters. Nor does it cover orphan restore-shadow
+    garbage collection - which rotates the shadow's registration lineage, purges
+    every shard and only then unregisters it - or the purged-copy bulk re-admission
+    and re-seed that a re-issued restore of the same deterministic shadow id relies
+    on (#5813). A bulk load is admitted to a purged copy only under the registration
+    lineage it was issued with, and a stamped re-seed never registers the id itself.
+    Not closed by that rule: a stale load reaching a shard that is no longer purged,
+    which needs the shard map or an explicit operation id to differ between attempts,
+    and the new restore to commit and a read to re-seed the shard within the stale
+    message's expiry; and the merge apply path, whose stale write into an
+    unregistered shadow re-registers it without provenance.
 
 - **Materialised-view tail and lifecycle** ([`spec/materialised-views/`](../../spec/materialised-views/README.md)).
   - **Covers:** physical WAL binding, checkpoint and published read-position
@@ -610,7 +674,7 @@ area's list is the authoritative one. The separately listed interrupted-shadow d
 
 | Area | Defects | Full list |
 |------|---------|-----------|
-| WAL durability lifecycle | #4450, #4451, #4456, #4467, #4523, #4525, #4621, #4622, #4634, #4641, #4654, #4669, #4699, #4700, #5358, #5416, #5417, #5458, #5459 | [Verified WAL](verified-wal.md#the-tla-specification-and-the-scope-of-the-assurance) |
+| WAL durability lifecycle | #4450, #4451, #4456, #4467, #4523, #4525, #4621, #4622, #4634, #4641, #4654, #4669, #4699, #4700, #5358, #5416, #5417, #5458, #5459, #5610, #5614, #5634, #5642, #5643, #5654, #5656, #5657, #5662, #5663, #5664, #5668, #5705, #5706, #5708, #5709, #5716, #5752, #5755, #5756, #5760, #5766, #5810, #5825, #5841 | [Verified WAL](verified-wal.md#the-tla-specification-and-the-scope-of-the-assurance) |
 | Shard ownership | #4452, #4453, #4454, #4455, #4473, #4474, #4475, #4503, #4522, #4545, #4564, #4611, #4613, #4618, #4619, #4689 | [`spec/shard-ownership/`](../../spec/shard-ownership/README.md#defects-this-area-found) |
 | Cross-cluster atomic visibility | #4480, #4481, #4482, #4508, #4511, #4526, #4533, #4534, #4591, #4627, #4664, #4683, #4684, #4685 | [Verified Atomic-Commit](verified-atomic-commit.md#scope-the-single-cluster-protocol-and-the-replicated-half-checked-separately) |
 | Replication convergence | #4463, #4464, #4465, #4504, #4537, #4549, #4585, #4586, #4587, #4603, #4604, #4614, #4615, #4673, #4707, #5689 | [`spec/replication/`](../../spec/replication/README.md#production-defects-this-module-found) |

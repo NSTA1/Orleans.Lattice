@@ -1,0 +1,17 @@
+# Pairs with OnlySupersededRefused. The partition's retired floor is checked on
+# every stamped append, as revision 4 of the design specified, through the append
+# admission predicate. The floor is one value per partition but epochs are per
+# leaf, so after another leaf's retirement a live leaf's append is refused
+# although nothing superseded it (#5635). The edit is to a predicate both append
+# steps read, not to an action, so it perturbs none.
+MODULE: OnlySupersededRefusedFloorAtAppend
+TARGET: OnlySupersededRefused
+CLASS: Invariant
+SUMMARY: the append admission predicate also checks the partition's retired floor
+
+--- FIND
+AppendAdmits(a) == epoch[a] >= memFence
+--- REPLACE
+\* MUTATION: the partition's retired floor is checked on the append path too.
+AppendAdmits(a) == epoch[a] >= memFence /\ epoch[a] > retired
+--- END

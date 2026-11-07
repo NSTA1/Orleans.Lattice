@@ -1,0 +1,20 @@
+# The purge deletes L's marker but L's marker state still reads initialised (#5668):
+# an absent marker is read as closed, against rule 2 (section 2). A foreign write the
+# open marker held, allocated under it before the purge, is then passed by L's live
+# advance (13 states); a straddling write admitted before the purge, allocated after
+# it under the absent generation entry, is the same shape.
+MODULE: ReadPositionHonestRoutingPurgeKeepsMarkerInit
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: a purge that deletes a leaf's marker leaves its marker state initialised
+PERTURBS: Recreate
+BOUNDS: WithRecreate = TRUE, WithBatch = FALSE, MaxWindows = 1
+
+--- FIND
+    /\ hoClosedAt' = 0
+    /\ mInit' = FALSE
+--- REPLACE
+\* MUTATION: the deleted marker still reads initialised.
+    /\ hoClosedAt' = 0
+    /\ mInit' = TRUE
+--- END

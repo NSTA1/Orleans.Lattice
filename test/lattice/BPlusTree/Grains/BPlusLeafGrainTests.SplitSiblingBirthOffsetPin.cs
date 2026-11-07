@@ -301,14 +301,38 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
-    public async Task A_zero_or_negative_birth_head_falls_back_to_the_sentinel()
+    public async Task A_negative_birth_position_falls_back_to_the_sentinel()
     {
-        // An empty WAL reports head 0, which is not a usable checkpoint offset -
-        // treating it as one would floor the whole tree at 0 and simply move the
-        // wedge from the cursor axis to the offset axis. Mirrors the
-        // `donorHead > 0` guard CompleteSplitAsync applies to the same array.
+        // An empty WAL reports head 0, which the donor turns into the read position
+        // -1 (issue #5760): nothing applied, so not a usable checkpoint offset -
+        // treating it as one would floor the whole tree and simply move the wedge
+        // from the cursor axis to the offset axis.
         var (pinGrain, registry, factory) = CreateSharedPinStore();
         var sibling = CreateLeafOnSharedPinStore("split-sibling-zero-head", registry, factory);
+
+        await sibling.InitializeSiblingAsync(new SiblingInitialization
+        {
+            TreeId = PinSeamTreeId,
+            ShardIndex = 0,
+            LowKeyInclusive = "m",
+            NextSibling = null,
+            PrevSibling = GrainId.Create("leaf", "donor"),
+            WalHeadsAtBirth = new[] { -1L },
+        });
+
+        var offsets = await pinGrain.GetPinOffsetsAsync();
+        Assert.That(offsets!.Values, Has.All.EqualTo(-1L),
+            "A read position of -1 is nothing applied and must stay on the sentinel.");
+    }
+
+    [Test]
+    public async Task A_birth_position_of_zero_is_a_real_offset_not_the_sentinel()
+    {
+        // Issue #5760: the read position is one below the head, so a WAL holding one
+        // record gives 0, "applied through offset 0". Read as the sentinel it would
+        // block the tree's whole cursor trim (#3094).
+        var (pinGrain, registry, factory) = CreateSharedPinStore();
+        var sibling = CreateLeafOnSharedPinStore("split-sibling-zero-position", registry, factory);
 
         await sibling.InitializeSiblingAsync(new SiblingInitialization
         {
@@ -321,7 +345,7 @@ public partial class BPlusLeafGrainTests
         });
 
         var offsets = await pinGrain.GetPinOffsetsAsync();
-        Assert.That(offsets!.Values, Has.All.EqualTo(-1L),
-            "A head of 0 is not a usable checkpoint offset and must stay on the sentinel.");
+        Assert.That(offsets!.Values, Has.Some.EqualTo(0L),
+            "A read position of 0 seeds a real offset.");
     }
 }

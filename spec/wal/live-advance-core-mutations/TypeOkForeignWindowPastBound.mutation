@@ -1,0 +1,16 @@
+# The hand-off windows' bound is dropped, so the environment opens windows past the
+# instance's bound. The bound stands for the model's finite instance; the mutation
+# checks that it is real.
+MODULE: TypeOkForeignWindowPastBound
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: a hand-off window opens past MaxWindows
+PERTURBS: ForeignOpen
+
+--- FIND
+    /\ ~hoOpen
+    /\ windows < MaxWindows
+--- REPLACE
+    /\ ~hoOpen
+\* MUTATION: no bound on the windows.
+--- END

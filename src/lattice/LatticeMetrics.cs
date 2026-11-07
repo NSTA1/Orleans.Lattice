@@ -140,6 +140,12 @@ public static class LatticeMetrics
     public const string TagReason = "reason";
 
     /// <summary>
+    /// Tag key for the class of caller whose seam retried a leaf write after an
+    /// append-fence rejection, on <see cref="WalAppendFenceSeamRetries"/> (epic #5605).
+    /// </summary>
+    public const string TagCaller = "caller";
+
+    /// <summary>
     /// Tag key for the write origin that reached a leaf (<c>client_write</c>,
     /// <c>merge</c>, or <c>cross_shard_migration</c>) on
     /// <see cref="LeafSpanFailOpenCommits"/>, which separates a deliberate
@@ -4764,7 +4770,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> LeafSplitAttempts =
         Meter.CreateCounter<long>("orleans.lattice.leaf.split_attempts", unit: "{attempt}",
-            description: "Leaf divisions sought on an over-capacity leaf, tagged by tree and outcome (divided/recovered/gate_contended/already_under_capacity/no_admissible_pivot/faulted, the last also tagged failure_class as unaffordable/timeout/other). Read alongside leaf bisect refusals, which is uninterpretable at zero without it.");
+            description: "Leaf divisions sought on an over-capacity leaf, tagged by tree and outcome (divided/recovered/gate_contended/already_under_capacity/no_admissible_pivot/commits_in_flight/faulted, the last also tagged failure_class as unaffordable/timeout/other). Read alongside leaf bisect refusals, which is uninterpretable at zero without it.");
 
     /// <summary>Canonical name of <see cref="LeafSplitAttempts"/>.</summary>
     public const string LeafSplitAttemptsName = "orleans.lattice.leaf.split_attempts";
@@ -4828,6 +4834,16 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly KeyValuePair<string, object?> LeafSplitNoAdmissiblePivot =
         new(TagOutcome, "no_admissible_pivot");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> = <c>commits_in_flight</c> on
+    /// <see cref="LeafSplitAttempts"/>: the division was declined because commits the
+    /// leaf admitted before capturing the sibling's read position had still not applied
+    /// after the drain deadline (issue #5706). Nothing was persisted; the next write
+    /// retries the division.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> LeafSplitCommitsInFlight =
+        new(TagOutcome, "commits_in_flight");
 
     /// <summary>
     /// <see cref="TagOutcome"/> = <c>faulted</c> on
@@ -5690,6 +5706,22 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly KeyValuePair<string, object?> DriverDeclineRecheckDriveRefused =
         new(TagReason, "recheck_drive_refused");
+
+    /// <summary>
+    /// <see cref="TagReason"/> value for a coverage-lag timer drive routed on
+    /// <see cref="DriverDeclineRecheckCheckpointStalled"/> that was not requested
+    /// because replays were queued on the per-silo WAL replay gate (#5851, a5e2e2ef's BH3).
+    /// <para>
+    /// A <b>qualifier</b> of that arm, recorded on the same tick, like
+    /// <see cref="DriverDeclineRecheckDriveRefused"/>. The timer's drive is background
+    /// work: while an activation's or a cold restart's replay waits for a permit, it
+    /// steps aside rather than compete, and stays owed, so the next tick that finds no
+    /// waiter drives it. A sustained rate means the gate is persistently contended by
+    /// foreground replays.
+    /// </para>
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> DriverDeclineRecheckDriveYielded =
+        new(TagReason, "recheck_drive_yielded");
 
     /// <summary>
     /// <see cref="TagReason"/> value for a coverage-lag timer starvation drive
@@ -11335,4 +11367,313 @@ public static class LatticeMetrics
     public static readonly Counter<long> CopyReceiveFencedApplies =
         Meter.CreateCounter<long>("orleans.lattice.restore.copy_receive_fenced", unit: "{apply}",
             description: "Replication applies refused because they routed to a restored copy a coordinated restore has fenced: still closed, or admitted before the restore paused receiving.");
+
+    /// <summary>
+    /// <see cref="TagKind"/> value on <see cref="WalAppendFenceClaims"/> for a leaf's
+    /// append-epoch claim at a WAL partition (epic #5605).
+    /// </summary>
+    public const string AppendFenceKindEpoch = "epoch";
+
+    /// <summary>
+    /// <see cref="TagKind"/> value on <see cref="WalAppendFenceClaims"/> for a
+    /// shard-level initiator's routing-generation re-claim (epic #5605).
+    /// </summary>
+    public const string AppendFenceKindGeneration = "generation";
+
+    /// <summary><see cref="TagOutcome"/> value on <see cref="WalAppendFenceClaims"/> for an accepted claim.</summary>
+    public static readonly KeyValuePair<string, object?> AppendFenceClaimAccepted = new(TagOutcome, "accepted");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="WalAppendFenceClaims"/> for a
+    /// refused claim: not above the entry, or not above the partition's retired floor.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> AppendFenceClaimRefused = new(TagOutcome, "refused");
+
+    /// <summary><see cref="TagReason"/> value on <see cref="WalAppendFenceRejections"/>: the stamp's epoch was superseded.</summary>
+    public static readonly KeyValuePair<string, object?> AppendFenceRejectedStaleEpoch = new(TagReason, "stale_epoch");
+
+    /// <summary><see cref="TagReason"/> value on <see cref="WalAppendFenceRejections"/>: the leaf's entry was not loaded.</summary>
+    public static readonly KeyValuePair<string, object?> AppendFenceRejectedUnloadedEntry = new(TagReason, "unloaded_entry");
+
+    /// <summary><see cref="TagReason"/> value on <see cref="WalAppendFenceRejections"/>: the stamp's routing generation was superseded.</summary>
+    public static readonly KeyValuePair<string, object?> AppendFenceRejectedStaleGeneration = new(TagReason, "stale_generation");
+
+    /// <summary><see cref="TagReason"/> value on <see cref="WalAppendFenceRejections"/>: the initiator's generation entry was not loaded.</summary>
+    public static readonly KeyValuePair<string, object?> AppendFenceRejectedUnloadedGeneration = new(TagReason, "unloaded_generation");
+
+    /// <summary>
+    /// <see cref="TagReason"/> value mapped from <see cref="BPlusTree.Grains.WalAppendFenceOutcome.Admitted"/>
+    /// for exhaustiveness only: an admitted append is never recorded on <see cref="WalAppendFenceRejections"/>.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> AppendFenceAdmitted = new(TagReason, "admitted");
+
+    /// <summary>The <see cref="TagReason"/> pair <see cref="WalAppendFenceRejections"/> records for <paramref name="outcome"/>.</summary>
+    internal static KeyValuePair<string, object?> AppendFenceRejectionReason(BPlusTree.Grains.WalAppendFenceOutcome outcome) => outcome switch
+    {
+        BPlusTree.Grains.WalAppendFenceOutcome.StaleEpoch => AppendFenceRejectedStaleEpoch,
+        BPlusTree.Grains.WalAppendFenceOutcome.UnloadedEntry => AppendFenceRejectedUnloadedEntry,
+        BPlusTree.Grains.WalAppendFenceOutcome.StaleGeneration => AppendFenceRejectedStaleGeneration,
+        BPlusTree.Grains.WalAppendFenceOutcome.UnloadedGeneration => AppendFenceRejectedUnloadedGeneration,
+        _ => AppendFenceAdmitted,
+    };
+
+    /// <summary>
+    /// Counter of append-epoch and routing-generation claims served by WAL
+    /// partitions (epic #5605), tagged with <see cref="TagTree"/>, the tenant,
+    /// <see cref="TagKind"/> (<c>epoch</c> or <c>generation</c>) and
+    /// <see cref="TagOutcome"/> (<c>accepted</c> or <c>refused</c>). A leaf
+    /// activation claims once per partition it writes while the append-fence gate
+    /// is open, so the accepted rate follows leaf activations, not writes. A refusal
+    /// is expected once after a leaf's retirement raises a partition's retired floor
+    /// (the next new leaf claims above it); a sustained refusal rate on one tree
+    /// means activations of the same leaf are contending.
+    /// </summary>
+    public static readonly Counter<long> WalAppendFenceClaims =
+        Meter.CreateCounter<long>("orleans.lattice.wal.append_fence.claims", unit: "{claim}",
+            description: "Append-epoch and routing-generation claims served by WAL partitions (epic #5605), by tree, kind (epoch or generation) and outcome (accepted or refused).");
+
+    /// <summary>
+    /// Counter of stamped WAL appends the append fence rejected (epic #5605),
+    /// tagged with <see cref="TagTree"/>, the tenant and <see cref="TagReason"/>:
+    /// <c>stale_epoch</c> (a superseded activation of a leaf tried to append; it
+    /// deactivates and the write is retried against the live activation),
+    /// <c>unloaded_entry</c> (the partition restarted or moved since the leaf's
+    /// claim; the leaf re-presents its claim and retries), <c>stale_generation</c>
+    /// and <c>unloaded_generation</c> (the same for a shard-level initiator's
+    /// routing generation). Every rejection is retried at the seam that raised it,
+    /// so none reaches a caller.
+    /// </summary>
+    public static readonly Counter<long> WalAppendFenceRejections =
+        Meter.CreateCounter<long>("orleans.lattice.wal.append_fence.rejections", unit: "{append}",
+            description: "Stamped WAL appends the append fence rejected (epic #5605), by tree and reason (stale_epoch, unloaded_entry, stale_generation, unloaded_generation); each is retried at its seam and never reaches a caller.");
+
+    /// <summary>
+    /// Counter of leaf-write retries after an append-fence rejection (epic #5605),
+    /// tagged with <see cref="TagCaller"/>, the class of caller whose seam retried.
+    /// A retry re-issues the write against the leaf's live activation until the
+    /// operation's existing deadline; a non-zero rate means stale duplicate
+    /// activations were superseded and their writes re-routed.
+    /// </summary>
+    public static readonly Counter<long> WalAppendFenceSeamRetries =
+        Meter.CreateCounter<long>("orleans.lattice.wal.append_fence.seam_retries", unit: "{retry}",
+            description: "Leaf-write retries after an append-fence rejection (epic #5605), by the class of caller whose seam retried.");
+
+    /// <summary>
+    /// Counter of stamped WAL appends whose response reported an unstamped append
+    /// the leaf had not seen reported before (epic #5605), tagged with
+    /// <see cref="TagTree"/> and the tenant. An unstamped append comes from a silo
+    /// whose view of the append-fence gate is closed, typically one running an older
+    /// build during a rolling upgrade, or from a write unstamped by design
+    /// (<see cref="WalAppendFenceUnstampedAppends"/>); a saga coordinator's
+    /// transaction terminal carries the coordinator-terminal stamp class and is not
+    /// reported. It is always admitted; a leaf must read past every one reported to
+    /// it before its checkpoint may skip records.
+    /// </summary>
+    public static readonly Counter<long> WalAppendFenceUnstampedReports =
+        Meter.CreateCounter<long>("orleans.lattice.wal.append_fence.unstamped_reports", unit: "{report}",
+            description: "Stamped WAL append responses that reported an unstamped append (from a silo whose append-fence gate is closed, or a write unstamped by design) made after the leaf's claim (epic #5605), by tree.");
+
+    /// <summary><see cref="TagOutcome"/> on <see cref="WalAppendFenceSweeps"/>: the leaf was gone and its fence rows were retired.</summary>
+    public static readonly KeyValuePair<string, object?> AppendFenceSweepRetired = new(TagOutcome, "retired");
+
+    /// <summary><see cref="TagOutcome"/> on <see cref="WalAppendFenceSweeps"/>: the leaf still exists, so its rows were kept.</summary>
+    public static readonly KeyValuePair<string, object?> AppendFenceSweepLive = new(TagOutcome, "live");
+
+    /// <summary><see cref="TagOutcome"/> on <see cref="WalAppendFenceSweeps"/>: checking or retiring the leaf failed; the next sweep tries again.</summary>
+    public static readonly KeyValuePair<string, object?> AppendFenceSweepFailed = new(TagOutcome, "failed");
+
+    /// <summary>
+    /// Counter of leaves the WAL append-fence sweep examined (#5634), tagged with
+    /// <see cref="TagTree"/>, the tenant and <see cref="TagOutcome"/>:
+    /// <c>retired</c> (the leaf was gone, and its entries, its directory listings and
+    /// its epoch row were retired), <c>live</c> (the leaf still exists) or
+    /// <c>failed</c> (the next sweep tries again). Only leaves listed in a partition's
+    /// append-epoch directory for longer than the sweep's grace are examined. A
+    /// <c>retired</c> count means a retirement left rows behind, typically one run on
+    /// a silo with an older build during a rollback.
+    /// </summary>
+    public static readonly Counter<long> WalAppendFenceSweeps =
+        Meter.CreateCounter<long>("orleans.lattice.wal.append_fence.sweeps", unit: "{leaf}",
+            description: "Leaves the WAL append-fence sweep examined (#5634), by tree and outcome (retired, live or failed).");
+
+    /// <summary>Tag key naming where a bulk append relocated rows from (issue #5610).</summary>
+    public const string TagBulkRelocationSource = "source";
+
+    /// <summary>
+    /// <see cref="TagBulkRelocationSource"/> value on <see cref="BulkRelocatedRows"/>:
+    /// the batch's own entries that sorted at or below the shard's right edge, merged
+    /// into the leaves the routing names.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> BulkRelocationBelowEdge = new(TagBulkRelocationSource, "below_edge");
+
+    /// <summary>
+    /// <see cref="TagBulkRelocationSource"/> value on <see cref="BulkRelocatedRows"/>:
+    /// rows the old rightmost leaf held at or above the first appended separator,
+    /// moved into the appended leaves when the graft narrowed it.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> BulkRelocationRightmostLeaf = new(TagBulkRelocationSource, "rightmost_leaf");
+
+    /// <summary>
+    /// <see cref="TagBulkRelocationSource"/> value on <see cref="BulkRelocatedRows"/>:
+    /// rows a batch write stored on the root a bulk load replaced while the load
+    /// ran (issue #5642), merged into the loaded tree.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> BulkRelocationReplacedRoot = new(TagBulkRelocationSource, "replaced_root");
+
+    /// <summary>
+    /// Counter of rows a bulk load or bulk append placed somewhere other than the
+    /// leaves it created (issues #5610 and #5642), tagged with <see cref="TagTree"/>,
+    /// the tenant and <see cref="TagBulkRelocationSource"/>: <c>below_edge</c> (an
+    /// append's own entries that sorted at or below rows the shard already held,
+    /// merged last-writer-wins into the leaves the routing names),
+    /// <c>rightmost_leaf</c> (rows the old rightmost leaf held in the appended
+    /// range, tombstones included, moved into the appended leaves when the graft
+    /// narrowed it) or <c>replaced_root</c> (rows a batch write stored on the root a
+    /// bulk load replaced while the load ran, merged into the loaded tree). Zero
+    /// when a load runs on a quiet shard and every appended key sorts above the
+    /// shard's contents, which is the documented use; a sustained
+    /// <c>below_edge</c> rate means callers append out of order or into a tree that
+    /// takes concurrent writes.
+    /// </summary>
+    public static readonly Counter<long> BulkRelocatedRows =
+        Meter.CreateCounter<long>("orleans.lattice.shard_root.bulk.relocated_rows", unit: "{row}",
+            description: "Rows a bulk load or bulk append placed outside the leaves it created (issues #5610 and #5642), by tree and source: below_edge (appended entries at or below rows the shard already held, merged last-writer-wins), rightmost_leaf (rows the old rightmost leaf held in the appended range) or replaced_root (rows a batch write stored on the root a bulk load replaced).");
+
+    /// <summary>
+    /// Tag key for the source of an append that went unstamped by design, on
+    /// <see cref="WalAppendFenceUnstampedAppends"/> (epic #5605, member 2).
+    /// </summary>
+    public const string TagUnstampedSource = "source";
+
+    /// <summary>
+    /// <see cref="TagUnstampedSource"/> value: a record sent under the
+    /// coordinator-terminal stamp class that is not a <c>TxCommit</c> or
+    /// <c>TxAbort</c>, which the WAL shard admitted unstamped and reported.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> UnstampedSourceTerminalClassMisuse = new(TagUnstampedSource, "terminal_class_misuse");
+
+    /// <summary>
+    /// <see cref="TagUnstampedSource"/> value: a range-delete walk that reached a
+    /// shard root through the existing, unfenced method (replication apply, a resize
+    /// or reshard shadow forward, a fan-out begun while the gate was closed, or an
+    /// older-build caller), appended unstamped by design.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> UnstampedSourceRangeDeleteUnfenced = new(TagUnstampedSource, "range_delete_unfenced");
+
+    /// <summary>
+    /// <see cref="TagUnstampedSource"/> value: a fenced range-delete walk whose
+    /// stamped append was rejected after its own intent closed (a walk outliving
+    /// its intent's deadline, such as a long paged drain), so it went on unstamped.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> UnstampedSourceRangeDeletePastIntent = new(TagUnstampedSource, "range_delete_past_intent");
+
+    /// <summary>
+    /// Counter of WAL appends that went unstamped by design while the append-fence
+    /// gate was open (epic #5605, member 2), tagged with <see cref="TagTree"/>, the
+    /// tenant and <see cref="TagUnstampedSource"/>. Each raises its partition's
+    /// unstamped watermark, so every leaf that later arms on that partition first
+    /// replays past it: a tail replay, never one from the log's start. The rate
+    /// makes that cost observable per source (design note, behaviour change 7).
+    /// </summary>
+    public static readonly Counter<long> WalAppendFenceUnstampedAppends =
+        Meter.CreateCounter<long>("orleans.lattice.wal.append_fence.unstamped_appends", unit: "{append}",
+            description: "WAL appends that went unstamped by design while the append-fence gate was open (epic #5605), by tree and source; each makes leaves on its partition replay past it before they arm.");
+
+    /// <summary><see cref="TagKind"/> value on <see cref="WalAppendFenceHandOffMarkers"/>: a leaf split onto its sibling.</summary>
+    public const string HandOffKindSplit = "split";
+
+    /// <summary>
+    /// Counter of stamped leaf appends rejected because the leaf's own activation had
+    /// raised its epoch since the stamp was taken (epic #5605, member 2): a hand-off
+    /// close's bump, or a bump after a retired-floor refusal. Tagged with
+    /// <see cref="TagTree"/> and the tenant. The activation is not superseded and keeps
+    /// serving; the write is retried by its caller's seam and re-admitted under the
+    /// current epoch. A rate tracks splits and reclaims, not writes.
+    /// </summary>
+    public static readonly Counter<long> WalAppendFenceSelfFenced =
+        Meter.CreateCounter<long>("orleans.lattice.wal.append_fence.self_fenced", unit: "{append}",
+            description: "Stamped leaf appends rejected because the leaf's own activation raised its epoch since (a hand-off close or a floor bump); retried at the caller's seam, the activation keeps serving (epic #5605), by tree.");
+
+    /// <summary>
+    /// Counter of leaf arms that failed at a WAL partition (#5833, review N1): the arm's
+    /// claim rounds were all refused, or a call failed for a reason other than the
+    /// activation being superseded. Tagged with <see cref="TagTree"/> and the tenant. The
+    /// partition stays pre-arm, so the leaf advances there by replay - latency, never
+    /// data - and the next coverage-lag tick or GC drive arms again.
+    /// </summary>
+    public static readonly Counter<long> WalAppendFenceArmFailures =
+        Meter.CreateCounter<long>("orleans.lattice.wal.append_fence.arm_failures", unit: "{arm}",
+            description: "Leaf arms that failed at a WAL partition (#5833); the partition stays pre-arm and advances by replay until a later arm lands (epic #5605), by tree.");
+
+    /// <summary>
+    /// Counter of a pre-arm split donor's re-claim allowance (#5840 review S4; #5843), tagged
+    /// with <see cref="TagTree"/>, the tenant and <see cref="TagOutcome"/>: the allowance spent on
+    /// a refusal at the current epoch (<see cref="ReclaimAllowanceSpentStaleEpoch"/>) or on a
+    /// bump's row conflict (<see cref="ReclaimAllowanceSpentRowConflict"/>), or an activation that
+    /// counted a split close superseded with the allowance already spent
+    /// (<see cref="ReclaimAllowanceSupersededAfterClose"/>). The last counts every such supersession:
+    /// a genuine one, and the liveness edge a5e2e2ef carried - a duplicate's row write before the
+    /// link spends the allowance, and a re-arm that then races the link fence deactivates the live
+    /// donor (latency, never data).
+    /// </summary>
+    public static readonly Counter<long> WalAppendFenceReclaimAllowance =
+        Meter.CreateCounter<long>("orleans.lattice.wal.append_fence.reclaim_allowance", unit: "{event}",
+            description: "A pre-arm split donor's one probed re-claim per counted close (#5840 S4): spent on a refusal at its current epoch or a bump's row conflict, or superseded_after_close when it was superseded with the allowance already spent (epic #5605), by tree and outcome.");
+
+    /// <summary><see cref="TagOutcome"/> value on <see cref="WalAppendFenceReclaimAllowance"/>: spent on a refusal at the current epoch.</summary>
+    public static readonly KeyValuePair<string, object?> ReclaimAllowanceSpentStaleEpoch = new(TagOutcome, "spent_stale_epoch");
+
+    /// <summary><see cref="TagOutcome"/> value on <see cref="WalAppendFenceReclaimAllowance"/>: spent on a bump's row conflict.</summary>
+    public static readonly KeyValuePair<string, object?> ReclaimAllowanceSpentRowConflict = new(TagOutcome, "spent_row_conflict");
+
+    /// <summary><see cref="TagOutcome"/> value on <see cref="WalAppendFenceReclaimAllowance"/>: an activation that counted a split close superseded with the allowance spent - a genuine supersession as well as the liveness edge.</summary>
+    public static readonly KeyValuePair<string, object?> ReclaimAllowanceSupersededAfterClose = new(TagOutcome, "superseded_after_close");
+
+    /// <summary><see cref="TagKind"/> value on <see cref="WalAppendFenceHandOffMarkers"/>: a leaf reclaim onto its survivor.</summary>
+    public const string HandOffKindReclaim = "reclaim";
+
+    /// <summary>
+    /// <see cref="TagKind"/> value on <see cref="WalAppendFenceHandOffMarkers"/>: a slot
+    /// migration onto its target shard - an adaptive split, or a consolidation fold,
+    /// which opens its window through the same donor-shard migration.
+    /// </summary>
+    public const string HandOffKindShardMigration = "shard_migration";
+
+    /// <summary><see cref="TagKind"/> value on <see cref="WalAppendFenceHandOffMarkers"/>: a tree range delete's intent.</summary>
+    public const string HandOffKindRangeDelete = "range_delete";
+
+    /// <summary><see cref="TagKind"/> value on <see cref="WalAppendFenceHandOffMarkers"/>: a bulk load's or bulk append's switch (member 3).</summary>
+    public const string HandOffKindBulk = "bulk";
+
+
+    /// <summary><see cref="TagOutcome"/> value on <see cref="WalAppendFenceHandOffMarkers"/>: a hand-off marker opened.</summary>
+    public static readonly KeyValuePair<string, object?> HandOffMarkerOpened = new(TagOutcome, "opened");
+
+    /// <summary><see cref="TagOutcome"/> value on <see cref="WalAppendFenceHandOffMarkers"/>: a hand-off marker closed by its fence.</summary>
+    public static readonly KeyValuePair<string, object?> HandOffMarkerClosed = new(TagOutcome, "closed");
+
+    /// <summary>
+    /// Counter of hand-off markers opened and closed (epic #5605, member 2), tagged
+    /// with <see cref="TagTree"/>, the tenant, <see cref="TagKind"/> (<c>split</c>,
+    /// <c>reclaim</c>, <c>shard_migration</c>, <c>range_delete</c> or <c>bulk</c>) and <see cref="TagOutcome"/> (<c>opened</c> or <c>closed</c>). An
+    /// open marker holds the owners it covers on the replay-based advance until its
+    /// close's fence returns heads they replay to; opened minus closed is the number
+    /// in flight, and a gap that does not close means a hand-off whose recovery has not
+    /// re-driven its close.
+    /// </summary>
+    public static readonly Counter<long> WalAppendFenceHandOffMarkers =
+        Meter.CreateCounter<long>("orleans.lattice.wal.append_fence.handoff_markers", unit: "{marker}",
+            description: "Hand-off markers opened and closed by their fence (epic #5605), by tree, kind (split, reclaim, shard_migration, range_delete or bulk) and outcome (opened or closed).");
+
+    /// <summary>Records one hand-off marker of <paramref name="kind"/> opened or closed on <paramref name="treeId"/>.</summary>
+    internal static void RecordHandOffMarker(string kind, bool opened, string treeId) =>
+        WalAppendFenceHandOffMarkers.Add(
+            1,
+            new System.Diagnostics.TagList
+            {
+                new KeyValuePair<string, object?>(TagTree, treeId),
+                LatticeTenantLabel.ForTree(treeId),
+                new KeyValuePair<string, object?>(TagKind, kind),
+                opened ? HandOffMarkerOpened : HandOffMarkerClosed,
+            });
 }

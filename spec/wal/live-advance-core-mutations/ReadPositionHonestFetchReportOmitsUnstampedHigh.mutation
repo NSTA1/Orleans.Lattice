@@ -1,0 +1,19 @@
+# #5851 R4 (a5e2e2ef's F1-F7): an idle leaf's read-only report fetch carries every bound an
+# append response carries, for the closes the leaf carries.
+MODULE: ReadPositionHonestFetchReportOmitsUnstampedHigh
+TARGET: ReadPositionHonest
+CLASS: Invariant
+PERTURBS: FetchReport
+SUMMARY: the idle leaf's report fetch omits the key-filtered unstamped high, so a stale donor's unrouted write, which only that high bounds (C4), lies below the fetched head and L free-advances past it unapplied
+BOUNDS: WithFreeAdvance = TRUE, WithKeyMove = TRUE, WithReportFetch = TRUE, MaxWindows = 0, WithMixedVersion = FALSE, WithDuplicate = FALSE
+
+--- FIND
+    /\ seenU' = [seenU EXCEPT ![a] = Max2(@, ReportU)]
+    /\ ReportStale(a)
+    /\ ft' = [ft EXCEPT ![a] = next - 1]
+--- REPLACE
+\* MUTATION: the fetch carries no unstamped high.
+    /\ UNCHANGED seenU
+    /\ ReportStale(a)
+    /\ ft' = [ft EXCEPT ![a] = next - 1]
+--- END

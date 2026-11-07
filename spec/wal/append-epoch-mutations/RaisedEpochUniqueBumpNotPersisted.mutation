@@ -1,0 +1,15 @@
+# Pairs with RaisedEpochUnique. A bump forced on another partition moves the
+# activation's epoch but does not persist it to the epoch row, so the next
+# claimant reads the old row and claims the bumped value, and both hold it.
+MODULE: RaisedEpochUniqueBumpNotPersisted
+TARGET: RaisedEpochUnique
+CLASS: Invariant
+SUMMARY: the other partition's bump changes the epoch without writing the row
+PERTURBS: OtherPartitionBump
+
+--- FIND
+        /\ rowEpoch' = e
+--- REPLACE
+\* MUTATION: the row is not written.
+        /\ rowEpoch' = rowEpoch
+--- END

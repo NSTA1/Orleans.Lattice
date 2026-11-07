@@ -1,0 +1,20 @@
+# Pairs with StaleEpochNeverAppends. A claim written before L's clear is raised
+# after it. The clear deleted the entry, so a raise checked against the entries
+# alone accepts an epoch the clear retired, and its activation appends. The shard
+# does not check the floor on appends (#5635), so the raise's floor check is the
+# guard. Production holds the leaf's gate across a claim's write and raise, so
+# L's own clear cannot fall between them; the model allows it (an
+# over-approximation), and another leaf's retirement can.
+MODULE: StaleEpochNeverAppendsIgnoresRetiredFloor
+TARGET: StaleEpochNeverAppends
+CLASS: Invariant
+SUMMARY: the claim's raise is not refused at or below the retired floor
+PERTURBS: ClaimRaise
+
+--- FIND
+    /\ epoch[a] >= Max2(fence, memFence)
+    /\ epoch[a] > retired
+--- REPLACE
+    /\ epoch[a] >= Max2(fence, memFence)
+\* MUTATION: the retired floor is not checked at the raise.
+--- END

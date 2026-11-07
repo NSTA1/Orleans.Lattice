@@ -1,0 +1,20 @@
+# Pairs with NewbornPinEventuallyUsable. The live advance is never wired in, as
+# before #5572: a live leaf's read position moves only by replay, and production
+# replays a live leaf only toward a bound the arming list names. Its own appends
+# above those bounds are never covered, so its pin never becomes usable without a
+# replay from -1.
+MODULE: NewbornPinEventuallyUsableAdvanceNeverFires
+TARGET: NewbornPinEventuallyUsable
+CLASS: Temporal
+SUMMARY: the live advance never fires
+PERTURBS: LiveAdvance
+
+--- FIND
+    /\ mine[a] # {}
+    /\ Armed(a)
+--- REPLACE
+    /\ mine[a] # {}
+\* MUTATION: the live advance is never enabled.
+    /\ FALSE
+    /\ Armed(a)
+--- END

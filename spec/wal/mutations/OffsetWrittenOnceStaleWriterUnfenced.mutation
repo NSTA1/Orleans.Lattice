@@ -1,0 +1,25 @@
+# Pairs with OffsetWrittenOnce. A predecessor's provider instance on another
+# silo commits its abandoned batch without the TAIL commit fence: its phase-2
+# transaction does not require the TAIL ETag it last saw (issue #5810). The
+# successor has already committed a batch through the predecessor's start
+# offset, so the predecessor's entry row lands at an offset the successor wrote
+# mid-batch, and that offset is written twice.
+MODULE: OffsetWrittenOnceStaleWriterUnfenced
+TARGET: OffsetWrittenOnce
+CLASS: Invariant
+SUMMARY: a stale predecessor's commit is not fenced by the TAIL ETag
+PERTURBS: LateLand
+
+--- FIND
+       THEN IF /\ o >= tail
+               /\ prevFresh
+--- REPLACE
+\* MUTATION: the predecessor's commit is not conditional on its view of TAIL.
+       THEN IF /\ o >= tail
+--- END
+--- FIND
+WithCrossSiloMove == FALSE
+--- REPLACE
+\* MUTATION: raises the bound so a lost activation may move to another silo.
+WithCrossSiloMove == TRUE
+--- END

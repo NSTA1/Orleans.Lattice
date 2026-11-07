@@ -1,0 +1,14 @@
+# Pairs with EpochMeetsCoreClaim (E -> C). The claim raise loses its floor check, so an
+# activation that survived the purge unclaimed raises an epoch L's clear retired and is not
+# the current activation the core makes it.
+MODULE: EpochMeetsCoreClaimRetiredEpochRaised
+TARGET: EpochMeetsCoreClaim
+CLASS: Invariant
+SUMMARY: E's claim raise admits an epoch L's clear retired
+
+--- FIND
+        /\ ERaiseAboveEntry(e)
+        /\ ERaiseAboveFloor(e)
+--- REPLACE
+        /\ ERaiseAboveEntry(e)
+--- END

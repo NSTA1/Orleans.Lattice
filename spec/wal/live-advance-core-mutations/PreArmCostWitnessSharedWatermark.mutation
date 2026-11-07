@@ -1,0 +1,26 @@
+# #5833. A PreArm append raises the partition's shared unstamped watermark, as a plain
+# unstamped one does: every activation is told to replay past its own PreArm appends, so
+# on a growing tree every armed leaf of the partition is held on the replay-based advance.
+MODULE: PreArmCostWitnessSharedWatermark
+TARGET: PreArmCostWitness
+CLASS: Invariant
+SUMMARY: a PreArm append raises the shared unstamped watermark
+PERTURBS: PreArmAlloc
+
+--- FIND
+    /\ preArm' = preArm \cup {next}
+    /\ seenU' = [seenU EXCEPT ![a] = Max2(@, ReportU)]
+    /\ IF FreeOn THEN ReportForeign(a) ELSE UNCHANGED seenP
+    /\ ReportStale(a)
+    /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars>>
+    /\ UNCHANGED <<lastU, oldUsed, restarted, oldRejected, envVars>>
+--- REPLACE
+    /\ preArm' = preArm \cup {next}
+\* MUTATION: the shared watermark is raised.
+    /\ lastU' = next
+    /\ seenU' = [seenU EXCEPT ![a] = Max2(@, next)]
+    /\ IF FreeOn THEN ReportForeign(a) ELSE UNCHANGED seenP
+    /\ ReportStale(a)
+    /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars>>
+    /\ UNCHANGED <<oldUsed, restarted, oldRejected, envVars>>
+--- END

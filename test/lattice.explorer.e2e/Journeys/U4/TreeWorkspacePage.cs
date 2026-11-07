@@ -120,7 +120,9 @@ public sealed class TreeWorkspacePage(ShellPage shell)
         await Shell.GoToAreaAsync("data");
         await Expect(Shell.Heading).ToHaveTextAsync("Data");
         await Content.GetByLabel("Filter trees and views").FillAsync(tree);
-        var link = Content.GetByRole(AriaRole.Link, new() { Name = tree, Exact = true });
+        // The tree's own row: until the filter applies, the views it feeds link to it from their Source column too.
+        var link = Content.GetByRole(AriaRole.Row, new() { NameRegex = new Regex("^" + Regex.Escape(tree) + " ") })
+            .GetByRole(AriaRole.Link, new() { Name = tree, Exact = true });
         await Expect(link).ToBeVisibleAsync();
         await link.ClickAsync();
         await ExpectOpenAsync(tree);
@@ -196,7 +198,8 @@ public sealed class TreeWorkspacePage(ShellPage shell)
         await field.FocusAsync();
         await field.PressSequentiallyAsync(key);
         var option = Page.Locator(".lt-combobox__list [role=option]").Filter(new() { HasText = key });
-        await Expect(option.First).ToBeVisibleAsync();
+        // The picker's options come from a server-side prefix scan, so the wait is a server read's bound (#5737).
+        await Expect(option.First).ToBeVisibleAsync(new() { Timeout = PanelSettled.BoundMs });
         await option.First.ClickAsync();
         await Expect(field).ToHaveValueAsync(key);
         await Content.GetByRole(AriaRole.Button, new() { Name = "Show history", Exact = true }).ClickAsync();

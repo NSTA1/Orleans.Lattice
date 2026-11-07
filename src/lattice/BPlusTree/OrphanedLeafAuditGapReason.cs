@@ -91,4 +91,15 @@ public enum OrphanedLeafAuditGapReason
     /// pass can see but cannot judge or repair.
     /// </summary>
     EntryLeafUnreachable = 6,
+
+    /// <summary>
+    /// The walk's descent for a leaf could have taken a stale route, so its answer is
+    /// no verdict (#5876): an internal node on the path had divided and its parent did
+    /// not yet route to the new half (the key is at or above the node's declared high bound),
+    /// or the shard's root changed during the descent - created or rolled back, promoted,
+    /// switched by a bulk graft, retired, purged, revived, or moved by a shard split or slot
+    /// migration. The leaf is neither judged nor used as a resume position; a later pass
+    /// judges it once the structure has settled.
+    /// </summary>
+    RoutingInMotion = 7,
 }

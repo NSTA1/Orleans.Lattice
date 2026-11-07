@@ -1,0 +1,16 @@
+{
+  "mutations": "append-epoch-mutations",
+  "refinement": "AppendEpochRefinement.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 5,
+    "properties": 0,
+    "actions": 17,
+    "mutations": 23,
+    "behaviourRows": 20,
+    "distinctStates": 150706
+  },
+  "variants": {
+    "WideEpochs": { "distinctStates": 495810 }
+  }
+}

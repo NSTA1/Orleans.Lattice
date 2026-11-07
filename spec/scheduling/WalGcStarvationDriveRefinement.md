@@ -221,6 +221,16 @@ its historical name; it skips the phase refresh and does not model randomness.
   checks that projection only at its own small bound.
   No production symbol: the gap is a modelling abstraction with no single
   production owner.
+- **A stalled drive yields to queued replays (#5851 B).** Production skips a stalled timer
+  drive while replays queue on the per-silo gate and keeps it owed, a refusal reason the
+  model's `CanAdmit` does not name, pinned by
+  `BPlusLeafGrainTests.HeadDrive_steps_aside_while_replays_queue_and_stays_owed`. The
+  model's refused timer dispatch re-arms and stays owed (`DriveRefused`), so safety is
+  unchanged; liveness relies on the queued replays draining, each a finite admitted
+  request that releases its permit. A tick whose only checkpoint movement was
+  live-advance stamps counts toward the stall, which only widens the timer schedules
+  production takes and stays within the core's abstracted stall clock.
+  Production symbols: `BPlusLeafGrain.IsCheckpointStalledBehindLiveDataAsync`.
 - **No three-leaf liveness claim.** A three-leaf instance of this core was
   measured outside CI. Its safety-only check passed in several minutes, and its
   full liveness check did not finish within the twenty-minute cap, so it is not

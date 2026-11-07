@@ -643,6 +643,11 @@ internal sealed class TreeSnapshotGrain(
 
                     if (!copyComplete)
                     {
+                        // An offline copy is incomplete only while the destination
+                        // still runs an earlier attempt's load (#5812): there is no
+                        // cursor to bank and the retry is not spent, so nothing changes.
+                        if (state.State.Mode != SnapshotMode.Online) break;
+
                         // A bounded online pass that yielded. Persist the resume
                         // position and stay on this shard and phase; the next
                         // tick continues from the key. The retry budget is reset
@@ -832,8 +837,9 @@ internal sealed class TreeSnapshotGrain(
     /// </summary>
     /// <returns>
     /// Whether the source shard's whole leaf chain has been copied, and the key
-    /// the next pass resumes from when it has not. The offline path always
-    /// reports the copy complete.
+    /// the next pass resumes from when it has not. The offline path reports the
+    /// copy complete, except while the destination is still running the load an
+    /// earlier, timed-out attempt issued (#5812).
     /// </returns>
     private async Task<(bool CopyComplete, string? ResumeFromInclusive)> CopyShardAsync(
         int shardIndex,
@@ -843,6 +849,28 @@ internal sealed class TreeSnapshotGrain(
         var sourceShardKey = $"{SourcePhysicalTreeId}/{shardIndex}";
         var sourceShard = grainFactory.GetGrain<IShardRootGrain>(sourceShardKey);
         var offline = state.State.Mode != SnapshotMode.Online;
+
+        // Issue #5812: a load's size is unbounded, so an earlier attempt's load can
+        // outrun the response timeout while the destination keeps running it. A retry
+        // asks the destination first rather than re-walking the source and queueing a
+        // second load behind the first: a completed load completes the copy, and a
+        // running one is waited for without spending the retry budget. The first
+        // attempt (no retry spent) skips the read, so the healthy path costs nothing.
+        if (offline && state.State.ShardRetries > 0)
+        {
+            switch (await ReadOfflineLoadStatusAsync(shardIndex))
+            {
+                case BulkOperationStatus.Completed:
+                    _offlineLoadWaitStarted = 0;
+                    return (true, null);
+                case BulkOperationStatus.Running:
+                    ThrowIfOfflineLoadWaitExpired(shardIndex);
+                    await Task.Delay(OfflineLoadPollInterval);
+                    return (false, null);
+            }
+
+            _offlineLoadWaitStarted = 0;
+        }
 
         var atomicWalk = offline ? new AtomicLeafWalk("SnapshotOfflineCopyShardAsync") : default;
 
@@ -896,9 +924,7 @@ internal sealed class TreeSnapshotGrain(
             // Offline drain: source is locked, destination is guaranteed empty.
             // Use the bottom-up bulk-load path for minimal storage I/O.
             entries.Sort((a, b) => string.Compare(a.Key, b.Key, StringComparison.Ordinal));
-            var operationId = $"{state.State.OperationId}-snapshot-{shardIndex}";
-            var offlineDest = grainFactory.GetGrain<IShardRootGrain>($"{state.State.DestinationTreeId}/{shardIndex}");
-            await offlineDest.BulkLoadRawAsync(operationId, entries);
+            await OfflineDestination(shardIndex).BulkLoadRawAsync(OfflineLoadOperationId(shardIndex), entries);
             return (true, null);
         }
 
@@ -951,6 +977,88 @@ internal sealed class TreeSnapshotGrain(
         position == state.State.NextShardIndex
             ? state.State.CopyCursorKey
             : state.State.DrainCursors is { } cursors && cursors.TryGetValue(position, out var key) ? key : null;
+
+    /// <summary>
+    /// How long a retry waits before it reports the destination's load still running
+    /// (#5812), so a slice polls the destination about once a second rather than spinning.
+    /// </summary>
+    internal static readonly TimeSpan OfflineLoadPollInterval = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// When this activation began waiting for a shard's running offline load, as a
+    /// <see cref="Stopwatch"/> timestamp; 0 when it is not waiting. Activation memory
+    /// only: a reactivated snapshot starts the guard again.
+    /// </summary>
+    private long _offlineLoadWaitStarted;
+
+    /// <summary>The shard <see cref="_offlineLoadWaitStarted"/> belongs to.</summary>
+    private int _offlineLoadWaitShard = -1;
+
+    /// <summary>
+    /// The hang guard on waiting for a destination's running offline load (#5812): the
+    /// restore's, <see cref="ShardBulkLoadCompletion.DefaultWaitCeiling"/>. Past it the
+    /// wait fails the copy step with a timeout, which spends the shard's retry.
+    /// </summary>
+    internal TimeSpan OfflineLoadWaitCeiling { get; set; } = ShardBulkLoadCompletion.DefaultWaitCeiling;
+
+    private void ThrowIfOfflineLoadWaitExpired(int shardIndex)
+    {
+        if (_offlineLoadWaitStarted == 0 || _offlineLoadWaitShard != shardIndex)
+        {
+            _offlineLoadWaitStarted = Stopwatch.GetTimestamp();
+            _offlineLoadWaitShard = shardIndex;
+            return;
+        }
+
+        if (Stopwatch.GetElapsedTime(_offlineLoadWaitStarted) >= OfflineLoadWaitCeiling)
+        {
+            _offlineLoadWaitStarted = 0;
+            throw new TimeoutException(
+                $"Snapshot of tree '{SourceTreeId}': shard {shardIndex}'s offline load was still running on the destination after {OfflineLoadWaitCeiling}.");
+        }
+    }
+
+    private string OfflineLoadOperationId(int shardIndex) => $"{state.State.OperationId}-snapshot-{shardIndex}";
+
+    private IShardRootGrain OfflineDestination(int shardIndex) =>
+        grainFactory.GetGrain<IShardRootGrain>($"{state.State.DestinationTreeId}/{shardIndex}");
+
+    /// <summary>
+    /// The destination's status for this shard's offline load (#5812). A destination
+    /// on lattice 10.2.0, which answers the read with the definite "method unknown"
+    /// failure, reports <see cref="BulkOperationStatus.NotRunning"/>, so the retry
+    /// re-walks and re-issues exactly as it did before. Any other failure of the read
+    /// is transient and reports <see cref="BulkOperationStatus.Running"/>: the retry
+    /// waits and reads again, within the hang guard, rather than re-issue a load the
+    /// destination may still be running.
+    /// </summary>
+    private async Task<BulkOperationStatus> ReadOfflineLoadStatusAsync(int shardIndex)
+    {
+        try
+        {
+            var status = await OfflineDestination(shardIndex).GetBulkOperationStatusAsync(OfflineLoadOperationId(shardIndex));
+            if (status == BulkOperationStatus.Running)
+            {
+                Logger.LogInformation(
+                    "Snapshot of tree {TreeId}: shard {ShardIndex}'s offline load is still running on the destination after a timeout; waiting for it rather than re-issuing it.",
+                    SourceTreeId, shardIndex);
+            }
+
+            return status;
+        }
+        catch (Exception ex) when (WalAppendFenceMethodProbe.IsDefiniteMethodUnknown(ex))
+        {
+            Logger.LogDebug(ex, "Snapshot of tree {TreeId}: shard {ShardIndex}'s destination cannot report its offline load's status.",
+                SourceTreeId, shardIndex);
+            return BulkOperationStatus.NotRunning;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogDebug(ex, "Snapshot of tree {TreeId}: shard {ShardIndex}'s destination could not report its offline load's status this time; reading again.",
+                SourceTreeId, shardIndex);
+            return BulkOperationStatus.Running;
+        }
+    }
 
     /// <summary>
     /// Copies one shard for as many bounded passes as fit in the current slice.

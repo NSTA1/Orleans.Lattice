@@ -192,7 +192,9 @@ public sealed class DashboardPanelTagDomainTests
             // timer's starvation drive was refused admission to the replay gate
             // or is backing off after a refusal. Neither is a minting event, and
             // neither is discharged by the drive in this panel's denominator.
-            // Both are charted on panel 160 on their own target F.
+            // Both are charted on panel 160 on their own target F, as is
+            // recheck_drive_yielded (#5851), the same kind of qualifier: the stalled
+            // drive stepped aside for replays queued on the gate.
             ["CommitPath|161|orleans.lattice.leaf.snapshot.driver.declines|reason"] =
             [
                 "deactivate_unproven_coverage_current",
@@ -203,6 +205,7 @@ public sealed class DashboardPanelTagDomainTests
                 "recheck_coverage_current",
                 "recheck_drive_deferred",
                 "recheck_drive_refused",
+                "recheck_drive_yielded",
                 "recheck_no_durable_checkpoint",
             ],
 

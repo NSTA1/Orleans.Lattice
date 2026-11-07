@@ -98,6 +98,129 @@ public sealed class ContractWaitSelfTests
         });
     }
 
+    /// <summary>An operation not terminal at the deadline times out naming the last status it read.</summary>
+    [Test]
+    public void A_fixed_deadline_wait_names_the_last_status_on_timeout()
+    {
+        var ex = Assert.ThrowsAsync<TimeoutException>(() => ContractWait.SucceededAsync(
+            "the self-test operation",
+            () => Task.FromResult<LatticeOperationStatus?>(Status(LatticeOperationState.Running, 5)),
+            TimeSpan.FromSeconds(1)));
+
+        Assert.That(ex!.Message, Does.Contain("Timed out").And.Contain("Last status: Running/migrating 5."));
+    }
+
+    /// <summary>An operation whose total grows while it gains on it converges, and its success is returned.</summary>
+    [Test]
+    public async Task An_operation_that_gains_on_a_growing_total_converges_and_succeeds()
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var polls = 0L;
+
+        var done = await ContractWait.SucceededWhileAdvancingAsync(
+            "the self-test operation",
+            () =>
+            {
+                polls++;
+                var state = clock.Elapsed > Stall * 2 ? LatticeOperationState.Succeeded : LatticeOperationState.Running;
+                return Task.FromResult<LatticeOperationStatus?>(Status(state, units: 2 * polls, total: 1_000 + polls));
+            },
+            Stall,
+            TimeSpan.FromMinutes(1),
+            convergence: TimeSpan.FromSeconds(1));
+
+        Assert.That(done.State, Is.EqualTo(LatticeOperationState.Succeeded));
+    }
+
+    /// <summary>An operation whose total grows as fast as it advances never converges, and times out naming it.</summary>
+    [Test]
+    public void An_operation_that_advances_but_never_gains_on_its_total_fails_as_not_converging()
+    {
+        var polls = 0L;
+
+        var ex = Assert.ThrowsAsync<TimeoutException>(() => ContractWait.SucceededWhileAdvancingAsync(
+            "the self-test operation",
+            () =>
+            {
+                polls++;
+                return Task.FromResult<LatticeOperationStatus?>(Status(LatticeOperationState.Running, units: polls, total: 100 + polls));
+            },
+            TimeSpan.FromMinutes(1),
+            TimeSpan.FromMinutes(1),
+            convergence: TimeSpan.FromSeconds(1)));
+
+        Assert.That(ex!.Message, Does.Contain("not converging").And.Contain("Running/migrating"));
+    }
+
+    private static LatticeOperationStatus Status(LatticeOperationState state, long units, long total) => Status(state, units) with { TotalUnits = total };
+
+    private static ContractWait.ExternalWait Wait(TimeSpan ceiling, Func<string?> holder) =>
+        new("waiting", ceiling, () => Task.FromResult(holder()));
+
+    private static LatticeOperationStatus Waiting() => Status(LatticeOperationState.Running, 0) with { Phase = "waiting" };
+
+    /// <summary>An operation waiting on a named holder outlasts the stall window, and succeeds once the holder lets go.</summary>
+    [Test]
+    public async Task A_wait_on_a_named_holder_does_not_stall()
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+
+        var done = await ContractWait.SucceededWhileAdvancingAsync(
+            "the self-test operation",
+            () => Task.FromResult<LatticeOperationStatus?>(clock.Elapsed > Stall * 3
+                ? Status(LatticeOperationState.Succeeded, 1)
+                : Waiting()),
+            Stall,
+            TimeSpan.FromMinutes(1),
+            externalWait: Wait(TimeSpan.FromMinutes(1), () => "the resize of t"));
+
+        Assert.That(done.State, Is.EqualTo(LatticeOperationState.Succeeded));
+    }
+
+    /// <summary>A wait on a named holder fails at the wait's own ceiling, naming the holder.</summary>
+    [Test]
+    public void A_wait_on_a_named_holder_fails_at_its_ceiling_naming_the_holder()
+    {
+        var ex = Assert.ThrowsAsync<TimeoutException>(() => ContractWait.SucceededWhileAdvancingAsync(
+            "the self-test operation",
+            () => Task.FromResult<LatticeOperationStatus?>(Waiting()),
+            TimeSpan.FromMinutes(1),
+            TimeSpan.FromMinutes(1),
+            externalWait: Wait(Stall, () => "the resize of t")));
+
+        Assert.That(ex!.Message, Does.Contain("waited in waiting").And.Contain("the resize of t"));
+    }
+
+    /// <summary>A wait whose holder the harness cannot name is judged by the stall check as before.</summary>
+    [Test]
+    public void A_wait_on_an_unnamed_holder_still_stalls()
+    {
+        var ex = Assert.ThrowsAsync<TimeoutException>(() => ContractWait.SucceededWhileAdvancingAsync(
+            "the self-test operation",
+            () => Task.FromResult<LatticeOperationStatus?>(Waiting()),
+            Stall,
+            TimeSpan.FromMinutes(1),
+            externalWait: Wait(TimeSpan.FromMinutes(1), () => null)));
+
+        Assert.That(ex!.Message, Does.Contain("made no progress"));
+    }
+
+    /// <summary>A stall after a named wait ends names the holder the operation last waited on.</summary>
+    [Test]
+    public void A_stall_after_a_named_wait_names_the_last_holder()
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+
+        var ex = Assert.ThrowsAsync<TimeoutException>(() => ContractWait.SucceededWhileAdvancingAsync(
+            "the self-test operation",
+            () => Task.FromResult<LatticeOperationStatus?>(clock.Elapsed < Stall ? Waiting() : Status(LatticeOperationState.Running, 4)),
+            Stall,
+            TimeSpan.FromMinutes(1),
+            externalWait: Wait(TimeSpan.FromMinutes(1), () => "the resize of t")));
+
+        Assert.That(ex!.Message, Does.Contain("made no progress").And.Contain("last waiting holder: the resize of t"));
+    }
+
     private static LatticeOperationStatus Status(LatticeOperationState state, long units) => new()
     {
         OperationId = "op",

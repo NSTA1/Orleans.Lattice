@@ -1,0 +1,12 @@
+# Witness for BulkCloseMeetsCoreClose. The check is replaced by FALSE, so the invariant fails
+# exactly when a kept bulk-switch close is reachable.
+MODULE: BulkCloseMeetsCoreCloseWitness
+TARGET: BulkCloseMeetsCoreClose
+CLASS: Invariant
+SUMMARY: a bulk switch's close is reachable: the edge's check is not vacuous
+
+--- FIND
+Fails("BulkCloseMeetsCoreClose", CBulkClose)
+--- REPLACE
+Fails("BulkCloseMeetsCoreClose", FALSE)
+--- END

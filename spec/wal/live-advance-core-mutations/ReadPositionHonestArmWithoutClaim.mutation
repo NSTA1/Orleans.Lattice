@@ -1,0 +1,17 @@
+# #5833. An activation arms at the partition without the lazy claim: a partition the
+# batched arm skipped. Nothing reported the other activations' appends to it, so it
+# passes one. It edits the Armed predicate, not an action, so it names no perturbed action.
+MODULE: ReadPositionHonestArmWithoutClaim
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: an activation arms at the partition without claiming there
+
+--- FIND
+Armed(a) ==
+    /\ claimed[a]
+
+--- REPLACE
+Armed(a) ==
+\* MUTATION: armed without a claim at the partition.
+
+--- END

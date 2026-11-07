@@ -1,0 +1,18 @@
+# #5851 K1-K6 (a5e2e2ef, #5851 comment 6668840949): the partition tables recent unstamped
+# records by key; a reader reads the folded floor and the tabled records in its current range,
+# and a reader whose range widened reads the global high for the absorbed span.
+MODULE: ReadPositionHonestUnstampedSpanWriteUntabled
+TARGET: ReadPositionHonest
+CLASS: Invariant
+PERTURBS: SpanUnstampedAlloc
+SUMMARY: an unstamped write is neither tabled by its key nor folded into the floor (K1), so once its key's span is L's, no high a reader reads carries it and L free-advances past it unapplied
+BOUNDS: WithFreeAdvance = TRUE, WithKeyFilter = TRUE, MaxWindows = 0, WithMixedVersion = FALSE, WithDuplicate = FALSE
+
+--- FIND
+    /\ uSpan' = next
+    /\ spanRecs' = spanRecs \cup {next}
+--- REPLACE
+\* MUTATION: the unstamped write is not tabled.
+    /\ UNCHANGED uSpan
+    /\ spanRecs' = spanRecs \cup {next}
+--- END

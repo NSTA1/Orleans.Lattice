@@ -706,7 +706,8 @@ internal sealed partial class BPlusLeafGrain
         for (var p = 0; p < width; p++)
         {
             if (IsPartitionProvenCheckpointed(p)
-                && DurableSnapshotCoverageForPartition(p) < 0)
+                && DurableSnapshotCoverageForPartition(p) < 0
+                && !IsHeldUncoveredHint(p))
             {
                 count++;
                 if (stopAtFirst)
@@ -849,6 +850,12 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private int _consecutiveCheckpointStallTicks;
 
+    /// <summary>
+    /// How far live-advance steps raised the checkpoint signature since the last stall
+    /// check (#5851 B, BH1): movement the stall check does not count as progress.
+    /// </summary>
+    private long _checkpointLiveAdvancedSinceStallCheck;
+
     private uint _checkpointStallRearms;
     private bool[]? _checkpointStallLiveData;
     private ILeafReplayCoordinatorGrain?[]? _checkpointStallCoordinators;
@@ -945,11 +952,23 @@ internal sealed partial class BPlusLeafGrain
             return false;
         }
 
+        // #5851 B (a5e2e2ef's BH1): progress is a replay, or a catch-up to the head, which
+        // the head probe below finds. A live-advance step moves the checkpoint only to the
+        // leaf's own high and never past another author's records, so it does not reset the
+        // count; when anything else moved the checkpoint in the same tick, that wins. A
+        // rollback lowers the signature, and a negative delta is never progress either.
+        var liveAdvanced = _checkpointLiveAdvancedSinceStallCheck;
+        _checkpointLiveAdvancedSinceStallCheck = 0;
         if (signature != _lastCheckpointProgressSignature)
         {
+            var movedByOther = _lastCheckpointProgressSignature == long.MinValue
+                || signature - _lastCheckpointProgressSignature > liveAdvanced;
             _lastCheckpointProgressSignature = signature;
-            _consecutiveCheckpointStallTicks = 0;
-            return false;
+            if (movedByOther)
+            {
+                _consecutiveCheckpointStallTicks = 0;
+                return false;
+            }
         }
 
         // Unchanged. That is only a fault if there are rows whose durability
@@ -2992,6 +3011,21 @@ internal sealed partial class BPlusLeafGrain
         // replay-gate slot, kept for the WAL GC sweep; a refusal is counted and
         // backed off rather than thrown out of this callback (issue #3575).
         var starvationPartitionCount = Math.Max(1, resolved.WalPartitions);
+        RearmHintCapture();
+
+        // Issue #5572. A leaf's own live writes advance its checkpoint here,
+        // without a replay, whenever that is safe (BPlusLeafGrain.LiveCheckpoint.cs).
+        // Running first is what keeps a live-written leaf off the starved arm
+        // below: once a partition is checkpointed the leaf is no longer starved,
+        // and the bank step persists the advance, captures over it and publishes
+        // a usable pin.
+        var liveAdvanced = await TryAdvanceLiveCheckpointAsync(fetchReports: true);
+
+        // a5e2e2ef's G4 (A4, and #5851 comment 6668840949): a witnessed donor close still
+        // carried at a partition is resolved by an arm there at the first tick after the
+        // witness - before any arm below returns early - once per (partition, witness).
+        await TryBackstopCarriedClosesAsync();
+
         if (IsStarvedOfDurableCheckpoint(starvationPartitionCount))
         {
             ObserveDriverDecline(LatticeMetrics.DriverDeclineRecheckNoDurableCheckpoint);
@@ -3036,6 +3070,16 @@ internal sealed partial class BPlusLeafGrain
         if (stalled)
         {
             ObserveDriverDecline(LatticeMetrics.DriverDeclineRecheckCheckpointStalled);
+            if (QueuedReplayPermitWaiters > 0)
+            {
+                // #5851 B (BH3): replays wait on the gate - an activation, or a cold-restart
+                // storm - so this background drive yields to them, and stays owed: the next
+                // tick that finds the gate free drives it.
+                ObserveDriverDecline(LatticeMetrics.DriverDeclineRecheckDriveYielded);
+                _consecutiveCheckpointStallTicks = CheckpointStallTicksBeforeDrive - 1;
+                return;
+            }
+
             await DispatchTimerDriveAsync(starvationPartitionCount, "arm=stalled-drive");
             return;
         }
@@ -3073,7 +3117,14 @@ internal sealed partial class BPlusLeafGrain
         // nothing and coalescing is intact. The commit persists only an advance
         // an apply already banked - no replay, no permit - and the pin it makes
         // bankable stays clamped by coverage exactly as above.
-        var flushPending = IsResidualPendingCheckpointPersistDue(resolved);
+        //
+        // A live advance this tick made is persisted regardless of the window,
+        // as the starvation drive persists its replay's advance (issue #3476):
+        // the pin is bounded by the persisted checkpoint, so an advance left
+        // pending would move nothing until the window closed - an hour, under a
+        // long MaterialiserCheckpointInterval. It costs at most one persist per
+        // tick, in place of the drive this advance replaces (issue #5572).
+        var flushPending = liveAdvanced || IsResidualPendingCheckpointPersistDue(resolved);
         using (AwaitDiagnostics.Begin(
             "leaf.timer.coverage-lag", context.GrainId, AwaitDiagnostics.Enabled ? "arm=bank-pin flush=" + flushPending : null))
         {
@@ -3081,6 +3132,23 @@ internal sealed partial class BPlusLeafGrain
                 starvationPartitionCount,
                 flushPendingCheckpoint: flushPending,
                 cancellationToken);
+        }
+
+        // #5851 (a5e2e2ef's ruling 2). A pre-arm leaf whose claimless advance or split
+        // hint was held only by a reported bound - a foreign or unstamped record above its
+        // checkpoint - is never starved and need not stall, so nothing above reads past
+        // that record, and one raise would hold it, and every sibling born capped from it,
+        // for good. The same drive reads the gap: C's Replay, permit, apply and advance,
+        // once per (partition, bound value), dispatched here and never on a write. Last,
+        // after the bank step, so this tick's live advance is still persisted and banked
+        // (N2); the starved and stalled arms above return before it, and their drives
+        // replay past the bound as well. A drive that never ran re-arms it (N1).
+        // a5e2e2ef's W1-W5 widen the hold to concrete close heads alone, with the target
+        // their head minus one: still one drive per tick, keyed by the target, and the
+        // drive's replay sets the checkpoint only to what it contiguously read (W1).
+        if (TakeReportedBoundCatchUp())
+        {
+            await DispatchTimerDriveAsync(starvationPartitionCount, "arm=reported-bound-catch-up");
         }
     }
 
@@ -4166,6 +4234,8 @@ internal sealed partial class BPlusLeafGrain
             }
         }
 
+        DropRowsTransferredByACompletedSplit();
+
         // Advance the persisted checkpoint per partition to match the
         // snapshot EXACTLY - including resetting a partition to -1 when the
         // snapshot predates that partition's checkpoint. After Cache.Clear()
@@ -4272,6 +4342,46 @@ internal sealed partial class BPlusLeafGrain
             _warmCacheOriginScalar = blob.ScalarOffsetOrSentinel();
         }
         return true;
+    }
+
+    /// <summary>
+    /// Removes from a just-rehydrated cache the rows a completed split moved to its
+    /// sibling (issue #5756). A snapshot captured before the split still holds them,
+    /// and nothing else removes them: replay never re-applies a key outside the
+    /// declared span, so they would sit out of span, counted on two leaves. Only rows
+    /// at or above the completed split's key are dropped, and only while the leaf no
+    /// longer declares that key - the sibling holds every one of them, because the
+    /// split completes only after it has transferred them. Rows a bulk append's narrow
+    /// stranded below that key are kept for the graft to relocate. The steady state -
+    /// no completed split, or no row at or above its key - costs one check and
+    /// hydrates nothing.
+    /// </summary>
+    private void DropRowsTransferredByACompletedSplit()
+    {
+        if (state.State.SplitKey is not { } splitKey
+            || HasInterruptedSplit
+            || state.State.HighKeyExclusive is not { } high
+            || string.CompareOrdinal(high, splitKey) > 0
+            || !Cache.HasKeyAtOrAboveWithoutHydrating(splitKey))
+        {
+            return;
+        }
+
+        List<string>? transferred = null;
+        foreach (var (key, _) in Cache.EnumerateRange(splitKey, null))
+        {
+            (transferred ??= []).Add(key);
+        }
+
+        if (transferred is null)
+        {
+            return;
+        }
+
+        foreach (var key in transferred)
+        {
+            Cache.Remove(key);
+        }
     }
 
     /// <summary>

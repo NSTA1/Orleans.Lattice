@@ -70,7 +70,7 @@ internal sealed class SchemaOperationService(
             async (progress, ct) =>
             {
                 var accepted = await AcceptAsync(
-                    treeId, () => grain.AcceptAsync(transform, targetPolicy, operationId), ct).ConfigureAwait(false);
+                    treeId, () => grain.AcceptAsync(transform, targetPolicy, operationId), progress, ct).ConfigureAwait(false);
                 return await SchemaRemediationDriver.DriveAsync(grain, accepted, progress, ct).ConfigureAwait(false);
             },
             ToCompletion);
@@ -101,7 +101,7 @@ internal sealed class SchemaOperationService(
             async (progress, ct) =>
             {
                 var accepted = await AcceptAsync(
-                    treeId, () => grain.AcceptVersionMigrationAsync(config.SchemaId, config.TargetVersion, operationId), ct)
+                    treeId, () => grain.AcceptVersionMigrationAsync(config.SchemaId, config.TargetVersion, operationId), progress, ct)
                     .ConfigureAwait(false);
                 return await SchemaRemediationDriver.DriveAsync(grain, accepted, progress, ct).ConfigureAwait(false);
             },
@@ -145,7 +145,7 @@ internal sealed class SchemaOperationService(
             {
                 var advanced = await versions.AdvanceTargetVersionAsync(treeId, newTargetVersion, ct).ConfigureAwait(false);
                 var accepted = await AcceptAsync(
-                    treeId, () => grain.AcceptVersionMigrationAsync(advanced.SchemaId, advanced.TargetVersion, operationId), ct)
+                    treeId, () => grain.AcceptVersionMigrationAsync(advanced.SchemaId, advanced.TargetVersion, operationId), progress, ct)
                     .ConfigureAwait(false);
                 return await SchemaRemediationDriver.DriveAsync(grain, accepted, progress, ct).ConfigureAwait(false);
             },
@@ -157,14 +157,18 @@ internal sealed class SchemaOperationService(
     /// alias reservation for at most <see cref="LatticeSchemaEnforcementOptions.AliasReservationWaitTimeout"/> (#5750).
     /// </summary>
     private Task<LatticeSchemaRemediationReport> AcceptAsync(
-        string treeId, Func<Task<LatticeSchemaRemediationReport>> accept, CancellationToken cancellationToken) =>
+        string treeId,
+        Func<Task<LatticeSchemaRemediationReport>> accept,
+        ILatticeOperationProgress progress,
+        CancellationToken cancellationToken) =>
         SchemaRemediationDriver.AcceptAsync(
             treeId,
             accept,
             (services.GetService<IOptions<LatticeSchemaEnforcementOptions>>()?.Value ?? new LatticeSchemaEnforcementOptions())
                 .AliasReservationWaitTimeout,
             services.GetService<ILogger<SchemaOperationService>>(),
-            cancellationToken);
+            cancellationToken,
+            progress: progress);
 
     private Task<LatticeOperationLaunch<LatticeSchemaRemediationReport>> ReplayAsync(
         string tenantId, string operationId, string kind, string treeId, IReadOnlyList<string> phases) =>

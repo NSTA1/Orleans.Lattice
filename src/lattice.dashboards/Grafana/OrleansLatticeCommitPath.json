@@ -1126,7 +1126,7 @@
         { "refId": "C", "expr": "sum(rate(orleans_lattice_wal_gc_blocked_leaf_reactivations_total{cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "WAL GC drive completions/s (must exceed minting)" },
         { "refId": "D", "expr": "sum by (tree) (rate(orleans_lattice_leaf_snapshot_driver_declines_total{tree=~\"$tree\",reason=\"recheck_no_durable_checkpoint\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}} STARVED no durable checkpoint/s" },
         { "refId": "E", "expr": "sum by (tree) (rate(orleans_lattice_leaf_snapshot_driver_declines_total{tree=~\"$tree\",reason=\"recheck_checkpoint_stalled\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}} FROZEN checkpoint stopped advancing/s" },
-        { "refId": "F", "expr": "sum by (tree, reason) (rate(orleans_lattice_leaf_snapshot_driver_declines_total{tree=~\"$tree\",reason=~\"recheck_drive_refused|recheck_drive_deferred\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}} {{reason}} starvation drive not run/s" }
+        { "refId": "F", "expr": "sum by (tree, reason) (rate(orleans_lattice_leaf_snapshot_driver_declines_total{tree=~\"$tree\",reason=~\"recheck_drive_refused|recheck_drive_deferred|recheck_drive_yielded\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}} {{reason}} starvation drive not run/s" }
       ]
     },
     {
@@ -1338,6 +1338,50 @@
       "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "spanNulls": false } }, "overrides": [] },
       "targets": [
         { "refId": "A", "expr": "sum by (tree) (rate(orleans_lattice_leaf_merge_observer_events_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "{{tree}} merge-observer events/s" }
+      ]
+    },
+    {
+      "id": 5605,
+      "title": "WAL append fence: claims, rejections, seam retries, unstamped reports and sweeps - epic #5605",
+      "description": "The WAL append fence (epic #5605): every leaf activation claims an append epoch at each WAL partition it writes, and a partition rejects a stamped append from a superseded epoch. CLAIMS (orleans.lattice.wal.append_fence.claims) by kind and outcome: accepted claims follow leaf activations, not writes; one refusal per new leaf per partition is expected after a retirement raises the partition's retired floor, and a sustained refusal rate on one tree means activations of the same leaf are contending. REJECTIONS (orleans.lattice.wal.append_fence.rejections) by reason: stale_epoch is a superseded duplicate activation that deactivated; unloaded_entry is a partition that restarted or moved since the claim. SEAM RETRIES (orleans.lattice.wal.append_fence.seam_retries) by caller class: every rejection is retried at the seam that raised it until the operation's existing deadline, so none reaches a caller. UNSTAMPED REPORTS (orleans.lattice.wal.append_fence.unstamped_reports): stamped responses that reported an unstamped append made after the leaf's claim: an append by an older-build silo during a rolling upgrade, or a write unstamped by design; a saga coordinator's transaction terminal carries the coordinator-terminal class and is not reported. SWEEPS (orleans.lattice.wal.append_fence.sweeps, #5634) by outcome, as the increase over 6h because a tree is swept once every 6 hours: retired is a leaf whose fence rows a clear on an older-build silo left behind, typically during a rollback; live is a listed leaf that still exists; failed is retried at the next sweep. NONE IS ZERO-PRIMED, so this panel has no 'or vector(0)' and an absent line is not a measured zero.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 468 },
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "spanNulls": false } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (kind, outcome) (rate(orleans_lattice_wal_append_fence_claims_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "claim {{kind}} {{outcome}}" },
+        { "refId": "B", "expr": "sum by (reason) (rate(orleans_lattice_wal_append_fence_rejections_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "rejected {{reason}}" },
+        { "refId": "C", "expr": "sum by (caller) (rate(orleans_lattice_wal_append_fence_seam_retries_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "seam retry {{caller}}" },
+        { "refId": "D", "expr": "sum by (tree) (rate(orleans_lattice_wal_append_fence_unstamped_reports_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "unstamped reported {{tree}}" },
+        { "refId": "E", "expr": "sum by (outcome) (increase(orleans_lattice_wal_append_fence_sweeps_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[6h]))", "legendFormat": "swept {{outcome}} (6h)" }
+      ]
+    },
+    {
+      "id": 5610,
+      "title": "Bulk load and append: rows placed outside the created leaves (rate) - issues #5610, #5642",
+      "description": "Rows a bulk load or bulk append placed somewhere other than the leaves it created (orleans.lattice.shard_root.bulk.relocated_rows), by source. BELOW_EDGE: a chunk's entries that sorted at or below rows the shard already held and were not a re-delivery, merged last-writer-wins into the leaves that own their keys rather than refused. RIGHTMOST_LEAF: rows the shard's old rightmost leaf held in the appended range, deleted ones included, moved with their stamps into the appended leaves. REPLACED_ROOT: rows a batch write stored on the root a bulk load replaced while the load ran. Zero for an import into a quiet tree in ascending key order; a sustained below_edge rate means chunks arrive out of order or the tree takes writes while it loads. NOT ZERO-PRIMED, so this panel has no 'or vector(0)' and an absent line is not a measured zero.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 475 },
+      "fieldConfig": { "defaults": { "unit": "short", "custom": { "spanNulls": false } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (source) (rate(orleans_lattice_shard_root_bulk_relocated_rows_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "relocated {{source}}" }
+      ]
+    },
+    {
+      "id": 5606,
+      "title": "WAL hand-off fences: markers, unstamped-by-design appends and self-fenced appends (rate) - epic #5605",
+      "description": "The WAL hand-off fences (epic #5605, member 2). MARKERS (orleans.lattice.wal.append_fence.handoff_markers) by kind and outcome: a split, a leaf reclaim, a shard migration (adaptive split or consolidation fold), a tree range delete or a bulk load or append (member 3) opens a marker on the owners it hands keys to and closes it by a fence whose heads they replay to; opened minus closed is the number in flight, and an opened line with no matching closed line is a hand-off whose close has not been re-driven yet (latency, never data). UNSTAMPED APPENDS (orleans.lattice.wal.append_fence.unstamped_appends) by source: range_delete_unfenced is a range-delete walk through the existing, unfenced method (replication apply, a shadow forward, a gate-spanning fan-out, an older caller); range_delete_past_intent is a walk whose own intent closed under it; terminal_class_misuse is a non-terminal record sent under the coordinator-terminal class. Each costs the leaves on its partition a tail replay. SELF-FENCED (orleans.lattice.wal.append_fence.self_fenced): leaf appends refused because the leaf raised its own epoch at a split close; retried by the caller, the leaf keeps serving. ARM FAILURES (orleans.lattice.wal.append_fence.arm_failures): leaf arms that failed at a partition (#5833), which stays pre-arm and advances by replay until a later arm lands. RECLAIM ALLOWANCE (orleans.lattice.wal.append_fence.reclaim_allowance) by outcome: a pre-arm split donor's one probed re-claim per counted close, spent on a refusal at its current epoch or a bump's row conflict; superseded_after_close means an activation that counted a close was superseded after spending it - a genuine supersession, or the live donor deactivated (latency, never data). NONE IS ZERO-PRIMED, so this panel has no 'or vector(0)' and an absent line is not a measured zero.",
+      "type": "timeseries",
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "gridPos": { "h": 7, "w": 24, "x": 0, "y": 482 },
+      "fieldConfig": { "defaults": { "unit": "reqps", "custom": { "spanNulls": false } }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "expr": "sum by (kind, outcome) (rate(orleans_lattice_wal_append_fence_handoff_markers_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "marker {{kind}} {{outcome}}" },
+        { "refId": "B", "expr": "sum by (source) (rate(orleans_lattice_wal_append_fence_unstamped_appends_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "unstamped by design {{source}}" },
+        { "refId": "C", "expr": "sum by (tree) (rate(orleans_lattice_wal_append_fence_self_fenced_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "self-fenced {{tree}}" },
+        { "refId": "D", "expr": "sum by (tree) (rate(orleans_lattice_wal_append_fence_arm_failures_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "arm failures {{tree}}" },
+        { "refId": "E", "expr": "sum by (outcome) (rate(orleans_lattice_wal_append_fence_reclaim_allowance_total{tree=~\"$tree\",cluster=~\"$cluster\",instance=~\"$silo\"}[5m]))", "legendFormat": "reclaim allowance {{outcome}}" }
       ]
     }
   ]

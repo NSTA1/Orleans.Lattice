@@ -47,14 +47,14 @@ internal static class WalAbandonedFlushRegistry
     /// <summary>The abandoned flush windows of one shard.</summary>
     internal sealed class ShardWindows
     {
-        private readonly List<(long Start, Task Work)> _windows = new();
+        private readonly List<(long Start, long EndExclusive, Task Work)> _windows = new();
         private int _count;
 
         /// <summary>
-        /// Records a window starting at <paramref name="startOffset"/> whose provider
-        /// call <paramref name="work"/> is still in motion. A settled call is ignored.
+        /// Records the window <c>[<paramref name="startOffset"/>, <paramref name="endOffsetExclusive"/>)</c>
+        /// whose provider call <paramref name="work"/> is still in motion. A settled call is ignored.
         /// </summary>
-        internal void Add(long startOffset, Task? work)
+        internal void Add(long startOffset, long endOffsetExclusive, Task? work)
         {
             if (work is null || work.IsCompleted)
             {
@@ -63,7 +63,7 @@ internal static class WalAbandonedFlushRegistry
 
             lock (_windows)
             {
-                _windows.Add((startOffset, work));
+                _windows.Add((startOffset, endOffsetExclusive, work));
                 Volatile.Write(ref _count, _windows.Count);
             }
         }
@@ -84,7 +84,7 @@ internal static class WalAbandonedFlushRegistry
                 _windows.RemoveAll(static w => w.Work.IsCompleted);
                 Volatile.Write(ref _count, _windows.Count);
                 long? lowest = null;
-                foreach (var (start, _) in _windows)
+                foreach (var (start, _, _) in _windows)
                 {
                     if (lowest is not { } current || start < current)
                     {
@@ -93,6 +93,37 @@ internal static class WalAbandonedFlushRegistry
                 }
 
                 return lowest;
+            }
+        }
+
+        /// <summary>
+        /// One past the highest offset of a window whose call has not yet settled,
+        /// or <see langword="null"/> when none is outstanding. Prunes settled windows.
+        /// An allocator re-seeded from the provider's tail starts no lower than this
+        /// (issue #5799): such a call may still land its window, possibly above a gap,
+        /// and an offset reissued beneath it collides with the landing.
+        /// </summary>
+        internal long? HighestUnsettledEndExclusive()
+        {
+            if (Volatile.Read(ref _count) == 0)
+            {
+                return null;
+            }
+
+            lock (_windows)
+            {
+                _windows.RemoveAll(static w => w.Work.IsCompleted);
+                Volatile.Write(ref _count, _windows.Count);
+                long? highest = null;
+                foreach (var (_, end, _) in _windows)
+                {
+                    if (highest is not { } current || end > current)
+                    {
+                        highest = end;
+                    }
+                }
+
+                return highest;
             }
         }
     }

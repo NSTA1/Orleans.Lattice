@@ -1,0 +1,26 @@
+# #5837, the forward-exclusion relief (a5e2e2ef's X8): a WAL shard restart forgets the
+# per-tag forward highs; neither the start-head floor nor the shared watermark's reset
+# then covers a forward from before it. Either alone does, as for an activation's own
+# records (ReadPositionHonestFreeAdvanceRestartForgetsBothFloors).
+MODULE: ForwardHonestForwardTableLostOnRestart
+TARGET: ForwardHonest
+CLASS: Invariant
+SUMMARY: a WAL shard restart forgets the forward highs with neither the start-head floor nor the shared watermark's reset
+PERTURBS: Restart
+BOUNDS: WithFreeAdvance = TRUE, WithFwdExclusion = TRUE, WithDuplicate = FALSE, WithRestart = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
+
+--- FIND
+    Max({startHead - 1, evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts \ {a}}
+--- REPLACE
+\* MUTATION: no shardStartHead - 1 fallback.
+    Max({-1, evFloor} \cup {o \in Offs : o >= TrackStart /\ author[o] \in Acts \ {a}}
+--- END
+
+--- FIND
+    /\ restarted' = TRUE
+    /\ lastU' = next - 1
+--- REPLACE
+    /\ restarted' = TRUE
+\* MUTATION: the shared watermark is lost with the shard's memory.
+    /\ lastU' = -1
+--- END

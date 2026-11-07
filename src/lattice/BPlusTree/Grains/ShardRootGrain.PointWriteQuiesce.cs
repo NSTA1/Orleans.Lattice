@@ -105,6 +105,20 @@ internal sealed partial class ShardRootGrain
     private int _interleavedBatchWritesInFlight;
 
     /// <summary>
+    /// The batch-write admission epoch (issue #5642). Its parity selects the slot of
+    /// <see cref="_batchWritesInFlightByEpoch"/> a newly admitted batch write counts
+    /// in, so <see cref="DrainBatchWritesAdmittedBeforeAsync"/> can wait for exactly
+    /// the batch writes admitted before it, without waiting for later ones.
+    /// </summary>
+    private long _batchWriteEpoch;
+
+    /// <summary>Batch writes in flight, per admission-epoch parity.</summary>
+    private readonly int[] _batchWritesInFlightByEpoch = new int[2];
+
+    /// <summary>Completed when a slot of <see cref="_batchWritesInFlightByEpoch"/> reaches zero.</summary>
+    private TaskCompletionSource? _batchEpochDrained;
+
+    /// <summary>
     /// Serial turns that are active, or waiting for in-flight point writes to
     /// drain. While non-zero, new point writes wait.
     /// </summary>
@@ -190,21 +204,54 @@ internal sealed partial class ShardRootGrain
         }
     }
 
-    private void BeginBatchWrite()
+    /// <summary>
+    /// Admits a batch write, returning the epoch slot it counts in; pass it to
+    /// <see cref="EndBatchWrite"/>.
+    /// </summary>
+    internal int BeginBatchWrite()
     {
         if (_deactivationRequested)
         {
             throw new ShardRootDeactivatingException(ShardKeyForFence());
         }
 
+        var slot = (int)(_batchWriteEpoch & 1);
+        _batchWritesInFlightByEpoch[slot]++;
         Interlocked.Increment(ref _interleavedBatchWritesInFlight);
+        return slot;
     }
 
-    private void EndBatchWrite()
+    internal void EndBatchWrite(int slot)
     {
+        if (--_batchWritesInFlightByEpoch[slot] == 0 && _batchEpochDrained is { } drained)
+        {
+            _batchEpochDrained = null;
+            drained.TrySetResult();
+        }
+
         if (Interlocked.Decrement(ref _interleavedBatchWritesInFlight) == 0)
         {
             CompleteDeferredDeactivation();
+        }
+    }
+
+    /// <summary>
+    /// Waits until every batch write admitted before this call has finished,
+    /// including its leaf calls (issue #5642). A batch write admitted afterwards
+    /// counts in the next epoch and is not waited for. Called from a serial turn
+    /// after it has changed routing, it returns once no batch write that could
+    /// still act on the old routing is in flight. Calls must not overlap: each
+    /// waits its epoch out before the next can reuse the slot, which serial turns
+    /// guarantee.
+    /// </summary>
+    internal async Task DrainBatchWritesAdmittedBeforeAsync()
+    {
+        var slot = (int)(_batchWriteEpoch & 1);
+        _batchWriteEpoch++;
+        while (_batchWritesInFlightByEpoch[slot] > 0)
+        {
+            _batchEpochDrained ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            await _batchEpochDrained.Task;
         }
     }
 

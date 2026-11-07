@@ -1,0 +1,19 @@
+# Pairs with RaisedEpochUnique. The retirement floors the partition at the leaf's
+# entry alone, as member 1 first shipped it, ignoring the epoch-row value the
+# clear passed. The clear deletes the row, so epoch values recur. A pre-clear
+# duplicate that wrote the row but not yet its entry here writes the entry after
+# the clear and raises; the re-created incarnation claims the same epoch, is
+# admitted as AlreadyDurable, and both hold it (#5641). Moved from the design's
+# ReadPositionHonestFloorFromEntryOnly.
+MODULE: RaisedEpochUniqueFloorFromEntryOnly
+TARGET: RaisedEpochUnique
+CLASS: Invariant
+SUMMARY: the retirement raises the floor to the leaf's entry only, not to its epoch row
+PERTURBS: ClearRetire
+
+--- FIND
+    /\ retired' = Max2(retired, Max2(Max2(fence, memFence), clrRow))
+--- REPLACE
+\* MUTATION: the floor is built from the entry alone.
+    /\ retired' = Max2(retired, Max2(fence, memFence))
+--- END

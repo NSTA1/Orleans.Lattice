@@ -1,5 +1,6 @@
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.State;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
@@ -56,7 +57,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         }));
         Received.InOrder(() =>
         {
-            tail.NarrowHighKeyAsync("k0000");
+            tail.NarrowHighKeyAsync("k0000", Arg.Any<GrainId?>(), Arg.Any<List<GraftEntry>?>());
             tail.SetNextSiblingAsync(Arg.Any<GrainId?>());
         });
     }
@@ -67,9 +68,10 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         var h = CreateHarness();
         var existing = SeedPendingGraft(h, "op-1", rootWasLeaf: false);
         var separator = h.State.State.PendingBulkGraft!.NewLeaves[0].SeparatorKey;
+        var firstAppended = h.State.State.PendingBulkGraft!.NewLeaves[0].LeafId;
 
         await h.Grain.BulkAppendAsync("op-1", Pairs(1));
 
-        await h.Leaf(existing).Received(1).NarrowHighKeyAsync(separator);
+        await h.Leaf(existing).Received(1).NarrowHighKeyAsync(separator, firstAppended, Arg.Any<List<GraftEntry>?>());
     }
 }

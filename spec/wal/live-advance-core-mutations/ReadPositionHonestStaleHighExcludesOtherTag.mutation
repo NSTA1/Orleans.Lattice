@@ -1,0 +1,15 @@
+# #5837, the staleHigh exclusion (b6c84690; a5e2e2ef's ruling with F2'): L's staleHigh
+# excludes only its donor's forwards tagged with the split that created L.
+MODULE: ReadPositionHonestStaleHighExcludesOtherTag
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: L's staleHigh excludes a stale D' forward of L's key into another orphan, tagged with that orphan's split, and L advances past it unapplied
+PERTURBS: StaleForwardOther
+BOUNDS: WithFreeAdvance = TRUE, WithForwardIn = TRUE, WithSplitBirth = TRUE, WithDonorRestart = TRUE, WithKeyMove = TRUE, WithDuplicate = FALSE, WithMixedVersion = FALSE
+
+--- FIND
+    /\ sHi' = IF StaleHighCountsTag("O") THEN next ELSE sHi
+--- REPLACE
+\* MUTATION: every forward tag is excluded, not only the receiver's.
+    /\ sHi' = sHi
+--- END

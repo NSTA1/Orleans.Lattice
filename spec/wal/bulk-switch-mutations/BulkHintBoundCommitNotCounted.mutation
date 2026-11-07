@@ -1,0 +1,16 @@
+# Pairs with BulkHintBound. Issue #5706: the leaf counts its mutations by
+# admission epoch so the narrow can drain them. An uncounted commit, allocated
+# below the hint and stored after the narrow, lies outside the old leaf's span
+# and below the appended leaf's read position: no leaf ever applies it.
+MODULE: BulkHintBoundCommitNotCounted
+TARGET: BulkHintBound
+CLASS: Invariant
+SUMMARY: the old leaf does not count an admitted commit among the mutations the narrow drains
+PERTURBS: CommitAlloc
+
+--- FIND
+    /\ cCounted' = TRUE
+--- REPLACE
+\* MUTATION: the commit is not counted.
+    /\ cCounted' = FALSE
+--- END

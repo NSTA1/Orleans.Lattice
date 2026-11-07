@@ -114,7 +114,7 @@ internal sealed class BuildWriteGate : IOutgoingGrainCallFilter
     public async Task Invoke(IOutgoingGrainCallContext context)
     {
         if (context.InterfaceMethod?.DeclaringType == typeof(ILattice)
-            && context.MethodName == nameof(ILattice.SetAsync)
+            && context.MethodName is nameof(ILattice.SetAsync) or nameof(ILattice.SetManyAsync)
             && context.TargetId.Key.ToString() is { } key
             && key.IndexOf(DestinationInfix, StringComparison.Ordinal) is var at and > 0
             && Holds.TryGetValue(key[..at], out var hold))

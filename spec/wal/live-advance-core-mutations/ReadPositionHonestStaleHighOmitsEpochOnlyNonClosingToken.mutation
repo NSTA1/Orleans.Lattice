@@ -1,0 +1,18 @@
+# #5837, the staleHigh obligation carried from #5841 (a5e2e2ef, #5837 comment 6658448943, H2):
+# the donor's staleHigh counts its records from every non-closing token, epoch-only
+# writes included.
+MODULE: ReadPositionHonestStaleHighOmitsEpochOnlyNonClosingToken
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the WAL leaves a stale duplicate's epoch-only write out of the donor's staleHigh, so the receiver's deferred bound and guard miss it and it advances past the record unapplied
+PERTURBS: StaleEpochOnlyAlloc
+BOUNDS: WithFreeAdvance = TRUE, WithEpochOnly = TRUE, WithSplitBirth = TRUE, WithDonorRestart = TRUE, WithKeyMove = TRUE, WithDuplicate = FALSE, WithMixedVersion = FALSE
+
+--- FIND
+    /\ inflight' = inflight \cup {next}
+    /\ sHi' = Max2(sHi, next)
+--- REPLACE
+    /\ inflight' = inflight \cup {next}
+\* MUTATION: an epoch-only record is not counted in staleHigh.
+    /\ UNCHANGED sHi
+--- END

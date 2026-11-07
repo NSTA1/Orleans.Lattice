@@ -1,0 +1,18 @@
+# Pairs with RaisedEpochUnique. The epoch row's conditional write dropped, as the
+# topology-seed persist does when it adopts a benign first-create race (#5593):
+# two activations persist the same epoch, and the second's entry write is
+# admitted as AlreadyDurable, so both raise it. Moved from the design's
+# ReadPositionHonestClaimAdoptsNoCas.
+MODULE: RaisedEpochUniqueClaimAdoptsNoCas
+TARGET: RaisedEpochUnique
+CLASS: Invariant
+SUMMARY: the claim persists the epoch it read plus one without a conditional write
+PERTURBS: ClaimRow
+
+--- FIND
+    /\ RowUnmoved(a)
+    /\ seen[a] + 1 <= MaxEpoch
+--- REPLACE
+\* MUTATION: no conditional write.
+    /\ seen[a] + 1 <= MaxEpoch
+--- END

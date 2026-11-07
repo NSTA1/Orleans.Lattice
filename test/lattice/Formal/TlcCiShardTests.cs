@@ -105,7 +105,8 @@ public sealed partial class TlcCiShardTests
     [TestCase("Replication", "EventualConvergence", TlcCiShard.Convergence)]
     [TestCase("Replication", "BootstrapHandoffLosesNothing", TlcCiShard.ReplicationWal)]
     [TestCase("ReplicationReBootstrap", "", TlcCiShard.ReBootstrap)]
-    [TestCase("WalDurability", "", TlcCiShard.ReplicationWal)]
+    [TestCase("WalDurability", "", TlcCiShard.WalDurability)]
+    [TestCase("WalDurability", "OffsetWrittenOnce", TlcCiShard.WalDurabilityCrossSilo)]
     [TestCase("ShardOwnershipRetention", "", TlcCiShard.ShardOwnership)]
     [TestCase("AtomicCommitCrossCluster", "", TlcCiShard.Atomic)]
     [TestCase("BackupCapture", "", TlcCiShard.Backup)]
@@ -201,6 +202,25 @@ public sealed partial class TlcCiShardTests
                             ? TlcCiShard.SchedulingWorkloadB : TlcCiShard.Scheduling
                         : module.Name.StartsWith("Replication", StringComparison.Ordinal)
                         ? TlcCiShard.ReBootstrap
+                        : module.Name == "WalDurability" && variant == "CrossSilo"
+                        ? TlcCiShard.WalDurabilityCrossSilo
+                        : module.Name == "WalAppendEpoch"
+                        ? TlcCiShard.WalAppendEpoch
+                        : module.Name == "WalHandOffFence"
+                        ? TlcCiShard.WalHandOffFence
+                        : module.Name == "WalRoutingFloor"
+                        ? TlcCiShard.WalRoutingFloor
+                        : module.Name == "WalBulkSwitch"
+                        ? TlcCiShard.WalBulkSwitch
+                        : module.Name == "WalLiveAdvanceCore"
+                        ? (variant.StartsWith("Free", StringComparison.Ordinal)
+                                ? new[] { TlcCiShard.WalLiveAdvanceCoreFree, TlcCiShard.WalLiveAdvanceCoreFreeVariants, TlcCiShard.WalLiveAdvanceCoreFreeSplitVariants }
+                                : new[] { TlcCiShard.WalLiveAdvanceCoreEagerVariants, TlcCiShard.WalLiveAdvanceCoreLazyVariants })
+                            .Contains(TlcCiShard.OfVariant(module, variant))
+                            ? TlcCiShard.OfVariant(module, variant)
+                            : "a WalLiveAdvanceCore variant shard of the variant's family"
+                        : module.Name == "WalLiveAdvanceComposite"
+                        ? TlcCiShard.WalLiveAdvanceComposite
                         : module.Name == "SchemaViewComposition"
                         ? TlcCiShard.SchemaView
                         : module.Name == "BackupRetention"

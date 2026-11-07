@@ -2353,7 +2353,27 @@ internal sealed partial class AtomicWriteGrain(
             }
         }
         if (buffer is null) return;
-        await writer.AppendManyAsync(buffer, CancellationToken.None);
+        // Epic #5605, member 2: under the coordinator-terminal class, so a saga's
+        // terminals do not raise the unstamped watermark of every partition it touched.
+        await CoordinatorTerminalAppendFence.AppendManyAsync(writer, buffer, ResolveTerminalAppendFence(), CancellationToken.None);
+    }
+
+    private bool _terminalAppendFenceResolved;
+    private CoordinatorTerminalAppendFence? _terminalAppendFence;
+
+    /// <summary>
+    /// This activation's coordinator-terminal append fence (epic #5605, member 2), or
+    /// <see langword="null"/> when the silo provides no fence gate.
+    /// </summary>
+    private CoordinatorTerminalAppendFence? ResolveTerminalAppendFence()
+    {
+        if (!_terminalAppendFenceResolved)
+        {
+            _terminalAppendFence = CoordinatorTerminalAppendFence.Resolve(GrainContext.ActivationServices);
+            _terminalAppendFenceResolved = true;
+        }
+
+        return _terminalAppendFence;
     }
 
     /// <summary>

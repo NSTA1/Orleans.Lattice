@@ -1,0 +1,19 @@
+# Weakens H's CloseHeadMonotone in this module's environment: a close overwrites
+# the heads L's marker requires instead of max-merging with them. A window opened
+# after the purge and before the re-created incarnation's first initialisation
+# closes after it with heads below the straddler, so the initialisation's heads are
+# lost and the re-created incarnation's live advance passes the straddler.
+# Production max-merges in HandOffMarkerCore.RequiredHead.
+MODULE: ReadPositionHonestAssumeCloseReplacesHeads
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: a close overwrites the heads earlier closes and the initialisation recorded
+PERTURBS: Close
+BOUNDS: WithRecreate = TRUE, WithUnclaimedSurvivor = FALSE, WithPreArm = FALSE
+
+--- FIND
+    /\ \E h \in IF mInit THEN HeadsAbove(CloseCovers) ELSE 0..next : hoClosedAt' = Max2(hoClosedAt, h)
+--- REPLACE
+\* MUTATION: the close overwrites the recorded heads.
+    /\ \E h \in IF mInit THEN HeadsAbove(CloseCovers) ELSE 0..next : hoClosedAt' = h
+--- END

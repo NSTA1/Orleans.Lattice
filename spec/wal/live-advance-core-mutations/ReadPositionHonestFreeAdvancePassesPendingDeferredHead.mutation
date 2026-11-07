@@ -1,0 +1,19 @@
+# #5837, the claimless advance and the split hint.
+MODULE: ReadPositionHonestFreeAdvancePassesPendingDeferredHead
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the free advance ignores the staleHigh while a deferred close is pending, so it passes the stale donor's routed record
+PERTURBS: FreeCommit
+BOUNDS: WithFreeAdvance = TRUE, WithKeyMove = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
+
+--- FIND
+    /\ rp[a] >= seenU[a]
+    /\ CloseCarried => rp[a] >= seenS[a]
+    /\ \A o \in inflight : author[o] = a => o > ft[a]
+    /\ rp' = [rp EXCEPT ![a] = ft[a]]
+--- REPLACE
+    /\ rp[a] >= seenU[a]
+\* MUTATION: a pending deferred close adds no bound.
+    /\ \A o \in inflight : author[o] = a => o > ft[a]
+    /\ rp' = [rp EXCEPT ![a] = ft[a]]
+--- END

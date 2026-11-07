@@ -6,7 +6,7 @@ DETECTORS: LatticeSchemaRemediationGrainTests.StartVersionMigrationAsync_restamp
 SUMMARY: the build writes the source value instead of its rewrite
 
 --- FIND
-                await destination.SetAsync(entry.Key, input.Restamp(rewritten));
+                        batch.Add(new KeyValuePair<string, byte[]>(entry.Key, value.Input.Restamp(value.Rewritten!)));
 --- REPLACE
-                await destination.SetAsync(entry.Key, input.Restamp(input.Body.ToArray()));
+                        batch.Add(new KeyValuePair<string, byte[]>(entry.Key, value.Input.Restamp(value.Input.Body.ToArray())));
 --- END

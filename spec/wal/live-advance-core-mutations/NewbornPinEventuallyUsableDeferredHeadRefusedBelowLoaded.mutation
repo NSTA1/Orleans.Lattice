@@ -1,0 +1,20 @@
+# #5833, C5. Resolving a deferred head refuses when a later raise is already re-claimed
+# at the partition, as today's claim decision would: the receiver can never arm, so its
+# pin never becomes usable. It edits an operator, not an action.
+MODULE: NewbornPinEventuallyUsableDeferredHeadRefusedBelowLoaded
+TARGET: NewbornPinEventuallyUsable
+CLASS: Temporal
+SUMMARY: a deferred head below the loaded generation is refused
+BOUNDS: WithKeyMove = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
+
+--- FIND
+ResolveDeferred ==
+    /\ pend' = FALSE
+
+--- REPLACE
+ResolveDeferred ==
+\* MUTATION: a deferred generation below the loaded one is refused.
+    /\ pendGen >= gL
+    /\ pend' = FALSE
+
+--- END

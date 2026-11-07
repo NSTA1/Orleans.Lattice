@@ -92,7 +92,8 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         Orleans.Lattice.BPlusTree.Grains.ILeafCursorReporter? cursorReporter = null,
         FakePinStore? pins = null,
         Orleans.Storage.IGrainStorage? leafStateStorage = null,
-        IWalOrphanPinSweepCoordinator? orphanSweepCoordinator = null)
+        IWalOrphanPinSweepCoordinator? orphanSweepCoordinator = null,
+        Action<IGrainFactory>? configureFactory = null)
     {
         var gc = Substitute.For<ILatticeWalGc>();
         gc.RunOnceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
@@ -123,6 +124,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         // would double-consume any probe that counts its invocations, which is
         // most of them in this file.
         leaf.GetTreeIdAsync().Returns(_ => Task.FromResult<string?>(treeId));
+        configureFactory?.Invoke(factory);
 
         var recorder = new InstrumentRecorder(LatticeMetrics.WalGcBlockedLeafReactivations, treeId);
         return (CreateScheduler(

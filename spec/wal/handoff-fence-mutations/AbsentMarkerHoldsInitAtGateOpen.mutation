@@ -1,0 +1,23 @@
+# Pairs with AbsentMarkerHolds. The marker state is initialised when the fence
+# gate opens, rather than once no hand-off begun before the gate is in flight, so
+# an absent marker reads as closed while that hand-off has yet to resume and open
+# its marker.
+MODULE: AbsentMarkerHoldsInitAtGateOpen
+TARGET: AbsentMarkerHolds
+CLASS: Invariant
+SUMMARY: the gate's opening initialises L's marker state
+PERTURBS: OpenGate
+
+--- FIND
+    /\ ~gate
+    /\ gate' = TRUE
+    /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
+    /\ UNCHANGED <<gst, gstamp, closing, hfly, resumed, mInit>>
+--- REPLACE
+    /\ ~gate
+    /\ gate' = TRUE
+\* MUTATION: the gate's opening initialises the marker state.
+    /\ mInit' = TRUE
+    /\ UNCHANGED <<next, author, hoOpen, hoClosedAt, windows, fAdmit, fpend, fkind, fstamp, fEpoch, fFence, restarted>>
+    /\ UNCHANGED <<gst, gstamp, closing, hfly, resumed>>
+--- END

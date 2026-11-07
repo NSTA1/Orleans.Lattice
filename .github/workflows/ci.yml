@@ -496,7 +496,11 @@ jobs:
       # range, never a fixed count back from HEAD - the same enumeration the
       # branch/trailer guard above uses, for the same reason (on a pull_request
       # event HEAD is the synthetic merge commit, and a fixed count would scan
-      # the base's settled history or miss the PR's own).
+      # the base's settled history or miss the PR's own). Commits already
+      # reachable from the default branch are excluded from that range (a sync
+      # of the default branch brings them, and their keywords were honoured when
+      # they landed); nothing is excluded when the default branch cannot be
+      # resolved.
       #
       # WHAT THIS ARM DOES NOT COVER, stated because measuring it was the whole
       # reason for the change. Across the 200 merged member pull requests on
@@ -582,6 +586,8 @@ jobs:
           base = os.environ.get("BASE_REF", "")
           default = os.environ.get("DEFAULT_BRANCH", "")
 
+          exempted = []
+
           def commit_messages():
               """The pull request's own commits, as (sha, full message).
 
@@ -611,8 +617,30 @@ jobs:
                   if listed.returncode != 0:
                       return None
 
+              # Commits already on the default branch are not this pull request's
+              # own (#5605's sync of main into its integration branch). A merge of
+              # the default branch brings them into BASE_SHA..HEAD_SHA, but any
+              # keyword they carry was honoured when they landed there, so it is
+              # not inert and cannot be reworded without rewriting the default
+              # branch. When the default branch cannot be resolved nothing is
+              # exempted, which fails toward reporting rather than toward silence.
+              on_default = set()
+              default_ref = "refs/remotes/origin/" + default if default else ""
+              if default_ref:
+                  subprocess.run(["git", "fetch", "--no-tags", "--quiet", "origin",
+                                  "+refs/heads/" + default + ":" + default_ref],
+                                 capture_output=True, text=True)
+                  own = subprocess.run(["git", "rev-list", base_sha + ".." + head_sha,
+                                        "^" + default_ref],
+                                       capture_output=True, text=True)
+                  if own.returncode == 0:
+                      on_default = set(listed.stdout.split()) - set(own.stdout.split())
+              exempted.extend(sorted(on_default))
+
               collected = []
               for sha in listed.stdout.split():
+                  if sha in on_default:
+                      continue
                   # %B is the FULL message, subject and body. Every closing
                   # keyword found in this repository's own history sat in a
                   # commit BODY, so a subject-only read would have scanned past
@@ -669,7 +697,8 @@ jobs:
 
           if not body_hits and not commit_hits:
               print(f"OK: matcher and commit-scanner self-tests passed, {len(messages)} "
-                    f"commit message(s) scanned, and no closing keyword GitHub would "
+                    f"commit message(s) scanned ({len(exempted)} already on '{default}' "
+                    f"exempted), and no closing keyword GitHub would "
                     f"honour appears in the body or in a commit of a PR targeting "
                     f"'{base}' rather than '{default}'.")
               sys.exit(0)

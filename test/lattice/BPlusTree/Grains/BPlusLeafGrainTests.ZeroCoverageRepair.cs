@@ -126,12 +126,22 @@ public partial class BPlusLeafGrainTests
     /// share at a known width on any machine.
     /// </param>
     /// <param name="walPartitions">The number of WAL partitions.</param>
+    /// <param name="commitLogWriter">
+    /// The commit-log writer the leaf appends through, or <see langword="null"/>
+    /// for none (the leaf then appends nothing). Issue #5572's live checkpoint
+    /// fixtures supply one so the leaf's own appends are tracked.
+    /// </param>
     /// <param name="cursorReporter">
     /// The cursor reporter the leaf publishes its durable pins through, or
     /// <see langword="null"/> for a substitute nothing reads. Issue #5570's
     /// detector supplies one to read the offset the WAL GC would see.
     /// </param>
     /// <param name="detectorDecision">The detector classification provider shared by all partitions.</param>
+    /// <param name="materialiserCheckpointInterval">
+    /// The checkpoint-coalescing interval; <see cref="TimeSpan.Zero"/> (every-entry mode) by
+    /// default. Issue #5877's hinted-sibling fixtures pass a long one so a birth hint stays
+    /// pending until a flush.
+    /// </param>
     private static (BPlusLeafGrain Grain,
         FakePersistentState<LeafNodeState> State,
         ILeafSnapshotStorageGrain SnapshotStub,
@@ -148,11 +158,16 @@ public partial class BPlusLeafGrainTests
             int? maxConcurrentReplays = null,
             ILeafReplayCoordinatorGrain? replayCoordinator = null,
             string? replicaId = null,
-            ILeafCursorReporter? cursorReporter = null)
+            ICommitLogWriter? commitLogWriter = null,
+            ILeafCursorReporter? cursorReporter = null,
+            LiveAdvanceRig? liveAdvance = null,
+            TimeSpan? materialiserCheckpointInterval = null,
+            FakePersistentState<LeafNodeState>? reactivateState = null,
+            ILeafSnapshotStorageGrain? reactivateSnapshot = null)
     {
         var saved = new List<LeafSnapshotBlob>();
 
-        var snapshotStub = Substitute.For<ILeafSnapshotStorageGrain>();
+        var snapshotStub = reactivateSnapshot ?? Substitute.For<ILeafSnapshotStorageGrain>();
 
         LeafSnapshotBlob? existing = null;
         if (existingCoverage is not null)
@@ -167,10 +182,17 @@ public partial class BPlusLeafGrainTests
             };
         }
 
-        snapshotStub.LoadAsync(Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(existing));
+        if (reactivateSnapshot is null)
+        {
+            snapshotStub.LoadAsync(Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(existing));
+        }
 
-        if (saveFailure is null)
+        if (reactivateSnapshot is not null)
+        {
+            // A reactivation keeps the caller's snapshot store as it is.
+        }
+        else if (saveFailure is null)
         {
             snapshotStub.SaveAsync(Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>())
                 .Returns(ci =>
@@ -217,26 +239,40 @@ public partial class BPlusLeafGrainTests
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<ILeafSnapshotStorageGrain>(Arg.Any<Guid>()).Returns(snapshotStub);
         grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(Arg.Any<string>()).Returns(coord);
+        liveAdvance?.Configure(grainFactory);
 
         var sc = new ServiceCollection();
         sc.AddSingleton(Substitute.For<ICommitLogReader>());
         sc.AddSingleton(cursorReporter ?? Substitute.For<ILeafCursorReporter>());
+        if (commitLogWriter is not null)
+        {
+            sc.AddSingleton(commitLogWriter);
+        }
         sc.AddSingleton(detector);
+        liveAdvance?.Register(sc);
         var services = sc.BuildServiceProvider();
 
         var context = Substitute.For<IGrainContext>();
-        context.GrainId.Returns(GrainId.Create("leaf", replicaId ?? Guid.NewGuid().ToString("N")));
+        context.GrainId.Returns(GrainId.Create("leaf", liveAdvance?.LeafId.ToString("N") ?? replicaId ?? Guid.NewGuid().ToString("N")));
         context.ActivationServices.Returns(services);
 
-        var state = new FakePersistentState<LeafNodeState>();
-        state.State.TreeId = treeId ?? CoverageRepairTreeId;
-        state.State.ProjectionCheckpointOffset = persistedCheckpoint;
+        var state = reactivateState ?? new FakePersistentState<LeafNodeState>();
+        if (reactivateState is null)
+        {
+            if (liveAdvance is not null)
+            {
+                state.State.ShardIndex = 0;
+            }
+
+            state.State.TreeId = treeId ?? CoverageRepairTreeId;
+            state.State.ProjectionCheckpointOffset = persistedCheckpoint;
+        }
 
         var optionsResolver = TestOptionsResolver.Create(
             baseOptions: new LatticeOptions
             {
                 WalPartitions = walPartitions,
-                MaterialiserCheckpointInterval = TimeSpan.Zero,
+                MaterialiserCheckpointInterval = materialiserCheckpointInterval ?? TimeSpan.Zero,
                 LeafSnapshotReClassifyEveryNCheckpoints = reClassifyEveryN,
                 WalMaterialiserMaxConcurrentReplays =
                     maxConcurrentReplays ?? LatticeOptions.DefaultWalMaterialiserMaxConcurrentReplays,

@@ -83,6 +83,24 @@ internal sealed partial class BPlusInternalGrain
     /// <summary>True while a <see cref="FlushUpwardPublishAsync"/> is running.</summary>
     private bool _upwardPublishInFlight;
 
+    /// <summary>
+    /// The parent the last upward publish reached without fault, or <see langword="null"/>
+    /// when there is none to compare against (issue #5851, O3c-1). Set only after the
+    /// parent's apply call returned; cleared before every attempt, so a faulted, timed-out
+    /// or cancelled publish leaves nothing cached, and cleared by every
+    /// <see cref="SetParentAsync"/>. In memory only, so a reactivation starts empty.
+    /// </summary>
+    private GrainId? _lastUpwardPublishParent;
+
+    /// <summary>
+    /// The content, without its <see cref="ChildDigestSnapshot.PublishSequence"/>, of the
+    /// publish <see cref="_lastUpwardPublishParent"/> accepted.
+    /// </summary>
+    private ChildDigestSnapshot _lastUpwardPublishContent;
+
+    /// <summary>The <see cref="System.Diagnostics.Stopwatch.GetTimestamp"/> of that publish.</summary>
+    private long _lastUpwardPublishTimestamp;
+
     /// <inheritdoc />
     public async Task SetParentAsync(GrainId? parentId)
     {
@@ -99,6 +117,11 @@ internal sealed partial class BPlusInternalGrain
         await _splitGate.WaitAsync().ConfigureAwait(true);
         try
         {
+            // Issue #5851 (O3c-1): any re-parent, re-link or merge forgets what the
+            // parent was last sent, even a re-link to the same parent, which may have
+            // dropped this node's row in between; the next publish is never suppressed.
+            _lastUpwardPublishParent = null;
+
             if (state.State.ParentId == parentId) return;
 
             var prev = state.State.ParentId;
@@ -574,7 +597,14 @@ internal sealed partial class BPlusInternalGrain
     /// they ride upward for free and are never folded into the digest
     /// arithmetic.
     /// </summary>
-    private ChildDigestSnapshot BuildOwnSubtreeSnapshot()
+    private ChildDigestSnapshot BuildOwnSubtreeSnapshot() =>
+        BuildOwnSubtreeContent() with { PublishSequence = NextDigestPublishSequence() };
+
+    /// <summary>
+    /// <see cref="BuildOwnSubtreeSnapshot"/>'s content without a publish sequence, so an
+    /// upward publish can be compared with the last one before a sequence is minted.
+    /// </summary>
+    private ChildDigestSnapshot BuildOwnSubtreeContent()
     {
         var (depth, live, tombstones, low, high) = ComputeStructuralAggregates();
         return new ChildDigestSnapshot
@@ -582,7 +612,6 @@ internal sealed partial class BPlusInternalGrain
             Hash = (byte[])state.State.SubtreeProjectionHash!.Clone(),
             EntryCount = state.State.SubtreeEntryCount,
             CheckpointOffset = state.State.SubtreeHighestCheckpointOffset,
-            PublishSequence = NextDigestPublishSequence(),
             LowKeyInclusive = low,
             HighKeyExclusive = high,
             LiveCount = live,
@@ -742,9 +771,46 @@ internal sealed partial class BPlusInternalGrain
     {
         EnsureSubtreeHashInitialized();
         var parent = grainFactory.GetGrain<IBPlusInternalGrain>(parentId);
-        var snapshot = BuildOwnSubtreeSnapshot();
+        var options = await GetOptionsAsync();
+        var content = BuildOwnSubtreeContent();
 
-        var timeout = (await GetOptionsAsync()).DigestPublishTimeout;
+        // Issue #5851 (O3c-1). A fold that left this node's own content unchanged - every
+        // field but the sequence - owes the parent nothing it does not already hold: the
+        // parent folded exactly this content from the last publish it accepted. During a
+        // catch-up replay most child publishes are checkpoint advances below this node's
+        // maximum, so without this each one cascaded to the root. Suppression is bounded
+        // by MaterialiserCheckpointInterval, the interval that already bounds how stale a
+        // leaf's persisted checkpoint may be: an unchanged publish is re-sent once per
+        // interval, which repairs one the parent parked and then lost. A zero interval
+        // never suppresses. Pulls (GetChildDigestSnapshotAsync) always read current state.
+        if (_lastUpwardPublishParent == parentId
+            && content.Equals(_lastUpwardPublishContent)
+            && options.MaterialiserCheckpointInterval > TimeSpan.Zero
+            && System.Diagnostics.Stopwatch.GetElapsedTime(_lastUpwardPublishTimestamp) < options.MaterialiserCheckpointInterval)
+        {
+            return;
+        }
+
+        _lastUpwardPublishParent = null;
+        var snapshot = content with { PublishSequence = NextDigestPublishSequence() };
+        await SendUpwardPublishAsync(parent, parentId, snapshot, options.DigestPublishTimeout);
+
+        // A re-link to this same parent can clear the cache while this send is in flight,
+        // and the parent may drop this node's row in between; this then re-caches content
+        // the parent no longer holds. Benign: the digest is observability only, and the
+        // next unchanged publish is re-sent once the interval elapses (review N2).
+        _lastUpwardPublishParent = parentId;
+        _lastUpwardPublishContent = content;
+        _lastUpwardPublishTimestamp = System.Diagnostics.Stopwatch.GetTimestamp();
+    }
+
+    /// <summary>
+    /// The cross-grain half of <see cref="PublishUpwardAsync"/>: sends
+    /// <paramref name="snapshot"/>, bounded by <paramref name="timeout"/>.
+    /// </summary>
+    private async Task SendUpwardPublishAsync(
+        IBPlusInternalGrain parent, GrainId parentId, ChildDigestSnapshot snapshot, TimeSpan timeout)
+    {
         if (timeout == Timeout.InfiniteTimeSpan)
         {
             await parent.OnChildDigestPublishedAsync(context.GrainId, snapshot);

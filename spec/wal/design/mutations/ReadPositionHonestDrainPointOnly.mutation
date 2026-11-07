@@ -1,0 +1,26 @@
+# The fence covers point writes only. Batch appends carry no author stamp - the
+# shape of the shard fold's serial-turn guard, which excludes point writes and
+# only counts batches - so a batch admitted before the close is accepted after it.
+MODULE: ReadPositionHonestDrainPointOnly
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: batch appends bypass the author fence, so the close drains point writes only
+PERTURBS: ForeignAlloc, ForeignReject
+
+--- FIND
+    /\ fpend
+    /\ fstamp >= fFence
+--- REPLACE
+    /\ fpend
+\* MUTATION: a batch append is not checked.
+    /\ (fkind = "batch" \/ fstamp >= fFence)
+--- END
+
+--- FIND
+    /\ fpend
+    /\ fstamp < fFence
+--- REPLACE
+    /\ fpend
+    /\ fkind = "point"
+    /\ fstamp < fFence
+--- END

@@ -1,0 +1,15 @@
+# #5840 S4: the live donor's pre-narrow write of a moved key is fenced by D's epoch.
+MODULE: HandOffBoundLiveMovedKeyWriteUnfenced
+TARGET: HandOffBound
+CLASS: Invariant
+SUMMARY: the live donor's write of a moved key, admitted before its narrow, is allocated whatever its epoch
+PERTURBS: LiveAlloc
+BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1, WithRestart = FALSE
+
+--- FIND
+    /\ lpend
+    /\ lstamp >= eRow
+--- REPLACE
+    /\ lpend
+\* MUTATION: no entry check.
+--- END

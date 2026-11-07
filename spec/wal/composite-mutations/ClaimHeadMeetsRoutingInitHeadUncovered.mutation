@@ -1,0 +1,14 @@
+# Pairs with ClaimHeadMeetsRoutingInit (E -> R). ClaimHeadCoversPriorAppends no longer
+# covers S, so the first initialisation's re-claim head lies below the allocator head.
+MODULE: ClaimHeadMeetsRoutingInitHeadUncovered
+TARGET: ClaimHeadMeetsRoutingInit
+CLASS: Invariant
+SUMMARY: E's claim head no longer covers S's prior appends
+
+--- FIND
+ClaimHeadCoversPriorAppends ==
+    \A a \in Claimants : cstage[a] = 3 => \A o \in prior[a] : o < claimHead[a]
+--- REPLACE
+ClaimHeadCoversPriorAppends ==
+    \A a \in Claimants \ {"S"} : cstage[a] = 3 => \A o \in prior[a] : o < claimHead[a]
+--- END

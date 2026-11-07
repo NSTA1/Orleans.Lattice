@@ -1,0 +1,17 @@
+# Pairs with NewbornPinEventuallyUsable. The claim-head conjunct of Armed is off
+# by one: it asks the activation to have read the record at its claim head, not
+# below it. The newborn's replay is driven only to the head below, so arming is
+# never enabled, and its own appends are never covered. It edits the Armed
+# predicate, not an action, so it names no perturbed action.
+MODULE: NewbornPinEventuallyUsableArmingNeverEnabled
+TARGET: NewbornPinEventuallyUsable
+CLASS: Temporal
+SUMMARY: arming asks for a read at the claim head, which no driven replay reaches
+BOUNDS: WithPreArm = FALSE
+
+--- FIND
+    /\ IF WithPreArm THEN rp[a] >= seenP[a] ELSE rp[a] >= claimHead[a] - 1
+--- REPLACE
+\* MUTATION: off by one: the record at the claim head must have been read.
+    /\ IF WithPreArm THEN rp[a] >= seenP[a] ELSE rp[a] >= claimHead[a]
+--- END

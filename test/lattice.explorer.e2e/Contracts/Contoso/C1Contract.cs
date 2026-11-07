@@ -67,7 +67,9 @@ public sealed class C1Contract() : ChapterContract("C1")
 
         var schema = ContractFacades.Of(context, Personas.Sam.Id).Schema;
         var remediation = await schema.StartRemediationAsync(Names.Trees.FactoryOrders, ContosoSchema.NegativeTotalToZero, ContosoSchema.OrdersRevised);
-        await ContractWait.SucceededAsync("the negative-total remediation of the restored orders", () => schema.GetSchemaOperationStatusAsync(remediation.OperationId), OperationPatience);
+        await U2Contract.AwaitRemediationAsync(
+            schema, remediation.OperationId, "the negative-total remediation of the restored orders",
+            U2Contract.AliasWaitOn(admin, Names.Trees.FactoryOrders));
         await U2Contract.MigrateAsync(schema, Names.Trees.FactoryOrders, "the re-migration to version 2");
 
         await ReplayCapturedOrdersFromEastAsync(context.Estate);

@@ -1,0 +1,16 @@
+# Bulk without hint: entries another leaf took for this range between the bulk
+# load beginning and the leaf's creation lie below its starting read position.
+# The violation needs no live advance: the hint is the birth read position, so
+# every arming depends on it.
+MODULE: ReadPositionHonestBulkWithoutHint
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the bulk leaf starts at the WAL head at its creation instead of the head when the bulk load began
+PERTURBS: Create
+
+--- FIND
+    /\ rp' = [rp EXCEPT !["a1"] = hint - 1]
+--- REPLACE
+\* MUTATION: the head at creation, not the birth hint.
+    /\ rp' = [rp EXCEPT !["a1"] = next - 1]
+--- END

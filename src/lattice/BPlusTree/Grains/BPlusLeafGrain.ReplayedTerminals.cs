@@ -41,13 +41,35 @@ internal sealed partial class BPlusLeafGrain
 
             // Keep the source bucket and its checkpoint clamp until every
             // destination has durably accepted its typed prepares and commit.
-            foreach (var (target, mutations) in targets)
+            //
+            // A destination's first await is its replay barrier, so a cold one
+            // needs a replay permit to answer; a replay holding one returns it
+            // for the delivery (issue #5775). An activation replay is still inside
+            // its barrier, so the leaf serves nothing meanwhile; a starvation drive
+            // runs on a live leaf whose barrier is already open, so it keeps serving
+            // exactly what it served before the permit went out.
+            var suspended = SuspendReplayPermit();
+            try
             {
-                await grainFactory.GetGrain<IBPlusLeafGrain>(target)
-                    .ApplyPreparedReplayCommitAsync(transactionId, mutations, terminalTimestamp, remainingForwards - 1);
-                forwarded ??= new HashSet<string>(StringComparer.Ordinal);
-                foreach (var mutation in mutations)
-                    forwarded.Add(mutation.Key);
+                foreach (var (target, mutations) in targets)
+                {
+                    var destination = grainFactory.GetGrain<IBPlusLeafGrain>(target);
+                    await WalFenceSeamRetry.RunAsync(
+                        () => WalForwardChain.ForwardAsync(
+                            WalForwardChain.KeyOf(context.GrainId),
+                            WalForwardChain.KeyOf(target),
+                            () => destination.ApplyPreparedReplayCommitAsync(transactionId, mutations, terminalTimestamp, remainingForwards - 1)),
+                        WalFenceSeamRetry.CallerLeaf,
+                        state.State.TreeId);
+                    forwarded ??= new HashSet<string>(StringComparer.Ordinal);
+                    foreach (var mutation in mutations)
+                        forwarded.Add(mutation.Key);
+                }
+            }
+            finally
+            {
+                if (suspended is not null)
+                    await ResumeReplayPermitAsync(suspended);
             }
             // Another split may have narrowed the donor during delivery.
         }
@@ -100,6 +122,11 @@ internal sealed partial class BPlusLeafGrain
             throw new ArgumentException("Every prepare must belong to the replayed transaction.", nameof(preparedMutations));
         await EnsureTerminalWitnessHydratedAsync();
 
+        // Issue #5706 (review S1 of #5702): the prepared records below are data-keyed
+        // and applied after their append, so a narrow or a division must wait for
+        // them as for any write. This path never divides the leaf.
+        using var _mutationScope = EnterMutationScope();
+
         var records = new List<WalRecord>(preparedMutations.Count + 1);
         foreach (var mutation in preparedMutations)
         {
@@ -142,8 +169,9 @@ internal sealed partial class BPlusLeafGrain
             Timestamp = terminalTimestamp,
         });
         var writer = ResolveCommitLogWriter();
+        IReadOnlyList<long>? replayedOffsets = null;
         if (writer is not null)
-            await writer.AppendManyAsync(records);
+            replayedOffsets = await writer.AppendManyAsync(records);
 
         // The WAL append may have overlapped another split. Bucket the exact
         // typed prepares, then re-route before draining, just as on the donor.
@@ -161,6 +189,11 @@ internal sealed partial class BPlusLeafGrain
                 visibleStamp = row.Timestamp;
         PublishVersionAdvance(visibleStamp);
         ClearSagaShadow(transactionId);
+        // The re-appended records are applied (issue #5572).
+        if (replayedOffsets is not null)
+        {
+            MarkLiveAppendApplied(records, replayedOffsets);
+        }
         await PublishDigestUpwardInlineAsync();
     }
 }

@@ -1,0 +1,16 @@
+# Issue #5610: a bulk append grafts its leaf over a range an existing leaf already
+# holds rows in, without relocating them. The birth hint lies above those rows,
+# so the bulk leaf starts past them unread. Moved from the design's
+# ReadPositionHonestBulkAppendDropsExistingRows.
+MODULE: BulkHintBoundDropsExistingRows
+TARGET: BulkHintBound
+CLASS: Invariant
+SUMMARY: the appended leaf is born without the rows the range already held
+PERTURBS: Deliver
+
+--- FIND
+    /\ heldN' = heldN \cup copied
+--- REPLACE
+\* MUTATION: the existing rows are not relocated.
+    /\ heldN' = heldN
+--- END

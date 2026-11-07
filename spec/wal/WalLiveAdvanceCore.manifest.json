@@ -1,0 +1,122 @@
+{
+  "mutations": "live-advance-core-mutations",
+  "refinement": "LiveAdvanceCoreRefinement.md",
+  "nonBehaviouralActions": [
+    "Stutter"
+  ],
+  "counts": {
+    "invariants": 18,
+    "properties": 2,
+    "actions": 59,
+    "mutations": 138,
+    "behaviourRows": 77,
+    "distinctStates": 2021047
+  },
+  "variants": {
+    "Restart": {
+      "distinctStates": 3052664
+    },
+    "GateFlip": {
+      "distinctStates": 3373761
+    },
+    "Recreate": {
+      "distinctStates": 3693715
+    },
+    "RecreateSurvivor": {
+      "distinctStates": 4638713
+    },
+    "RecreateSurvivorMixed": {
+      "distinctStates": 1622161
+    },
+    "Bulk": {
+      "distinctStates": 1114185
+    },
+    "KeyMove": {
+      "distinctStates": 1021427
+    },
+    "PreArmRestart": {
+      "distinctStates": 2262022
+    },
+    "PreArmBulk": {
+      "distinctStates": 2511745
+    },
+    "PreArmRecreate": {
+      "distinctStates": 2631557
+    },
+    "PreArmGateFlip": {
+      "distinctStates": 490073
+    },
+    "Free": {
+      "distinctStates": 4680662
+    },
+    "FreeKeyMove": {
+      "distinctStates": 2386428
+    },
+    "FreeSplitHint": {
+      "distinctStates": 3562343
+    },
+    "FreeSplitBirth": {
+      "distinctStates": 2146154
+    },
+    "FreeSplitLink": {
+      "distinctStates": 428890
+    },
+    "FreeLatch": {
+      "distinctStates": 892259
+    },
+    "FreeOrphan": {
+      "distinctStates": 707726
+    },
+    "FreeRestart": {
+      "distinctStates": 3855129
+    },
+    "FreeRestartKeyMove": {
+      "distinctStates": 477300
+    },
+    "FreeRecreate": {
+      "distinctStates": 1715417
+    },
+    "FreeRecreateSurvivor": {
+      "distinctStates": 4908025
+    },
+    "FreeBulk": {
+      "distinctStates": 3309965
+    },
+    "FreeGateFlip": {
+      "distinctStates": 1904304
+    },
+    "FreeFwdExclusion": {
+      "distinctStates": 4217142
+    },
+    "FreeTagEvict": {
+      "distinctStates": 821800
+    },
+    "FreeReforward": {
+      "distinctStates": 1795034
+    },
+    "FreeForwardIn": {
+      "distinctStates": 1032584
+    },
+    "FreeSplitView": {
+      "distinctStates": 1159405
+    },
+    "FreeOtherLinkRaise": {
+      "distinctStates": 1056232
+    },
+    "FreeKeyFilter": {
+      "distinctStates": 8791
+    },
+    "FreeReportFetch": {
+      "distinctStates": 24397
+    },
+    "FreeEpochOnly": {
+      "distinctStates": 712124
+    },
+    "FreeChainEvict": {
+      "distinctStates": 1993821
+    },
+    "FreeOrphanEvict": {
+      "distinctStates": 3045174
+    }
+  }
+}

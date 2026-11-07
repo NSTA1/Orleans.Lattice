@@ -1,0 +1,15 @@
+# #5837, the claimless advance and the split hint.
+MODULE: ReadPositionHonestResolveHeadWithoutReclaim
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: resolving a deferred close records the staleHigh head without re-claiming the generation, so the stale donor is admitted above it
+BOUNDS: WithFreeAdvance = TRUE, WithKeyMove = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
+
+--- FIND
+    /\ pend' = FALSE
+    /\ gL' = Max2(gL, pendGen)
+--- REPLACE
+    /\ pend' = FALSE
+\* MUTATION: no re-claim; stale admissions continue.
+    /\ gL' = gL
+--- END

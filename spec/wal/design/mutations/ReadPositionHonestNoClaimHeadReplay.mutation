@@ -1,0 +1,15 @@
+# The claim-head guard dropped: an activation arms without replaying to the head
+# its claim returned, so it passes another activation's appends below it.
+MODULE: ReadPositionHonestNoClaimHeadReplay
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the activation arms without replaying to its claim head
+PERTURBS: LiveAdvance
+
+--- FIND
+    /\ mInit
+    /\ rp[a] >= claimHead[a] - 1
+--- REPLACE
+    /\ mInit
+\* MUTATION: no replay to the claim head.
+--- END

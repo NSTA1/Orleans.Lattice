@@ -264,6 +264,20 @@ public sealed class LatticeTreeAdminGrpcServiceUnitTests
     }
 
     [Test]
+    public void InvokeAsync_maps_a_wal_shard_quiesced_for_a_move_to_Unavailable()
+    {
+        // #5800: transient move back-pressure that commits nothing. It derives from
+        // InvalidOperationException, which this ladder reports as FailedPrecondition, so
+        // its own arm must come first: the client retries Unavailable, not a precondition.
+        var ex = MapFault(new LatticeWalQuiescingException("WAL shard secret-tree/0 quiesced for a placement move"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex.StatusCode, Is.EqualTo(StatusCode.Unavailable));
+            Assert.That(ex.Status.Detail, Does.Not.Contain("secret-tree"));
+        });
+    }
+    [Test]
     public void InvokeAsync_maps_an_unexpected_fault_to_a_non_revealing_Internal()
     {
         var ex = MapFault(new BadImageFormatException("secret internal detail"));

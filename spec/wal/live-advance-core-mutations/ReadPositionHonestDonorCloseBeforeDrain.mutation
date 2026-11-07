@@ -1,0 +1,19 @@
+# #5837, the claimless advance: the split transfer and the receiver's close heads.
+MODULE: ReadPositionHonestDonorCloseBeforeDrain
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the donor closes before draining its admitted moved-key mutations, so its close head misses one still in flight
+PERTURBS: DonorClose
+BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithKeyMove = TRUE, MaxWindows = 1, WithMixedVersion = FALSE, WithDuplicate = FALSE
+
+--- FIND
+    /\ dNarrowed
+    /\ \A o \in inflight : o \notin dKnown
+    /\ hoOpen' = FALSE
+    /\ hoClosedAt' = Max2(hoClosedAt, Max({-1} \cup DonorCloseCovers) + 1)
+--- REPLACE
+    /\ dNarrowed
+\* MUTATION: no drain; the head covers only the donor's writes it has seen land.
+    /\ hoOpen' = FALSE
+    /\ hoClosedAt' = Max2(hoClosedAt, Max({-1} \cup (DonorCloseCovers \cap durable)) + 1)
+--- END

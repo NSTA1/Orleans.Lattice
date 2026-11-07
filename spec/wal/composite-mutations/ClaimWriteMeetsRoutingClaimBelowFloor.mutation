@@ -1,0 +1,14 @@
+# Pairs with ClaimWriteMeetsRoutingClaim (E -> R). E's claim write loses its floor check,
+# so the purged incarnation's re-presented claim is admitted over the floor the purge raised.
+MODULE: ClaimWriteMeetsRoutingClaimBelowFloor
+TARGET: ClaimWriteMeetsRoutingClaim
+CLASS: Invariant
+SUMMARY: E's claim write admits a claim at or below the floor
+PERTURBS: Represent
+
+--- FIND
+        /\ EClaimAboveFloor(i, s)
+        /\ EClaimAboveEntry(i, s)
+--- REPLACE
+        /\ EClaimAboveEntry(i, s)
+--- END

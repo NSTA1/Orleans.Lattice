@@ -1,0 +1,17 @@
+# Pairs with BulkHintBound. The old leaf takes a write of the range before the
+# bulk operation begins and does not store its row, so the narrow hands back
+# nothing for it and the appended leaf, born above its record, never holds it.
+MODULE: BulkHintBoundPreWriteNotStored
+TARGET: BulkHintBound
+CLASS: Invariant
+SUMMARY: the old leaf acknowledges a write before the switch without storing its row
+PERTURBS: PreWrite
+
+--- FIND
+    /\ Alloc("p")
+    /\ rowsO' = rowsO \cup {next}
+--- REPLACE
+    /\ Alloc("p")
+\* MUTATION: the row is not stored.
+    /\ rowsO' = rowsO
+--- END

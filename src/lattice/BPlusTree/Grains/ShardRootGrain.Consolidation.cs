@@ -48,6 +48,7 @@ internal sealed partial class ShardRootGrain
     /// <inheritdoc />
     public async Task<int> ReclaimSlotsAsync(int[] sortedSlots, int virtualShardCount)
     {
+        using var structuralRouting = EnterStructuralRouting(); // #5876
         ArgumentNullException.ThrowIfNull(sortedSlots);
         if (virtualShardCount <= 0)
             throw new ArgumentOutOfRangeException(nameof(virtualShardCount), "Must be greater than 0.");
@@ -143,6 +144,7 @@ internal sealed partial class ShardRootGrain
             throw new InvalidOperationException(
                 $"Shard {MyShardIndex} of tree '{TreeId}' cannot abort a slot migration that has already reached phase {sip.Phase}.");
 
+        NoteStructuralRoutingChange(); // #5876
         state.State.SplitInProgress = null;
         await WriteShardStateAsync();
     }

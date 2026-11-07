@@ -1,0 +1,15 @@
+# Pairs with BulkHintBound. The shard root's copy of the rows is in memory: a
+# graft resumed after a crash must narrow and relocate again. Continuing from
+# where it died loses an undelivered copy, and the hint is still applied.
+MODULE: BulkHintBoundResumeSkipsRelocation
+TARGET: BulkHintBound
+CLASS: Invariant
+SUMMARY: a graft resumed after a crash continues past the narrow without relocating again
+PERTURBS: Crash
+
+--- FIND
+    /\ phase' = IF phase = "begun" THEN "retry" ELSE "created"
+--- REPLACE
+\* MUTATION: the resumed graft does not relocate again.
+    /\ phase' = IF phase = "begun" THEN "retry" ELSE "dropped"
+--- END

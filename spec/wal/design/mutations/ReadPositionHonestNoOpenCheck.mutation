@@ -1,0 +1,15 @@
+# The open-marker guard dropped: the owner advances while a hand-off is open,
+# past a foreign entry no close has yet recorded.
+MODULE: ReadPositionHonestNoOpenCheck
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the owner advances live while a hand-off marker is open
+PERTURBS: LiveAdvance
+
+--- FIND
+    /\ ~MarkerOpen(a)
+    /\ rp[a] >= MarkerClosedAt(a) - 1
+--- REPLACE
+\* MUTATION: the open marker is not consulted.
+    /\ rp[a] >= MarkerClosedAt(a) - 1
+--- END

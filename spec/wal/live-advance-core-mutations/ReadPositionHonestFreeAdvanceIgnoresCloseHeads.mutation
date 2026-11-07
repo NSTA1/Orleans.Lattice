@@ -1,0 +1,23 @@
+# #5837, the claimless advance and the split hint.
+MODULE: ReadPositionHonestFreeAdvanceIgnoresCloseHeads
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the free advance ignores its marker's close heads, so it passes a handed-off foreign record
+PERTURBS: FreeCommit
+BOUNDS: WithFreeAdvance = TRUE
+
+--- FIND
+    /\ ~hoOpen
+    /\ rp[a] >= hoClosedAt - 1
+    /\ rp[a] >= seenP[a]
+    /\ rp[a] >= seenU[a]
+    /\ CloseCarried => rp[a] >= seenS[a]
+    /\ \A o \in inflight : author[o] = a => o > ft[a]
+--- REPLACE
+    /\ ~hoOpen
+\* MUTATION: no close-head bound.
+    /\ rp[a] >= seenP[a]
+    /\ rp[a] >= seenU[a]
+    /\ CloseCarried => rp[a] >= seenS[a]
+    /\ \A o \in inflight : author[o] = a => o > ft[a]
+--- END

@@ -1,0 +1,15 @@
+# #5837, the claimless advance: the split transfer and the receiver's close heads.
+MODULE: SoleActivationNeverFallsOffGcTrimPastSolePin
+TARGET: SoleActivationNeverFallsOff
+CLASS: Invariant
+SUMMARY: the GC trims past the shared snapshot's coverage, so a sole activation falls off the log: what the widened excuse must never hide
+PERTURBS: GcTrim
+BOUNDS: WithFreeAdvance = TRUE
+
+--- FIND
+    /\ floor <= snapCov
+    /\ floor \in durable
+--- REPLACE
+\* MUTATION: the trim is not bounded by the pin.
+    /\ floor \in durable
+--- END

@@ -1,0 +1,15 @@
+# #5841, the claim half of the fix removed. Red outside pre-arm too: an idle duplicate
+# (one that never wrote, so never claimed) claims after the split.
+MODULE: HandOffBoundClaimSkipsLeafStateCheck
+TARGET: HandOffBound
+CLASS: Invariant
+SUMMARY: a claim after the split's narrow does not read the leaf state, so an idle stale duplicate claims and writes epoch-only: the eager residual of #5841
+PERTURBS: ClaimCheck
+BOUNDS: WithStaleDonor = TRUE, MaxWindows = 1
+
+--- FIND
+    /\ dst' = IF sNarrowed THEN "stale" ELSE "claimed"
+--- REPLACE
+\* MUTATION: the claim does not read the leaf state.
+    /\ dst' = "claimed"
+--- END

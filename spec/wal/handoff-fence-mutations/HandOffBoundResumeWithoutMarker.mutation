@@ -1,0 +1,19 @@
+# Pairs with HandOffBound. Moved from the design's
+# ReadPositionHonestResumeWithoutMarker. A hand-off begun before the fence gate
+# opened resumes under the gate and admits stamped writes without opening its
+# marker. It completes with no close heads, L's marker state initialises, and the
+# marker reads closed below them.
+MODULE: HandOffBoundResumeWithoutMarker
+TARGET: HandOffBound
+CLASS: Invariant
+SUMMARY: a hand-off that spans the gate opening resumes without opening its marker
+PERTURBS: Resume
+
+--- FIND
+    /\ resumed' = TRUE
+    /\ hoOpen' = TRUE
+--- REPLACE
+    /\ resumed' = TRUE
+\* MUTATION: the marker is not opened.
+    /\ hoOpen' = hoOpen
+--- END

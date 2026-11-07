@@ -1,0 +1,26 @@
+# The seam retry of a write the purged incarnation admitted re-stamps it (#5705).
+# Production's WAL floor refuses its old generation; #5663's refusal-driven raise
+# then reloads the shard root's marker, which the purge deleted, and the update
+# re-creates it at the floor plus one (or the reload reads the re-created
+# incarnation's marker, at the same value). The write's leaf claims that
+# generation, shared with the re-created incarnation, and the write is admitted
+# above the heads the re-created incarnation's first initialisation recorded.
+MODULE: ReadPositionHonestStraddlerRaiseRecreatesMarker
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: a straddling write refused at the routing floor raises its generation and is re-admitted
+PERTURBS: StraddleRetry
+BOUNDS: WithRecreate = TRUE, WithBatch = FALSE, MaxWindows = 1
+
+--- FIND
+    /\ fpend' = FALSE
+    /\ fkind' = "point"
+    /\ fstamp' = 0
+    /\ fFence' = fFence
+--- REPLACE
+\* MUTATION: the retry raises (or reloads) to the floor plus one and re-admits.
+    /\ fpend' = TRUE
+    /\ fkind' = fkind
+    /\ fstamp' = rFloor + 1
+    /\ fFence' = Max2(fFence, rFloor + 1)
+--- END

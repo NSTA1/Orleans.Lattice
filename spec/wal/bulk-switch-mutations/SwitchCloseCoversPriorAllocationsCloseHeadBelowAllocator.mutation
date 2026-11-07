@@ -1,0 +1,14 @@
+# #5833. The switch's close records a head one below the allocator head, so the last
+# record allocated before it lies at the head, not below it.
+MODULE: SwitchCloseCoversPriorAllocationsCloseHeadBelowAllocator
+TARGET: SwitchCloseCoversPriorAllocations
+CLASS: Action
+SUMMARY: the switch's close records a head below the allocator head
+PERTURBS: Close
+
+--- FIND
+    /\ closeHead' = IF tokOpen /\ ~Pending THEN next ELSE closeHead
+--- REPLACE
+\* MUTATION: one below the allocator head.
+    /\ closeHead' = IF tokOpen /\ ~Pending THEN next - 1 ELSE closeHead
+--- END

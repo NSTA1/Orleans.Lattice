@@ -1,0 +1,18 @@
+# Pairs with HandOffBound. Moved from the design's
+# ReadPositionHonestGenerationNotDurable. The routing generation entry is kept in
+# memory only, so a WAL shard restart loses the entry a close raised, and a write
+# admitted before the close is allocated above the recorded head.
+MODULE: HandOffBoundGenerationNotDurable
+TARGET: HandOffBound
+CLASS: Invariant
+SUMMARY: a WAL shard restart loses the initiator's generation entry
+PERTURBS: Restart
+
+--- FIND
+    /\ UNCHANGED fFence
+
+--- REPLACE
+\* MUTATION: the generation entry is not durable.
+    /\ fFence' = 1
+
+--- END

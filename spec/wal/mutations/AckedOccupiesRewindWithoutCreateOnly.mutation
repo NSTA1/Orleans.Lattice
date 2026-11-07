@@ -1,0 +1,30 @@
+# Pairs with AckedOccupies. Both layers that keep an acknowledged write in its
+# offset fail together: the post-failure resync re-seeds beneath an abandoned
+# call still in motion (issue #5799), and the store does not refuse that call
+# landing at an occupied offset. The reissued write is acknowledged, then the
+# abandoned call lands over it. Either layer alone keeps AckedOccupies: the
+# store's create-only rows are what kept #5799's run from losing a write.
+MODULE: AckedOccupiesRewindWithoutCreateOnly
+TARGET: AckedOccupies
+CLASS: Invariant
+SUMMARY: the resync re-seeds beneath an abandoned call and the store lets it land over the reissue
+PERTURBS: Resync, LateLand
+
+--- FIND
+    /\ resyncing = "resync"
+    /\ inflight = {}
+    /\ next' = ReseedNext
+--- REPLACE
+    /\ resyncing = "resync"
+    /\ inflight = {}
+\* MUTATION: re-seed from the store alone.
+    /\ next' = RecoveredNext
+--- END
+
+--- FIND
+               /\ ~WithCrossSiloMove \/ curFresh
+               /\ occ[o] = "none"
+--- REPLACE
+\* MUTATION: no create-only refusal; the late call lands over an occupant.
+               /\ ~WithCrossSiloMove \/ curFresh
+--- END

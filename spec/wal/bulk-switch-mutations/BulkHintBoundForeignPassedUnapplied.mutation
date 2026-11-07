@@ -1,0 +1,19 @@
+# Pairs with BulkHintBound. The old leaf's read position passes a foreign record
+# of its range when it is allocated, without applying it - a live advance of the
+# old leaf that is not honest about foreign records. The cap then trusts a read
+# position the old leaf does not hold up to.
+MODULE: BulkHintBoundForeignPassedUnapplied
+TARGET: BulkHintBound
+CLASS: Invariant
+SUMMARY: the old leaf's read position passes a foreign record without applying it
+PERTURBS: ForeignAlloc
+
+--- FIND
+    /\ Alloc("f")
+    /\ UNCHANGED <<rowsO, rpO, fO, narrowed,
+--- REPLACE
+    /\ Alloc("f")
+\* MUTATION: the old leaf's read position passes the record unapplied.
+    /\ rpO' = IF narrowed THEN rpO ELSE next
+    /\ UNCHANGED <<rowsO, fO, narrowed,
+--- END

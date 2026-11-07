@@ -1,0 +1,152 @@
+namespace Orleans.Lattice.BPlusTree.Grains;
+
+/// <summary>
+/// The pure decisions of the WAL append fence (epic #5605), kept apart from
+/// <see cref="WalShardGrain"/> so each guard is unit-testable and maps one to one
+/// onto the guard of the draft model <c>spec/wal/design/WalLiveAdvance.tla</c>
+/// that it implements: <see cref="DecideClaimWrite"/> is <c>ClaimWrite</c>,
+/// <see cref="IsRaiseAdmitted"/> is <c>ClaimRaise</c>, and
+/// <see cref="IsEpochAdmitted"/> is <c>OwnAlloc</c>.
+/// </summary>
+/// <remarks>
+/// An in-memory entry of <see cref="Unloaded"/> means the WAL shard activation has
+/// not loaded the entry since it activated. Nothing is ever admitted from an
+/// unloaded entry (<c>StaleEpochNeverAppendsUnloadedEntryAccepted</c>); the leaf's
+/// re-presented claim loads it.
+/// </remarks>
+internal static class WalAppendFenceCore
+{
+    /// <summary>The in-memory value of an entry this activation has not loaded.</summary>
+    public const long Unloaded = -1;
+
+    /// <summary>What a claim does with the durable entry row.</summary>
+    public enum ClaimWriteDecision
+    {
+        /// <summary>Refuse the claim: it is not above the entry, or not above the retired floor.</summary>
+        Refuse,
+
+        /// <summary>Max-merge the claimed value into the durable row, conditionally on its ETag.</summary>
+        Write,
+
+        /// <summary>
+        /// The durable row already holds exactly this value: the same claimant is
+        /// re-presenting its claim (after a WAL shard restart or move, or a lost
+        /// response), so nothing is written and the claim proceeds to its raise,
+        /// which loads the entry.
+        /// </summary>
+        AlreadyDurable,
+    }
+
+    /// <summary>
+    /// The claim's entry write (step 2). A claim is written only strictly above the
+    /// higher of the loaded entry, the durable entry and the retired floor, so the
+    /// row never moves down (<c>StaleEpochNeverAppendsClaimEntryOverwrite</c>) and
+    /// never lands at or below a retirement (<c>IgnoresRetiredFloor</c>). The one
+    /// exception is a value equal to the durable entry and not below the loaded
+    /// one, a re-presentation after a WAL shard restart or move: only the claimant
+    /// that wrote it can hold it. That holds because the leaf's epoch row is written
+    /// by a strict conditional write and, across a clear that deletes the row so
+    /// that values recur, because retirement raises the floor to the row's value as
+    /// well as the entry's (#5641). A duplicate that had written its row but not yet
+    /// its entry here is then refused by the floor, so it can never share an epoch
+    /// with the re-created incarnation.
+    /// </summary>
+    /// <param name="value">The claimed epoch or generation.</param>
+    /// <param name="loaded">The in-memory entry, or <see cref="Unloaded"/>.</param>
+    /// <param name="durable">The durable entry just read; 0 when absent.</param>
+    /// <param name="floor">The partition's retired floor; 0 for a routing generation.</param>
+    public static ClaimWriteDecision DecideClaimWrite(long value, long loaded, long durable, long floor)
+    {
+        if (value <= floor)
+        {
+            return ClaimWriteDecision.Refuse;
+        }
+
+        if (value > Math.Max(loaded, durable))
+        {
+            return ClaimWriteDecision.Write;
+        }
+
+        return value == durable && value >= loaded
+            ? ClaimWriteDecision.AlreadyDurable
+            : ClaimWriteDecision.Refuse;
+    }
+
+    /// <summary>
+    /// The claim's raise (step 3), under the lock that assigns offsets. Refused if
+    /// another claim has written or raised the entry above this value since the
+    /// write, or if a retirement since the write has raised the floor to it.
+    /// </summary>
+    /// <param name="value">The claimed epoch or generation.</param>
+    /// <param name="loaded">The in-memory entry, or <see cref="Unloaded"/>.</param>
+    /// <param name="durableSeen">The highest durable entry this activation has read or written.</param>
+    /// <param name="floor">The partition's retired floor; 0 for a routing generation.</param>
+    public static bool IsRaiseAdmitted(long value, long loaded, long durableSeen, long floor) =>
+        value >= Math.Max(loaded, durableSeen) && value > floor;
+
+    /// <summary>
+    /// A stamped append's epoch check, under the lock that assigns its offset. The
+    /// entry must be loaded and the epoch not below it. The caller has already
+    /// ruled out an unloaded entry.
+    /// </summary>
+    /// <remarks>
+    /// The partition's retired floor is deliberately not checked here (#5635). The
+    /// floor is one scalar per partition, while epochs are per leaf, so checking it
+    /// at every append would reject every live leaf whose epoch sits at or below
+    /// any other leaf's retired entry: one retirement would supersede, and
+    /// deactivate, every such leaf of the partition. The floor protects a leaf
+    /// re-created under a retired id, and for that the claim's write and raise
+    /// checks suffice (the design's redundancy row for
+    /// <c>StaleEpochNeverAppendsAppendIgnoresRetiredFloor</c>): retirement removes
+    /// the retired leaf's own entry, so its later appends meet an unloaded entry,
+    /// and a claim straddling the retirement is refused at its raise.
+    /// </remarks>
+    /// <param name="epoch">The stamp's epoch.</param>
+    /// <param name="loaded">The loaded in-memory entry (never <see cref="Unloaded"/>).</param>
+    public static bool IsEpochAdmitted(long epoch, long loaded) =>
+        loaded != Unloaded && epoch >= loaded;
+
+    /// <summary>
+    /// A stamped append's routing-generation check: the initiator's entry must be
+    /// loaded and the generation not below it.
+    /// </summary>
+    public static bool IsGenerationAdmitted(long generation, long loaded) =>
+        loaded != Unloaded && generation >= loaded;
+
+    /// <summary>
+    /// The value a read-only generation load installs (#5833, revision 2, C1): the
+    /// durable row, never below the routing floor. It is exactly the value the claim
+    /// decisions would read, so a claim after a load is decided as before it. When the
+    /// row is at or below the floor the entry is marked floor-only, and
+    /// <see cref="IsLoadedGenerationAdmitted"/> then admits only above the floor: every
+    /// generation at or below it belongs to a purged incarnation.
+    /// </summary>
+    /// <param name="durable">The durable row's generation; 0 when the row is absent.</param>
+    /// <param name="floor">The initiator's routing floor; 0 when none.</param>
+    public static long LoadedGeneration(long durable, long floor) => Math.Max(durable, floor);
+
+    /// <summary>
+    /// A stamped append's routing-generation check against an entry that may hold a
+    /// floor installed by a read-only load (#5833): admitted at or above the entry, and
+    /// strictly above it when <paramref name="floorOnly"/>, since no claim raised it.
+    /// </summary>
+    public static bool IsLoadedGenerationAdmitted(long generation, long loaded, bool floorOnly) =>
+        IsGenerationAdmitted(generation, loaded) && (!floorOnly || generation > loaded);
+
+    /// <summary>
+    /// Whether a record carried under the coordinator-terminal stamp class is
+    /// excluded from the partition's unstamped watermark (epic #5605, member 2;
+    /// review S2 of revision 3). Only a <c>TxCommit</c> or <c>TxAbort</c> record is:
+    /// it carries only its transaction id and no row data, and the leaf-wide prepare
+    /// clamp holds the live advance while the prepare it resolves is pending, so
+    /// passing it unread changes nothing. Any other record sent with the class is
+    /// admitted unstamped and reported.
+    /// </summary>
+    /// <param name="op">The record's mutation kind.</param>
+    public static bool IsCoordinatorTerminalOp(MutationKind op) =>
+        op is MutationKind.TxCommit or MutationKind.TxAbort;
+
+    /// <summary>The value a refused claim must exceed.</summary>
+    public static long ClaimThreshold(long loaded, long durable, long floor) =>
+        Math.Max(Math.Max(loaded, durable), floor);
+}
