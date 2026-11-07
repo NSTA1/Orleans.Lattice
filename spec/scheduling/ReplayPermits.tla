@@ -31,9 +31,15 @@ Focal == 1
 OwnerComplete(r) == r # Focal \/ Complete
 Live == {"pending", "queued", "holding"}
 NoObservation == [depth |-> 0, bound |-> 1, drain |-> "Draining"]
-RefuseForWait(r) == role[r] # "Drive" /\ observed[r].depth > 0 /\ observed[r].drain = "WaitExceeded"
+\* Work-conserving refusal (#5992 A1): a refusal is decided only while no
+\* permit is free or a waiter is already ahead, re-checked at the decision.
+WorkAvailable == free > 0 /\ queue = <<>>
+RefuseForWait(r) ==
+    /\ role[r] # "Drive" /\ observed[r].depth > 0 /\ observed[r].drain = "WaitExceeded"
+    /\ ~WorkAvailable
 RefuseForDepth(r) ==
-    role[r] # "Drive" /\ observed[r].depth >= observed[r].bound /\ observed[r].drain = "NoProgress"
+    /\ role[r] # "Drive" /\ observed[r].depth >= observed[r].bound /\ observed[r].drain = "NoProgress"
+    /\ ~WorkAvailable
 
 TypeOK ==
     /\ holders \subseteq Requests
@@ -113,6 +119,10 @@ NoSelfSustainingBacklog == [][\A r \in Requests :
         queue' = queue /\ holders' = holders /\ status' = status]_vars
 ReplayConverges ==
     ([]<>(Focal \in holders /\ Focal \notin hung)) => <>Complete
+\* No arrival is refused while a permit is free and no waiter is ahead of it.
+WorkConservingRefusal == [][\A r \in Requests :
+    (status[r] = "pending" /\ status'[r] = "refused" /\ role[r] # "Drive") =>
+        ~(free > 0 /\ queue = <<>>)]_vars
 
 Init ==
     /\ holders = {} /\ free = Ceiling - ServiceWithheld /\ withheld = ServiceWithheld

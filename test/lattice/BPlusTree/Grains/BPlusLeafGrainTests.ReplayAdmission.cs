@@ -43,8 +43,16 @@ public partial class BPlusLeafGrainTests
     /// produced it. The one test here that asserts <em>admission</em> gets the
     /// no-progress evidence without an excessive mean and is still admitted
     /// below the interactive bound, preserving the bulk reservation.
+    /// <para>
+    /// <b>And takes every permit</b> unless <paramref name="holdPermits"/> is
+    /// false, so the seeded queue is one no free permit could serve. Admission
+    /// never refuses while a permit is free with no waiter ahead (issue #5992,
+    /// A1), so a refusal test against a seeded count with every permit free
+    /// would be testing the refusal A1 removed. A test that expects admission
+    /// passes <see langword="false"/>, since its activation needs a permit.
+    /// </para>
     /// </remarks>
-    private static async Task<int> SeedAdmittedWaitersAsync(Func<int, int> queuedForCeiling)
+    private static async Task<int> SeedAdmittedWaitersAsync(Func<int, int> queuedForCeiling, bool holdPermits = true)
     {
         await QuiescentReplayGateAsync();
         var ceiling = BPlusLeafGrain.ReplayConcurrencyCeilingForTest;
@@ -58,7 +66,54 @@ public partial class BPlusLeafGrainTests
         BPlusLeafGrain.SeedReplayPermitWaitStateForTest(
             new LatticeOptions().WalReplayPermitMaxQueueWait,
             sinceLastProgress: TimeSpan.Zero);
+        if (holdPermits)
+        {
+            var gate = BPlusLeafGrain.ReplayConcurrencyGateForTest!;
+            while (gate.Wait(0))
+                _seededHeldReplayPermits++;
+        }
+
         return ceiling;
+    }
+
+    /// <summary>The permits <see cref="SeedAdmittedWaitersAsync"/> took, returned by <see cref="ClearSeededAdmittedWaiters"/>.</summary>
+    private static int _seededHeldReplayPermits;
+
+    /// <summary>
+    /// Activates <paramref name="grain"/> against a seeded queue whose permits
+    /// are held, and returns the held permits once the activation has either
+    /// joined the queue or failed, so an admission is proved by the activation
+    /// queuing rather than by a free permit that would admit it regardless
+    /// (issue #5992, A1). A refusal throws before the activation queues.
+    /// </summary>
+    private static async Task ActivateAgainstHeldPermitsAsync(IGrainBase grain)
+    {
+        var queuedBefore = BPlusLeafGrain.QueuedReplayPermitWaitersForTest;
+        var activation = LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
+        while (!activation.IsCompleted && BPlusLeafGrain.QueuedReplayPermitWaitersForTest <= queuedBefore)
+            await Task.Yield();
+
+        ReturnSeededHeldReplayPermits();
+        await activation;
+    }
+
+    /// <summary>
+    /// Returns the permits <see cref="SeedAdmittedWaitersAsync"/> took, never
+    /// more than the gate is short of its ceiling, since a test may already have
+    /// returned them.
+    /// </summary>
+    private static void ReturnSeededHeldReplayPermits()
+    {
+        var held = _seededHeldReplayPermits;
+        _seededHeldReplayPermits = 0;
+        var gate = BPlusLeafGrain.ReplayConcurrencyGateForTest;
+        if (gate is null || held <= 0)
+            return;
+
+        var shortfall = BPlusLeafGrain.ReplayConcurrencyCeilingForTest - gate.CurrentCount;
+        var release = Math.Min(held, shortfall);
+        if (release > 0)
+            gate.Release(release);
     }
 
     /// <summary>
@@ -68,6 +123,8 @@ public partial class BPlusLeafGrainTests
     /// </summary>
     private static void ClearSeededAdmittedWaiters()
     {
+        ReturnSeededHeldReplayPermits();
+
         BPlusLeafGrain.SeedReplayAdmissionStateForTest(
             BPlusLeafGrain.ReplayConcurrencyCeilingForTest, 0);
         BPlusLeafGrain.SeedReplayPermitWaitStateForTest(TimeSpan.Zero, sinceLastProgress: null);
@@ -220,9 +277,11 @@ public partial class BPlusLeafGrainTests
         var refusals = new ConcurrentBag<KeyValuePair<string, object?>[]>();
         try
         {
+            // The seed holds every permit: ceiling - 1 of them stand for the
+            // withheld ones, and the last for the one circulating permit, out on a
+            // replay that is not coming back.
             Assert.That(ceiling, Is.GreaterThan(1), "withholding must shrink a genuinely wider gate");
-            for (var i = 0; i < ceiling - 1; i++)
-                Assert.That(gate.Wait(0), Is.True);
+            Assert.That(gate.CurrentCount, Is.Zero, "instrument validation: no permit is free");
             BPlusLeafGrain.SeedWithheldReplayPermitsForTest(ceiling - 1);
             BPlusLeafGrain.SeedReplayPermitWaitStateForTest(
                 TimeSpan.Zero, options.WalReplayPermitMaxQueueWait + TimeSpan.FromSeconds(1));
@@ -276,8 +335,7 @@ public partial class BPlusLeafGrainTests
             state.State.TreeId = UniqueReplayPermitTree();
 
             Assert.DoesNotThrowAsync(
-                async () => await LeafActivationHarness.ActivateAsync(
-                    (IGrainBase)grain, CancellationToken.None),
+                async () => await ActivateAgainstHeldPermitsAsync((IGrainBase)grain),
                 $"an interactive caller must still be admitted at a depth of {ceiling * options.WalReplayPermitQueueDepthPerPermit - ceiling} "
                 + "admitted waiters, which is exactly where a bulk caller is refused");
         }
@@ -322,8 +380,7 @@ public partial class BPlusLeafGrainTests
             state.State.TreeId = UniqueReplayPermitTree();
 
             Assert.DoesNotThrowAsync(
-                async () => await LeafActivationHarness.ActivateAsync(
-                    (IGrainBase)grain, CancellationToken.None),
+                async () => await ActivateAgainstHeldPermitsAsync((IGrainBase)grain),
                 "a queue past the depth bound that is draining in milliseconds is healthy "
                 + "fan-out, and refusing it fails load that would have succeeded");
         }
