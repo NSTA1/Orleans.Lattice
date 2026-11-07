@@ -1,0 +1,15 @@
+# #5840 S4: the live donor, superseded by the fence the shard root ran at the link,
+# deactivates.
+MODULE: LiveDonorProgressLiveDonorSupersededByLinkFence
+TARGET: LiveDonorProgress
+CLASS: Invariant
+SUMMARY: a StaleEpoch at the live donor's current epoch after the link fence supersedes it, with no probed re-claim: #5840 S4 as raised
+PERTURBS: LiveStamp
+BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1, WithRestart = FALSE
+
+--- FIND
+         [] ~lAllow -> /\ eRow < MaxEpoch
+--- REPLACE
+\* MUTATION: no re-claim allowance.
+         [] FALSE -> /\ eRow < MaxEpoch
+--- END

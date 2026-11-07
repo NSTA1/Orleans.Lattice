@@ -94,7 +94,12 @@ internal sealed partial class ShardRootGrain
             // already owns after a crash between persisting intent and
             // reaching this shard.
             if (existing.Phase == ShardSplitPhase.BeginShadowWrite || existing.Phase == ShardSplitPhase.Drain)
+            {
+                // Epic #5605, member 2: a re-asserted window re-opens its marker,
+                // which also opens one a migration begun with the gate closed lacks.
+                await OpenMigrationHandOffAsync(existing);
                 return;
+            }
         }
         else if (existing is not null)
         {
@@ -129,6 +134,7 @@ internal sealed partial class ShardRootGrain
         var sorted = (int[])movedSlots.Clone();
         Array.Sort(sorted);
 
+        NoteStructuralRoutingChange(); // #5876
         state.State.SplitInProgress = new ShardSplitInProgress
         {
             Phase = ShardSplitPhase.BeginShadowWrite,
@@ -137,6 +143,10 @@ internal sealed partial class ShardRootGrain
             VirtualShardCount = virtualShardCount,
         };
         await WriteShardStateAsync();
+
+        // Epic #5605, member 2: the migration's hand-off marker opens on the target
+        // before the coordinator's drain or any shadow-forward reaches it.
+        await OpenMigrationHandOffAsync(state.State.SplitInProgress);
     }
 
     /// <inheritdoc />
@@ -152,9 +162,13 @@ internal sealed partial class ShardRootGrain
         var sip = state.State.SplitInProgress;
         if (sip is null)
             return;
+        // Epic #5605, member 2: every resume path opens the marker before its next
+        // admission (rule 1); idempotent, and a recorded close is never reopened.
+        await OpenMigrationHandOffAsync(sip);
         if (sip.Phase == ShardSplitPhase.Reject || sip.Phase == ShardSplitPhase.Complete)
             return;
 
+        NoteStructuralRoutingChange(); // #5876
         state.State.SplitInProgress = sip with { Phase = ShardSplitPhase.Reject };
         await WriteShardStateAsync();
     }
@@ -173,12 +187,21 @@ internal sealed partial class ShardRootGrain
         // never observed the reject phase would route reads to this shard
         // indefinitely and return orphaned old values for moved slots.
         var sip = state.State.SplitInProgress;
+
+        // Epic #5605, member 2: admission for the moved slots stopped at the reject
+        // phase and the drain has finished, so the close re-claims this shard's
+        // routing generation and records the heads on the target's marker. A failure
+        // propagates with the migration record intact, so the completion is re-driven.
+        await OpenMigrationHandOffAsync(sip);
+        await CloseMigrationHandOffAsync(sip);
+
         var moved = state.State.MovedAwaySlots;
         foreach (var slot in sip.MovedSlots)
         {
             moved[slot] = sip.ShadowTargetShardIndex;
         }
         state.State.MovedAwayVirtualShardCount = sip.VirtualShardCount;
+        NoteStructuralRoutingChange(); // #5876
         state.State.SplitInProgress = null;
         await WriteShardStateAsync();
     }

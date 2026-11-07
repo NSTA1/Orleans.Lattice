@@ -1,0 +1,16 @@
+# #5851 D5 (a5e2e2ef, #5851 comment 6667620149): a deferred pre-link sibling - its marker
+# carries the donor's pending close or an open split token, under the pre-arm gate, with no
+# orphan repair - stamps a routed write PreArm and never claims or arms (D1).
+MODULE: UnlinkedNeverClaimsDeferredSiblingClaims
+TARGET: UnlinkedNeverClaims
+CLASS: Invariant
+PERTURBS: Claim
+SUMMARY: the deferred state's fence admits a claim: an unlinked L whose marker carries the donor's pending close or an open split token claims an epoch no owner replays
+BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithKeyMove = TRUE, MaxWindows = 1, WithMixedVersion = FALSE, WithDuplicate = FALSE, WithLatch = TRUE
+
+--- FIND
+    /\ LatchAdmitsClaim
+--- REPLACE
+\* MUTATION: a deferred sibling claims.
+    /\ LatchAdmitsClaim \/ (~moved /\ (pend \/ hoOpen) /\ ~eagerG /\ ~repair)
+--- END

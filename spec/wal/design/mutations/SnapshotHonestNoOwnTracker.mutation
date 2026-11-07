@@ -1,0 +1,16 @@
+# Arming without the applied-prefix tracker: the advance passes the activation's
+# own append still in flight, the snapshot captures that coverage, and the append
+# then lands below it.
+MODULE: SnapshotHonestNoOwnTracker
+TARGET: SnapshotHonest
+CLASS: Invariant
+SUMMARY: the activation arms while one of its own appends is allocated and not yet applied
+PERTURBS: LiveAdvance
+
+--- FIND
+    /\ rp[a] >= seenU[a]
+    /\ \A o \in inflight : author[o] # a
+--- REPLACE
+    /\ rp[a] >= seenU[a]
+\* MUTATION: own appends in flight are not waited for.
+--- END

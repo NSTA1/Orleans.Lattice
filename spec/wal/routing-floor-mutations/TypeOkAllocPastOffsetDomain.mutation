@@ -1,0 +1,17 @@
+# Pairs with TypeOK. The allocator stops checking the end of the modelled
+# partition, so a fourth write is assigned an offset outside it.
+MODULE: TypeOkAllocPastOffsetDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: the WAL shard's allocator assigns past the partition's offset domain
+PERTURBS: Alloc
+
+--- FIND
+    /\ pend[i]
+    /\ next < MaxOff
+    /\ loaded[i] # Unloaded
+--- REPLACE
+    /\ pend[i]
+\* MUTATION: no bound on the allocator.
+    /\ loaded[i] # Unloaded
+--- END

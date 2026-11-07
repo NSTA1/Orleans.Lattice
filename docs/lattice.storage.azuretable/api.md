@@ -79,8 +79,9 @@ See [Architecture](architecture.md) for the storage and commit model, and [Core 
 | Commit pipeline | `PipelinePhaseTwoCommits`, `EliminateCandidateRowOnHotPath`, `PipelinedPhaseTwoFaultHandler`, `PhaseTwoCoalescingWindow`, `PhaseTwoCommitTimeout`, `PhaseOneTransientRetryMaxAttempts`, `PhaseOneTransientRetryBaseDelay` |
 | Reads | `ReadBatchFetchConcurrency` |
 | Saturation | `HonorSaturationSignal`, `SaturationShortCircuitCooldown` |
+| Trim | `TrimFullSweepInterval` |
 | Compression | `Compression`, `CompressionMinPayloadBytes` |
-| Defaults | `DefaultPipelinePhaseTwoCommits`, `DefaultEliminateCandidateRowOnHotPath`, `DefaultPhaseTwoCoalescingWindow`, `DefaultPhaseTwoCommitTimeout`, `DefaultRetryNetworkTimeout`, `DefaultHonorSaturationSignal`, `DefaultSaturationShortCircuitCooldown`, `DefaultCompression`, `DefaultCompressionMinPayloadBytes`, `DefaultPhaseOneTransientRetryMaxAttempts`, `DefaultPhaseOneTransientRetryBaseDelay`, `DefaultPhaseOneTransientRetryMaxDelay`, `DefaultReadBatchFetchConcurrency` |
+| Defaults | `DefaultPipelinePhaseTwoCommits`, `DefaultEliminateCandidateRowOnHotPath`, `DefaultPhaseTwoCoalescingWindow`, `DefaultPhaseTwoCommitTimeout`, `DefaultRetryNetworkTimeout`, `DefaultHonorSaturationSignal`, `DefaultSaturationShortCircuitCooldown`, `DefaultTrimFullSweepInterval`, `DefaultCompression`, `DefaultCompressionMinPayloadBytes`, `DefaultPhaseOneTransientRetryMaxAttempts`, `DefaultPhaseOneTransientRetryBaseDelay`, `DefaultPhaseOneTransientRetryMaxDelay`, `DefaultReadBatchFetchConcurrency` |
 
 Exactly one authentication mode must be configured. See [Configuration](configuration.md) for defaults, validation, and examples.
 

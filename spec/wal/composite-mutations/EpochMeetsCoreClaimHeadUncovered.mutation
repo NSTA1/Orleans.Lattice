@@ -1,0 +1,14 @@
+# Pairs with EpochMeetsCoreClaim (E -> C). ClaimHeadCoversPriorAppends no longer covers
+# L's activations, so a claim returns a head below an append already allocated.
+MODULE: EpochMeetsCoreClaimHeadUncovered
+TARGET: EpochMeetsCoreClaim
+CLASS: Invariant
+SUMMARY: E's claim head no longer covers L's prior appends
+
+--- FIND
+ClaimHeadCoversPriorAppends ==
+    \A a \in Claimants : cstage[a] = 3 => \A o \in prior[a] : o < claimHead[a]
+--- REPLACE
+ClaimHeadCoversPriorAppends ==
+    \A a \in Claimants \ Acts : cstage[a] = 3 => \A o \in prior[a] : o < claimHead[a]
+--- END

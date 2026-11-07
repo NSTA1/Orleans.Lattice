@@ -1,0 +1,17 @@
+# Pairs with OnlySupersededRefused. A refused claim stops the activation even
+# while its row still holds its own write, instead of bumping above the refusal
+# and claiming again. Another leaf's retirement then deactivates a live leaf
+# whose claim was in flight (#5635), and a restart can stop the current one.
+MODULE: OnlySupersededRefusedRefuseWithoutBump
+TARGET: OnlySupersededRefused
+CLASS: Invariant
+SUMMARY: every claim refusal stops the activation, whether or not its row holds
+PERTURBS: ClaimRefuse
+
+--- FIND
+    /\ Refused(a)
+    /\ ~CanBump(a)
+--- REPLACE
+    /\ Refused(a)
+\* MUTATION: no bump; a refusal always stops.
+--- END

@@ -146,6 +146,18 @@ compaction.
 
 Bulk-load operations into the destination shards use a deterministic operation
 ID derived from the snapshot's unique operation ID, making retries idempotent.
+A retry after an offline copy's bulk load outran the response timeout first asks
+the destination shard for that load's status rather than re-reading the source and
+re-issuing it: a completed load completes the copy, and a load still running is
+waited for, about once a second, without spending the shard's retry
+([#5812](https://github.com/NSTA1/Orleans.Lattice/issues/5812)). A load reads as
+complete only once its bulk switch has closed. A load whose switch failed to close
+after it published reads as not running, so it is re-issued, which closes the switch;
+the shard root also closes it on its own a few seconds later, including after a
+restart. A status read that fails transiently
+is treated as still running. The wait is bounded at 30 minutes, after which the copy
+step fails with a timeout that spends the retry. A destination on lattice 10.2.0,
+which cannot report a load's status, is re-issued to, as before.
 
 `ILattice.IsSnapshotCompleteAsync` returns `true` once no snapshot of the tree is
 in flight. The tree-admin snapshot status (`ILatticeTreeAdmin.GetSnapshotStatusAsync`,

@@ -1,0 +1,20 @@
+# The re-created incarnation's first routing generation starts at 1, not at its
+# initiator's routing floor plus one (#5668). Generation values recur, the #5641
+# shape applied to generations. The live incarnation's own generation is at or
+# below its floor, so the WAL refuses every claim it makes and #5705's guard fails
+# its writes as deleted. Distinct from StraddlerBelowInitRoutingFloorAfterDeletes,
+# which loses the floor itself (#5697 review, N1). Moved from the design's
+# LiveGenerationAboveFloorRoutingRecreatedAtOne, re-anchored on the
+# initialisation that seeds the generation.
+MODULE: LiveGenerationAboveFloorRoutingRecreatedAtOne
+TARGET: LiveGenerationAboveFloor
+CLASS: Invariant
+SUMMARY: a re-created tree's first routing generation starts at 1, at or below its floor
+PERTURBS: FirstInit
+
+--- FIND
+    /\ gen' = [gen EXCEPT !["s"] = rowFloor["s"] + 1]
+--- REPLACE
+\* MUTATION: the first generation ignores the routing floor.
+    /\ gen' = [gen EXCEPT !["s"] = 1]
+--- END

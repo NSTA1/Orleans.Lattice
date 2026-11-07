@@ -1,0 +1,16 @@
+# #5837: orphan repair re-runs the proof, which then latches.
+MODULE: RepairLatchesRepairSkipsReproof
+TARGET: RepairLatches
+CLASS: Invariant
+SUMMARY: orphan repair begins without re-running L's reachability proof, so an exempt L stays unlatched while its range is re-homed (a5e2e2ef's condition 3)
+PERTURBS: StartRepair
+BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithKeyMove = TRUE, MaxWindows = 1, WithMixedVersion = FALSE, WithDuplicate = FALSE, WithLatch = TRUE
+
+--- FIND
+    /\ repair' = TRUE
+    /\ tried' = FALSE
+--- REPLACE
+    /\ repair' = TRUE
+\* MUTATION: the proof is not re-run.
+    /\ tried' = TRUE
+--- END

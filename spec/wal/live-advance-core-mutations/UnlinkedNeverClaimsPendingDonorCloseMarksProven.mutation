@@ -1,0 +1,14 @@
+# #5837: the reachability latch exemption and the split transfer's link obligation.
+MODULE: UnlinkedNeverClaimsPendingDonorCloseMarksProven
+TARGET: UnlinkedNeverClaims
+CLASS: Invariant
+SUMMARY: the exemption marks an unlinked L proven; the gate flips to eager and L's first stamped write claims an epoch no owner replays (a5e2e2ef's condition 1)
+PERTURBS: ProveReach
+BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithKeyMove = TRUE, MaxWindows = 1, WithMixedVersion = FALSE, WithDuplicate = FALSE, WithLatch = TRUE
+
+--- FIND
+    /\ lat' = IF moved THEN "proven" ELSE IF ExemptPending THEN "undecided" ELSE "latched"
+--- REPLACE
+\* MUTATION: the exemption proves.
+    /\ lat' = IF moved THEN "proven" ELSE IF ExemptPending THEN "proven" ELSE "latched"
+--- END

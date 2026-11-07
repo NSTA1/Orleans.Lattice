@@ -289,7 +289,8 @@ copied.
 Remediation is idempotent and resumable. It persists its intent and then works in
 bounded slices of values, each resuming strictly after the last value the phase
 durably recorded; a slice interrupted by a fault records the values it had already
-processed before the fault surfaces. Re-issuing the same `RemediateAsync` call (the
+processed before the fault surfaces (in the build, the chunks it had written; a chunk
+whose write faulted is written again in full, with the same values). Re-issuing the same `RemediateAsync` call (the
 same transform and target policy) after a silo failover therefore resumes from the
 last recorded slice rather than from the start. Nothing resumes it on its own - an
 interrupted remediation stays in flight until it is requested again - and a call
@@ -302,9 +303,12 @@ nothing further.
 
 `RemediateAsync` drives the remediation to a terminal state before it returns its
 `LatticeSchemaRemediationReport`, one slice per call into the cluster, so no single
-call runs for the whole remediation. A slice is bounded by time as well as by value
-count: once it has run for 10 seconds it stops after the value in hand and returns,
-well inside Orleans' default 30-second grain call timeout. A slice call that still times out on a
+call runs for the whole remediation. A slice reads and writes in chunks of 32 values:
+it point-reads a chunk, rewrites and revalidates each value, and writes the chunk to
+the copy in one batched call, so it reads no further than it writes and each value is
+read once per phase however slow the copy is to write. A slice is bounded by time as
+well as by value count: once it has run for 10 seconds it stops after the chunk in hand
+and returns, well inside Orleans' default 30-second grain call timeout. A slice call that still times out on a
 loaded cluster is retried from the slice's recorded cursor rather than failing the
 run, so a value is never written twice; only five timeouts in a row fail it, with the
 last timeout as the cause. To start one without waiting, and to follow

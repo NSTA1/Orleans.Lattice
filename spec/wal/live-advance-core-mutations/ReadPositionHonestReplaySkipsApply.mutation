@@ -1,0 +1,13 @@
+# Replay moves the read position past an entry without applying it.
+MODULE: ReadPositionHonestReplaySkipsApply
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: replay advances the read position without applying the entry
+PERTURBS: Replay
+
+--- FIND
+    /\ cache' = [cache EXCEPT ![a] = @ \cup {rp[a] + 1}]
+--- REPLACE
+\* MUTATION: the entry is not applied.
+    /\ cache' = cache
+--- END

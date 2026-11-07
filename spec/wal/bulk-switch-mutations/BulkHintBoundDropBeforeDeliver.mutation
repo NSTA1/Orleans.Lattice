@@ -1,0 +1,16 @@
+# Pairs with BulkHintBound. Review B1 of #5646 (take before deliver): copy,
+# deliver, drop. Dropping before the delivery loses the rows.
+MODULE: BulkHintBoundDropBeforeDeliver
+TARGET: BulkHintBound
+CLASS: Invariant
+SUMMARY: the old leaf drops the rows it handed back before they are delivered
+PERTURBS: Drop
+
+--- FIND
+    /\ phase = "delivered"
+    /\ rowsO' = rowsO \ copied
+--- REPLACE
+\* MUTATION: drop before delivery.
+    /\ phase \in {"narrowed", "delivered"}
+    /\ rowsO' = rowsO \ copied
+--- END

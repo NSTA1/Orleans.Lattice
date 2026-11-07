@@ -73,6 +73,7 @@ internal sealed partial class ShardRootGrain(
         PrimeScanPageZeroProgressOutcomes();
         PrimeScanChainRegressions();
         PrimeOptimisticReadOutcomes();
+        ArmBulkIdleCloseOnActivation();
         await HealBakedRootIsLeafFlagAsync();
     }
 
@@ -913,16 +914,19 @@ internal sealed partial class ShardRootGrain(
         EnsureInternalOrigin(LatticeOperation.Write);
         ThrowIfShuttingDown();
         await PrepareForWriteAsync();
+        await EnsureRoutingGenerationAsync();
         ThrowIfRejectedForKey(key);
+        var routing = AdmissionRoutingStamp();
         RecordWrite();
 
         var retryDeadline = DateTime.UtcNow + LeafRetirementRetryDeadline;
         var retiredAttempts = 0;
+        WalFenceSeamRetry? fenceRetry = null;
         for (int attempt = 0; ; attempt++)
         {
             try
             {
-                var splitResult = await TraverseForWriteAsync(key, value);
+                var splitResult = await TraverseForWriteAsync(key, value, routing);
 
                 // If the root node split, we need to create a new internal root.
                 while (splitResult is not null)
@@ -935,6 +939,24 @@ internal sealed partial class ShardRootGrain(
                 // Online-resize mirror, at this copy's own stamps (issue #4522).
                 await MirrorAppliedWritesAsync(MirroredKey(key), (key, value), static (t, s) => t.SetAsync(s.key, s.value));
                 return;
+            }
+            catch (WalRoutingGenerationStaleException routingStale)
+            {
+                // Epic #5605, member 2: a hand-off close re-claimed the routing generation
+                // this write was admitted under. Re-run the phase check, which re-routes a
+                // moved slot, and re-admit under the current generation (section 5).
+                fenceRetry = await NextRoutingRetryAsync(fenceRetry, routingStale);
+                ThrowIfRejectedForKey(key);
+                routing = AdmissionRoutingStamp();
+                attempt--;
+            }
+            catch (LeafRetiredException fenceStale) when (fenceStale.ActivationSuperseded)
+            {
+                // Epic #5605: the leaf activation was superseded. Retry the whole step,
+                // re-resolving the route, until the operation's deadline; the ordinary
+                // attempt budget is not consumed.
+                fenceRetry = await WalFenceSeamRetry.NextAsync(fenceRetry, WalFenceSeamRetry.CallerShardRoot, TreeId);
+                attempt--;
             }
             catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
             {
@@ -953,16 +975,19 @@ internal sealed partial class ShardRootGrain(
         EnsureInternalOrigin(LatticeOperation.Write);
         ThrowIfShuttingDown();
         await PrepareForWriteAsync();
+        await EnsureRoutingGenerationAsync();
         ThrowIfRejectedForKey(key);
+        var routing = AdmissionRoutingStamp();
         RecordWrite();
 
         var retryDeadline = DateTime.UtcNow + LeafRetirementRetryDeadline;
         var retiredAttempts = 0;
+        WalFenceSeamRetry? fenceRetry = null;
         for (int attempt = 0; ; attempt++)
         {
             try
             {
-                var splitResult = await TraverseForWriteWithExpiryAsync(key, value, expiresAtTicks);
+                var splitResult = await TraverseForWriteWithExpiryAsync(key, value, expiresAtTicks, routing);
 
                 while (splitResult is not null)
                 {
@@ -977,6 +1002,24 @@ internal sealed partial class ShardRootGrain(
                 await MirrorAppliedWritesAsync(MirroredKey(key), (key, value, expiresAtTicks), static (t, s) => t.SetAsync(s.key, s.value, s.expiresAtTicks));
                 return;
             }
+            catch (WalRoutingGenerationStaleException routingStale)
+            {
+                // Epic #5605, member 2: a hand-off close re-claimed the routing generation
+                // this write was admitted under. Re-run the phase check, which re-routes a
+                // moved slot, and re-admit under the current generation (section 5).
+                fenceRetry = await NextRoutingRetryAsync(fenceRetry, routingStale);
+                ThrowIfRejectedForKey(key);
+                routing = AdmissionRoutingStamp();
+                attempt--;
+            }
+            catch (LeafRetiredException fenceStale) when (fenceStale.ActivationSuperseded)
+            {
+                // Epic #5605: the leaf activation was superseded. Retry the whole step,
+                // re-resolving the route, until the operation's deadline; the ordinary
+                // attempt budget is not consumed.
+                fenceRetry = await WalFenceSeamRetry.NextAsync(fenceRetry, WalFenceSeamRetry.CallerShardRoot, TreeId);
+                attempt--;
+            }
             catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
             {
                 if (await BackOffIfLeafRetiredAsync(ex, retiredAttempts, retryDeadline)) { attempt--; retiredAttempts++; }
@@ -990,11 +1033,14 @@ internal sealed partial class ShardRootGrain(
         EnsureInternalOrigin(LatticeOperation.Write);
         ThrowIfShuttingDown();
         await PrepareForWriteAsync();
+        await EnsureRoutingGenerationAsync();
         ThrowIfRejectedForKey(key);
+        var routing = AdmissionRoutingStamp();
         RecordWrite();
 
         var retryDeadline = DateTime.UtcNow + LeafRetirementRetryDeadline;
         var retiredAttempts = 0;
+        WalFenceSeamRetry? fenceRetry = null;
         for (int attempt = 0; ; attempt++)
         {
             try
@@ -1003,7 +1049,7 @@ internal sealed partial class ShardRootGrain(
                 // row it stored (issue #4522). Re-running GetOrSet on the
                 // destination could write the caller's value there while this
                 // copy kept its existing one.
-                var result = await TraverseForGetOrSetAsync(key, value);
+                var result = await TraverseForGetOrSetAsync(key, value, routing);
 
                 // If the key was already live, no write occurred - return existing value.
                 if (result.ExistingValue is not null)
@@ -1024,6 +1070,24 @@ internal sealed partial class ShardRootGrain(
                 await MirrorAppliedWritesAsync(MirroredKey(key), (key, value), static (t, s) => t.SetAsync(s.key, s.value));
                 return null;
             }
+            catch (WalRoutingGenerationStaleException routingStale)
+            {
+                // Epic #5605, member 2: a hand-off close re-claimed the routing generation
+                // this write was admitted under. Re-run the phase check, which re-routes a
+                // moved slot, and re-admit under the current generation (section 5).
+                fenceRetry = await NextRoutingRetryAsync(fenceRetry, routingStale);
+                ThrowIfRejectedForKey(key);
+                routing = AdmissionRoutingStamp();
+                attempt--;
+            }
+            catch (LeafRetiredException fenceStale) when (fenceStale.ActivationSuperseded)
+            {
+                // Epic #5605: the leaf activation was superseded. Retry the whole step,
+                // re-resolving the route, until the operation's deadline; the ordinary
+                // attempt budget is not consumed.
+                fenceRetry = await WalFenceSeamRetry.NextAsync(fenceRetry, WalFenceSeamRetry.CallerShardRoot, TreeId);
+                attempt--;
+            }
             catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
             {
                 if (await BackOffIfLeafRetiredAsync(ex, retiredAttempts, retryDeadline)) { attempt--; retiredAttempts++; }
@@ -1040,11 +1104,14 @@ internal sealed partial class ShardRootGrain(
         EnsureInternalOrigin(LatticeOperation.Write);
         ThrowIfShuttingDown();
         await PrepareForWriteAsync();
+        await EnsureRoutingGenerationAsync();
         ThrowIfRejectedForKey(key);
+        var routing = AdmissionRoutingStamp();
         RecordWrite();
 
         var retryDeadline = DateTime.UtcNow + LeafRetirementRetryDeadline;
         var retiredAttempts = 0;
+        WalFenceSeamRetry? fenceRetry = null;
         for (int attempt = 0; ; attempt++)
         {
             try
@@ -1057,7 +1124,7 @@ internal sealed partial class ShardRootGrain(
                 // with LWW resolving ordering against concurrent forwards. We only
                 // forward once the local CAS has succeeded so a rejected CAS does
                 // not leak a phantom value onto the destination.
-                var result = await TraverseForSetIfVersionAsync(key, value, expectedVersion);
+                var result = await TraverseForSetIfVersionAsync(key, value, expectedVersion, routing);
 
                 if (!result.Success)
                 {
@@ -1077,6 +1144,24 @@ internal sealed partial class ShardRootGrain(
                 await MirrorAppliedWritesAsync(MirroredKey(key), (key, value), static (t, s) => t.SetAsync(s.key, s.value));
                 return true;
             }
+            catch (WalRoutingGenerationStaleException routingStale)
+            {
+                // Epic #5605, member 2: a hand-off close re-claimed the routing generation
+                // this write was admitted under. Re-run the phase check, which re-routes a
+                // moved slot, and re-admit under the current generation (section 5).
+                fenceRetry = await NextRoutingRetryAsync(fenceRetry, routingStale);
+                ThrowIfRejectedForKey(key);
+                routing = AdmissionRoutingStamp();
+                attempt--;
+            }
+            catch (LeafRetiredException fenceStale) when (fenceStale.ActivationSuperseded)
+            {
+                // Epic #5605: the leaf activation was superseded. Retry the whole step,
+                // re-resolving the route, until the operation's deadline; the ordinary
+                // attempt budget is not consumed.
+                fenceRetry = await WalFenceSeamRetry.NextAsync(fenceRetry, WalFenceSeamRetry.CallerShardRoot, TreeId);
+                attempt--;
+            }
             catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
             {
                 if (await BackOffIfLeafRetiredAsync(ex, retiredAttempts, retryDeadline)) { attempt--; retiredAttempts++; }
@@ -1095,16 +1180,19 @@ internal sealed partial class ShardRootGrain(
         ArgumentNullException.ThrowIfNull(deltaBytes);
         ThrowIfShuttingDown();
         await PrepareForWriteAsync();
+        await EnsureRoutingGenerationAsync();
         ThrowIfRejectedForKey(key);
+        var routing = AdmissionRoutingStamp();
         RecordWrite();
 
         var retryDeadline = DateTime.UtcNow + LeafRetirementRetryDeadline;
         var retiredAttempts = 0;
+        WalFenceSeamRetry? fenceRetry = null;
         for (int attempt = 0; ; attempt++)
         {
             try
             {
-                var result = await TraverseForCrdtApplyAsync(key, mode, deltaBytes, expiresAtTicks);
+                var result = await TraverseForCrdtApplyAsync(key, mode, deltaBytes, expiresAtTicks, routing);
 
                 var splitResult = result.Split;
                 while (splitResult is not null)
@@ -1120,6 +1208,24 @@ internal sealed partial class ShardRootGrain(
                 await MirrorAppliedRowsAsync([key]);
                 return result.Version;
             }
+            catch (WalRoutingGenerationStaleException routingStale)
+            {
+                // Epic #5605, member 2: a hand-off close re-claimed the routing generation
+                // this write was admitted under. Re-run the phase check, which re-routes a
+                // moved slot, and re-admit under the current generation (section 5).
+                fenceRetry = await NextRoutingRetryAsync(fenceRetry, routingStale);
+                ThrowIfRejectedForKey(key);
+                routing = AdmissionRoutingStamp();
+                attempt--;
+            }
+            catch (LeafRetiredException fenceStale) when (fenceStale.ActivationSuperseded)
+            {
+                // Epic #5605: the leaf activation was superseded. Retry the whole step,
+                // re-resolving the route, until the operation's deadline; the ordinary
+                // attempt budget is not consumed.
+                fenceRetry = await WalFenceSeamRetry.NextAsync(fenceRetry, WalFenceSeamRetry.CallerShardRoot, TreeId);
+                attempt--;
+            }
             catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
             {
                 if (await BackOffIfLeafRetiredAsync(ex, retiredAttempts, retryDeadline)) { attempt--; retiredAttempts++; }
@@ -1132,12 +1238,14 @@ internal sealed partial class ShardRootGrain(
     {
         EnsureInternalOrigin(LatticeOperation.Write);
         ThrowIfShuttingDown();
-        BeginBatchWrite();
+        var batchSlot = BeginBatchWrite();
         try
         {
             await PrepareForWriteAsync();
+            await EnsureRoutingGenerationAsync();
             // Reject-check up-front so the batch fails fast rather than partially applying.
             ThrowIfRejectedForAnyKey(entries);
+            var routing = AdmissionRoutingStamp();
             RecordWrite(entries.Count);
 
             if (entries.Count == 0) return;
@@ -1153,7 +1261,7 @@ internal sealed partial class ShardRootGrain(
             var localApplyTs = Stopwatch.GetTimestamp();
             try
             {
-                await SetManyLocalOnlyAsync(entries);
+                await SetManyLocalOnlyAsync(entries, routing);
             }
             catch (Exception ex)
             {
@@ -1194,7 +1302,7 @@ internal sealed partial class ShardRootGrain(
         }
         finally
         {
-            EndBatchWrite();
+            EndBatchWrite(batchSlot);
         }
     }
 
@@ -1239,7 +1347,7 @@ internal sealed partial class ShardRootGrain(
     /// input key, post-apply, so semantics are unchanged.
     /// </para>
     /// </summary>
-    private async Task SetManyLocalOnlyAsync(List<KeyValuePair<string, byte[]>> entries)
+    private async Task SetManyLocalOnlyAsync(List<KeyValuePair<string, byte[]>> entries, WalRoutingStamp routing)
     {
         // Flat-tree shortcut: every entry routes to the root leaf, so
         // the whole batch lands in one leaf.SetManyAsync call. Guarded by
@@ -1251,7 +1359,7 @@ internal sealed partial class ShardRootGrain(
             var rootLeafId = state.State.RootNodeId!.Value;
             var leaf = ResolveLeafGrain(rootLeafId);
             await RecordAffectedLeafIfPreparedAsync(rootLeafId);
-            var split = await DispatchLeafBatchWithRetryAsync(leaf, entries);
+            var split = await DispatchLeafBatchWithRetryAsync(leaf, entries, routing);
             while (split is not null)
             {
                 split = await PromoteRootAsync(split);
@@ -1315,7 +1423,7 @@ internal sealed partial class ShardRootGrain(
         for (int i = 0; i < orderedBuckets.Count; i++)
         {
             var bucket = orderedBuckets[i].Bucket;
-            leafDispatchTasks[i] = DispatchLeafBatchWithRetryAsync(bucket.Leaf!, bucket.Slice);
+            leafDispatchTasks[i] = DispatchLeafBatchWithRetryAsync(bucket.Leaf!, bucket.Slice, routing);
         }
         var splitResults = await Task.WhenAll(leafDispatchTasks);
 
@@ -1379,8 +1487,10 @@ internal sealed partial class ShardRootGrain(
         ArgumentNullException.ThrowIfNull(deltas);
         ThrowIfShuttingDown();
         await PrepareForWriteAsync();
+        await EnsureRoutingGenerationAsync();
         // Reject-check up-front so the batch fails fast rather than partially applying.
         ThrowIfRejectedForAnyKey(deltas);
+        var routing = AdmissionRoutingStamp();
         RecordWrite(deltas.Count);
 
         if (deltas.Count == 0)
@@ -1395,7 +1505,7 @@ internal sealed partial class ShardRootGrain(
             var rootLeafId = state.State.RootNodeId!.Value;
             var rootLeaf = ResolveLeafGrain(rootLeafId);
             await RecordAffectedLeafIfPreparedAsync(rootLeafId);
-            var flatSplit = await DispatchLeafCrdtBatchAsync(rootLeaf, rootLeafId, deltas, mode);
+            var flatSplit = await DispatchLeafCrdtBatchAsync(rootLeaf, rootLeafId, deltas, mode, routing);
             while (flatSplit is not null)
             {
                 flatSplit = await PromoteRootAsync(flatSplit);
@@ -1446,7 +1556,7 @@ internal sealed partial class ShardRootGrain(
         for (int i = 0; i < orderedBuckets.Count; i++)
         {
             var (leafId, bucket) = orderedBuckets[i];
-            leafDispatchTasks[i] = DispatchLeafCrdtBatchAsync(bucket.Leaf!, leafId, bucket.Slice, mode);
+            leafDispatchTasks[i] = DispatchLeafCrdtBatchAsync(bucket.Leaf!, leafId, bucket.Slice, mode, routing);
         }
 
         var splitResults = await Task.WhenAll(leafDispatchTasks);
@@ -1502,11 +1612,44 @@ internal sealed partial class ShardRootGrain(
         IBPlusLeafGrain leaf,
         GrainId leafId,
         List<KeyValuePair<string, byte[]>> slice,
-        LatticeMergeMode mode)
+        LatticeMergeMode mode,
+        WalRoutingStamp routing)
+    {
+        WalFenceSeamRetry? fenceRetry = null;
+        while (true)
+        {
+            try
+            {
+                return await DispatchLeafCrdtBatchOnceAsync(leaf, leafId, slice, mode, routing);
+            }
+            catch (WalRoutingGenerationStaleException routingStale)
+            {
+                // Epic #5605, member 2: a hand-off close re-claimed the routing generation
+                // this write was admitted under. Re-run the phase check, which re-routes a
+                // moved slot, and re-admit under the current generation (section 5).
+                fenceRetry = await NextRoutingRetryAsync(fenceRetry, routingStale);
+                ThrowIfRejectedForAnyKey(slice);
+                routing = AdmissionRoutingStamp();
+            }
+            catch (LeafRetiredException fenceStale) when (fenceStale.ActivationSuperseded)
+            {
+                // Epic #5605: the leaf activation was superseded; retry against the
+                // live one until the operation's deadline.
+                fenceRetry = await WalFenceSeamRetry.NextAsync(fenceRetry, WalFenceSeamRetry.CallerShardRoot, TreeId);
+            }
+        }
+    }
+
+    private async Task<SplitResult?> DispatchLeafCrdtBatchOnceAsync(
+        IBPlusLeafGrain leaf,
+        GrainId leafId,
+        List<KeyValuePair<string, byte[]>> slice,
+        LatticeMergeMode mode,
+        WalRoutingStamp routing)
     {
         try
         {
-            return await leaf.ApplyCrdtDeltaManyAsync(slice, mode);
+            return await LeafApplyCrdtDeltaManyAsync(leaf, slice, mode, routing);
         }
         catch (LatticeCrdtShapeNotRegisteredException ex) when (ex.TreeId.Length == 0)
         {
@@ -1524,7 +1667,7 @@ internal sealed partial class ShardRootGrain(
 
             // Single-shot, matching the single-key path: a second failure is a
             // genuine fault and must stay fail-closed.
-            return await leaf.ApplyCrdtDeltaManyAsync(slice, mode);
+            return await LeafApplyCrdtDeltaManyAsync(leaf, slice, mode, routing);
         }
     }
 
@@ -1576,22 +1719,42 @@ internal sealed partial class ShardRootGrain(
     /// </summary>
     private async Task<SplitResult?> DispatchLeafBatchWithRetryAsync(
         IBPlusLeafGrain leaf,
-        List<KeyValuePair<string, byte[]>> slice)
+        List<KeyValuePair<string, byte[]>> slice,
+        WalRoutingStamp routing)
     {
         var retryDeadline = DateTime.UtcNow + LeafRetirementRetryDeadline;
         var retiredAttempts = 0;
+        WalFenceSeamRetry? fenceRetry = null;
         for (int attempt = 0; ; attempt++)
         {
             var rpcTs = Stopwatch.GetTimestamp();
             try
             {
-                var result = await leaf.SetManyAsync(slice);
+                var result = await LeafSetManyAsync(leaf, slice, routing);
                 LatticeMetrics.ShardRootSetManyLeafRpcDuration.Record(
                     Stopwatch.GetElapsedTime(rpcTs).TotalMilliseconds,
                     new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
                     LatticeMetrics.OperationSetManyTag,
                     LatticeTenantLabel.ForTree(TreeId));
                 return result;
+            }
+            catch (WalRoutingGenerationStaleException routingStale)
+            {
+                // Epic #5605, member 2: a hand-off close re-claimed the routing generation
+                // this write was admitted under. Re-run the phase check, which re-routes a
+                // moved slot, and re-admit under the current generation (section 5).
+                fenceRetry = await NextRoutingRetryAsync(fenceRetry, routingStale);
+                ThrowIfRejectedForAnyKey(slice);
+                routing = AdmissionRoutingStamp();
+                attempt--;
+            }
+            catch (LeafRetiredException fenceStale) when (fenceStale.ActivationSuperseded)
+            {
+                // Epic #5605: the leaf activation was superseded. Retry the whole step,
+                // re-resolving the route, until the operation's deadline; the ordinary
+                // attempt budget is not consumed.
+                fenceRetry = await WalFenceSeamRetry.NextAsync(fenceRetry, WalFenceSeamRetry.CallerShardRoot, TreeId);
+                attempt--;
             }
             catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
             {
@@ -1613,11 +1776,13 @@ internal sealed partial class ShardRootGrain(
         EnsureInternalOrigin(LatticeOperation.Write);
         ArgumentNullException.ThrowIfNull(entries);
         ThrowIfShuttingDown();
-        BeginBatchWrite();
+        var batchSlot = BeginBatchWrite();
         try
         {
             await PrepareForWriteAsync();
+            await EnsureRoutingGenerationAsync();
             ThrowIfRejectedForAnyKey(entries);
+            var routing = AdmissionRoutingStamp();
             // The affected-record count is the guard-passing subset, known only once
             // the local apply completes, so the operation is counted here and the
             // record count published on the success path below.
@@ -1630,7 +1795,7 @@ internal sealed partial class ShardRootGrain(
             var localApplyTs = Stopwatch.GetTimestamp();
             try
             {
-                written = await SetManyWhereLocalOnlyAsync(entries, predicate);
+                written = await SetManyWhereLocalOnlyAsync(entries, predicate, routing);
             }
             catch (Exception ex)
             {
@@ -1677,7 +1842,7 @@ internal sealed partial class ShardRootGrain(
         }
         finally
         {
-            EndBatchWrite();
+            EndBatchWrite(batchSlot);
         }
     }
 
@@ -1691,7 +1856,7 @@ internal sealed partial class ShardRootGrain(
     /// leaves.
     /// </summary>
     private async Task<IReadOnlyList<string>> SetManyWhereLocalOnlyAsync(
-        List<KeyValuePair<string, byte[]>> entries, LatticePredicateNode predicate)
+        List<KeyValuePair<string, byte[]>> entries, LatticePredicateNode predicate, WalRoutingStamp routing)
     {
         // Flat-tree shortcut: every entry routes to the root leaf. Guarded by
         // node type so a corrupt RootIsLeaf flag over an internal root
@@ -1702,7 +1867,7 @@ internal sealed partial class ShardRootGrain(
             var rootLeafId = state.State.RootNodeId!.Value;
             var leaf = ResolveLeafGrain(rootLeafId);
             await RecordAffectedLeafIfPreparedAsync(rootLeafId);
-            var result = await DispatchConditionalLeafBatchWithRetryAsync(leaf, entries, predicate);
+            var result = await DispatchConditionalLeafBatchWithRetryAsync(leaf, entries, predicate, routing);
             var split = result.Split;
             while (split is not null)
             {
@@ -1743,7 +1908,7 @@ internal sealed partial class ShardRootGrain(
         for (int i = 0; i < orderedBuckets.Count; i++)
         {
             var bucket = orderedBuckets[i].Bucket;
-            leafDispatchTasks[i] = DispatchConditionalLeafBatchWithRetryAsync(bucket.Leaf!, bucket.Slice, predicate);
+            leafDispatchTasks[i] = DispatchConditionalLeafBatchWithRetryAsync(bucket.Leaf!, bucket.Slice, predicate, routing);
         }
         var leafResults = await Task.WhenAll(leafDispatchTasks);
 
@@ -1820,22 +1985,42 @@ internal sealed partial class ShardRootGrain(
     private async Task<ConditionalSetManyResult> DispatchConditionalLeafBatchWithRetryAsync(
         IBPlusLeafGrain leaf,
         List<KeyValuePair<string, byte[]>> slice,
-        LatticePredicateNode predicate)
+        LatticePredicateNode predicate,
+        WalRoutingStamp routing)
     {
         var retryDeadline = DateTime.UtcNow + LeafRetirementRetryDeadline;
         var retiredAttempts = 0;
+        WalFenceSeamRetry? fenceRetry = null;
         for (int attempt = 0; ; attempt++)
         {
             var rpcTs = Stopwatch.GetTimestamp();
             try
             {
-                var result = await leaf.SetManyWherePredicateAsync(slice, predicate);
+                var result = await LeafSetManyWherePredicateAsync(leaf, slice, predicate, routing);
                 LatticeMetrics.ShardRootSetManyLeafRpcDuration.Record(
                     Stopwatch.GetElapsedTime(rpcTs).TotalMilliseconds,
                     new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
                     LatticeMetrics.OperationSetManyWherePredicateTag,
                     LatticeTenantLabel.ForTree(TreeId));
                 return result;
+            }
+            catch (WalRoutingGenerationStaleException routingStale)
+            {
+                // Epic #5605, member 2: a hand-off close re-claimed the routing generation
+                // this write was admitted under. Re-run the phase check, which re-routes a
+                // moved slot, and re-admit under the current generation (section 5).
+                fenceRetry = await NextRoutingRetryAsync(fenceRetry, routingStale);
+                ThrowIfRejectedForAnyKey(slice);
+                routing = AdmissionRoutingStamp();
+                attempt--;
+            }
+            catch (LeafRetiredException fenceStale) when (fenceStale.ActivationSuperseded)
+            {
+                // Epic #5605: the leaf activation was superseded. Retry the whole step,
+                // re-resolving the route, until the operation's deadline; the ordinary
+                // attempt budget is not consumed.
+                fenceRetry = await WalFenceSeamRetry.NextAsync(fenceRetry, WalFenceSeamRetry.CallerShardRoot, TreeId);
+                attempt--;
             }
             catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
             {
@@ -1901,11 +2086,14 @@ internal sealed partial class ShardRootGrain(
         EnsureInternalOrigin(LatticeOperation.Delete);
         ThrowIfShuttingDown();
         if (!await PrepareForReadAsync()) return false;
+        await EnsureRoutingGenerationAsync();
         ThrowIfRejectedForKey(key);
+        var routing = AdmissionRoutingStamp();
         RecordWrite();
 
         var retryDeadline = DateTime.UtcNow + LeafRetirementRetryDeadline;
         var retiredAttempts = 0;
+        WalFenceSeamRetry? fenceRetry = null;
         for (int attempt = 0; ; attempt++)
         {
             try
@@ -1931,7 +2119,7 @@ internal sealed partial class ShardRootGrain(
                 var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
                 await RecordAffectedLeafIfPreparedAsync(leafId);
                 await MarkLeafDirtyAsync(leafId);
-                var deleted = await DeleteOnLeafAsync(leafGrain, key);
+                var deleted = await DeleteOnLeafAsync(leafGrain, key, routing);
                 result = deleted.Deleted;
 
                 // Link any leaf split the delete caused (issue #3523). A split
@@ -1960,6 +2148,24 @@ internal sealed partial class ShardRootGrain(
                 await MirrorAppliedWritesAsync(MirroredKey(key), key, static (t, s) => t.DeleteAsync(s));
                 return result;
             }
+            catch (WalRoutingGenerationStaleException routingStale)
+            {
+                // Epic #5605, member 2: a hand-off close re-claimed the routing generation
+                // this write was admitted under. Re-run the phase check, which re-routes a
+                // moved slot, and re-admit under the current generation (section 5).
+                fenceRetry = await NextRoutingRetryAsync(fenceRetry, routingStale);
+                ThrowIfRejectedForKey(key);
+                routing = AdmissionRoutingStamp();
+                attempt--;
+            }
+            catch (LeafRetiredException fenceStale) when (fenceStale.ActivationSuperseded)
+            {
+                // Epic #5605: the leaf activation was superseded. Retry the whole step,
+                // re-resolving the route, until the operation's deadline; the ordinary
+                // attempt budget is not consumed.
+                fenceRetry = await WalFenceSeamRetry.NextAsync(fenceRetry, WalFenceSeamRetry.CallerShardRoot, TreeId);
+                attempt--;
+            }
             catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
             {
                 if (await BackOffIfLeafRetiredAsync(ex, retiredAttempts, retryDeadline)) { attempt--; retiredAttempts++; }
@@ -1987,8 +2193,21 @@ internal sealed partial class ShardRootGrain(
     /// older leaves, never worse than before.
     /// </para>
     /// </summary>
-    private static async Task<LeafDeleteResult> DeleteOnLeafAsync(IBPlusLeafGrain leaf, string key)
+    private static async Task<LeafDeleteResult> DeleteOnLeafAsync(IBPlusLeafGrain leaf, string key, WalRoutingStamp routing)
     {
+        // Epic #5605, member 2: the stamped method carries the routing generation the
+        // delete was admitted under; an older leaf answers it "method unknown".
+        if (!routing.ForcesUnstamped)
+        {
+            try
+            {
+                return await leaf.DeleteTrackedStampedAsync(key, routing);
+            }
+            catch (Exception ex) when (WalAppendFenceMethodProbe.IsDefiniteMethodUnknown(ex))
+            {
+            }
+        }
+
         try
         {
             return await leaf.DeleteTrackedAsync(key);
@@ -2043,15 +2262,30 @@ internal sealed partial class ShardRootGrain(
         var scan = BeginScanPage(nameof(DeleteRangeBoundedAsync));
         return GuardScanPageAsync(
             scan,
-            DeleteRangeBoundedCoreAsync(startInclusive, endExclusive, predicate, scan));
+            DeleteRangeBoundedCoreAsync(startInclusive, endExclusive, predicate, scan, ticket: null));
+    }
+
+    /// <inheritdoc />
+    public Task<ShardRangeDeletePage> DeleteRangeBoundedStampedAsync(
+        string startInclusive,
+        string endExclusive,
+        LatticePredicateNode? predicate,
+        RangeDeleteFenceTicket ticket)
+    {
+        var scan = BeginScanPage(nameof(DeleteRangeBoundedStampedAsync));
+        return GuardScanPageAsync(
+            scan,
+            DeleteRangeBoundedCoreAsync(startInclusive, endExclusive, predicate, scan, ticket.Generation > 0 ? ticket : null));
     }
 
     private async Task<ShardRangeDeletePage> DeleteRangeBoundedCoreAsync(
         string startInclusive,
         string endExclusive,
         LatticePredicateNode? predicate,
-        ScanPageWalk scan)
+        ScanPageWalk scan,
+        RangeDeleteFenceTicket? ticket)
     {
+        var fencedWalk = ticket is not null;
         EnsureInternalOrigin(LatticeOperation.RangeDelete);
         ThrowIfShuttingDown();
         if (!await PrepareForReadAsync()) return new ShardRangeDeletePage();
@@ -2117,7 +2351,47 @@ internal sealed partial class ShardRootGrain(
             // pointer on every leaf it does not stop at and the bounds on every
             // hop where the budget asks it to yield, all plain state reads taken
             // after the delete (and any split it caused) completed.
-            var page = await leafGrain.DeleteRangeAndNextSiblingAsync(startInclusive, endExclusive, predicate);
+            LeafRangeDeletePage page;
+            WalFenceSeamRetry? fenceRetry = null;
+            while (true)
+            {
+                try
+                {
+                    // Epic #5605, member 2: a fenced walk stamps the leaf's record with
+                    // the tree's range-delete generation its intent handed out, trusted
+                    // as given; an unfenced walk goes through the existing method and is
+                    // appended unstamped (B2).
+                    page = ticket is { } fenced
+                        ? await leafGrain.DeleteRangeAndNextSiblingStampedAsync(
+                            startInclusive, endExclusive, predicate, WalRoutingStamp.ForTreeRangeDelete(fenced.Generation))
+                        : await leafGrain.DeleteRangeAndNextSiblingAsync(startInclusive, endExclusive, predicate);
+                    if (ticket is null && page.Result.Deleted > 0)
+                    {
+                        RecordUnfencedRangeDeleteAppend(fencedWalk
+                            ? LatticeMetrics.UnstampedSourceRangeDeletePastIntent
+                            : LatticeMetrics.UnstampedSourceRangeDeleteUnfenced);
+                    }
+
+                    break;
+                }
+                catch (WalRoutingGenerationStaleException) when (ticket is { } rejected)
+                {
+                    // The intent's generation was re-claimed by a close. Re-stamp only
+                    // under this walk's own intent (rule 3); once it has closed, go on
+                    // unstamped, as 10.2.0 would. Nothing was applied by the rejected call.
+                    var current = await grainFactory
+                        .GetGrain<ITreeRangeDeleteFenceGrain>(TreeId)
+                        .GetOpenIntentGenerationAsync(rejected.IntentId);
+                    ticket = current is { } generation ? rejected with { Generation = generation } : null;
+                }
+                catch (LeafRetiredException fenceStale) when (fenceStale.ActivationSuperseded)
+                {
+                    // Epic #5605: the leaf activation was superseded; the walk step
+                    // retries against the live one until the operation's deadline.
+                    fenceRetry = await WalFenceSeamRetry.NextAsync(fenceRetry, WalFenceSeamRetry.CallerShardRoot, TreeId);
+                }
+            }
+
             var result = page.Result;
             totalDeleted += result.Deleted;
             scan.Budget.RecordLeafVisited();
@@ -2785,7 +3059,7 @@ internal sealed partial class ShardRootGrain(
         return arr;
     }
 
-    private async Task<bool> EnsureRootAsync(bool forWrite = false, bool purgedAnswersEmpty = false)
+    private async Task<bool> EnsureRootAsync(bool forWrite = false, bool purgedAnswersEmpty = false, Guid? admittedLineage = null)
     {
         // Steady-state fast path: once a root exists, short-circuit with
         // zero storage I/O and no gate acquisition. This is the only path
@@ -2798,7 +3072,7 @@ internal sealed partial class ShardRootGrain(
         await _ensureRootGate.WaitAsync().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
         try
         {
-            return await EnsureRootSlowWithDeadlineAsync(forWrite, purgedAnswersEmpty);
+            return await EnsureRootSlowWithDeadlineAsync(forWrite, purgedAnswersEmpty, admittedLineage);
         }
         finally
         {
@@ -2850,7 +3124,7 @@ internal sealed partial class ShardRootGrain(
     /// set and the tree has been purged, so the shard has no root and none was
     /// seeded; <see langword="true"/> when the shard has a root.
     /// </returns>
-    private async Task<bool> EnsureRootSlowWithDeadlineAsync(bool forWrite, bool purgedAnswersEmpty)
+    private async Task<bool> EnsureRootSlowWithDeadlineAsync(bool forWrite, bool purgedAnswersEmpty, Guid? admittedLineage)
     {
         // Read from configuration, not a registry resolve: the tree may not be
         // registered until the seed below runs, and a resolve of a purged id
@@ -2861,14 +3135,14 @@ internal sealed partial class ShardRootGrain(
         if (timeout == Timeout.InfiniteTimeSpan)
         {
             return await WarmOptionsIfRootedAsync(
-                await EnsureRootSlowAsync(forWrite, purgedAnswersEmpty).ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext));
+                await EnsureRootSlowAsync(forWrite, purgedAnswersEmpty, admittedLineage).ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext));
         }
 
         using var deadline = new CancellationTokenSource(timeout);
         try
         {
             return await WarmOptionsIfRootedAsync(
-                await EnsureRootSlowAsync(forWrite, purgedAnswersEmpty).WaitAsync(deadline.Token)
+                await EnsureRootSlowAsync(forWrite, purgedAnswersEmpty, admittedLineage).WaitAsync(deadline.Token)
                     .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext));
         }
         catch (OperationCanceledException oce) when (deadline.IsCancellationRequested)
@@ -2907,8 +3181,9 @@ internal sealed partial class ShardRootGrain(
         return rooted;
     }
 
-    private async Task<bool> EnsureRootSlowAsync(bool forWrite, bool purgedAnswersEmpty)
+    private async Task<bool> EnsureRootSlowAsync(bool forWrite, bool purgedAnswersEmpty, Guid? admittedLineage)
     {
+        using var structuralRouting = EnterStructuralRouting(); // #5876
         // Re-check under the gate: a turn that lost the race to the gate
         // observes the winner's published RootNodeId and returns without
         // seeding.
@@ -2948,11 +3223,36 @@ internal sealed partial class ShardRootGrain(
         // registered tree, so skipping it then is equivalent, and only a
         // genuinely unregistered tree still takes the mutating path.
         var prevIsRegistered = state.State.IsRegistered;
+
+        // On a purged re-seed, the registration's lineage identifies the re-created
+        // incarnation (#5716). It is read in place of the existence probe, and taken
+        // from the registration's own reply when this activation registers the id, so
+        // it costs no extra grain call.
+        TreeRegistryEntry? reseedEntry = null;
+        var reseedEntryRead = false;
         if (!state.State.IsRegistered &&
             !TreeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
         {
             var registry = grainFactory.GetLatticeRegistry();
-            if (!await registry.ExistsAsync(TreeId))
+            var reseed = state.State.IsPurged;
+            if (reseed)
+            {
+                reseedEntry = await registry.GetEntryAsync(TreeId);
+                reseedEntryRead = true;
+
+                // A bulk write admitted under a registration re-seeds only that
+                // registration (issue #5813): if the registry no longer names it -
+                // the orphan-shadow GC unregistered the shadow, or a re-issued
+                // restore registered it again since the admission read - the write
+                // is refused rather than registering the id without the provenance
+                // its builder stamped.
+                if (admittedLineage is not null && reseedEntry?.Lineage != admittedLineage)
+                {
+                    throw new LatticeTreePurgedException(TreeId);
+                }
+            }
+
+            if (reseed ? reseedEntry is null : !await registry.ExistsAsync(TreeId))
             {
                 // A write is the deliberate reuse of an id (issue #3940) and
                 // registers it; a read must not recreate a purged tree
@@ -2966,7 +3266,14 @@ internal sealed partial class ShardRootGrain(
                     else if (await PurgedTreeRegistrationGuard.IsPurgedAsync(grainFactory, TreeId))
                         return false;
                 }
-                await registry.RegisterAsync(TreeId);
+                if (reseed)
+                {
+                    reseedEntry = (await registry.RegisterAndGetEntryAsync(TreeId)).Entry;
+                }
+                else
+                {
+                    await registry.RegisterAsync(TreeId);
+                }
             }
             state.State.IsRegistered = true;
         }
@@ -2976,6 +3283,19 @@ internal sealed partial class ShardRootGrain(
         var shardKey = context.GrainId.Key.ToString()!;
         var deterministicId = DeterministicGuid(shardKey);
         var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(deterministicId);
+
+        // A re-created incarnation never adopts a hand-off marker that predates it
+        // (#5703 review, S2), identified by its registration's lineage (#5716). Retired
+        // before the tombstone is lifted, so a failure leaves it for the write's retry.
+        if (state.State.IsPurged)
+        {
+            if (!reseedEntryRead)
+            {
+                reseedEntry = await grainFactory.GetLatticeRegistry().GetEntryAsync(TreeId);
+            }
+
+            await RetirePredatingHandOffMarkerAsync(reseedEntry?.Lineage);
+        }
 
         // This shard is creating its root leaf, so the leaf's first row write
         // carries a create intent naming it (issue #4654).
@@ -3023,6 +3343,14 @@ internal sealed partial class ShardRootGrain(
             throw;
         }
 
+        // A re-created incarnation re-reads its hand-off marker (#5668): this
+        // activation may still cache the purged incarnation's, whose routing
+        // generation the purge retired under the tree id's floor.
+        if (prevIsPurged)
+        {
+            ForgetHandOffMarker();
+        }
+
         return true;
     }
 
@@ -3033,6 +3361,7 @@ internal sealed partial class ShardRootGrain(
     private async Task ResumePendingPromotionAsync()
     {
         if (state.State.PendingPromotion is null) return;
+        using var structuralRouting = EnterStructuralRouting(); // #5876
 
         // Re-check under the promotion gate. Two interleaved
         // PrepareForOperationSlowAsync turns could both observe a
@@ -3226,7 +3555,7 @@ internal sealed partial class ShardRootGrain(
         return PrepareForOperationSlowAsync(forWrite, purgedAnswersEmpty);
     }
 
-    private async Task<bool> PrepareForOperationSlowAsync(bool forWrite, bool purgedAnswersEmpty)
+    private async Task<bool> PrepareForOperationSlowAsync(bool forWrite, bool purgedAnswersEmpty, Guid? admittedLineage = null)
     {
         // Bracketed as a routing mutation (issue #3474): the serial reads that
         // reach here are exempt from the call-filter bracket, yet this path can
@@ -3235,7 +3564,7 @@ internal sealed partial class ShardRootGrain(
         BeginRoutingMutation();
         try
         {
-            if (!await EnsureRootAsync(forWrite, purgedAnswersEmpty))
+            if (!await EnsureRootAsync(forWrite, purgedAnswersEmpty, admittedLineage))
                 return false;
             await ResumePendingPromotionAsync();
             await ResumePendingBulkGraftAsync();
@@ -3266,7 +3595,7 @@ internal sealed partial class ShardRootGrain(
     /// the registry does not name, so a purged copy cannot be re-opened by any
     /// caller.
     /// </summary>
-    private async Task<bool> PrepareForPurgedCopyAsync(bool forWrite, bool purgedAnswersEmpty)
+    private async Task<bool> PrepareForPurgedCopyAsync(bool forWrite, bool purgedAnswersEmpty, Guid? admittedLineage = null)
     {
         var routedLogical = RequestContext.Get(LatticeEventConstants.RoutedLogicalTreeIdRequestContextKey) as string;
         var registry = grainFactory.GetLatticeRegistry();
@@ -3280,6 +3609,12 @@ internal sealed partial class ShardRootGrain(
                     stalePhysicalTreeId: TreeId,
                     destinationPhysicalTreeId: resolved);
             }
+
+            if (admittedLineage is not null
+                && (await registry.GetEntryAsync(TreeId))?.Lineage != admittedLineage)
+            {
+                throw new LatticeTreePurgedException(TreeId);
+            }
         }
         else
         {
@@ -3290,6 +3625,14 @@ internal sealed partial class ShardRootGrain(
             if (!live)
             {
                 if (!forWrite && purgedAnswersEmpty) return false;
+                throw new LatticeTreePurgedException(TreeId);
+            }
+
+            // A bulk write issued under an earlier registration of this id - a load
+            // whose caller gave up before the orphan-shadow GC purged the shadow -
+            // must not land in the registration that re-created it (issue #5813).
+            if (admittedLineage is not null && entry!.Lineage != admittedLineage)
+            {
                 throw new LatticeTreePurgedException(TreeId);
             }
         }
@@ -3317,7 +3660,7 @@ internal sealed partial class ShardRootGrain(
                 heldId);
         }
 
-        return await PrepareForOperationSlowAsync(forWrite, purgedAnswersEmpty);
+        return await PrepareForOperationSlowAsync(forWrite, purgedAnswersEmpty, admittedLineage);
     }
 
     public async Task MergeManyAsync(Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration = false)
@@ -3329,8 +3672,10 @@ internal sealed partial class ShardRootGrain(
         // caller re-routes (the resize mirror's refusal chase, #4478; a
         // replication apply's stale-routing retry), and during a split's drain
         // it is forwarded to the split destination below (issue #4522).
+        await EnsureRoutingGenerationAsync();
         if (!isCrossShardMigration)
             ThrowIfRejectedForAnyMergeKey(entries);
+        var routing = AdmissionRoutingStamp();
         RecordWrite(entries.Count);
 
         if (entries.Count == 0)
@@ -3350,17 +3695,38 @@ internal sealed partial class ShardRootGrain(
         // not threaded through TrackShadowForward.
         var forwardTask = TrackShadowForward(entries, static (t, s) => t.MergeManyAsync(s), static s => ShadowForwardRefusal.PerEntry(s));
 
+        await MergeRoutedAsync(entries, isCrossShardMigration, routing);
+
+        if (!isCrossShardMigration)
+            await ForwardMergedRowsToSplitShadowIfNeededAsync(entries.Keys);
+
+        // Await forwardTask at the end - surfaces any forward failure to the
+        // caller. Without this await, the forward would only be observed
+        // asynchronously by the tracker continuation.
+        await forwardTask;
+    }
+
+    /// <summary>
+    /// Merges <paramref name="entries"/> last-writer-wins into the leaves the
+    /// current routing names for their keys, one leaf call per target leaf,
+    /// linking any split a merge produces. The routing half of
+    /// <see cref="MergeManyAsync"/>, shared with a bulk append's below-edge
+    /// entries (issue #5610). <paramref name="routing"/> is the routing stamp the
+    /// entries were admitted under (epic #5605, member 2): the shard root's generation
+    /// for a merge that passed the phase check, which a stale-generation rejection
+    /// re-runs; <see cref="WalRoutingStamp.Unstamped"/> for a bulk path that makes no
+    /// phase check, whose appends are therefore unstamped and reported.
+    /// </summary>
+    private async Task MergeRoutedAsync(Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration, WalRoutingStamp routing)
+    {
         // Root-is-leaf fast path: route the entire batch to the single leaf
         // in one grain call and one WriteStateAsync. Decided by node TYPE so a
         // corrupt RootIsLeaf flag over an internal root (issue 899) takes the
         // grouped internal-routing path below instead of blind-casting.
         if (RootIsLeafTyped)
         {
-            await MergeGroupAsync(entries, isCrossShardMigration,
+            await MergeGroupAsync(entries, isCrossShardMigration, routing,
                 Volatile.Read(ref _routingGeneration), state.State.RootNodeId);
-            if (!isCrossShardMigration)
-                await ForwardMergedRowsToSplitShadowIfNeededAsync(entries.Keys);
-            await forwardTask;
             return;
         }
 
@@ -3401,17 +3767,8 @@ internal sealed partial class ShardRootGrain(
 
         foreach (var group in groups.Values)
         {
-            await MergeGroupAsync(group, isCrossShardMigration, groupedAtGeneration, groupedAtRoot);
+            await MergeGroupAsync(group, isCrossShardMigration, routing, groupedAtGeneration, groupedAtRoot);
         }
-
-        if (!isCrossShardMigration)
-            await ForwardMergedRowsToSplitShadowIfNeededAsync(entries.Keys);
-
-        // Await forwardTask at the end of the grouped path - matches the
-        // root-is-leaf fast path and surfaces any forward failure to the
-        // caller. Without this await, the forward would only be observed
-        // asynchronously by the tracker continuation.
-        await forwardTask;
     }
 
     /// <summary>
@@ -3422,11 +3779,20 @@ internal sealed partial class ShardRootGrain(
     {
         var retryDeadline = DateTime.UtcNow + LeafRetirementRetryDeadline;
         var retiredAttempts = 0;
+        WalFenceSeamRetry? fenceRetry = null;
         for (int attempt = 0; ; attempt++)
         {
             try
             {
                 return await TraverseToLeafAsync(key);
+            }
+            catch (LeafRetiredException fenceStale) when (fenceStale.ActivationSuperseded)
+            {
+                // Epic #5605: the leaf activation was superseded. Retry the whole step,
+                // re-resolving the route, until the operation's deadline; the ordinary
+                // attempt budget is not consumed.
+                fenceRetry = await WalFenceSeamRetry.NextAsync(fenceRetry, WalFenceSeamRetry.CallerShardRoot, TreeId);
+                attempt--;
             }
             catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
             {
@@ -3464,6 +3830,7 @@ internal sealed partial class ShardRootGrain(
     private async Task MergeGroupAsync(
         Dictionary<string, LwwValue<byte[]>> group,
         bool isCrossShardMigration,
+        WalRoutingStamp routing,
         long groupedAtGeneration,
         GrainId? groupedAtRoot)
     {
@@ -3481,6 +3848,7 @@ internal sealed partial class ShardRootGrain(
         // attempt so it does not consume the transient retry budget, and a
         // retry after that back-off must still re-group.
         var retried = false;
+        WalFenceSeamRetry? fenceRetry = null;
         for (int attempt = 0; ; attempt++)
         {
             try
@@ -3489,11 +3857,11 @@ internal sealed partial class ShardRootGrain(
                     || Volatile.Read(ref _routingGeneration) != groupedAtGeneration
                     || !Nullable.Equals(state.State.RootNodeId, groupedAtRoot))
                 {
-                    await RegroupAndMergeAsync(group, isCrossShardMigration);
+                    await RegroupAndMergeAsync(group, isCrossShardMigration, routing);
                     return;
                 }
 
-                var splitResult = await TraverseForMergeAsync(pivotKey!, group, isCrossShardMigration);
+                var splitResult = await TraverseForMergeAsync(pivotKey!, group, isCrossShardMigration, routing);
 
                 while (splitResult is not null)
                 {
@@ -3501,6 +3869,14 @@ internal sealed partial class ShardRootGrain(
                 }
 
                 return;
+            }
+            catch (LeafRetiredException fenceStale) when (fenceStale.ActivationSuperseded)
+            {
+                // Epic #5605: the leaf activation was superseded. Retry the whole step,
+                // re-resolving the route, until the operation's deadline; the ordinary
+                // attempt budget is not consumed.
+                fenceRetry = await WalFenceSeamRetry.NextAsync(fenceRetry, WalFenceSeamRetry.CallerShardRoot, TreeId);
+                attempt--;
             }
             catch (Exception ex) when (ShouldRetryLeafDispatch(ex, attempt, retryDeadline))
             {
@@ -3526,7 +3902,7 @@ internal sealed partial class ShardRootGrain(
     /// landed before the fault is LWW-idempotent.
     /// </para>
     /// </summary>
-    private async Task RegroupAndMergeAsync(Dictionary<string, LwwValue<byte[]>> group, bool isCrossShardMigration)
+    private async Task RegroupAndMergeAsync(Dictionary<string, LwwValue<byte[]>> group, bool isCrossShardMigration, WalRoutingStamp routing)
     {
         Interlocked.Increment(ref _mergeRegroupCount);
 
@@ -3536,7 +3912,7 @@ internal sealed partial class ShardRootGrain(
         {
             string? onlyPivot = null;
             foreach (var k in group.Keys) { onlyPivot = k; break; }
-            var rootSplit = await TraverseForMergeAsync(onlyPivot!, group, isCrossShardMigration);
+            var rootSplit = await TraverseForMergeAsync(onlyPivot!, group, isCrossShardMigration, routing);
             while (rootSplit is not null)
             {
                 rootSplit = await PromoteRootAsync(rootSplit);
@@ -3563,7 +3939,7 @@ internal sealed partial class ShardRootGrain(
             string? subPivot = null;
             foreach (var k in subGroup.Keys) { subPivot = k; break; }
 
-            var splitResult = await TraverseForMergeAsync(subPivot!, subGroup, isCrossShardMigration);
+            var splitResult = await TraverseForMergeAsync(subPivot!, subGroup, isCrossShardMigration, routing);
             while (splitResult is not null)
             {
                 splitResult = await PromoteRootAsync(splitResult);
@@ -3571,12 +3947,45 @@ internal sealed partial class ShardRootGrain(
         }
     }
 
-    private async Task<SplitResult?> TraverseForMergeAsync(string key, Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration)
+    /// <summary>
+    /// Merges <paramref name="entries"/> into <paramref name="leaf"/> under
+    /// <paramref name="routing"/>, re-admitting the batch under the current routing
+    /// generation when a hand-off close re-claimed the one it was admitted under
+    /// (epic #5605, member 2; section 5). A migration import has no phase check to
+    /// re-run: it is this shard's own drain target.
+    /// </summary>
+    private async Task<SplitResult?> MergeOnLeafAsync(
+        IBPlusLeafGrain leaf,
+        Dictionary<string, LwwValue<byte[]>> entries,
+        bool isCrossShardMigration,
+        WalRoutingStamp routing)
+    {
+        WalFenceSeamRetry? fenceRetry = null;
+        while (true)
+        {
+            try
+            {
+                return await LeafMergeManyAsync(leaf, entries, isCrossShardMigration, routing);
+            }
+            catch (WalRoutingGenerationStaleException routingStale)
+            {
+                fenceRetry = await NextRoutingRetryAsync(fenceRetry, routingStale);
+                if (!isCrossShardMigration)
+                {
+                    ThrowIfRejectedForAnyMergeKey(entries);
+                }
+
+                routing = AdmissionRoutingStamp();
+            }
+        }
+    }
+
+    private async Task<SplitResult?> TraverseForMergeAsync(string key, Dictionary<string, LwwValue<byte[]>> entries, bool isCrossShardMigration, WalRoutingStamp routing)
     {
         if (RootIsLeafTyped)
         {
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(state.State.RootNodeId!.Value);
-            return await leaf.MergeManyAsync(entries, isCrossShardMigration);
+            return await MergeOnLeafAsync(leaf, entries, isCrossShardMigration, routing);
         }
 
         var path = StackPool.Get();
@@ -3602,7 +4011,7 @@ internal sealed partial class ShardRootGrain(
 
             var leafId = path.Pop();
             var leafGrain = grainFactory.GetGrain<IBPlusLeafGrain>(leafId);
-            var splitResult = await leafGrain.MergeManyAsync(entries, isCrossShardMigration);
+            var splitResult = await MergeOnLeafAsync(leafGrain, entries, isCrossShardMigration, routing);
 
             // Issue #3265: routed through the durable-intent helper so an
             // interrupted promotion cannot strand a spliced, pinned sibling

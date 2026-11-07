@@ -224,6 +224,7 @@ public sealed partial class DataStewardJourney
     }
 
     /// <summary>Waits for a toast saying exactly <paramref name="message"/>.</summary>
+    // Each toast follows a server write, so the wait is a server write's bound (#5737).
     private Task ExpectToastAsync(string message) =>
-        Expect(_priya.Shell.Toasts.Filter(new() { HasTextRegex = Exactly(message) })).Not.ToHaveCountAsync(0, new() { Timeout = 30_000 });
+        Expect(_priya.Shell.Toasts.Filter(new() { HasTextRegex = Exactly(message) })).Not.ToHaveCountAsync(0, new() { Timeout = PanelSettled.BoundMs });
 }

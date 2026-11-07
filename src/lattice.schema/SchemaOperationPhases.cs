@@ -19,6 +19,15 @@ public static class SchemaOperationPhases
     /// <summary>The tree is pointed at the destination copy. Reports no units.</summary>
     public const string Cutover = nameof(LatticeSchemaRemediationPhase.Cutover);
 
+    /// <summary>
+    /// Not one of the ordered phases: the operation is waiting for another alias
+    /// operation (a replication re-seed, a resize, a restore) to release the tree's
+    /// alias reservation before its remediation can be accepted. Reported once on
+    /// entering the wait; the remediation's first phase replaces it on leaving.
+    /// Reports no units.
+    /// </summary>
+    public const string WaitingForAliasOperation = "WaitingForAliasOperation";
+
     /// <summary>What the dry run's and the build's units count.</summary>
     public const string ValuesUnit = "values";
 }

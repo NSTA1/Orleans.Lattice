@@ -1,0 +1,25 @@
+# Pairs with BulkMeetsCoreCreate (B -> C). BulkHintBound is dropped, so the bulk-born leaf
+# is born with a read position above a record it does not hold.
+MODULE: BulkMeetsCoreCreateHintUnbounded
+TARGET: BulkMeetsCoreCreate
+CLASS: Invariant
+SUMMARY: BulkHintBound is dropped
+
+--- FIND
+Guarantees ==
+    /\ ClaimHeadCoversPriorAppends
+    /\ RaisedEpochUnique
+    /\ StaleEpochNeverAppends
+    /\ HandOffBound
+    /\ DeferredHeadAtRaisedGeneration
+    /\ StraddlerBelowInit
+    /\ BulkHintBound
+--- REPLACE
+Guarantees ==
+    /\ ClaimHeadCoversPriorAppends
+    /\ RaisedEpochUnique
+    /\ StaleEpochNeverAppends
+    /\ HandOffBound
+    /\ DeferredHeadAtRaisedGeneration
+    /\ StraddlerBelowInit
+--- END

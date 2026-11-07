@@ -1,0 +1,22 @@
+# #5837, a5e2e2ef's MF1 (#5837 comment 6659146662): the response to the receiver's own
+# append of its donor's forward carries the donor's staleHigh, as every routed response does.
+MODULE: ReadPositionHonestForwardIntoLOmitsStaleReport
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the response to L's append of its donor's forward omits staleHigh, so a stale D''s earlier forward of L's key is missed and L free-advances past it unapplied
+PERTURBS: ForwardIntoL
+BOUNDS: WithFreeAdvance = TRUE, WithForwardIn = TRUE, WithSplitBirth = TRUE, WithDonorRestart = TRUE, WithKeyMove = TRUE, WithDuplicate = FALSE, WithMixedVersion = FALSE
+
+--- FIND
+    /\ ReportForeign(a)
+    /\ ReportStale(a)
+    /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars, envVars, moveVars>>
+    /\ UNCHANGED <<lastU, oldUsed, restarted, oldRejected>>
+    /\ UNCHANGED <<preArm, startHead, evStart, evFloor, ft, sh, sibHint, sibRows, xferVars, svVars>>
+--- REPLACE
+    /\ ReportForeign(a)
+\* MUTATION: the response carries no staleHigh.
+    /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars, envVars, moveVars>>
+    /\ UNCHANGED <<lastU, oldUsed, restarted, oldRejected>>
+    /\ UNCHANGED <<preArm, startHead, evStart, evFloor, seenS, ft, sh, sibHint, sibRows, xferVars, svVars>>
+--- END

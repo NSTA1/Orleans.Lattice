@@ -1,0 +1,19 @@
+# Pairs with CloseHeadMonotone. A close overwrites the heads earlier closes recorded
+# instead of max-merging with them, so a later window's close, whose own stamped
+# appends all lie below a lower head, lowers the heads the marker requires and
+# releases an owner an earlier close still holds. Production max-merges in
+# HandOffMarkerCore.RequiredHead. Three windows are needed for the lower head to
+# be choosable: the walk goes on unstamped only after a close has rejected it.
+MODULE: CloseHeadMonotoneCloseOverwritesHeads
+TARGET: CloseHeadMonotone
+CLASS: Action
+SUMMARY: a close overwrites the marker's heads rather than max-merging them
+PERTURBS: Close
+BOUNDS: MaxWindows = 3, MaxEpoch = 4
+
+--- FIND
+    /\ \E h \in CloseHeads : hoClosedAt' = Max2(hoClosedAt, h)
+--- REPLACE
+\* MUTATION: the close overwrites the recorded heads.
+    /\ \E h \in CloseHeads : hoClosedAt' = h
+--- END

@@ -1,0 +1,21 @@
+# #5833. A duplicate activation that never claimed appends PreArm after the leaf armed;
+# the armed activation's stamped responses do not report foreignHigh, so it advances
+# past the duplicate's append.
+MODULE: ReadPositionHonestDuplicatePreArmUnreported
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: a stamped response does not report foreignHigh
+PERTURBS: OwnAlloc
+
+--- FIND
+    /\ seenU' = [seenU EXCEPT ![a] = Max2(@, ReportU)]
+    /\ ReportForeign(a)
+    /\ ReportStale(a)
+    /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars>>
+--- REPLACE
+    /\ seenU' = [seenU EXCEPT ![a] = Max2(@, ReportU)]
+\* MUTATION: foreignHigh is not reported.
+    /\ UNCHANGED seenP
+    /\ ReportStale(a)
+    /\ UNCHANGED <<durable, acked, floor, leafVars, epochVars, handVars>>
+--- END

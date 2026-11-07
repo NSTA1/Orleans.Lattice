@@ -1,0 +1,19 @@
+# A claim written before a purge and re-creation of the leaf is raised after it.
+# The retirement reset the leaf's entry, so a raise checked against the entry
+# alone accepts an epoch the old incarnation already superseded, and its activation
+# appends. The shard does not check the retired floor on appends (#5635), so the
+# raise's floor check is the only guard.
+MODULE: StaleEpochNeverAppendsIgnoresRetiredFloor
+TARGET: StaleEpochNeverAppends
+CLASS: Invariant
+SUMMARY: the claim's raise is not refused at or below the retired floor
+PERTURBS: ClaimRaise
+BOUNDS: WithRecreate = TRUE, WithBatch = FALSE, MaxWindows = 1
+
+--- FIND
+    /\ epoch[a] >= Max2(fence, memFence)
+    /\ epoch[a] > retired
+--- REPLACE
+    /\ epoch[a] >= Max2(fence, memFence)
+\* MUTATION: the retired floor is not checked at the raise.
+--- END

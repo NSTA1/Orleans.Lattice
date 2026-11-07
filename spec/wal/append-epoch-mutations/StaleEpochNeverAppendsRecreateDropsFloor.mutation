@@ -1,0 +1,17 @@
+# Pairs with StaleEpochNeverAppends. L's clear removes its entry without raising
+# the partition's retired floor, so a claim of the cleared incarnation, in flight
+# or re-presented, raises over the empty entry and appends at an epoch the clear
+# retired, and can share it with the re-created incarnation. Moved from the
+# design's ReadPositionHonestRecreateDropsFloor; it breaks RaisedEpochUnique too.
+MODULE: StaleEpochNeverAppendsRecreateDropsFloor
+TARGET: StaleEpochNeverAppends
+CLASS: Invariant
+SUMMARY: retiring L's entry does not raise the partition's retired floor
+PERTURBS: ClearRetire
+
+--- FIND
+    /\ retired' = Max2(retired, Max2(Max2(fence, memFence), clrRow))
+--- REPLACE
+\* MUTATION: the floor is not raised.
+    /\ retired' = retired
+--- END

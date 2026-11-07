@@ -57,6 +57,22 @@ SnapshotLoss == FALSE
 
 \* The "no snapshot" sentinel for snapshot coverage; -1 is a real coverage
 \* claim ("a snapshot exists and covers no offset").
+\* Whether the environment may lose the WAL shard's grain activation on a silo
+\* that keeps running, leaving its provider calls in motion (ActivationLoss,
+\* issue #5799). A variant may turn it off to stay within the TLC budget.
+WithActivationLoss == TRUE
+
+\* Whether the lost activation's successor may be on another silo, which cannot
+\* see the predecessor's calls in motion (issue #5799). Off in the base, whose
+\* liveness check it would put past the TLC budget; the CrossSilo variant
+\* turns it on and checks the safety properties.
+WithCrossSiloMove == FALSE
+
+\* Whether a flush may be abandoned with its provider call still running
+\* (Abandon, issue #4621). A variant may turn it off to stay within the TLC
+\* budget.
+WithAbandonedFlush == TRUE
+
 NoSnap == -2
 
 Max(S) == CHOOSE x \in S : \A y \in S : y <= x
@@ -68,12 +84,32 @@ Min(S) == CHOOSE x \in S : \A y \in S : x <= y
 (* WAL shard (one partition):                                              *)
 (*  next      the next offset the allocator hands out.                     *)
 (*  inflight  offsets assigned to an append whose flush has not completed. *)
-(*  durable   offsets the WAL store holds (trim removes them).             *)
+(*  occ       the WAL store's entry at each offset: "none" when empty      *)
+(*            (trim empties it), "acked" when the write the shard          *)
+(*            acknowledged there occupies it, starting a batch, "ackedMid" *)
+(*            when it continues the batch before it, "late" when an        *)
+(*            abandoned call landed there. After a cross-silo move the     *)
+(*            predecessor's rows are "ackedPrev" and "latePrev". "dup" is  *)
+(*            an offset two batches with different starts both hold.       *)
+(*            durable, below, is the occupied offsets.                     *)
 (*  tail      the oldest readable offset; every offset below it is gone.   *)
 (*  acked     offsets acknowledged to their writer (only once durable).    *)
 (*  orphans   abandoned appends: the flush deadline or the drain budget     *)
 (*            faulted their acknowledgement, but the provider call may      *)
 (*            still land (issue #4621). Never acknowledged.                 *)
+(*  hidden    the abandoned calls in motion that the shard's current       *)
+(*            activation cannot see: a predecessor's on another silo.      *)
+(*            WalAbandonedFlushRegistry is per process (issue #5799).      *)
+(*  resyncing "no", or the allocator's pending re-seed: "resync" after a   *)
+(*            failed flush (a sticky failure), "recover" for a new          *)
+(*            activation; it hands out no offset meanwhile (issue #5799).  *)
+(*  ct        the store's TAIL row: the highest committed offset (Azure    *)
+(*            Table). Cross-silo only; with one silo it is the highest     *)
+(*            stored offset and is not tracked separately.                 *)
+(*  curFresh, prevFresh  whether the current activation's provider         *)
+(*            instance, and its predecessor's on another silo, hold a      *)
+(*            current view of TAIL: the TAIL commit fence (issue #5810).   *)
+(*            The fence's ETag and generation are abstracted to this flag. *)
 (*                                                                         *)
 (* Leaf l:                                                                 *)
 (*  up[l]     an activation exists and has finished activating.            *)
@@ -123,26 +159,38 @@ Min(S) == CHOOSE x \in S : \A y \in S : x <= y
 (*            trigger; a foreground acknowledgement does not supply one.  *)
 (*  faults    environment faults spent so far.                             *)
 (***************************************************************************)
-VARIABLES next, inflight, durable, tail, acked, orphans,
+VARIABLES next, inflight, occ, tail, acked, orphans, hidden, resyncing, ct, curFresh, prevFresh,
           up, cache, rp, stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale, replayRequested,
           pinOff, pinHlc, hadSnap, row, purgeRec, cleared, deleted, purged, faults
 
-walVars  == <<next, inflight, durable, tail, acked, orphans>>
+walVars  == <<next, inflight, occ, tail, acked, orphans, hidden, resyncing, ct, curFresh, prevFresh>>
+tailRowVars == <<ct, curFresh, prevFresh>>
 leafVars == <<up, cache, rp, stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale, replayRequested>>
 pinVars  == <<pinOff, pinHlc, hadSnap, row, purgeRec, cleared, deleted, purged>>
-vars == <<next, inflight, durable, tail, acked, orphans,
+vars == <<next, inflight, occ, tail, acked, orphans, hidden, resyncing, ct, curFresh, prevFresh,
           up, cache, rp, stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale, replayRequested,
           pinOff, pinHlc, hadSnap, row, purgeRec, cleared, deleted, purged, faults>>
 
 Pos == -1..(MaxOff - 1)
 
+\* The occupied offsets. A batch's start row is create-only, so its first
+\* occupant keeps it until trim. An offset inside a batch is not: a batch
+\* with another start can still write it, which "dup" records (issue
+\* #5810). Naming the occupant is enough to see a collision (issue #5799).
+durable == {o \in Offs : occ[o] # "none"}
+
 TypeOK ==
    /\ next \in 0..MaxOff
    /\ inflight \subseteq Offs
-   /\ durable \subseteq Offs
+   /\ occ \in [Offs -> {"none", "acked", "ackedMid", "ackedPrev", "late", "latePrev", "dup"}]
    /\ tail \in 0..MaxOff
    /\ acked \subseteq Offs
    /\ orphans \subseteq Offs
+   /\ hidden \subseteq orphans
+   /\ resyncing \in {"no", "resync", "recover"}
+   /\ ct \in -1..(MaxOff - 1)
+   /\ curFresh \in BOOLEAN
+   /\ prevFresh \in BOOLEAN
    /\ up \in [Leaves -> BOOLEAN]
    /\ cache \in [Leaves -> SUBSET Offs]
    /\ rp \in [Leaves -> Pos]
@@ -181,13 +229,17 @@ Readable == {o \in durable : o >= tail}
 
 \* One past the highest stored entry, never below the tail: what a recovering
 \* allocator hands out next (WalOffsetAllocationCore.RecoveredNextOffset).
-RecoveredNext == Max({tail} \cup {o + 1 : o \in durable})
+\* Cross-silo, recovery reads the TAIL row and only the TAIL row
+\* (AzureTableWalStorageProvider.GetHighestOffsetAsync); with one silo that row
+\* is exactly the highest stored offset.
+RecoveredNext == IF WithCrossSiloMove THEN Max({tail, ct + 1})
+                 ELSE Max({tail} \cup {o + 1 : o \in durable})
 
 \* A reader is shown only offsets below every unsettled append (in flight or
 \* abandoned) and below the offset a recovering allocator would hand out next
 \* (one past the highest stored entry): a trailing hole is never exposed, so no
 \* reader passes an offset a recovered allocator can reissue (issue #4621).
-Watermark == Min({next, RecoveredNext} \cup inflight \cup orphans)
+Watermark == Min({next, RecoveredNext} \cup inflight \cup (orphans \ hidden))
 
 Owned(l) == {o \in acked : Owner[o] = l}
 
@@ -217,10 +269,18 @@ Floor == Min({pinOff[l] : l \in {k \in Leaves : pinOff[k] >= 0}} \cup {MaxOff})
 Init ==
     /\ next = 0
     /\ inflight = {}
-    /\ durable = {}
+    /\ occ = [o \in Offs |-> "none"]
     /\ tail = 0
     /\ acked = {}
     /\ orphans = {}
+    /\ hidden = {}
+    /\ resyncing = "no"
+    \* The store's TAIL row, and whether each provider instance's view of it
+    \* is current (its cached ETag matches). Cross-silo only: with one silo the
+    \* TAIL row is the highest stored offset and is not tracked separately.
+    /\ ct = -1
+    /\ curFresh = TRUE
+    /\ prevFresh = FALSE
     /\ up = [l \in Leaves |-> TRUE]
     /\ cache = [l \in Leaves |-> {}]
     /\ rp = [l \in Leaves |-> -1]
@@ -254,14 +314,16 @@ Init ==
 (* flush completes.                                                        *)
 (***************************************************************************)
 Append ==
+    /\ resyncing = "no"
     /\ next < MaxOff
     /\ inflight' = inflight \cup {next}
     /\ next' = next + 1
-    /\ UNCHANGED <<durable, tail, acked>>
+    /\ UNCHANGED <<occ, tail, acked, resyncing>>
     /\ UNCHANGED leafVars
     /\ UNCHANGED pinVars
     /\ UNCHANGED faults
-    /\ UNCHANGED orphans
+    /\ UNCHANGED <<orphans, hidden>>
+    /\ UNCHANGED tailRowVars
 
 (***************************************************************************)
 (* FlushAck(o): one in-flight append's flush completes - flushes complete  *)
@@ -270,21 +332,43 @@ Append ==
 (* projection (the foreground apply); that never advances its read         *)
 (* position. When the owner is not active the write is acknowledged        *)
 (* without the apply, which over-approximates production (a write reaches  *)
-(* an active leaf) and leaves the owner to replay it.                      *)
+(* an active leaf) and leaves the owner to replay it. The store's entry    *)
+(* rows are create-only: a flush finding its offset already occupied - by  *)
+(* an abandoned call that landed first under an allocator rewound beneath  *)
+(* it - is refused; it is unacknowledged and fails the shard into its     *)
+(* resync.                                                                 *)
 (***************************************************************************)
+\* Batch shape, cross-silo only. Entry rows are create-only per batch: keyed
+\* by the batch's start offset, not per offset. A write may continue a batch
+\* only after an offset this activation acknowledged.
+MidOk(o) == WithCrossSiloMove /\ o > 0 /\ occ[o - 1] \in {"acked", "ackedMid", "dup"}
+
 FlushAck(o) ==
     /\ o \in inflight
     /\ inflight' = inflight \ {o}
-    /\ durable' = durable \cup {o}
-    /\ acked' = acked \cup {o}
-    /\ cache' = IF up[Owner[o]] /\ ~stale[Owner[o]]
-                THEN [cache EXCEPT ![Owner[o]] = @ \cup {o}]
-                ELSE cache
+    /\ \E kind \in IF MidOk(o) THEN {"acked", "ackedMid"} ELSE {"acked"} :
+       IF /\ ~WithCrossSiloMove \/ curFresh
+          /\ occ[o] = "none" \/ (kind = "ackedMid" /\ occ[o] = "latePrev")
+       THEN /\ occ' = [occ EXCEPT ![o] = IF occ[o] = "none" THEN kind ELSE "dup"]
+            /\ acked' = acked \cup {o}
+            \* The commit's TAIL write is conditional on the ETag this instance
+            \* last saw, so it lands only over a TAIL no other writer has moved,
+            \* and moves every other instance's view out of date.
+            /\ ct' = IF WithCrossSiloMove THEN Max({ct, o}) ELSE ct
+            /\ UNCHANGED curFresh
+            /\ prevFresh' = FALSE
+            /\ cache' = IF up[Owner[o]] /\ ~stale[Owner[o]]
+                        THEN [cache EXCEPT ![Owner[o]] = @ \cup {o}]
+                        ELSE cache
+            /\ UNCHANGED resyncing
+       ELSE /\ resyncing' = "resync"
+            /\ UNCHANGED <<occ, acked, cache>>
+            /\ UNCHANGED tailRowVars
     /\ UNCHANGED <<next, tail>>
     /\ UNCHANGED <<up, rp, stCp, durCp, anchor, clk, cov, snapCov, snapRows, stale, replayRequested>>
     /\ UNCHANGED pinVars
     /\ UNCHANGED faults
-    /\ UNCHANGED orphans
+    /\ UNCHANGED <<orphans, hidden>>
 
 (***************************************************************************)
 (* ShardCrash: the WAL shard's activation is lost at any step. Every       *)
@@ -296,42 +380,161 @@ ShardCrash ==
     /\ faults < MaxFaults
     /\ inflight' = {}
     /\ next' = RecoveredNext
+    /\ resyncing' = "no"
     /\ faults' = faults + 1
-    /\ UNCHANGED <<durable, tail, acked>>
+    /\ UNCHANGED <<occ, tail, acked>>
+    \* The next activation's recovery reads and re-stamps TAIL, as ShardRecover.
+    /\ UNCHANGED ct
+    /\ curFresh' = TRUE
+    /\ prevFresh' = FALSE
     /\ UNCHANGED leafVars
     /\ UNCHANGED pinVars
-    \* An abandoned call dies with the process (in-memory and file providers),
-    \* or can land only at or above the committed tail (Azure Table: phase 2
-    \* commits in offset order and ReconcileAsync rolls a late phase-1 row
-    \* forward in order or back), so no orphan survives to land below a reader.
-    /\ orphans' = {}
+    \* This process's abandoned calls die with it (in-memory and file
+    \* providers), or are rolled forward in order or back by the next
+    \* activation's ReconcileAsync (Azure Table). A call a predecessor abandoned
+    \* on another silo runs in a process this crash does not kill, so it stays
+    \* in motion, still hidden.
+    /\ orphans' = hidden
+    /\ UNCHANGED hidden
+
+(***************************************************************************)
+(* ActivationLoss: the WAL shard's grain activation is lost on a silo that *)
+(* keeps running - a deactivation, or a reactivation elsewhere. Unlike a   *)
+(* process crash, every provider call it started keeps running: each      *)
+(* in-flight flush loses its acknowledgement and becomes an abandoned call *)
+(* in motion, with the abandoned calls already in motion. A new activation *)
+(* on the same silo sees them all (WalAbandonedFlushRegistry is per        *)
+(* process); one on another silo sees none of them, so they become hidden. *)
+(* The new activation recovers the allocator (ShardRecover) before it      *)
+(* hands out an offset (issue #5799).                                      *)
+(***************************************************************************)
+ActivationLoss ==
+    /\ WithActivationLoss
+    /\ faults < MaxFaults
+    /\ inflight' = {}
+    /\ orphans' = orphans \cup inflight
+    /\ \E otherSilo \in IF WithCrossSiloMove THEN BOOLEAN ELSE {FALSE} :
+         /\ hidden' = IF otherSilo THEN orphans \cup inflight ELSE hidden
+         \* The predecessor's rows, written through its own silo's provider.
+         /\ occ' = IF otherSilo
+                   THEN [o \in Offs |-> CASE occ[o] \in {"acked", "ackedMid"} -> "ackedPrev"
+                                          [] occ[o] = "late" -> "latePrev"
+                                          [] OTHER -> occ[o]]
+                   ELSE occ
+         \* The predecessor's provider instance keeps its view of TAIL; the
+         \* successor's instance reads TAIL when it recovers.
+         /\ prevFresh' = IF otherSilo THEN curFresh ELSE prevFresh
+    /\ UNCHANGED <<ct, curFresh>>
+    /\ resyncing' = "recover"
+    /\ faults' = faults + 1
+    /\ UNCHANGED <<next, tail, acked>>
+    /\ UNCHANGED leafVars
+    /\ UNCHANGED pinVars
+
+(***************************************************************************)
+(* Re-seeding the allocator (issue #5799). Resync: the post-failure resync *)
+(* (WalShardGrain.HandleFlushFailureAsync) waits for the later slots'      *)
+(* flushes, then re-seeds the next offset from the store. ShardRecover: a  *)
+(* new activation's recovery (OnActivateAsync) does the same. Neither     *)
+(* waits for an abandoned call still in motion: each re-seeds to at least *)
+(* the end of every one (ReseedNext), so no offset is handed out beneath  *)
+(* work in motion. A call that never lands leaves a hole readers settle   *)
+(* past (#4621). A hidden call (a predecessor's on another silo) cannot  *)
+(* be seen, so its offset may be reissued. The TAIL commit fence then    *)
+(* keeps the reissue and the call from both landing: whichever commits   *)
+(* second finds TAIL moved and is refused (issue #5810).                 *)
+(***************************************************************************)
+ReseedNext == Max({RecoveredNext} \cup {o + 1 : o \in orphans \ hidden})
+
+Resync ==
+    /\ resyncing = "resync"
+    /\ inflight = {}
+    /\ next' = ReseedNext
+    /\ resyncing' = "no"
+    /\ UNCHANGED <<inflight, occ, tail, acked, orphans, hidden>>
+    \* The re-seed's reconcile reads TAIL with its ETag (a refused conditional
+    \* write's detection: the instance's fence generation moves on, so nothing
+    \* it claimed before the read is ever committed) and re-stamps it, as
+    \* ShardRecover does (issue #5825).
+    /\ UNCHANGED ct
+    /\ curFresh' = TRUE
+    /\ prevFresh' = FALSE
+    /\ UNCHANGED leafVars
+    /\ UNCHANGED pinVars
+    /\ UNCHANGED faults
+
+ShardRecover ==
+    /\ resyncing = "recover"
+    /\ next' = ReseedNext
+    /\ resyncing' = "no"
+    /\ UNCHANGED <<inflight, occ, tail, acked, orphans, hidden>>
+    \* The new activation reads TAIL with its ETag and, before it serves a
+    \* read, re-stamps it: a conditional write of the same value under that
+    \* ETag, retried after a re-read when it is refused. The new ETag puts
+    \* every other instance's view out of date, so a predecessor's late
+    \* commit is refused by the fence (issue #5825).
+    /\ UNCHANGED ct
+    /\ curFresh' = TRUE
+    /\ prevFresh' = FALSE
+    /\ UNCHANGED leafVars
+    /\ UNCHANGED pinVars
+    /\ UNCHANGED faults
 
 (***************************************************************************)
 (* Abandon(o): an append's flush misses its deadline, or the drain budget  *)
 (* expires under it. Its acknowledgement is faulted, but the provider call *)
 (* is still running and may yet land (issue #4621). The abandoned offset   *)
 (* bounds the watermark until the call settles: WalAbandonedFlushRegistry. *)
+(* The failed flush fails the shard into its resync.                       *)
 (* LateLand(o): the abandoned call lands. A provider refuses a write at an *)
-(* occupied offset (create-only) or at or below its trim watermark, so the *)
-(* entry appears only in a gap no reader has passed. SettleHole(o): the    *)
-(* call settles without landing; the offset is a permanent hole, which    *)
+(* occupied offset (insert-only entry and manifest rows, whichever silo   *)
+(* wrote the occupant) or at or below its trim watermark, so the entry     *)
+(* appears only in a gap no reader has passed. SettleHole(o): the call    *)
+(* settles without landing; the offset is a permanent hole, which         *)
 (* readers then pass and the trim watermark distinguishes from a trim.     *)
 (***************************************************************************)
 Abandon(o) ==
+    /\ WithAbandonedFlush
     /\ o \in inflight
     /\ faults < MaxFaults
     /\ inflight' = inflight \ {o}
     /\ orphans' = orphans \cup {o}
+    /\ UNCHANGED hidden
+    /\ resyncing' = IF resyncing = "no" THEN "resync" ELSE resyncing
     /\ faults' = faults + 1
-    /\ UNCHANGED <<next, durable, tail, acked>>
+    /\ UNCHANGED <<next, occ, tail, acked>>
+    /\ UNCHANGED tailRowVars
     /\ UNCHANGED leafVars
     /\ UNCHANGED pinVars
 
 LateLand(o) ==
     /\ o \in orphans
     /\ orphans' = orphans \ {o}
-    /\ durable' = IF o \notin durable /\ o >= tail THEN durable \cup {o} ELSE durable
-    /\ UNCHANGED <<next, inflight, tail, acked>>
+    /\ hidden' = hidden \ {o}
+    \* A hidden call is the predecessor's: its instance commits phase 2 in
+    \* arrival order, not offset order, so it may land below a row of its own
+    \* (issue #5825). Its batch's start is create-only; an offset the
+    \* successor wrote mid-batch is not. Either
+    \* writer's commit lands only while its view of TAIL is current; otherwise
+    \* the conditional TAIL write is refused and the call settles unlanded.
+    /\ IF o \in hidden
+       THEN IF /\ o >= tail
+               /\ prevFresh
+               /\ occ[o] \in {"none", "ackedMid"}
+            THEN /\ occ' = [occ EXCEPT ![o] = IF occ[o] = "none" THEN "latePrev" ELSE "dup"]
+                 /\ ct' = Max({ct, o})
+                 /\ curFresh' = FALSE
+                 /\ UNCHANGED prevFresh
+            ELSE UNCHANGED <<occ, ct, curFresh, prevFresh>>
+       ELSE IF /\ o >= tail
+               /\ ~WithCrossSiloMove \/ curFresh
+               /\ occ[o] = "none"
+            THEN /\ occ' = [occ EXCEPT ![o] = "late"]
+                 /\ ct' = IF WithCrossSiloMove THEN Max({ct, o}) ELSE ct
+                 /\ prevFresh' = FALSE
+                 /\ UNCHANGED curFresh
+            ELSE UNCHANGED <<occ, ct, curFresh, prevFresh>>
+    /\ UNCHANGED <<next, inflight, tail, acked, resyncing>>
     /\ UNCHANGED leafVars
     /\ UNCHANGED pinVars
     /\ UNCHANGED faults
@@ -339,7 +542,9 @@ LateLand(o) ==
 SettleHole(o) ==
     /\ o \in orphans
     /\ orphans' = orphans \ {o}
-    /\ UNCHANGED <<next, inflight, durable, tail, acked>>
+    /\ hidden' = hidden \ {o}
+    /\ UNCHANGED <<next, inflight, occ, tail, acked, resyncing>>
+    /\ UNCHANGED tailRowVars
     /\ UNCHANGED leafVars
     /\ UNCHANGED pinVars
     /\ UNCHANGED faults
@@ -376,6 +581,9 @@ ReadStep(l) ==
     /\ up[l]
     /\ ~stale[l]
     /\ replayRequested[l]
+    \* A new WAL shard activation serves no read until its recovery completes
+    \* (WalShardGrain.OnActivateAsync).
+    /\ resyncing # "recover"
     /\ ReadFrom(l) < Watermark
     /\ LET o == ReadFrom(l)
        IN /\ rp' = [rp EXCEPT ![l] = o]
@@ -528,9 +736,10 @@ GcTrim ==
          \* watermark (#4621), so it fails unacknowledged: safe, and not explored.
          /\ t <= Watermark
          /\ tail' = t
-         /\ durable' = {o \in durable : o >= t}
-    /\ UNCHANGED <<next, inflight, acked>>
-    /\ UNCHANGED orphans
+         /\ occ' = [o \in Offs |-> IF o >= t THEN occ[o] ELSE "none"]
+    /\ UNCHANGED <<next, inflight, acked, resyncing>>
+    /\ UNCHANGED <<orphans, hidden>>
+    /\ UNCHANGED tailRowVars
     /\ UNCHANGED leafVars
     /\ UNCHANGED pinVars
     /\ UNCHANGED faults
@@ -813,6 +1022,18 @@ PurgeSettled ==
     /\ purged
     /\ UNCHANGED vars
 
+\* The instance's offsets are spent and nothing is in motion: with every one a
+\* settled hole there is no write above them, so no reader may pass them (a
+\* trailing hole is never exposed, #4621). In production the next write lifts
+\* the watermark; the bounded instance has none, so it rests here.
+OffsetsExhausted ==
+    /\ next = MaxOff
+    /\ inflight = {}
+    /\ orphans = {}
+    /\ resyncing = "no"
+    /\ durable = {}
+    /\ UNCHANGED vars
+
 \* The action constraint the checked configurations apply. While a purge marker
 \* is outstanding the tree is deleted and refuses data operations, so only the
 \* purge, the recovery, the GC, environment faults and leaf (de)activation are
@@ -849,6 +1070,9 @@ Next ==
     \/ \E o \in Offs : LateLand(o)
     \/ \E o \in Offs : SettleHole(o)
     \/ ShardCrash
+    \/ ActivationLoss
+    \/ Resync
+    \/ ShardRecover
     \/ \E l \in Leaves : ScheduleReplay(l)
     \/ \E l \in Leaves : ReadStep(l)
     \/ \E l \in Leaves : PersistCheckpoint(l)
@@ -869,6 +1093,7 @@ Next ==
     \/ \E l \in Leaves : PurgeClear(l)
     \/ \E l \in Leaves : Recover(l)
     \/ PurgeSettled
+    \/ OffsetsExhausted
 
 (***************************************************************************)
 (* Fairness: the protocol's own steps are weakly fair - appends complete,  *)
@@ -884,6 +1109,8 @@ Spec ==
     /\ WF_vars(Append)
     /\ \A o \in Offs : WF_vars(FlushAck(o))
     /\ \A o \in Offs : WF_vars(LateLand(o) \/ SettleHole(o))
+    /\ WF_vars(Resync)
+    /\ WF_vars(ShardRecover)
     /\ WF_vars(GcTrim)
     /\ \A l \in Leaves : WF_vars(ScheduleReplay(l))
     /\ \A l \in Leaves : WF_vars(ReadStep(l))
@@ -943,6 +1170,33 @@ OffsetContiguity ==
     /\ acked \cap inflight = {}
     /\ \A o \in acked \cup inflight : o < next
 
+\* Every acknowledged write still occupies its offset: no other write has
+\* taken it - a late-landing abandoned call, or a reissue of the offset - while
+\* it is stored (issue #5799). The offset-level invariants above cannot see a
+\* collision; this names the occupant.
+AckedOccupies ==
+    \A o \in acked : occ[o] # "none" => occ[o] \in {"acked", "ackedMid", "ackedPrev", "dup"}
+
+\* While the shard's provider instance holds a current view of TAIL and no
+\* re-seed is pending, its allocator is above TAIL: every offset it can claim
+\* lies above everything committed when it last read TAIL
+\* (WalShardCommitFence's guard covers its fence, issue #5810).
+GuardCoversFence ==
+    (WithCrossSiloMove /\ curFresh /\ resyncing = "no") => ct < next
+
+\* No offset is ever written twice: two batches with different start offsets
+\* never both hold one (issue #5810).
+OffsetWrittenOnce ==
+    \A o \in Offs : occ[o] # "dup"
+
+\* The allocator never hands out an offset at or below an abandoned call still
+\* in motion that the shard's activation can see: every re-seed starts above
+\* them (issue #5799). A predecessor's call on another silo is invisible to it,
+\* and AckedOccupies and OffsetWrittenOnce then rest on the TAIL commit fence
+\* (issue #5810).
+AllocatorAboveOrphans ==
+    \A o \in orphans \ hidden : o < next
+
 \* Recovery never falls off the log: no leaf ever latches stale.
 RecoveryNeverFallsOffLog ==
     \A l \in Leaves : ~stale[l]
@@ -959,6 +1213,15 @@ PersistedBeliefHonest ==
 \* violation, and reachable with no fault at all.
 ReleaseBackedBySnapshot ==
     \A l \in Leaves : pinOff[l] >= 0 => snapCov[l] >= pinOff[l]
+
+\* The store's TAIL row never regresses (issue #5810).
+TailMonotone ==
+    [][ ct' >= ct ]_vars
+
+\* A re-seeded allocator never hands out an offset a committed batch holds:
+\* every stored entry lies below it (issue #5810).
+RecoverNeverInsideCommitted ==
+    [][ (Resync \/ ShardRecover \/ ShardCrash) => \A o \in durable : o < next' ]_vars
 
 \* Durable snapshot coverage never regresses.
 SnapshotCoverageMonotonic ==

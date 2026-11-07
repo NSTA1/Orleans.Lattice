@@ -1372,9 +1372,21 @@ internal sealed partial class BPlusLeafGrain
         if (txid == Guid.Empty) return TxStatus.InFlight;
         var treeId = state.State.TreeId;
         if (string.IsNullOrEmpty(treeId)) return TxStatus.InFlight;
-        return await TxRegistryRouting
-            .GetRegistry(grainFactory, treeId, txid)
-            .GetStatusForSettlementAsync(txid);
+
+        // Pass 2.5 resolves under the replay's permit; the registry's own
+        // activation can need one (issue #5775), so the permit is out for the call.
+        var suspended = SuspendReplayPermit();
+        try
+        {
+            return await TxRegistryRouting
+                .GetRegistry(grainFactory, treeId, txid)
+                .GetStatusForSettlementAsync(txid);
+        }
+        finally
+        {
+            if (suspended is not null)
+                await ResumeReplayPermitAsync(suspended);
+        }
     }
 
     /// <summary>
@@ -2490,6 +2502,12 @@ internal sealed partial class BPlusLeafGrain
         // backstop to the leaf that declares it rather than stored here,
         // where it would duplicate that leaf's row in the shard's chain.
         Dictionary<GrainId, Dictionary<string, byte[]>>? forwarded = null;
+
+        // #5664 (a): admitted against this activation's hand-off closes before the span
+        // check below. The forwards are awaited before the local backstop appends, so a
+        // split can narrow this leaf in between; a backstop for a key it then no longer
+        // owns is self-fenced at dispatch, never appended under the close's raised epoch.
+        var backstopAdmission = StampedRouting(WalRoutingStamp.None);
         if (missingKeys is { Count: > 0 } && HasDeclaredSpan)
         {
             List<KeyValuePair<string, byte[]>>? local = null;
@@ -2531,7 +2549,14 @@ internal sealed partial class BPlusLeafGrain
                 // so the declaring leaf applies it at that stamp too.
                 using (LatticeOriginalPrepareStampContext.With(SelectStamps(missingStamps, subset.Keys)))
                 {
-                    forwards[f++] = grainFactory.GetGrain<IBPlusLeafGrain>(target).ApplyTxTerminalAsync(transactionId, committed: true, subset);
+                    var terminalTarget = grainFactory.GetGrain<IBPlusLeafGrain>(target);
+                    forwards[f++] = WalFenceSeamRetry.RunAsync(
+                        () => WalForwardChain.ForwardAsync(
+                            WalForwardChain.KeyOf(context.GrainId),
+                            WalForwardChain.KeyOf(target),
+                            () => terminalTarget.ApplyTxTerminalAsync(transactionId, committed: true, subset)),
+                        WalFenceSeamRetry.CallerLeaf,
+                        state.State.TreeId);
                 }
             }
             await Task.WhenAll(forwards);
@@ -2751,6 +2776,8 @@ internal sealed partial class BPlusLeafGrain
                     anyFreshStamp = true;
                 }
 
+                WalRecord? backstopEntry = null;
+                long backstopOffset = -1;
                 if (writer is not null)
                 {
                     var entry = new WalRecord
@@ -2788,7 +2815,8 @@ internal sealed partial class BPlusLeafGrain
                     var walStartTicks = Stopwatch.GetTimestamp();
                     try
                     {
-                        await writer.AppendAsync(entry);
+                        backstopOffset = await AppendRoutedAsync(writer, entry, backstopAdmission);
+                        backstopEntry = entry;
                     }
                     finally
                     {
@@ -2811,6 +2839,11 @@ internal sealed partial class BPlusLeafGrain
                 StoreEntry(kvp.Key, value);
                 if (joinCrdtState)
                     Cache.SetMergeMode(kvp.Key, backstopMode);
+                // The backstop's append is applied (issue #5572).
+                if (backstopEntry is { } appliedBackstop)
+                {
+                    MarkLiveAppendApplied(appliedBackstop, backstopOffset);
+                }
                 // A backstop at a fresh stamp, or at an original stamp minted
                 // on this shard, is a non-migration write: any prior
                 // migration-provenance marker for this key is now stale and

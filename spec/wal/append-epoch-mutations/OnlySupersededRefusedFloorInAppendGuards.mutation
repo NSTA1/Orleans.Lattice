@@ -1,0 +1,27 @@
+# Pairs with OnlySupersededRefused. The floor check is put back into the append
+# steps' guards, leaving the admission predicate alone, so a property defined
+# through that predicate would not see it. The behavioural property does: a live
+# leaf's append is refused after another leaf's retirement (#5635).
+MODULE: OnlySupersededRefusedFloorInAppendGuards
+TARGET: OnlySupersededRefused
+CLASS: Invariant
+SUMMARY: the append guards check the partition's retired floor beside the entry
+PERTURBS: OwnAlloc, StaleAppend
+
+--- FIND
+    /\ AppendAdmits(a)
+    /\ next < MaxOff
+--- REPLACE
+\* MUTATION: the floor is checked in the guard.
+    /\ AppendAdmits(a) /\ epoch[a] > retired
+    /\ next < MaxOff
+--- END
+
+--- FIND
+    /\ ~AppendAdmits(a)
+    /\ up' = up \ {a}
+--- REPLACE
+\* MUTATION: the floor is checked in the guard.
+    /\ ~AppendAdmits(a) \/ epoch[a] <= retired
+    /\ up' = up \ {a}
+--- END

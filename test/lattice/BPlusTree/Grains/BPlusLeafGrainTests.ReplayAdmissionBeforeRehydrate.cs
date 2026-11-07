@@ -147,6 +147,8 @@ public partial class BPlusLeafGrainTests
             Assert.That(ArmOf(refusals.Single()), Is.EqualTo("holders_slow"));
             Assert.That(refusal!.Message, Does.Contain("still advancing"));
             Assert.That(refusal.Message, Does.Not.Contain("not coming back"));
+            Assert.That(refusal.Message, Does.Contain(" Permit holders:").And.Contain("queued waiters"),
+                "a slow-holders refusal must name the permit holders, as a stalled one does: the remedy depends on what they are doing");
         });
     }
 

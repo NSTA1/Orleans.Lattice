@@ -93,7 +93,8 @@ public sealed class SchemaRemediationStatusInterleaveIntegrationTests
     }
 
     /// <summary>
-    /// Holds the first <see cref="Orleans.Lattice.ILattice.SetAsync(string, byte[], System.Threading.CancellationToken)"/> into an armed tree's
+    /// Holds the first write (<see cref="Orleans.Lattice.ILattice.SetAsync(string, byte[], System.Threading.CancellationToken)"/>,
+    /// or the batched <see cref="Orleans.Lattice.ILattice.SetManyAsync"/> the build sends per chunk, issue #5802) into an armed tree's
     /// remediation destination (<c>{treeId}/remediated/{operationId}</c>) until the
     /// test releases it, keeping the coordinator inside its build phase.
     /// </summary>
@@ -113,7 +114,7 @@ public sealed class SchemaRemediationStatusInterleaveIntegrationTests
         public async Task Invoke(IOutgoingGrainCallContext context)
         {
             if (context.InterfaceMethod?.DeclaringType == typeof(ILattice)
-                && context.MethodName == nameof(ILattice.SetAsync)
+                && context.MethodName is nameof(ILattice.SetAsync) or nameof(ILattice.SetManyAsync)
                 && context.TargetId.Key.ToString() is { } key
                 && key.IndexOf(DestinationInfix, StringComparison.Ordinal) is var at and > 0
                 && Holds.TryGetValue(key[..at], out var hold))

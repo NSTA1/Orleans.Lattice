@@ -1,0 +1,18 @@
+# The re-seed skips the catch-up whenever it finds a marker, without checking that
+# the marker carries this incarnation's identity (#5716). After a purge that
+# finished on 10.2.0 the first re-seed finds the purged incarnation's marker,
+# still initialised, and leaves it: L's marker reads initialised with no close
+# above the purged incarnation's appends.
+MODULE: StraddlerBelowInitSkipWithoutIncarnation
+TARGET: StraddlerBelowInit
+CLASS: Invariant
+SUMMARY: the re-seed skips the catch-up without reading the marker's incarnation
+PERTURBS: CatchUpSkip
+
+--- FIND
+    /\ markNew
+    /\ dup' = caught
+--- REPLACE
+\* MUTATION: the marker's incarnation is not checked.
+    /\ dup' = caught
+--- END

@@ -1,0 +1,20 @@
+# Pairs with AllocatorAboveOrphans. The issue #5799 defect: the post-failure
+# resync re-seeds the allocator from the store alone (one past the highest
+# stored entry), ignoring the abandoned calls still in motion, so it hands an
+# offset out again beneath one of them.
+MODULE: AllocatorAboveOrphansResyncRewindsToStoreTail
+TARGET: AllocatorAboveOrphans
+CLASS: Invariant
+SUMMARY: the post-failure resync re-seeds from the store, beneath an abandoned call in motion
+PERTURBS: Resync
+
+--- FIND
+    /\ resyncing = "resync"
+    /\ inflight = {}
+    /\ next' = ReseedNext
+--- REPLACE
+    /\ resyncing = "resync"
+    /\ inflight = {}
+\* MUTATION: re-seed from the store alone.
+    /\ next' = RecoveredNext
+--- END

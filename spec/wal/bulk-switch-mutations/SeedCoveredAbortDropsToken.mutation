@@ -1,0 +1,20 @@
+# Pairs with SeedCovered (review C1). A token removed without its close's
+# re-claim leaves the abandoned attempt's seed in flight admissible, with no
+# marker and no close heads to cover it.
+MODULE: SeedCoveredAbortDropsToken
+TARGET: SeedCovered
+CLASS: Invariant
+SUMMARY: an abandoned attempt removes its switch token without a close
+PERTURBS: Abort
+
+--- FIND
+    /\ aborted' = TRUE
+    /\ phase' = "retry"
+    /\ UNCHANGED <<next, author, rowsO, rpO, fO, narrowed, cst, cCounted, hint, tokOpen, prevOpen, prevHint,
+--- REPLACE
+    /\ aborted' = TRUE
+    /\ phase' = "retry"
+\* MUTATION: the token is dropped, unfenced.
+    /\ tokOpen' = FALSE
+    /\ UNCHANGED <<next, author, rowsO, rpO, fO, narrowed, cst, cCounted, hint, prevOpen, prevHint,
+--- END

@@ -668,6 +668,31 @@ public sealed class AzureTableWalStorageOptions
     public static readonly TimeSpan DefaultSaturationShortCircuitCooldown = TimeSpan.FromSeconds(2);
 
     /// <summary>
+    /// The least time between two trims of one WAL partition, on one provider
+    /// instance, that sweep its batch partitions from the first rather than from the
+    /// previous trim watermark.
+    /// <para>
+    /// Trim deletes entry rows with a key-range sweep that also reaches batch
+    /// partitions no commit metadata names: the rows a refused or failed append leaves
+    /// when its writer stops before reconciling. A steady trim sweeps only the span
+    /// above the previous watermark, which covers everything new since the last trim.
+    /// Such rows can also land below an earlier watermark, so about once per interval a
+    /// trim of each WAL partition sweeps from the first batch partition instead. The
+    /// first such sweep of a WAL partition a provider instance has not yet trimmed is
+    /// scheduled at a random point within one interval, so a restart does not line up
+    /// every partition's full sweep at once. A full sweep may cost extra query pages
+    /// over the range earlier trims emptied, so the interval keeps it occasional.
+    /// </para>
+    /// <para>
+    /// Default 6 hours. <see cref="TimeSpan.Zero"/> makes every trim a full sweep.
+    /// </para>
+    /// </summary>
+    public TimeSpan TrimFullSweepInterval { get; set; } = DefaultTrimFullSweepInterval;
+
+    /// <summary>Default value for <see cref="TrimFullSweepInterval"/> (6 hours).</summary>
+    public static readonly TimeSpan DefaultTrimFullSweepInterval = TimeSpan.FromHours(6);
+
+    /// <summary>
     /// Maximum number of <i>additional</i> in-place phase-1 commit attempts the provider makes
     /// after a <b>transient</b> fault before it surfaces the fault to the calling
     /// <c>WalShardGrain</c>. <c>2</c> (the default) means up to three total attempts per phase-1
@@ -924,6 +949,12 @@ public sealed class AzureTableWalStorageOptions
         {
             throw new InvalidOperationException(
                 $"{nameof(AzureTableWalStorageOptions)}.{nameof(SaturationShortCircuitCooldown)} must be non-negative.");
+        }
+
+        if (TrimFullSweepInterval < TimeSpan.Zero)
+        {
+            throw new InvalidOperationException(
+                $"{nameof(AzureTableWalStorageOptions)}.{nameof(TrimFullSweepInterval)} must be non-negative.");
         }
 
         if (CompressionMinPayloadBytes < 0)

@@ -67,4 +67,34 @@ public abstract class GrpcTransientFaultMappingContractTestsBase
             + "Internal. Offenders:"
             + Environment.NewLine + string.Join(Environment.NewLine, offenders));
     }
+
+    /// <summary>
+    /// Every catch chain that maps the transient cluster faults also maps a WAL shard
+    /// quiesced for a placement move (#5800), ahead of any broader clause.
+    /// </summary>
+    /// <remarks>
+    /// <c>LatticeWalQuiescingException</c> is transient, self-healing back-pressure: the
+    /// refused write was never committed and the caller should retry shortly. It derives
+    /// from <see cref="InvalidOperationException"/>, so a chain without its own arm, or
+    /// with one below a <c>catch (InvalidOperationException)</c> or <c>catch (Exception)</c>,
+    /// reports it as <c>FailedPrecondition</c> or <c>Internal</c> and the client does not
+    /// retry a write that would succeed moments later.
+    /// </remarks>
+    [Test]
+    public void Every_grpc_facade_chain_maps_a_wal_quiesce_ahead_of_broader_catches()
+    {
+        var offenders = GrpcFacadeCatchClauses.DiscoverServices(PackageAssembly)
+            .SelectMany(service => GrpcFacadeCatchClauses.ChainsMissingOrShadowing(
+                service,
+                "OrleansMessageRejectionException",
+                "LatticeWalQuiescingException",
+                [nameof(InvalidOperationException), nameof(Exception)]))
+            .ToList();
+
+        Assert.That(offenders, Is.Empty,
+            "A WAL shard quiesced for a placement move refuses appends briefly and commits nothing; every facade "
+            + "chain must map it to the retryable Unavailable before a broader clause reports it as a precondition "
+            + "failure or a server error. Offenders:"
+            + Environment.NewLine + string.Join(Environment.NewLine, offenders));
+    }
 }

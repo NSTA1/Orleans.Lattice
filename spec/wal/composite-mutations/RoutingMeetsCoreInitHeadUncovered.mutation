@@ -1,0 +1,13 @@
+# Pairs with RoutingMeetsCoreInit (R -> C). InitHeadCoversPriorAllocations is dropped, so the
+# first initialisation records a head at or below a record allocated before it.
+MODULE: RoutingMeetsCoreInitHeadUncovered
+TARGET: RoutingMeetsCoreInit
+CLASS: Invariant
+SUMMARY: InitHeadCoversPriorAllocations is dropped
+
+--- FIND
+    /\ (~recreated /\ recreated' /\ ~legacy') \/ CloseHeadMonotone
+    /\ InitHeadCoversPriorAllocations
+--- REPLACE
+    /\ (~recreated /\ recreated' /\ ~legacy') \/ CloseHeadMonotone
+--- END

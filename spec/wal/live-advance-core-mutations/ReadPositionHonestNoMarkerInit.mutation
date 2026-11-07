@@ -1,0 +1,21 @@
+# The initialised conjunct of Armed dropped: an absent marker, deleted by the
+# purge, does not hold L, so the re-created incarnation arms while a straddler of
+# the purged incarnation is still being allocated. The design kept this guard as a
+# redundancy check (clean in its LegacyHandOff configuration); with the purge
+# in the environment it is load-bearing here. It edits the Armed predicate, so it
+# names no perturbed action.
+MODULE: ReadPositionHonestNoMarkerInit
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the activation arms while L's marker state is not initialised
+BOUNDS: WithRecreate = TRUE, WithUnclaimedSurvivor = FALSE, WithPreArm = FALSE
+
+--- FIND
+    /\ claimed[a]
+    /\ mInit
+
+--- REPLACE
+    /\ claimed[a]
+\* MUTATION: an uninitialised marker does not hold the advance.
+
+--- END

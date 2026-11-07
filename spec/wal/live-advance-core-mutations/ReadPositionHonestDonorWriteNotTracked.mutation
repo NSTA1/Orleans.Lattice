@@ -1,0 +1,15 @@
+# #5837: the donor's close head is above its moved-key writes since the heads, which it
+# tracks from its own append responses.
+MODULE: ReadPositionHonestDonorWriteNotTracked
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the donor's write for L's keys after the heads is not tracked by its closing activation, so its close head misses it
+PERTURBS: DonorAlloc
+BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithKeyMove = TRUE, MaxWindows = 1, WithMixedVersion = FALSE, WithDuplicate = FALSE
+
+--- FIND
+    /\ dKnown' = dKnown \cup {next}
+--- REPLACE
+\* MUTATION: the write is not tracked.
+    /\ UNCHANGED dKnown
+--- END

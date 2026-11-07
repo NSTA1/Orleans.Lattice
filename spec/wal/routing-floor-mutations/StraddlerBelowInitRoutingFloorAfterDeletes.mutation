@@ -1,0 +1,19 @@
+# The purge writes the routing floor after deleting the fence rows, and crashes
+# between them (#5668). Its re-drive reads the maximum over rows that are already
+# gone, so no floor is raised, at the row or at the WAL, and the re-created
+# incarnation's first initialisation seeds the old floor plus one, at or below the
+# straddler's generation: the straddler re-presents a claim the floor does not
+# refuse, and is allocated above the recorded close. Moved from the design's
+# ReadPositionHonestRoutingFloorAfterDeletes.
+MODULE: StraddlerBelowInitRoutingFloorAfterDeletes
+TARGET: StraddlerBelowInit
+CLASS: Invariant
+SUMMARY: the routing floor is max-merged after the fence rows are deleted, with a crash between
+PERTURBS: Purge
+
+--- FIND
+    /\ LET rf == [i \in Inits |-> Max2(rowFloor[i], Max2(gen[i], Max2(entryRow[i], loaded[i])))] IN
+--- REPLACE
+\* MUTATION: the re-drive after the crash reads deleted rows; no floor is raised.
+    /\ LET rf == rowFloor IN
+--- END

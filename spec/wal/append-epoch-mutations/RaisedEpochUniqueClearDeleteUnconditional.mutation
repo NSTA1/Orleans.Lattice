@@ -1,0 +1,22 @@
+# Pairs with RaisedEpochUnique. The clear deletes the epoch row unconditionally.
+# A pre-clear activation bumps its row between the clear's read and its delete (a
+# refusal by the floor the clear just raised, or a bump forced on another
+# partition); the delete removes the bumped row, so the re-created incarnation's
+# claim reaches the same value, admitted above the entry or as AlreadyDurable:
+# both hold it.
+MODULE: RaisedEpochUniqueClearDeleteUnconditional
+TARGET: RaisedEpochUnique
+CLASS: Invariant
+SUMMARY: the clear deletes the epoch row whatever its ETag
+PERTURBS: ClearDelete
+
+--- FIND
+    /\ IF <<rowInc, rowEpoch>> = clrTag
+       THEN /\ rowEpoch' = 0
+            /\ rowInc' = rowInc + 1
+       ELSE UNCHANGED <<rowEpoch, rowInc>>
+--- REPLACE
+\* MUTATION: the delete is not conditional on the ETag read.
+    /\ rowEpoch' = 0
+    /\ rowInc' = rowInc + 1
+--- END

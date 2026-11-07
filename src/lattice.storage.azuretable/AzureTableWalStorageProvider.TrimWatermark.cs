@@ -65,9 +65,10 @@ public sealed partial class AzureTableWalStorageProvider
 
     /// <summary>
     /// Durably raises the shard's trim watermark row to at least
-    /// <paramref name="throughOffsetInclusive"/>, never lowering it.
+    /// <paramref name="throughOffsetInclusive"/>, never lowering it, and returns the
+    /// value the row held before, or -1 when it was absent.
     /// </summary>
-    private async Task RaiseTrimWatermarkAsync(
+    private async Task<long> RaiseTrimWatermarkAsync(
         TableClient table,
         string manifestPartitionKey,
         long throughOffsetInclusive,
@@ -109,7 +110,7 @@ public sealed partial class AzureTableWalStorageProvider
                 }
 
                 NoteTrimWatermark(manifestPartitionKey, Math.Max(existing?.Offset ?? -1L, throughOffsetInclusive));
-                return;
+                return existing?.Offset ?? -1L;
             }
             catch (RequestFailedException ex) when (ex.Status is 409 or 412)
             {

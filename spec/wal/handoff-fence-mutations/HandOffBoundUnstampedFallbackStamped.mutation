@@ -1,0 +1,16 @@
+# Pairs with HandOffBound. A rejected range-delete walk whose own intent has
+# closed is appended stamped with the generation the fence grain hands out now,
+# instead of unstamped and reported. It passes the re-claimed entry and is
+# allocated above the head the close recorded, with no marker holding L.
+MODULE: HandOffBoundUnstampedFallbackStamped
+TARGET: HandOffBound
+CLASS: Invariant
+SUMMARY: a walk whose intent has closed goes on stamped with the current generation instead of unstamped
+PERTURBS: GUnstamped
+
+--- FIND
+    /\ author' = [author EXCEPT ![next] = "u"]
+--- REPLACE
+\* MUTATION: stamped with the current generation, not unstamped.
+    /\ author' = [author EXCEPT ![next] = "g"]
+--- END

@@ -203,39 +203,119 @@ internal sealed partial class BPlusLeafGrain
     /// The commit-log writer the leaf appends through: every append first raises
     /// the override holds its records need (issue #4641).
     /// </summary>
-    private sealed class OverrideHoldCommitLogWriter(BPlusLeafGrain leaf, ICommitLogWriter inner) : ICommitLogWriter
+    private sealed class OverrideHoldCommitLogWriter(BPlusLeafGrain leaf, ICommitLogWriter inner) : IRoutingStampedCommitLogWriter
     {
         /// <inheritdoc />
         public Task<long> AppendAsync(WalRecord entry, CancellationToken cancellationToken = default)
         {
+            // #5709: an activation proves it is reachable by descent before its first
+            // claim; once decided this is one flag read.
+            var proof = leaf.ProveStampReachabilityAsync();
+            if (!proof.IsCompletedSuccessfully)
+            {
+                return AppendAfterProofAsync(proof.AsTask(), entry, WalRoutingStamp.None, cancellationToken);
+            }
+
+            // Counted before anything can fail, so no append escapes the live
+            // checkpoint tracker (issue #5572).
+            leaf.NoteLiveAppendIssued();
+
             // The common case (a freshly ticked write) raises nothing, so it adds
             // no state machine to the append.
             var raise = leaf.RaiseOverrideHoldsForAsync(entry, cancellationToken);
             return raise.IsCompletedSuccessfully
                 ? inner.AppendAsync(entry, cancellationToken)
-                : AppendAfterRaiseAsync(raise, entry, cancellationToken);
+                : AppendAfterRaiseAsync(raise, entry, WalRoutingStamp.None, cancellationToken);
         }
 
         /// <inheritdoc />
         public Task<IReadOnlyList<long>> AppendManyAsync(IReadOnlyList<WalRecord> entries, CancellationToken cancellationToken = default)
         {
+            var proof = leaf.ProveStampReachabilityAsync();
+            if (!proof.IsCompletedSuccessfully)
+            {
+                return AppendManyAfterProofAsync(proof.AsTask(), entries, WalRoutingStamp.None, cancellationToken);
+            }
+
+            leaf.NoteLiveAppendIssued();
             var raise = leaf.RaiseOverrideHoldsForAsync(entries, cancellationToken);
             return raise.IsCompletedSuccessfully
                 ? inner.AppendManyAsync(entries, cancellationToken)
-                : AppendManyAfterRaiseAsync(raise, entries, cancellationToken);
+                : AppendManyAfterRaiseAsync(raise, entries, WalRoutingStamp.None, cancellationToken);
         }
 
-        private async Task<long> AppendAfterRaiseAsync(Task raise, WalRecord entry, CancellationToken cancellationToken)
+        /// <inheritdoc />
+        public Task<long> AppendAsync(WalRecord entry, WalRoutingStamp routing, CancellationToken cancellationToken)
+        {
+            var proof = leaf.ProveStampReachabilityAsync();
+            if (!proof.IsCompletedSuccessfully)
+            {
+                return AppendAfterProofAsync(proof.AsTask(), entry, routing, cancellationToken);
+            }
+
+            // The routed overloads are counted too, or the release would latch the
+            // tracker off (epic #5605, member 4).
+            leaf.NoteLiveAppendIssued();
+            var raise = leaf.RaiseOverrideHoldsForAsync(entry, cancellationToken);
+            return raise.IsCompletedSuccessfully
+                ? InnerAppendAsync(entry, routing, cancellationToken)
+                : AppendAfterRaiseAsync(raise, entry, routing, cancellationToken);
+        }
+
+        /// <inheritdoc />
+        public Task<IReadOnlyList<long>> AppendManyAsync(IReadOnlyList<WalRecord> entries, WalRoutingStamp routing, CancellationToken cancellationToken)
+        {
+            var proof = leaf.ProveStampReachabilityAsync();
+            if (!proof.IsCompletedSuccessfully)
+            {
+                return AppendManyAfterProofAsync(proof.AsTask(), entries, routing, cancellationToken);
+            }
+
+            leaf.NoteLiveAppendIssued();
+            var raise = leaf.RaiseOverrideHoldsForAsync(entries, cancellationToken);
+            return raise.IsCompletedSuccessfully
+                ? InnerAppendManyAsync(entries, routing, cancellationToken)
+                : AppendManyAfterRaiseAsync(raise, entries, routing, cancellationToken);
+        }
+
+        // Epic #5605, member 2: the routing stamp reaches the fenced writer; an inner
+        // writer that cannot carry it appends as it always has.
+        private Task<long> InnerAppendAsync(WalRecord entry, WalRoutingStamp routing, CancellationToken cancellationToken) =>
+            inner is IRoutingStampedCommitLogWriter routed
+                ? routed.AppendAsync(entry, routing, cancellationToken)
+                : inner.AppendAsync(entry, cancellationToken);
+
+        private Task<IReadOnlyList<long>> InnerAppendManyAsync(IReadOnlyList<WalRecord> entries, WalRoutingStamp routing, CancellationToken cancellationToken) =>
+            inner is IRoutingStampedCommitLogWriter routed
+                ? routed.AppendManyAsync(entries, routing, cancellationToken)
+                : inner.AppendManyAsync(entries, cancellationToken);
+
+        // Once per activation: the reachability proof (#5709) completes before the append
+        // is counted and issued, so it decides whether the append may claim.
+        private async Task<long> AppendAfterProofAsync(Task proof, WalRecord entry, WalRoutingStamp routing, CancellationToken cancellationToken)
+        {
+            await proof;
+            return await AppendAsync(entry, routing, cancellationToken);
+        }
+
+        private async Task<IReadOnlyList<long>> AppendManyAfterProofAsync(
+            Task proof, IReadOnlyList<WalRecord> entries, WalRoutingStamp routing, CancellationToken cancellationToken)
+        {
+            await proof;
+            return await AppendManyAsync(entries, routing, cancellationToken);
+        }
+
+        private async Task<long> AppendAfterRaiseAsync(Task raise, WalRecord entry, WalRoutingStamp routing, CancellationToken cancellationToken)
         {
             await raise;
-            return await inner.AppendAsync(entry, cancellationToken);
+            return await InnerAppendAsync(entry, routing, cancellationToken);
         }
 
         private async Task<IReadOnlyList<long>> AppendManyAfterRaiseAsync(
-            Task raise, IReadOnlyList<WalRecord> entries, CancellationToken cancellationToken)
+            Task raise, IReadOnlyList<WalRecord> entries, WalRoutingStamp routing, CancellationToken cancellationToken)
         {
             await raise;
-            return await inner.AppendManyAsync(entries, cancellationToken);
+            return await InnerAppendManyAsync(entries, routing, cancellationToken);
         }
     }
 }

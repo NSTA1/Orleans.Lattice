@@ -597,6 +597,7 @@ The following inventory includes directly declared public members and overloads,
 - `public const string DryRun`
 - `public const string Build`
 - `public const string Cutover`
+- `public const string WaitingForAliasOperation`
 - `public const string ValuesUnit`
 
 ### `Orleans.Lattice.Schema.SchemaOperationResultKeys`

@@ -1,0 +1,20 @@
+# The close-head conjunct of Armed dropped: the core's own guard, distinct from
+# H's guarantee. An activation arms after a close without replaying to the heads
+# the close recorded, and passes a foreign record below them. It edits the Armed
+# predicate, so it names no perturbed action.
+MODULE: ReadPositionHonestArmsBelowCloseHead
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the activation arms without replaying to the last close's heads
+
+--- FIND
+    /\ ~pend
+    /\ ~hoOpen
+    /\ rp[a] >= hoClosedAt - 1
+
+--- REPLACE
+    /\ ~pend
+    /\ ~hoOpen
+\* MUTATION: no replay to the close heads.
+
+--- END

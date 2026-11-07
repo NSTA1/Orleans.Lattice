@@ -1,0 +1,22 @@
+# Weakens E's StaleEpochNeverAppends and RaisedEpochUnique in this module's
+# environment: a superseded activation, whose claim was raised earlier, still has
+# its stamped appends allocated. The current activation's claim head does not
+# cover them, and its live advance passes one. Shows the assumption is
+# load-bearing.
+MODULE: ReadPositionHonestAssumeSupersededAllocates
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: any activation whose claim was raised allocates, current or superseded
+PERTURBS: OwnAlloc
+BOUNDS: WithPreArm = FALSE
+
+--- FIND
+    /\ a \in up
+    /\ cur = a
+    /\ next < MaxOff
+--- REPLACE
+    /\ a \in up
+\* MUTATION: a superseded activation still allocates.
+    /\ claimed[a]
+    /\ next < MaxOff
+--- END

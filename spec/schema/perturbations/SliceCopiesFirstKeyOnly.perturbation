@@ -3,7 +3,7 @@ MODULE: SchemaRemediationCutover
 ROW: QuiescentCutoverComplete
 FILE: src/lattice.schema/LatticeSchemaRemediationGrain.cs
 DETECTORS: SchemaRemediationIntegrationTests.Remediation_rewrites_values_cuts_over_and_enforces_the_new_policy
-SUMMARY: each slice copies only its first key
+SUMMARY: each chunk copies only its first key
 
 --- FIND
             if (values.TryGetValue(key, out var value) && value is not null)

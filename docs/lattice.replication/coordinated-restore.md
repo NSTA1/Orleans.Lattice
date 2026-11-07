@@ -233,6 +233,21 @@ sink or failing its content-digest check) or exhausts its bounded retry budget
 whole set) votes to abort and garbage collects its partial shadow, leaving no
 orphaned shadow state; the whole saga then rolls back all-or-nothing.
 
+A build refused because another alias operation holds the target tree's alias
+reservation (LatticeAliasOperationInProgressException) is not a failed build.
+A replication re-seed holds that reservation while its bootstrap copy builds, as
+do a resize, a schema remediation and another restore. The holder releases it
+when it completes, so the participant waits it out, single tree and set member
+alike. It retries on a backoff of 1, 2, 5 and then every 10 seconds, and spends
+none of the build-retry budget doing so. The 15-minute ceiling bounds the whole
+prepare, not one build: every build attempt and every set member draws on the
+same waiting budget, so a set whose members are refused in turn still waits at
+most 15 minutes in total. A reservation still held past that ceiling counts as a
+failed build and aborts at once (#5791). While a later set member waits, the
+members already built keep their own shadow reservations, so those trees refuse
+other alias operations for the length of the wait, at most that same ceiling;
+an abort releases them when it garbage collects the shadows.
+
 ### Resolving a participant whose coordinator is lost
 
 A prepared participant whose coordinator can no longer be reached keeps its

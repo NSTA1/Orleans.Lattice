@@ -1,4 +1,8 @@
+using NSubstitute;
+using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.BPlusTree.State;
+using Orleans.Runtime;
 using Orleans.Lattice.Tests.Fakes;
 using System.Text;
 
@@ -11,6 +15,9 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// </summary>
 public partial class BPlusLeafGrainTests
 {
+    private static async Task<List<LwwEntry>> NarrowRowsAsync(BPlusLeafGrain grain, string highKeyExclusive) =>
+        (await grain.NarrowHighKeyAsync(highKeyExclusive))!.Rows;
+
     [Test]
     public async Task GetAppendTail_reports_no_keys_for_an_empty_leaf()
     {
@@ -96,5 +103,126 @@ public partial class BPlusLeafGrainTests
         var grain = CreateGrain();
 
         Assert.That(async () => await grain.NarrowHighKeyAsync(null!), Throws.ArgumentNullException);
+    }
+
+    [Test]
+    public async Task NarrowHighKey_hands_back_a_copy_of_every_row_at_or_above_the_bound_and_keeps_them_until_dropped()
+    {
+        // Issue #5610: the graft relocates these rows into the appended leaves and
+        // only then drops them, so a relocation that fails part-way is handed the
+        // same rows again when the graft is resumed.
+        var grain = CreateGrain();
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("vb"));
+        await grain.SetAsync("m", Encoding.UTF8.GetBytes("vm"));
+        await grain.SetAsync("q", Encoding.UTF8.GetBytes("vq"));
+        await grain.SetAsync("z", Encoding.UTF8.GetBytes("vz"));
+        await grain.DeleteAsync("q");
+
+        var stranded = await NarrowRowsAsync(grain, "m");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(stranded.Select(r => r.Key), Is.EqualTo(new[] { "m", "q", "z" }));
+            Assert.That(stranded.Single(r => r.Key == "q").IsTombstone, Is.True, "a tombstone is handed back as one");
+            Assert.That(Encoding.UTF8.GetString(stranded.Single(r => r.Key == "z").Value!), Is.EqualTo("vz"));
+        });
+
+        var again = await NarrowRowsAsync(grain, "m");
+        Assert.That(again.Select(r => r.Key), Is.EqualTo(new[] { "m", "q", "z" }),
+            "a resumed graft is handed the same rows: the narrow removed nothing");
+    }
+
+    [Test]
+    public async Task DropRelocatedRows_drops_exactly_the_rows_handed_back_and_keeps_rows_in_span()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state);
+        await grain.SetAsync("b", Encoding.UTF8.GetBytes("vb"));
+        await grain.SetAsync("m", Encoding.UTF8.GetBytes("vm"));
+        await grain.SetAsync("z", Encoding.UTF8.GetBytes("vz"));
+
+        var stranded = await NarrowRowsAsync(grain, "m");
+        var handedBack = stranded.ToDictionary(r => r.Key, r => r.Timestamp);
+
+        // A stale stamp for z: a row rewritten since it was handed back is kept.
+        handedBack["z"] = HybridLogicalClock.Zero;
+
+        // A key the leaf still declares is never dropped, whatever stamp is named.
+        var bRow = (await grain.GetRawEntryAsync("b"))!.Value;
+        handedBack["b"] = bRow.Timestamp;
+
+        await grain.DropRelocatedRowsAsync(handedBack);
+
+        var remaining = await NarrowRowsAsync(grain, "m");
+        var bAfter = await grain.GetRawEntryAsync("b");
+        Assert.Multiple(() =>
+        {
+            Assert.That(remaining.Select(r => r.Key), Is.EqualTo(new[] { "z" }), "only m, handed back at its stamp, is dropped");
+            Assert.That(bAfter, Is.Not.Null, "a row in span is kept");
+        });
+
+        await grain.DropRelocatedRowsAsync(handedBack);
+        Assert.That((await NarrowRowsAsync(grain, "m")).Select(r => r.Key), Is.EqualTo(new[] { "z" }), "idempotent");
+    }
+
+    [Test]
+    public async Task NarrowHighKey_links_the_successor_in_the_same_persist_so_a_later_write_above_the_bound_forwards()
+    {
+        // Issue #5654: narrowed but unlinked, the leaf has no forward target, so a
+        // write above the bound fails open onto it, outside its span.
+        var state = new FakePersistentState<LeafNodeState>();
+        var successor = Substitute.For<IBPlusLeafGrain>();
+        var grain = CreateGrain(state, siblingStub: successor);
+        var successorId = GrainId.Create("leaf", "successor");
+
+        var writesBefore = state.WriteCount;
+        await grain.NarrowHighKeyAsync("m", successorId);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.HighKeyExclusive, Is.EqualTo("m"));
+            Assert.That(state.State.NextSibling, Is.EqualTo(successorId));
+            Assert.That(state.WriteCount - writesBefore, Is.EqualTo(1), "bound and link land in one persist");
+        });
+
+        await grain.SetAsync("z", Encoding.UTF8.GetBytes("vz"));
+
+        await successor.Received(1).SetAsync("z", Arg.Any<byte[]>(), Arg.Any<long>());
+        Assert.That(await NarrowRowsAsync(grain, "m"), Is.Empty, "the write was forwarded, not stored here");
+    }
+
+    [Test]
+    public async Task DropRelocatedRows_persists_the_drop_before_returning()
+    {
+        // Re-review S1: the graft completes once the drop returns, so a drop held
+        // only in memory would come back with an earlier snapshot, outside the
+        // span, and be counted on two leaves for good.
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state);
+        await grain.SetAsync("z", Encoding.UTF8.GetBytes("vz"));
+        var stranded = await NarrowRowsAsync(grain, "m");
+
+        var writesBefore = state.WriteCount;
+        await grain.DropRelocatedRowsAsync(stranded.ToDictionary(r => r.Key, r => r.Timestamp));
+
+        Assert.That(state.WriteCount, Is.GreaterThan(writesBefore), "the drop is persisted");
+    }
+
+    [Test]
+    public async Task DropRelocatedRows_restores_the_rows_when_its_persist_fails()
+    {
+        var state = new FakePersistentState<LeafNodeState>();
+        var grain = CreateGrain(state);
+        await grain.SetAsync("z", Encoding.UTF8.GetBytes("vz"));
+        var stranded = await NarrowRowsAsync(grain, "m");
+        var failure = new IOException("persist failed");
+        state.ThrowOnWrite = failure;
+
+        Assert.That(async () => await grain.DropRelocatedRowsAsync(stranded.ToDictionary(r => r.Key, r => r.Timestamp)),
+            Throws.Exception.SameAs(failure));
+
+        var again = await NarrowRowsAsync(grain, "m");
+        Assert.That(again.Select(r => r.Key), Is.EqualTo(new[] { "z" }),
+            "a failed drop leaves the row for the resumed graft to be handed again");
     }
 }

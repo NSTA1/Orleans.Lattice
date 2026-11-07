@@ -35,8 +35,114 @@ internal static class TlcCiShard
     /// <summary>The Replication EventualConvergence* temporal mutants.</summary>
     public const string Convergence = "TlcShardConvergence";
 
-    /// <summary>The other Replication mutants, plus the mutants of every Wal* module, and the Replication, WalDurability and WalMove bases.</summary>
+    /// <summary>
+    /// The other Replication mutants, plus the mutants of every Wal* module
+    /// without a shard of its own (<see cref="LiveAdvanceCategory"/> and
+    /// <see cref="WalDurability"/>), and the Replication, WalMove and
+    /// WalPinRetirement bases.
+    /// </summary>
     public const string ReplicationWal = "TlcShardReplicationWal";
+
+    /// <summary>
+    /// The base and every mutation of <c>WalDurability</c>. Its base's liveness
+    /// check grew to about 12 minutes with the allocator re-seed of #5803, which
+    /// made <see cref="ReplicationWal"/> the run's critical path, so it moved to
+    /// a shard of its own. Its mutations that raise <c>WithCrossSiloMove</c>
+    /// are in <see cref="WalDurabilityCrossSilo"/>; its variant configurations
+    /// but <c>CrossSilo</c> stay in the catch-all.
+    /// </summary>
+    public const string WalDurability = "TlcShardWalDurability";
+
+    /// <summary>
+    /// The <c>WalDurability</c> mutations that raise <c>WithCrossSiloMove</c>, and
+    /// its <c>CrossSilo</c> variant configuration (#5810). Each such mutation's
+    /// control runs the raised configuration rather than the base's, so the
+    /// base cannot serve it, and the controls together cost more than the
+    /// WalDurability shard's critical path could absorb.
+    /// </summary>
+    public const string WalDurabilityCrossSilo = "TlcShardWalDurabilityCrossSilo";
+
+    /// <summary>Every base, variant and mutation of <c>WalAppendEpoch</c>, the live-advance append-epoch module (epic #5605, E).</summary>
+    public const string WalAppendEpoch = "TlcShardWalAppendEpoch";
+
+    /// <summary>Every base, variant and mutation of <c>WalHandOffFence</c>, the live-advance hand-off fence module (epic #5605, H).</summary>
+    public const string WalHandOffFence = "TlcShardWalHandOffFence";
+
+    /// <summary>Every base, variant and mutation of <c>WalRoutingFloor</c>, the live-advance routing-floor module (epic #5605, R).</summary>
+    public const string WalRoutingFloor = "TlcShardWalRoutingFloor";
+
+    /// <summary>Every base, variant and mutation of <c>WalBulkSwitch</c>, the live-advance bulk-switch module (epic #5605, B).</summary>
+    public const string WalBulkSwitch = "TlcShardWalBulkSwitch";
+
+    /// <summary>
+    /// The base of <c>WalLiveAdvanceCore</c>, the live-advance core module (epic #5605, C),
+    /// and every mutation of it that does not raise <c>WithFreeAdvance</c>: the base serves
+    /// those mutations' full-bound controls, so they stay in its process.
+    /// </summary>
+    public const string WalLiveAdvanceCore = "TlcShardWalLiveAdvanceCore";
+
+    /// <summary>
+    /// The <c>WalLiveAdvanceCore</c> variants that check the eager arm (#5833) without the
+    /// claimless advance. Split from <see cref="WalLiveAdvanceCore"/>, whose base, mutations
+    /// and variants together ran 43 to 71 minutes on one CI leg; a variant serves no control,
+    /// so it can run in any process.
+    /// </summary>
+    public const string WalLiveAdvanceCoreEagerVariants = "TlcShardWalLiveAdvanceCoreEagerVariants";
+
+    /// <summary>
+    /// The <c>WalLiveAdvanceCore</c> variants that check the lazy arm (#5833) without the
+    /// claimless advance, split from <see cref="WalLiveAdvanceCore"/> with
+    /// <see cref="WalLiveAdvanceCoreEagerVariants"/>.
+    /// </summary>
+    public const string WalLiveAdvanceCoreLazyVariants = "TlcShardWalLiveAdvanceCoreLazyVariants";
+
+    /// <summary>
+    /// The <c>WalLiveAdvanceCore</c> mutations that raise <c>WithFreeAdvance</c> (#5837's
+    /// claimless advance) and are not routed to one of its narrower claimless shards, and its
+    /// smallest claimless-advance variants. Each such mutation's control runs a raised
+    /// configuration rather than the base's, so the base cannot serve it, and together they
+    /// cost more than the core shard could absorb.
+    /// </summary>
+    public const string WalLiveAdvanceCoreFree = "TlcShardWalLiveAdvanceCoreFree";
+
+    /// <summary>
+    /// The <c>WalLiveAdvanceCore</c> claimless-advance mutations that target the snapshot and
+    /// sole-activation properties (<see cref="FreeSnapshotTargets"/>), split from
+    /// <see cref="WalLiveAdvanceCoreFree"/>, which ran 41 and 58 minutes on one CI leg. The split
+    /// is by target because controls are shared only between mutations with the same target and
+    /// bounds, so no control is launched twice.
+    /// </summary>
+    public const string WalLiveAdvanceCoreFreeSnapshot = "TlcShardWalLiveAdvanceCoreFreeSnapshot";
+
+    /// <summary>
+    /// The <c>WalLiveAdvanceCore</c> claimless-advance mutations that target the split-born
+    /// receiver's link and latch properties (<see cref="FreeLinkTargets"/>), split by target from
+    /// <see cref="WalLiveAdvanceCoreFree"/> with <see cref="WalLiveAdvanceCoreFreeSnapshot"/>.
+    /// </summary>
+    public const string WalLiveAdvanceCoreFreeLink = "TlcShardWalLiveAdvanceCoreFreeLink";
+
+    /// <summary>
+    /// The <c>WalLiveAdvanceCore</c> claimless-advance mutations that target
+    /// <c>ReadPositionHonest</c>, split from <see cref="WalLiveAdvanceCoreFree"/>: together
+    /// the two outran a pooled CI job's time limit.
+    /// </summary>
+    public const string WalLiveAdvanceCoreFreeReadPosition = "TlcShardWalLiveAdvanceCoreFreeReadPosition";
+
+    /// <summary>
+    /// The larger claimless-advance variant configurations of <c>WalLiveAdvanceCore</c> (#5837)
+    /// that are not split, forward or eviction variants (<see cref="WalLiveAdvanceCoreFreeSplitVariants"/>).
+    /// </summary>
+    public const string WalLiveAdvanceCoreFreeVariants = "TlcShardWalLiveAdvanceCoreFreeVariants";
+
+    /// <summary>
+    /// The claimless-advance variants of <c>WalLiveAdvanceCore</c> that check the split, the
+    /// forwards and their eviction (<see cref="FreeSplitVariants"/>), split from
+    /// <see cref="WalLiveAdvanceCoreFreeVariants"/>, which ran 32 minutes on one CI leg.
+    /// </summary>
+    public const string WalLiveAdvanceCoreFreeSplitVariants = "TlcShardWalLiveAdvanceCoreFreeSplitVariants";
+
+    /// <summary>The base and every mutation of <c>WalLiveAdvanceComposite</c>, the live-advance modules' interface check (epic #5605, member 6c).</summary>
+    public const string WalLiveAdvanceComposite = "TlcShardWalLiveAdvanceComposite";
 
     /// <summary>The mutants of every ShardOwnership* module, and the bases of all but ShardOwnership itself.</summary>
     public const string ShardOwnership = "TlcShardShardOwnership";
@@ -193,7 +299,7 @@ internal static class TlcCiShard
 
     /// <summary>Every category <see cref="Of"/>, <see cref="OfModule"/> and <see cref="OfVariant"/> can return.</summary>
     public static IReadOnlyList<string> All { get; } =
-        [Convergence, ReplicationWal, ShardOwnership, ReBootstrap, Atomic, .. AtomicVariantShards, Backup, BackupRetention,
+        [Convergence, ReplicationWal, WalDurability, WalDurabilityCrossSilo, ShardOwnership, ReBootstrap, Atomic, .. AtomicVariantShards, Backup, BackupRetention,
          BPlusCascade,
          MaterialisedViews, MaterialisedViewFence, MaterialisedViewHorizon,
          MaterialisedViewAggregation, MaterialisedViewRebind,
@@ -201,7 +307,11 @@ internal static class TlcCiShard
          MaterialisedViewResolvedIdentity, MaterialisedViewJointRepair, MaterialisedViewNumeric,
          AntiEntropy, AntiEntropy2, AntiEntropy3, TreeLifecycle, Aliasing, SplitGate,
          Scheduling, SchedulingWorkloadB, SchedulingReplayTwoPartitions, SchedulingShipping, SchedulingShippingVariants,
-         Schema, SchemaView];
+         Schema, SchemaView,
+         WalAppendEpoch, WalHandOffFence, WalRoutingFloor, WalBulkSwitch, WalLiveAdvanceCore,
+         WalLiveAdvanceCoreEagerVariants, WalLiveAdvanceCoreLazyVariants, WalLiveAdvanceCoreFree,
+         WalLiveAdvanceCoreFreeSnapshot, WalLiveAdvanceCoreFreeLink, WalLiveAdvanceCoreFreeReadPosition, WalLiveAdvanceCoreFreeVariants,
+         WalLiveAdvanceCoreFreeSplitVariants, WalLiveAdvanceComposite];
 
     private static readonly Lazy<IReadOnlyDictionary<(string Module, string Variant), string>> AtomicVariantCategories =
         new(CreateAtomicVariantCategories, LazyThreadSafetyMode.ExecutionAndPublication);
@@ -224,6 +334,18 @@ internal static class TlcCiShard
         if (SchemaCategory(name) is { } schemaCategory)
         {
             return schemaCategory;
+        }
+        if (string.Equals(name, "WalLiveAdvanceCore", StringComparison.Ordinal) && RaisesFreeAdvance(mutation))
+        {
+            return string.Equals(mutation.Target, "ReadPositionHonest", StringComparison.Ordinal)
+                ? WalLiveAdvanceCoreFreeReadPosition
+                : FreeSnapshotTargets.Contains(mutation.Target) ? WalLiveAdvanceCoreFreeSnapshot
+                : FreeLinkTargets.Contains(mutation.Target) ? WalLiveAdvanceCoreFreeLink
+                : WalLiveAdvanceCoreFree;
+        }
+        if (LiveAdvanceCategory(name) is { } liveAdvanceCategory)
+        {
+            return liveAdvanceCategory;
         }
         if (string.Equals(name, "AntiEntropy", StringComparison.Ordinal))
         {
@@ -252,6 +374,11 @@ internal static class TlcCiShard
         if (IsReplicationCompanion(name))
         {
             return ReBootstrap;
+        }
+
+        if (string.Equals(name, "WalDurability", StringComparison.Ordinal))
+        {
+            return RaisesCrossSiloMove(mutation) ? WalDurabilityCrossSilo : WalDurability;
         }
 
         if (name.StartsWith("Wal", StringComparison.Ordinal))
@@ -286,7 +413,8 @@ internal static class TlcCiShard
     public static string? OfModule(SpecModule module)
     {
         ArgumentNullException.ThrowIfNull(module);
-        return SchedulingCategory(module) ?? SchemaCategory(module.Name) ?? LifecycleCategory(module.Name) ?? CoLocatedBaseCategory(module);
+        return SchedulingCategory(module) ?? SchemaCategory(module.Name) ?? LiveAdvanceCategory(module.Name)
+            ?? LifecycleCategory(module.Name) ?? CoLocatedBaseCategory(module);
     }
 
     /// <summary>
@@ -337,7 +465,8 @@ internal static class TlcCiShard
         "BPlusCascade" => BPlusCascade,
         "ReplicationCausalDelivery" or "ReplicationLowWatermark" or "ReplicationReBootstrap" => ReBootstrap,
         "ShardOwnershipCrdt" or "ShardOwnershipCutover" or "ShardOwnershipFold" or "ShardOwnershipRetention" => ShardOwnership,
-        "Replication" or "WalDurability" or "WalMove" or "WalPinRetirement" => ReplicationWal,
+        "Replication" or "WalMove" or "WalPinRetirement" => ReplicationWal,
+        "WalDurability" => WalDurability,
         _ => null,
     };
 
@@ -361,6 +490,24 @@ internal static class TlcCiShard
             return schemaCategory;
         }
 
+        if (string.Equals(module.Name, "WalLiveAdvanceCore", StringComparison.Ordinal)
+            && variant.StartsWith("Free", StringComparison.Ordinal))
+        {
+            return SmallFreeAdvanceVariants.Contains(variant) ? WalLiveAdvanceCoreFree
+                : FreeSplitVariants.Contains(variant) ? WalLiveAdvanceCoreFreeSplitVariants
+                : WalLiveAdvanceCoreFreeVariants;
+        }
+
+        if (string.Equals(module.Name, "WalLiveAdvanceCore", StringComparison.Ordinal))
+        {
+            return LazyArmVariants.Contains(variant) ? WalLiveAdvanceCoreLazyVariants : WalLiveAdvanceCoreEagerVariants;
+        }
+
+        if (LiveAdvanceCategory(module.Name) is { } liveAdvanceCategory)
+        {
+            return liveAdvanceCategory;
+        }
+
         if (string.Equals(module.Name, "AntiEntropy", StringComparison.Ordinal)
             && string.Equals(variant, "Alias", StringComparison.Ordinal))
         {
@@ -370,6 +517,12 @@ internal static class TlcCiShard
         if (string.Equals(module.Name, "BackupRetention", StringComparison.Ordinal))
         {
             return BackupRetention;
+        }
+
+        if (string.Equals(module.Name, "WalDurability", StringComparison.Ordinal)
+            && string.Equals(variant, "CrossSilo", StringComparison.Ordinal))
+        {
+            return WalDurabilityCrossSilo;
         }
 
         if (LifecycleCategory(module.Name) is { } lifecycleCategory)
@@ -414,6 +567,44 @@ internal static class TlcCiShard
         return assignments;
     }
 
+    /// <summary>
+    /// Whether <paramref name="mutation"/> raises <c>WalDurability</c>'s
+    /// <c>WithCrossSiloMove</c> bound by a text edit, so its control runs the
+    /// raised configuration (<see cref="WalDurabilityCrossSilo"/>).
+    /// </summary>
+    private static bool RaisesCrossSiloMove(SpecMutation mutation) =>
+        mutation.Edits.Any(edit => edit.Replace.Contains("WithCrossSiloMove == TRUE", StringComparison.Ordinal));
+
+    /// <summary>
+    /// Whether <paramref name="mutation"/> raises <c>WalLiveAdvanceCore</c>'s
+    /// <c>WithFreeAdvance</c> bound, so its control runs a claimless-advance
+    /// configuration (<see cref="WalLiveAdvanceCoreFree"/>).
+    /// </summary>
+    private static bool RaisesFreeAdvance(SpecMutation mutation) =>
+        mutation.Bounds.Any(bound => string.Equals(bound.Name, "WithFreeAdvance", StringComparison.Ordinal)
+            && string.Equals(bound.Value, "TRUE", StringComparison.Ordinal));
+
+    /// <summary>The claimless-advance variants small enough to share <see cref="WalLiveAdvanceCoreFree"/> with its mutations.</summary>
+    private static readonly HashSet<string> SmallFreeAdvanceVariants =
+        new(["FreeSplitLink", "FreeLatch", "FreeOrphan", "FreeRestartKeyMove", "FreeTagEvict", "FreeKeyFilter", "FreeReportFetch"], StringComparer.Ordinal);
+
+    /// <summary>The claimless-advance variants that check the split, the forwards and their eviction (<see cref="WalLiveAdvanceCoreFreeSplitVariants"/>).</summary>
+    private static readonly HashSet<string> FreeSplitVariants =
+        new(["FreeSplitBirth", "FreeSplitHint", "FreeSplitView", "FreeForwardIn", "FreeFwdExclusion", "FreeReforward", "FreeChainEvict", "FreeOrphanEvict", "FreeOtherLinkRaise"],
+            StringComparer.Ordinal);
+
+    /// <summary>The claimless-advance mutation targets routed to <see cref="WalLiveAdvanceCoreFreeSnapshot"/>.</summary>
+    private static readonly HashSet<string> FreeSnapshotTargets =
+        new(["SnapshotHonest", "SnapshotForwardHonest", "SoleActivationNeverFallsOff"], StringComparer.Ordinal);
+
+    /// <summary>The claimless-advance mutation targets routed to <see cref="WalLiveAdvanceCoreFreeLink"/>.</summary>
+    private static readonly HashSet<string> FreeLinkTargets =
+        new(["SplitEventuallyLinked", "UnlinkedNeverClaims", "RepairLatches", "PendingCloseNotLatched", "NarrowObligated"], StringComparer.Ordinal);
+
+    /// <summary>The <c>WalLiveAdvanceCore</c> variants without the claimless advance that check the lazy arm (<see cref="WalLiveAdvanceCoreLazyVariants"/>).</summary>
+    private static readonly HashSet<string> LazyArmVariants =
+        new(["KeyMove", "PreArmRestart", "PreArmBulk", "PreArmRecreate", "PreArmGateFlip"], StringComparer.Ordinal);
+
     private static bool IsReplicationCompanion(string name) =>
         name.StartsWith("Replication", StringComparison.Ordinal)
         && !string.Equals(name, "Replication", StringComparison.Ordinal);
@@ -442,6 +633,30 @@ internal static class TlcCiShard
         string.Equals(name, "SchemaViewComposition", StringComparison.Ordinal) ? SchemaView
         : name.StartsWith("Schema", StringComparison.Ordinal) ? Schema
         : null;
+
+    /// <summary>
+    /// The dedicated shard of a live-advance module (epic #5605), or
+    /// <see langword="null"/>. Each module promoted from the live-advance design
+    /// model gets a measured shard of its own holding its base, variants and
+    /// mutations together, so its base serves its mutations' full-bound controls
+    /// and it never lengthens <see cref="ReplicationWal"/> or the catch-all.
+    /// <c>WalLiveAdvanceCore</c> outgrew one shard, so its variants and its claimless
+    /// mutations are routed apart before this is consulted; its base keeps every mutation
+    /// whose full-bound control it serves.
+    /// Listed by exact name, never by the <c>Wal</c> prefix, because each shard
+    /// is a measured decision and the per-case costs live in its
+    /// <c>test-shards.json</c> note.
+    /// </summary>
+    private static string? LiveAdvanceCategory(string name) => name switch
+    {
+        "WalAppendEpoch" => WalAppendEpoch,
+        "WalHandOffFence" => WalHandOffFence,
+        "WalRoutingFloor" => WalRoutingFloor,
+        "WalBulkSwitch" => WalBulkSwitch,
+        "WalLiveAdvanceCore" => WalLiveAdvanceCore,
+        "WalLiveAdvanceComposite" => WalLiveAdvanceComposite,
+        _ => null,
+    };
 
     private static string? LifecycleCategory(string name) =>
         name == "MaterialisedViewFence" ? MaterialisedViewFence

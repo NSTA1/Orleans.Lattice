@@ -1,0 +1,14 @@
+# #5837, condition 4 (a5e2e2ef): an orphan sibling's forward under the transfer and
+# forward class. It edits an operator, not an action.
+MODULE: SnapshotHonestForwardAttributedToForwarderToken
+TARGET: SnapshotHonest
+CLASS: Invariant
+SUMMARY: an orphan's forward is attributed to its forwarder's own token, so the forwarder, which never applies it, advances and captures past it
+BOUNDS: WithFreeAdvance = TRUE, WithOrphanForward = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
+
+--- FIND
+FwdToken == "empty"
+--- REPLACE
+\* MUTATION: the forwarding activation's own token.
+FwdToken == "a2"
+--- END

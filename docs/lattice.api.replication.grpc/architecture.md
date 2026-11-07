@@ -40,6 +40,7 @@ The service maps facade outcomes to stable gRPC status codes so a client sees a 
 | `OperationCanceledException` | `Cancelled` |
 | `TimeoutException` (a grain call timed out; outcome unknown, logged at Warning) | `DeadlineExceeded` |
 | `OrleansMessageRejectionException` (including `SiloUnavailableException`) or `EnumerationAbortedException` (transient, logged at Warning) | `Unavailable` |
+| `LatticeWalQuiescingException` (a WAL shard quiesced for a placement move; transient, logged at Warning, #5800) | `Unavailable` |
 | Any other exception | `Internal` (logged server-side; the client sees a non-leaking message) |
 
 `GetPeerStatus` maps the same way, without the precondition outcomes: a negative page size or a malformed continuation token is an `ArgumentException`, so it surfaces as `InvalidArgument`.

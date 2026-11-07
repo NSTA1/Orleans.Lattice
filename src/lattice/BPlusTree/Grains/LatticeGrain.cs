@@ -3607,6 +3607,106 @@ internal sealed partial class LatticeGrain(
         cancellationToken.ThrowIfCancellationRequested();
         var physicalShards = shardMap.GetPhysicalShardIndices();
 
+        // Epic #5605, member 2: fence the delete at the tree before any shard appends.
+        // Every shard's walk is stamped with the tree's range-delete generation the
+        // intent hands out; the close re-claims it once per WAL partition when every
+        // walk has returned. With the gate closed, or if the intent cannot be opened,
+        // the walks go through the existing method and are appended unstamped, which
+        // is always safe.
+        var ticket = await OpenRangeDeleteIntentAsync(physicalTreeId, physicalShards, startInclusive, endExclusive);
+        try
+        {
+            return await DeleteRangeFencedCoreAsync(
+                physicalTreeId, physicalShards, startInclusive, endExclusive, predicate, ticket, cancellationToken);
+        }
+        finally
+        {
+            if (ticket is { } opened)
+            {
+                await CloseRangeDeleteIntentAsync(physicalTreeId, opened.IntentId);
+            }
+        }
+    }
+
+    /// <summary>
+    /// How long a range-delete intent may stay open when the silo has no finite
+    /// response timeout to take its deadline from. Liveness only: a close before the
+    /// walks finish sends their later pages unstamped.
+    /// </summary>
+    internal static readonly TimeSpan FallbackRangeDeleteIntentDeadline = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// Opens a range-delete intent at the tree's fence (epic #5605, member 2), or
+    /// returns <see langword="null"/> when the append-fence gate is closed or the open
+    /// fails. A failed open is closed again, best effort; an intent the close misses
+    /// is closed by the fence's reminder at its deadline.
+    /// </summary>
+    private async Task<RangeDeleteFenceTicket?> OpenRangeDeleteIntentAsync(
+        string physicalTreeId,
+        IReadOnlyList<int> physicalShards,
+        string startInclusive,
+        string endExclusive)
+    {
+        if (services.GetService<IWalAppendFenceGate>() is not { IsOpen: true })
+        {
+            return null;
+        }
+
+        var intentId = Guid.NewGuid();
+        var deadline = SagaDecisionDeadline();
+        if (deadline == 0)
+        {
+            deadline = DateTime.UtcNow.Add(FallbackRangeDeleteIntentDeadline).Ticks;
+        }
+
+        try
+        {
+            var generation = await grainFactory
+                .GetGrain<ITreeRangeDeleteFenceGrain>(physicalTreeId)
+                .OpenIntentAsync(intentId, startInclusive, endExclusive, deadline, physicalShards.ToArray());
+            return new RangeDeleteFenceTicket(intentId, generation);
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(
+                ex,
+                "Tree {TreeId}: could not open a range-delete intent; the delete runs unfenced and its records are appended unstamped (epic #5605).",
+                physicalTreeId);
+            await CloseRangeDeleteIntentAsync(physicalTreeId, intentId);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Closes range-delete intent <paramref name="intentId"/>, best effort: a failure is
+    /// logged and left to the fence's reminder, which closes the intent at its deadline.
+    /// </summary>
+    private async Task CloseRangeDeleteIntentAsync(string physicalTreeId, Guid intentId)
+    {
+        try
+        {
+            await grainFactory.GetGrain<ITreeRangeDeleteFenceGrain>(physicalTreeId).CloseIntentAsync(intentId);
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(
+                ex,
+                "Tree {TreeId}: could not close range-delete intent {IntentId}; the fence's reminder closes it at its deadline (epic #5605).",
+                physicalTreeId,
+                intentId);
+        }
+    }
+
+    private async Task<int> DeleteRangeFencedCoreAsync(
+        string physicalTreeId,
+        IReadOnlyList<int> physicalShards,
+        string startInclusive,
+        string endExclusive,
+        LatticePredicateNode? predicate,
+        RangeDeleteFenceTicket? ticket,
+        CancellationToken cancellationToken)
+    {
+
         // Generate a single producer-side issue HLC for the entire range
         // delete and pin every per-leaf tombstone (across every shard in
         // the fan-out) to that HLC via LatticeHlcOverrideContext. This
@@ -3646,7 +3746,7 @@ internal sealed partial class LatticeGrain(
         {
             using var outerScope = LatticeHlcOverrideContext.With(outer);
             var (nestedDeleted, nestedRefusal) = await DeleteRangeFanOutAsync(
-                physicalTreeId, physicalShards, startInclusive, endExclusive, predicate, cancellationToken);
+                physicalTreeId, physicalShards, startInclusive, endExclusive, predicate, ticket, cancellationToken);
             if (nestedRefusal is not null)
             {
                 System.Runtime.ExceptionServices.ExceptionDispatchInfo.Throw(nestedRefusal);
@@ -3662,7 +3762,7 @@ internal sealed partial class LatticeGrain(
             using var hlcScope = LatticeHlcOverrideContext.With(issueHlc);
             using var freshScope = LatticeFreshStampContext.Begin();
             var (deleted, refusal) = await DeleteRangeFanOutAsync(
-                physicalTreeId, physicalShards, startInclusive, endExclusive, predicate, cancellationToken);
+                physicalTreeId, physicalShards, startInclusive, endExclusive, predicate, ticket, cancellationToken);
             total += deleted;
             if (refusal is null)
             {
@@ -3713,6 +3813,7 @@ internal sealed partial class LatticeGrain(
         string startInclusive,
         string endExclusive,
         LatticePredicateNode? predicate,
+        RangeDeleteFenceTicket? ticket,
         CancellationToken cancellationToken)
     {
 
@@ -3730,7 +3831,7 @@ internal sealed partial class LatticeGrain(
         for (int i = 0; i < physicalShards.Count; i++)
         {
             var shard = GetShardGrainByIndex(physicalTreeId, physicalShards[i]);
-            tasks[i] = DrainShardRangeDeleteAsync(shard, startInclusive, endExclusive, predicate, cancellationToken);
+            tasks[i] = DrainShardRangeDeleteAsync(shard, startInclusive, endExclusive, predicate, ticket, cancellationToken);
         }
 
         try
@@ -3780,6 +3881,7 @@ internal sealed partial class LatticeGrain(
         string startInclusive,
         string endExclusive,
         LatticePredicateNode? predicate,
+        RangeDeleteFenceTicket? ticket,
         CancellationToken cancellationToken)
     {
         var total = 0;
@@ -3791,8 +3893,19 @@ internal sealed partial class LatticeGrain(
             ShardRangeDeletePage page;
             try
             {
+                var fenced = ticket;
                 page = await ShardActivationRetry.RunAsync(
-                    () => shard.DeleteRangeBoundedAsync(cursor, endExclusive, predicate));
+                    () => fenced is { } t
+                        ? shard.DeleteRangeBoundedStampedAsync(cursor, endExclusive, predicate, t)
+                        : shard.DeleteRangeBoundedAsync(cursor, endExclusive, predicate));
+            }
+            catch (Exception methodUnknown) when (ticket is not null && WalAppendFenceMethodProbe.IsDefiniteMethodUnknown(methodUnknown))
+            {
+                // Epic #5605, member 2: the shard root is hosted by an older build that
+                // joined before this silo's gate observed it. Only on that definite
+                // failure does the walk go on unfenced, through the existing method.
+                ticket = null;
+                continue;
             }
             catch (WalStampBelowFloorException refusal)
             {

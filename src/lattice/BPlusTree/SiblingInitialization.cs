@@ -92,7 +92,9 @@ internal readonly record struct SiblingInitialization
     /// bound). Indexed by WAL partition, in the same offset space as
     /// <c>ILeafProjection.SetCheckpointOffsetAsync</c> - these are the very
     /// values the donor goes on to stamp through
-    /// <c>SetCheckpointOffsetHintsAsync</c>.
+    /// <c>SetCheckpointOffsetHintsAsync</c>: one below each head read, as a head is
+    /// exclusive and a checkpoint inclusive (issue #5760), and no higher than the
+    /// donor's own checkpoint (issue #5752).
     /// <para>
     /// <b>Why the birth pin needs them (issue #3094).</b> The sibling seeds a
     /// durable materialiser pin before the donor's <c>MergeEntriesAsync</c>
@@ -135,4 +137,27 @@ internal readonly record struct SiblingInitialization
     /// sibling, which never sees that terminal.
     /// </summary>
     [Id(10)] public AppliedTerminalWitness[]? TerminalWitnesses { get; init; }
+
+    /// <summary>
+    /// Set only by a split's own birth of the sibling (#5837, P2): the sibling is then
+    /// proven reachable at birth, on the call that seeds it and once that persist lands
+    /// (P1), for that activation alone (P3). A bulk load's seeding, a recovery re-call
+    /// and a build that does not send it leave it unset, and the sibling proves by descent.
+    /// </summary>
+    [Id(11)] public bool SplitBirth { get; init; }
+
+    /// <summary>
+    /// The shard root whose routing generation <see cref="SpanGeneration"/> is (#5837, T1);
+    /// meaningful only while that is above 0.
+    /// </summary>
+    [Id(12)] public int SpanShard { get; init; }
+
+    /// <summary>
+    /// The routing generation the sibling's span was established under: the one its donor's
+    /// writes were admitted under at the split (#5837, T1). The split's transfer into the
+    /// sibling is appended under it, attributed to the sibling, never the shared watermark
+    /// (T3). 0 when unknown, and from a build that does not send it: the transfer is then
+    /// appended unstamped.
+    /// </summary>
+    [Id(13)] public long SpanGeneration { get; init; }
 }

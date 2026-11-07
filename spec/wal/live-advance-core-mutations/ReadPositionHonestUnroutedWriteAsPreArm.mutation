@@ -1,0 +1,22 @@
+# #5833, C4. A write with no routing stamp is appended as PreArm rather than truly
+# unstamped: it raises no shared watermark and no generation fences it, so the receiver
+# passes it.
+MODULE: ReadPositionHonestUnroutedWriteAsPreArm
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: a write with no routing stamp is appended as PreArm
+PERTURBS: UnroutedAlloc
+BOUNDS: WithKeyMove = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
+
+--- FIND
+    /\ author' = [author EXCEPT ![next] = StaleDonor]
+    /\ inflight' = inflight \cup {next}
+    /\ lastU' = next
+
+--- REPLACE
+    /\ author' = [author EXCEPT ![next] = StaleDonor]
+    /\ inflight' = inflight \cup {next}
+\* MUTATION: the shared watermark is not raised.
+    /\ UNCHANGED lastU
+
+--- END

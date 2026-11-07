@@ -1,0 +1,29 @@
+# Pairs with HandOffBound. Moved from the design's
+# ReadPositionHonestRangeDeletePerShardClose. Each shard's walk is stamped with
+# its own shard's routing generation, so the close holding L re-claims only its
+# own. Another shard's walk, still in flight after its fan-out was abandoned, is
+# never rejected and is allocated above the heads that close recorded.
+MODULE: HandOffBoundRangeDeletePerShardClose
+TARGET: HandOffBound
+CLASS: Invariant
+SUMMARY: another shard's range-delete walk is not fenced by the close holding L
+PERTURBS: GAlloc, GReject
+
+--- FIND
+    /\ gst \in {"pend", "repend"}
+    /\ gstamp >= fFence
+    /\ next < MaxOff
+--- REPLACE
+    /\ gst \in {"pend", "repend"}
+\* MUTATION: stamped with its own shard's generation, which this close does not re-claim.
+    /\ next < MaxOff
+--- END
+
+--- FIND
+    /\ gst \in {"pend", "repend"}
+    /\ gstamp < fFence
+--- REPLACE
+    /\ gst \in {"pend", "repend"}
+\* MUTATION: this close never rejects it.
+    /\ FALSE
+--- END

@@ -1,0 +1,23 @@
+# A rejected range-delete walk re-stamps under ANY open intent of the tree. The
+# markers are range-scoped, so another intent's marker need not cover the leaves
+# the walk's record reaches: a leaf that re-armed after the walk's own intent
+# closed passes the record. Dropping L's marker from the guard stands for an open
+# intent disjoint from L.
+MODULE: ReadPositionHonestRestampUnderAnyIntent
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: a rejected walk re-stamps under any open intent, not only its own
+PERTURBS: GRestamp
+BOUNDS: WithTreeWalk = TRUE, WithBatch = FALSE, MaxWindows = 1
+
+--- FIND
+    /\ gst = "rejected"
+    /\ hoOpen
+    /\ ~closing
+    /\ gst' = "repend"
+--- REPLACE
+    /\ gst = "rejected"
+\* MUTATION: any open intent of the tree, not the walk's own.
+    /\ ~closing
+    /\ gst' = "repend"
+--- END

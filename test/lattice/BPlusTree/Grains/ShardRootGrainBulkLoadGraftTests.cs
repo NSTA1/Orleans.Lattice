@@ -92,8 +92,25 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
 
         leaf.CountAsync().Returns(0);
         leaf.GetAppendTailAsync().Returns((0, (string?)null));
+        // A leaf that narrows and strands nothing; null would mean "not narrowed".
+        leaf.NarrowHighKeyAsync(Arg.Any<string>(), Arg.Any<GrainId?>(), Arg.Any<List<GraftEntry>?>())
+            .Returns(_ => Task.FromResult<LeafNarrowResult?>(new LeafNarrowResult { ReadFrontier = UncappedFrontier }));
+        // A leaf of a replaced root that holds no row, with an uncapping frontier.
+        leaf.CopyRowsForBulkLoadAsync()
+            .Returns(_ => Task.FromResult(new LeafNarrowResult { ReadFrontier = UncappedFrontier }));
         return leaf;
     }
+
+    /// <summary>A replay frontier above every head, so the hint applies as stored.</summary>
+    private static readonly long[] UncappedFrontier = Enumerable.Repeat(long.MaxValue, 64).ToArray();
+
+    /// <summary>A narrow that handed back <paramref name="rows"/> with an uncapping frontier.</summary>
+    private static Task<LeafNarrowResult?> Narrowed(List<LwwEntry> rows) =>
+        Task.FromResult<LeafNarrowResult?>(new LeafNarrowResult { Rows = rows, ReadFrontier = UncappedFrontier });
+
+    /// <summary>A replaced-root leaf that holds <paramref name="rows"/>, with frontier <paramref name="frontier"/>.</summary>
+    private static Task<LeafNarrowResult> CopiedForLoad(List<LwwEntry> rows, long[]? frontier = null) =>
+        Task.FromResult(new LeafNarrowResult { Rows = rows, ReadFrontier = frontier ?? UncappedFrontier });
 
     private static IBPlusInternalGrain MakeInternal(Guid key)
     {
@@ -115,10 +132,20 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         return node;
     }
 
-    private static Harness CreateHarness(int maxLeafKeys = 2)
+    private static Harness CreateHarness(
+        int maxLeafKeys = 2,
+        IWalAppendFenceGate? appendFenceGate = null,
+        Orleans.Timers.ITimerRegistry? timers = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("shard", $"{TreeId}/0"));
+        if (appendFenceGate is not null || timers is not null)
+        {
+            var services = Substitute.For<IServiceProvider>();
+            services.GetService(typeof(IWalAppendFenceGate)).Returns(appendFenceGate);
+            services.GetService(typeof(Orleans.Timers.ITimerRegistry)).Returns(timers);
+            context.ActivationServices.Returns(services);
+        }
 
         var state = new FakePersistentState<ShardRootState>();
         var factory = Substitute.For<IGrainFactory>();

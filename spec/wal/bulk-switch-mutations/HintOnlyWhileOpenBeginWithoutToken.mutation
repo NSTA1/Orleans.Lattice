@@ -1,0 +1,17 @@
+# Pairs with HintOnlyWhileOpen. Design section 3 (S7): the hint and the open
+# marker are one write of the shard's hand-off row. Storing the hint alone leaves
+# a hint no open switch owns, which no close removes.
+MODULE: HintOnlyWhileOpenBeginWithoutToken
+TARGET: HintOnlyWhileOpen
+CLASS: Invariant
+SUMMARY: the birth hint is stored without opening the switch token in the same write
+PERTURBS: Begin
+
+--- FIND
+                IN /\ hint' = h
+                   /\ tokOpen' = TRUE
+--- REPLACE
+                IN /\ hint' = h
+\* MUTATION: the token is not opened with the hint.
+                   /\ tokOpen' = tokOpen
+--- END

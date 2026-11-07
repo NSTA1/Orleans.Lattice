@@ -1,0 +1,39 @@
+# #5837, the claimless advance and the split hint.
+MODULE: ReadPositionHonestFreeAdvanceViewBeforeHeads
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: the free advance reads its marker view before its target is fixed, so a window opened and closed in between is missed
+PERTURBS: FreeTarget
+BOUNDS: WithFreeAdvance = TRUE
+
+--- FIND
+    /\ ft[a] # Max(mine[a])
+    /\ ft' = [ft EXCEPT ![a] = Max(mine[a])]
+--- REPLACE
+    /\ ft[a] # Max(mine[a])
+\* MUTATION: the view is read here, before the target.
+    /\ mInit
+    /\ ~hoOpen
+    /\ rp[a] >= hoClosedAt - 1
+    /\ ft' = [ft EXCEPT ![a] = Max(mine[a])]
+--- END
+
+--- FIND
+    /\ ft[a] > rp[a]
+    /\ mInit
+    /\ ~hoOpen
+    /\ rp[a] >= hoClosedAt - 1
+    /\ rp[a] >= seenP[a]
+    /\ rp[a] >= seenU[a]
+    /\ CloseCarried => rp[a] >= seenS[a]
+    /\ \A o \in inflight : author[o] = a => o > ft[a]
+    /\ rp' = [rp EXCEPT ![a] = ft[a]]
+--- REPLACE
+    /\ ft[a] > rp[a]
+    /\ rp[a] >= seenP[a]
+    /\ rp[a] >= seenU[a]
+    /\ CloseCarried => rp[a] >= seenS[a]
+    /\ \A o \in inflight : author[o] # a
+\* MUTATION: the target is taken now, after the view.
+    /\ rp' = [rp EXCEPT ![a] = Max(mine[a])]
+--- END

@@ -1,0 +1,25 @@
+# The re-created incarnation's first initialisation seeds the floor plus one but
+# claims nothing (#5668). After a new-build purge the WAL-side floor refuses a
+# straddler's re-presented claim without it. After a purge that finished on 10.2.0
+# the catch-up raises only the floor row: the entries stay loaded and a running WAL
+# shard's in-memory floor is not raised, so a straddler of L's own shard root meets
+# its loaded entry and is allocated above the recorded close. There the claim is
+# what refuses it. Moved from the design's ReadPositionHonestRoutingInitWithoutClaim.
+MODULE: StraddlerBelowInitRoutingInitWithoutClaim
+TARGET: StraddlerBelowInit
+CLASS: Invariant
+SUMMARY: a re-created tree's marker reads initialised before its seeded generation is claimed
+PERTURBS: FirstInit
+
+--- FIND
+    /\ entryRow' = [entryRow EXCEPT !["s"] = Max2(@, gen'["s"])]
+    /\ loaded' = [loaded EXCEPT !["s"] = Max2(@, gen'["s"])]
+    /\ fo' = [fo EXCEPT !["s"] = FALSE]
+    /\ closedAt' = next
+--- REPLACE
+\* MUTATION: the initialisation claims nothing.
+    /\ entryRow' = entryRow
+    /\ loaded' = loaded
+    /\ UNCHANGED fo
+    /\ closedAt' = next
+--- END

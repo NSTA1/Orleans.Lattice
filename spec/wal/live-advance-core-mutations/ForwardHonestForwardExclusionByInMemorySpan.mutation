@@ -1,0 +1,13 @@
+# #5837, the forward-exclusion relief (a5e2e2ef's X1-X4).
+MODULE: ForwardHonestForwardExclusionByInMemorySpan
+TARGET: ForwardHonest
+CLASS: Invariant
+SUMMARY: a reader excludes on its in-memory narrow, persisted or not: a stale duplicate whose persist lost passes its own forward of a key L still owns (X3)
+BOUNDS: WithFreeAdvance = TRUE, WithFwdExclusion = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
+
+--- FIND
+FwdExcluded(a, o) == Persisted(a) /\ fTag[o] = nar[a]
+--- REPLACE
+\* MUTATION: the reader's in-memory span.
+FwdExcluded(a, o) == nar[a] # NoTag /\ fTag[o] = nar[a]
+--- END

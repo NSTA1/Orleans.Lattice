@@ -276,7 +276,9 @@ public sealed class ShardRootMergeRegroupIntegrationTests
         {
             ArgumentNullException.ThrowIfNull(context);
 
-            if (context.InterfaceMethod?.Name == nameof(IBPlusLeafGrain.MergeManyAsync)
+            // With the append-fence gate open the shard root dispatches the
+            // routing-stamped twin (epic #5605, member 2); entries are argument 0 of both.
+            if (context.InterfaceMethod?.Name is nameof(IBPlusLeafGrain.MergeManyAsync) or nameof(IBPlusLeafGrain.MergeManyStampedAsync)
                 && context.InterfaceMethod?.DeclaringType == typeof(IBPlusLeafGrain)
                 && context.TargetContext is { } target)
             {

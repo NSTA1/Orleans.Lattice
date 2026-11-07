@@ -129,15 +129,19 @@ public partial class BPlusLeafGrainTests
         "SetAsync", "GetOrSetAsync", "SetIfVersionAsync", "SetManyAsync",
         "SetManyWherePredicateAsync", "ApplyCrdtDeltaAsync", "ApplyCrdtDeltaManyAsync",
         "DeleteAsync", "DeleteTrackedAsync", "DeleteRangeAsync", "DeleteRangeAndNextSiblingAsync",
+        // The routing-stamped twins of the writes above (epic #5605, member 2).
+        "SetStampedAsync", "GetOrSetStampedAsync", "SetIfVersionStampedAsync", "SetManyStampedAsync",
+        "SetManyWherePredicateStampedAsync", "ApplyCrdtDeltaStampedAsync", "ApplyCrdtDeltaManyStampedAsync",
+        "DeleteStampedAsync", "DeleteTrackedStampedAsync", "DeleteRangeAndNextSiblingStampedAsync",
         // Range and enumeration reads.
-        "CountAsync", "CountAndNextSiblingAsync", "GetAppendTailAsync", "GetStatsAsync", "GetStatsAndNextSiblingAsync", "GetKeysAsync", "GetKeysAndNextSiblingAsync", "GetEntriesAsync",
+        "CountAsync", "CountAndNextSiblingAsync", "GetAppendTailAsync", "CopyRowsForBulkLoadAsync", "GetStatsAsync", "GetStatsAndNextSiblingAsync", "GetKeysAsync", "GetKeysAndNextSiblingAsync", "GetEntriesAsync",
         "GetLiveEntriesAsync", "GetLiveRawEntriesAsync", "GetLiveRawEntriesAndNextSiblingAsync",
         "GetBootstrapCaptureAsync", "GetLiveRawEntriesAndPendingAsync",
         // Replication and delta seams.
         "GetDeltaSinceAsync", "GetDeltaSinceAndNextSiblingAsync", "GetDeltaSinceCursorAsync", "GetCacheRefreshAsync", "GetDeltaSinceForSlotsAndNextSiblingAsync",
         "GetPendingKeysAsync", "GetPendingMutationsForSlotsAsync", "GetPendingMutationsForSlotsAndNextSiblingAsync",
         "GetOriginalPrepareStampsAsync",
-        "MergeEntriesAsync", "MergeManyAsync", "GetClockAsync", "GetClockAndNextSiblingAsync",
+        "MergeEntriesAsync", "MergeBulkSeedAsync", "MergeManyAsync", "MergeManyStampedAsync", "GetClockAsync", "GetClockAndNextSiblingAsync",
         // Digests and topology views computed FROM the projection.
         "GetProjectionDigestAsync", "GetProjectionDigestForRangeAsync",
         "GetChildDigestSnapshotAsync", "SetParentAndGetChildDigestSnapshotAsync", "GetTopologyNodeAsync",
@@ -164,6 +168,8 @@ public partial class BPlusLeafGrainTests
         // activation before this change.
         "SetShardIndexAsync", "SetKeyRangeAsync", "SetTreeIdAsync", "SetBindingAsync",
         "InitializeSiblingAsync", "SetCheckpointOffsetHintsAsync", "SetParentAsync", "NarrowHighKeyAsync",
+        // Drops relocated rows from the projection (issue #5610).
+        "DropRelocatedRowsAsync",
 
         // Recovery's birth seam (issue #4700): it re-binds, or re-creates, the leaf
         // through SetTreeIdAsync and SetShardIndexAsync, gated as they are.
@@ -223,11 +229,13 @@ public partial class BPlusLeafGrainTests
         /// cancellation, which is the case that shows whether criterion 3 holds
         /// structurally or only by the goodwill of every await on the replay path.
         /// </param>
-        internal WedgedReplayLeaf(bool honoursCancellation = true)
+        /// <param name="onHeadRead">Runs in the replay's own flow at each WAL head read.</param>
+        internal WedgedReplayLeaf(bool honoursCancellation = true, Action? onHeadRead = null)
         {
             var coord = Substitute.For<ILeafReplayCoordinatorGrain>();
             coord.GetHeadOffsetAsync(Arg.Any<CancellationToken>()).Returns(call =>
             {
+                onHeadRead?.Invoke();
                 if (!honoursCancellation)
                     return _release.Task;
 

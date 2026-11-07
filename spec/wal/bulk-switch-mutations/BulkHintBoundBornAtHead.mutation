@@ -1,0 +1,26 @@
+# Pairs with BulkHintBound. Before Finish applies the hint, the appended leaf
+# reads from the log's start. Born at the head instead, it passes the records of
+# the rows the narrow has not yet relocated into it.
+MODULE: BulkHintBoundBornAtHead
+TARGET: BulkHintBound
+CLASS: Invariant
+SUMMARY: the appended leaf is born reading from the WAL head at its creation instead of the log start
+PERTURBS: Create
+
+--- FIND
+    /\ nUp' = TRUE
+    /\ seedSt' = "flight"
+--- REPLACE
+    /\ nUp' = TRUE
+\* MUTATION: born at the head.
+    /\ rpN' = next - 1
+    /\ seedSt' = "flight"
+--- END
+
+--- FIND
+                   runHint, bulkAt, copied, relocOk, heldN, rpN, crashed, oUp, midLoad, skip, published, gen, wm,
+                   closeHead, seedUnder, aborted>>
+--- REPLACE
+                   runHint, bulkAt, copied, relocOk, heldN, crashed, oUp, midLoad, skip, published, gen, wm,
+                   closeHead, seedUnder, aborted>>
+--- END

@@ -1,0 +1,33 @@
+# #5841: the claim's half of the Dekker pair must write the row before it reads the state.
+MODULE: HandOffBoundClaimReadsStateBeforeRowWrite
+TARGET: HandOffBound
+CLASS: Invariant
+SUMMARY: the claim reads the leaf state before it writes the row, so both reads can miss the other's write
+PERTURBS: ClaimWrite, ClaimCheck
+BOUNDS: WithStaleDonor = TRUE, WithPreArm = TRUE, MaxWindows = 1, WithRestart = FALSE
+
+--- FIND
+    /\ dst' = "wrote"
+    /\ dEpoch' = eRow + 1
+    /\ eRow' = eRow + 1
+    /\ dupRaised' = TRUE
+    /\ UNCHANGED <<liveArmed, sNarrowed, dpend, dstamp, bst, bRead, dRetried>>
+--- REPLACE
+\* MUTATION: the state is read first, deciding staleness now; the row is written by the check.
+    /\ dst' = IF sNarrowed THEN "stale" ELSE "wrote"
+    /\ UNCHANGED <<eRow, dEpoch, dupRaised, liveArmed, sNarrowed, dpend, dstamp, bst, bRead, dRetried>>
+--- END
+
+--- FIND
+    /\ dst' = IF sNarrowed THEN "stale" ELSE "claimed"
+    /\ UNCHANGED <<eRow, liveArmed, sNarrowed, dEpoch, dpend, dstamp, bst, bRead, dRetried, lVars>>
+--- REPLACE
+\* MUTATION: the row is written after the state read.
+    /\ eRow < MaxEpoch
+    /\ dEpoch' = eRow + 1
+    /\ eRow' = eRow + 1
+    /\ dupRaised' = TRUE
+    /\ dst' = "claimed"
+    /\ UNCHANGED <<liveArmed, sNarrowed, dpend, dstamp, bst, bRead, dRetried>>
+    /\ UNCHANGED <<lpend, lstamp, lUsed, relEpoch, lEpoch, lCached, lClaim, lAllow, lStamped, lDead, lStuck, lBumped, lStaleLeaf, lProbeFailed>>
+--- END

@@ -129,22 +129,22 @@ public sealed class BPlusLeafGrainSiblingInitTests
     }
 
     [Test]
-    public async Task SetCheckpointOffsetHints_skips_non_positive_entries()
+    public async Task SetCheckpointOffsetHints_skips_negative_entries()
     {
         var state = new FakePersistentState<LeafNodeState>();
         var grain = CreateGrain(state);
 
-        // Partition 0 head is 0 (skipped); a single-element array keeps the
-        // grain in its default single-partition checkpoint shape.
-        await grain.SetCheckpointOffsetHintsAsync([0]);
+        // A hint is one below a WAL head (issue #5760), so an empty WAL gives -1,
+        // "nothing applied", which is skipped; 0 is "applied through offset 0" and
+        // is stamped (A_checkpoint_hint_of_zero_is_stamped_as_applied_through_offset_zero).
+        // A single-element array keeps the grain in its default single-partition
+        // checkpoint shape.
+        await grain.SetCheckpointOffsetHintsAsync([-1]);
 
-        // The sentinel, not 0. A skipped hint assigns nothing, and since
-        // issue #2703 an unassigned partition-0 checkpoint reports -1 rather
-        // than the born-0 scalar. That distinction is what this test needs to
-        // exist: while the unassigned value read back as 0 this assertion
-        // could not tell "the non-positive entry was skipped" from "the 0 hint
-        // was applied", so the property in the test's own name was the one
-        // thing it could not observe.
+        // The sentinel. A skipped hint assigns nothing, and since issue #2703 an
+        // unassigned partition-0 checkpoint reports -1 rather than the born-0
+        // scalar, so this assertion can tell "the negative entry was skipped" from
+        // "a hint was applied".
         Assert.That(grain.GetCurrentCheckpointForPartition(0), Is.EqualTo(-1));
     }
 

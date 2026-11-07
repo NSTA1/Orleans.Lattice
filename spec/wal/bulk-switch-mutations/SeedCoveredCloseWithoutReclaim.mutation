@@ -1,0 +1,15 @@
+# Pairs with SeedCovered (review C1: every close re-claims). An abandoned
+# attempt's seed still in flight is then admitted after its token closed,
+# above the close heads and unreported.
+MODULE: SeedCoveredCloseWithoutReclaim
+TARGET: SeedCovered
+CLASS: Invariant
+SUMMARY: a close removes the switch's token without re-claiming the routing generation
+PERTURBS: Close
+
+--- FIND
+    /\ gen' = IF gen < MaxGen THEN gen + 1 ELSE gen
+--- REPLACE
+\* MUTATION: no re-claim.
+    /\ gen' = gen
+--- END

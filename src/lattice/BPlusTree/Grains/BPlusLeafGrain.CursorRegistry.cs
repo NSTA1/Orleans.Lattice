@@ -171,8 +171,24 @@ internal sealed partial class BPlusLeafGrain
             var consumerId = BuildConsumerId(idBase, partition, partitionCount);
             try
             {
-                await reporter.ReportCheckpointAsync(treeId, consumerId, clock,
-                    partition, GetPersistedCheckpointForPartition(partition), CancellationToken.None);
+                // The registry's checkpoint offset is advisory: only the drain-lag
+                // sampler reads it, never a retention floor (the durable pin below
+                // keeps the persisted checkpoint). It is the APPLIED position, so a
+                // born leaf whose hinted checkpoint is held back from persistence
+                // until a capture covers it (#5877, H2) does not read as lagging
+                // from the partition's first append (#5969). A partition the live
+                // advance moved last reports its cursor - the WAL GC reads it - and
+                // withdraws its offset: that checkpoint is no drain claim (#5981).
+                if (IsLiveAdvancedPartition(partition))
+                {
+                    await reporter.ReportAsync(treeId, consumerId, clock, CancellationToken.None);
+                    await reporter.ClearCheckpointAsync(treeId, consumerId, partition, CancellationToken.None);
+                }
+                else
+                {
+                    await reporter.ReportCheckpointAsync(treeId, consumerId, clock,
+                        partition, GetCurrentCheckpointForPartition(partition), CancellationToken.None);
+                }
             }
             catch (Exception ex)
             {
@@ -873,13 +889,15 @@ internal sealed partial class BPlusLeafGrain
         {
             var consumerId = BuildConsumerId(idBase, partition, partitionCount);
 
-            // Only a head the donor actually captured for THIS partition is
-            // usable. A short array (a donor configured with fewer partitions
+            // Only a read position the donor actually captured for THIS partition
+            // is usable. A short array (a donor configured with fewer partitions
             // than this leaf resolves) contributes nothing rather than reading
-            // another partition's offset space.
+            // another partition's offset space. The positions are checkpoints, one
+            // below the heads (issue #5760), so 0 is "applied through offset 0", a
+            // real offset; only a negative one - an empty WAL - is the sentinel.
             var offset = walHeadsAtBirth is { } heads
                 && partition < heads.Length
-                && heads[partition] > 0
+                && heads[partition] >= 0
                     ? heads[partition]
                     : -1;
 

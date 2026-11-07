@@ -51,7 +51,7 @@ internal sealed class WalCommitLogWriter(
     LatticeOptionsResolver optionsResolver,
     ILatticeMergeModeResolver modeResolver,
     ILatticeOriginClusterIdResolver clusterIdResolver,
-    IWalSaturationSignal? saturationSignal = null) : ICommitLogWriter
+    IWalSaturationSignal? saturationSignal = null) : IFencedCommitLogWriter
 {
     // Per-(tree, partition) pending-append tracker. The append paths
     // create one PendingAppend per dispatch, link it into the partition's
@@ -290,7 +290,7 @@ internal sealed class WalCommitLogWriter(
     /// 409-Conflict bursts, transient transport errors that are not
     /// cancellation) flow through to <see cref="IncrementProviderFailureCount"/>.
     /// </summary>
-    private static bool IsExcludedFromProviderFailureCount(Exception ex)
+    internal static bool IsExcludedFromProviderFailureCount(Exception ex)
     {
         // Shutdown back-pressure - distinct regime from provider
         // saturation, has its own typed caller-detection surface.
@@ -308,6 +308,13 @@ internal sealed class WalCommitLogWriter(
         // A clock-floor refusal (issue #4586) is the partition rejecting a
         // stale stamp before any provider work, not a provider failure.
         if (ex is WalStampBelowFloorException) return true;
+        // An append-fence rejection (epic #5605) is a superseded leaf activation
+        // refused before any provider work; its seam retries it against the live
+        // activation. It must never feed a provider-health or saturation signal.
+        if (ex is LeafRetiredException { ActivationSuperseded: true }) return true;
+        // A hand-off close's routing-generation rejection (member 2) is the same kind
+        // of pre-provider refusal, retried from the shard root.
+        if (ex is WalRoutingGenerationStaleException) return true;
         return false;
     }
 
@@ -671,7 +678,24 @@ internal sealed class WalCommitLogWriter(
         return Task.CompletedTask;
     }
     /// <inheritdoc />
-    public async Task<long> AppendAsync(WalRecord entry, CancellationToken cancellationToken = default)
+    public Task<long> AppendAsync(WalRecord entry, CancellationToken cancellationToken = default) =>
+        AppendCoreAsync(entry, fence: null, WalRoutingStamp.None, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<long> AppendAsync(WalRecord entry, ILeafAppendFence fence, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(fence);
+        return AppendCoreAsync(entry, fence, WalRoutingStamp.None, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task<long> AppendAsync(WalRecord entry, ILeafAppendFence fence, WalRoutingStamp routing, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(fence);
+        return AppendCoreAsync(entry, fence, routing, cancellationToken);
+    }
+
+    private async Task<long> AppendCoreAsync(WalRecord entry, ILeafAppendFence? fence, WalRoutingStamp routing, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -807,7 +831,9 @@ internal sealed class WalCommitLogWriter(
                     // threadpool, so the writer-side diagnostic counter and
                     // log line fire even when the grain scheduler is parked.
                     // See WalAppendStage / StallWatchdog for the lifecycle.
-                    var offsetInf = await DispatchPointAppendAsync(grain, stamped, batched, cancellationToken).ConfigureAwait(false);
+                    var offsetInf = fence is null
+                        ? await DispatchPointAppendAsync(grain, stamped, batched, cancellationToken).ConfigureAwait(false)
+                        : await WalFencedAppendDispatch.AppendPointAsync(grain, stamped, batched, partition, fence, routing, waitForDeadline: false, cancellationToken).ConfigureAwait(false);
                     pending.AdvanceTo(WalAppendStage.Acked);
                     RecordAppend(stamped.TreeId, partition, offsetInf, DateTime.UtcNow.Ticks);
                     return offsetInf;
@@ -829,6 +855,7 @@ internal sealed class WalCommitLogWriter(
                     {
                         IncrementProviderFailureCount(stamped.TreeId, partition);
                     }
+                    NoteUnallocatedRefusal(fence, ex, sliceEntries: 1);
                     pending.AdvanceTo(WalAppendStage.Failed);
                     throw;
                 }
@@ -836,14 +863,18 @@ internal sealed class WalCommitLogWriter(
             using var deadlineCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             deadlineCts.CancelAfter(dispatchTimeout);
             pending.AdvanceTo(WalAppendStage.SentToShard);
-            var grainCall = DispatchPointAppendAsync(grain, stamped, batched, deadlineCts.Token);
+            var grainCall = fence is null ? DispatchPointAppendAsync(grain, stamped, batched, deadlineCts.Token) : null;
             try
             {
                 // Wedge-attribution exception: same rationale as the
                 // infinite-timeout branch above - the catch must land on the
                 // threadpool so the dispatch-timeout diagnostic is emitted
-                // even when the caller's grain context is wedged.
-                var offset = await grainCall.WaitAsync(deadlineCts.Token).ConfigureAwait(false);
+                // even when the caller's grain context is wedged. A fenced
+                // append (epic #5605) bounds each shard call by the same
+                // deadline inside its pooled dispatch, so it adds no task here.
+                var offset = grainCall is not null
+                    ? await grainCall.WaitAsync(deadlineCts.Token).ConfigureAwait(false)
+                    : await WalFencedAppendDispatch.AppendPointAsync(grain, stamped, batched, partition, fence!, routing, waitForDeadline: true, deadlineCts.Token).ConfigureAwait(false);
                 pending.AdvanceTo(WalAppendStage.Acked);
                 RecordAppend(stamped.TreeId, partition, offset, DateTime.UtcNow.Ticks);
                 return offset;
@@ -901,6 +932,7 @@ internal sealed class WalCommitLogWriter(
                 {
                     IncrementProviderFailureCount(stamped.TreeId, partition);
                 }
+                NoteUnallocatedRefusal(fence, ex, sliceEntries: 1);
                 pending.AdvanceTo(WalAppendStage.Failed);
                 throw;
             }
@@ -913,6 +945,46 @@ internal sealed class WalCommitLogWriter(
         }
     }
 
+    /// <summary>
+    /// Tells a leaf's fence that its single-partition append call was refused without
+    /// allocating anything, so the leaf releases the append it counted (#5708).
+    /// </summary>
+    private static void NoteUnallocatedRefusal(ILeafAppendFence? fence, Exception exception, int sliceEntries)
+    {
+        if (fence is not null && WalFencedAppendDispatch.IsUnallocatedRefusal(exception, sliceEntries))
+        {
+            fence.OnRefusedUnallocated();
+        }
+    }
+
+    /// <summary>
+    /// As <see cref="NoteUnallocatedRefusal"/>, for a batch fanned out across partitions:
+    /// the call allocated nothing only when every partition's slice failed with a
+    /// definite refusal. Every task has completed when <c>Task.WhenAll</c> throws. Used as
+    /// an exception filter, so it always returns <see langword="false"/> and lets the
+    /// failure propagate unchanged.
+    /// </summary>
+    private static bool NoteUnallocatedBatchRefusal(
+        ILeafAppendFence fence,
+        Task<KeyValuePair<string, IReadOnlyList<long>>>[] tasks,
+        Dictionary<string, WalPartitionBatch> partitions)
+    {
+        var t = 0;
+        foreach (var batch in partitions.Values)
+        {
+            var task = tasks[t++];
+            if (!task.IsFaulted
+                || task.Exception!.InnerExceptions.Count != 1
+                || !WalFencedAppendDispatch.IsUnallocatedRefusal(task.Exception.InnerExceptions[0], batch.Records.Count))
+            {
+                return false;
+            }
+        }
+
+        fence.OnRefusedUnallocated();
+        return false;
+    }
+
     // Selects the grain overload a point append dispatches to (#812).
     // IWalShardGrain.AppendAsync takes an exclusive grain turn and awaits
     // its own provider ack inside it, so a partition admits one point
@@ -923,7 +995,8 @@ internal sealed class WalCommitLogWriter(
     // fences, sticky-failure and quiesce checks, so a one-entry batch is
     // semantically the same append without the serialisation. The
     // non-batched branch returns the grain task directly so the off-switch
-    // costs no extra state machine.
+    // costs no extra state machine. A fenced append (epic #5605) does not come
+    // here: WalFencedAppendDispatch stamps it with the leaf's claimed epoch.
     private static Task<long> DispatchPointAppendAsync(
         IWalShardGrain grain,
         WalRecord stamped,
@@ -952,7 +1025,24 @@ internal sealed class WalCommitLogWriter(
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<long>> AppendManyAsync(IReadOnlyList<WalRecord> entries, CancellationToken cancellationToken = default)
+    public Task<IReadOnlyList<long>> AppendManyAsync(IReadOnlyList<WalRecord> entries, CancellationToken cancellationToken = default) =>
+        AppendManyCoreAsync(entries, fence: null, WalRoutingStamp.None, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<long>> AppendManyAsync(IReadOnlyList<WalRecord> entries, ILeafAppendFence fence, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(fence);
+        return AppendManyCoreAsync(entries, fence, WalRoutingStamp.None, cancellationToken);
+    }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<long>> AppendManyAsync(IReadOnlyList<WalRecord> entries, ILeafAppendFence fence, WalRoutingStamp routing, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(fence);
+        return AppendManyCoreAsync(entries, fence, routing, cancellationToken);
+    }
+
+    private async Task<IReadOnlyList<long>> AppendManyCoreAsync(IReadOnlyList<WalRecord> entries, ILeafAppendFence? fence, WalRoutingStamp routing, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(entries);
         cancellationToken.ThrowIfCancellationRequested();
@@ -974,7 +1064,7 @@ internal sealed class WalCommitLogWriter(
         // exclusive turn was holding.
         if (count == 1 && !options.Get(entries[0].TreeId).WalBatchedSingleEntryAppends)
         {
-            var offset = await AppendAsync(entries[0], cancellationToken);
+            var offset = await AppendCoreAsync(entries[0], fence, routing, cancellationToken);
             return new[] { offset };
         }
 
@@ -1046,9 +1136,17 @@ internal sealed class WalCommitLogWriter(
         foreach (var batch in partitions.Values)
         {
             var grain = grainFactory.GetGrain<IWalShardGrain>(batch.GrainKey);
-            tasks[t++] = AppendForPartitionAsync(batch.GrainKey, grain, batch.Records, batch.TreeId, batch.Partition, batch.WalPartitions, batch.PerTree, terminalsOnly, cancellationToken);
+            tasks[t++] = AppendForPartitionAsync(batch.GrainKey, grain, batch.Records, batch.TreeId, batch.Partition, batch.WalPartitions, batch.PerTree, terminalsOnly, fence, routing, cancellationToken);
         }
-        var partitionResults = await Task.WhenAll(tasks);
+        KeyValuePair<string, IReadOnlyList<long>>[] partitionResults;
+        try
+        {
+            partitionResults = await Task.WhenAll(tasks);
+        }
+        catch (Exception) when (fence is not null && NoteUnallocatedBatchRefusal(fence, tasks, partitions))
+        {
+            throw;
+        }
 
         // Stitch the per-partition offsets back into the caller's
         // input order.
@@ -1105,6 +1203,8 @@ internal sealed class WalCommitLogWriter(
         int walPartitions,
         LatticeOptions perTree,
         bool terminalsOnly,
+        ILeafAppendFence? fence,
+        WalRoutingStamp routing,
         CancellationToken cancellationToken)
     {
         // A2 cross-grain dispatch attribution on the batched path:
@@ -1184,7 +1284,9 @@ internal sealed class WalCommitLogWriter(
                     // AppendAsync's single-entry branch above for the full
                     // rationale: catch must land off the grain context so the
                     // dispatch-timeout diagnostic still fires under a wedge.
-                    offsets = await grain.AppendBatchAsync(entries, cancellationToken).ConfigureAwait(false);
+                    offsets = fence is null
+                        ? await grain.AppendBatchAsync(entries, cancellationToken).ConfigureAwait(false)
+                        : await WalFencedAppendDispatch.AppendBatchAsync(grain, entries, partition, fence, routing, waitForDeadline: false, cancellationToken).ConfigureAwait(false);
                     pending.AdvanceTo(WalAppendStage.Acked);
                 }
                 catch (Exception ex)
@@ -1208,12 +1310,15 @@ internal sealed class WalCommitLogWriter(
                 using var deadlineCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 deadlineCts.CancelAfter(dispatchTimeout);
                 pending.AdvanceTo(WalAppendStage.SentToShard);
-                var grainCall = grain.AppendBatchAsync(entries, deadlineCts.Token);
+                var grainCall = fence is null ? grain.AppendBatchAsync(entries, deadlineCts.Token) : null;
                 try
                 {
                     // Wedge-attribution exception (batched path); see the
-                    // single-entry WaitAsync site above for the rationale.
-                    offsets = await grainCall.WaitAsync(deadlineCts.Token).ConfigureAwait(false);
+                    // single-entry WaitAsync site above for the rationale,
+                    // including why a fenced append adds no task here.
+                    offsets = grainCall is not null
+                        ? await grainCall.WaitAsync(deadlineCts.Token).ConfigureAwait(false)
+                        : await WalFencedAppendDispatch.AppendBatchAsync(grain, entries, partition, fence!, routing, waitForDeadline: true, deadlineCts.Token).ConfigureAwait(false);
                     pending.AdvanceTo(WalAppendStage.Acked);
                 }
                 catch (OperationCanceledException) when (deadlineCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)

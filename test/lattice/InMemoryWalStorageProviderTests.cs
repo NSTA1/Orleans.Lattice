@@ -30,6 +30,36 @@ public class InMemoryWalStorageProviderTests
     };
 
     [Test]
+    public async Task A_stale_writers_later_batch_at_a_different_start_is_refused_per_offset()
+    {
+        // Issue #5810's interleaving against the in-memory provider: a successor
+        // acknowledged [4,6] and [7,9], then a stale writer's [5,6] arrives. Overlap
+        // is checked per offset against the whole log, not per batch start, so it is
+        // refused and nothing changes. (Its log is per process, so two silos never
+        // share one; this pins the per-offset contract the Azure provider lacks.)
+        var sut = new InMemoryWalStorageProvider();
+        await sut.AppendBatchAsync(Tree, 0, [Entry(0), Entry(1), Entry(2), Entry(3)], CancellationToken.None);
+        await sut.AppendBatchAsync(Tree, 0, [Entry(4, "s"), Entry(5, "s"), Entry(6, "s")], CancellationToken.None);
+        await sut.AppendBatchAsync(Tree, 0, [Entry(7, "s"), Entry(8, "s"), Entry(9, "s")], CancellationToken.None);
+
+        Assert.That(
+            async () => await sut.AppendBatchAsync(Tree, 0, [Entry(5, "p"), Entry(6, "p")], CancellationToken.None),
+            Throws.InvalidOperationException);
+
+        var stored = new List<WalEntry>();
+        await foreach (var entry in sut.ReadAsync(Tree, 0, -1L, 64, CancellationToken.None))
+        {
+            stored.Add(entry);
+        }
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(stored.Select(e => e.Offset), Is.EqualTo(Enumerable.Range(0, 10).Select(i => (long)i)));
+            Assert.That(stored.Where(e => e.Offset is 5 or 6).Select(e => e.Mutation.Key), Is.All.EqualTo("s"));
+            Assert.That(await sut.GetHighestOffsetAsync(Tree, 0, CancellationToken.None), Is.EqualTo(9L));
+        });
+    }
+    [Test]
     public async Task GetHighestOffsetAsync_returns_minus_one_for_empty_shard()
     {
         var sut = new InMemoryWalStorageProvider();

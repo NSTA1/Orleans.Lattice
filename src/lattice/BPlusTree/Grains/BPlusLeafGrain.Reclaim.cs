@@ -77,7 +77,8 @@ internal sealed partial class BPlusLeafGrain
             throw new LeafRetiredException(context.GrainId.ToString());
         }
 
-        return new MutationScope(this);
+        _mutationsInCurrentEpoch++;
+        return new MutationScope(this, _mutationEpoch);
     }
 
     /// <summary>
@@ -85,9 +86,133 @@ internal sealed partial class BPlusLeafGrain
     /// <see cref="IDisposable.Dispose"/>, so the count falls on every exit
     /// path of the mutation body including an exceptional one.
     /// </summary>
-    private readonly struct MutationScope(BPlusLeafGrain grain) : IDisposable
+    private readonly struct MutationScope(BPlusLeafGrain grain, long epoch) : IDisposable
     {
-        public void Dispose() => grain._mutationsInFlight--;
+        public void Dispose()
+        {
+            grain._mutationsInFlight--;
+            grain.EndMutationInEpoch(epoch);
+        }
+    }
+
+    /// <summary>
+    /// The mutation admission epoch (issue #5706). A drain raises it, so a mutation
+    /// admitted afterwards counts in <see cref="_mutationsInCurrentEpoch"/> and one
+    /// admitted before in <see cref="_mutationsInEarlierEpochs"/>.
+    /// </summary>
+    private long _mutationEpoch;
+
+    /// <summary>Mutations in flight that were admitted in the current epoch.</summary>
+    private int _mutationsInCurrentEpoch;
+
+    /// <summary>Mutations in flight that were admitted before the latest drain began.</summary>
+    private int _mutationsInEarlierEpochs;
+
+    /// <summary>Completed whenever <see cref="_mutationsInEarlierEpochs"/> falls.</summary>
+    private TaskCompletionSource? _earlierMutationsFell;
+
+    private void EndMutationInEpoch(long epoch)
+    {
+        if (epoch == _mutationEpoch)
+        {
+            _mutationsInCurrentEpoch--;
+            return;
+        }
+
+        _mutationsInEarlierEpochs--;
+        if (_earlierMutationsFell is { } fell)
+        {
+            _earlierMutationsFell = null;
+            fell.TrySetResult();
+        }
+    }
+
+    /// <summary>
+    /// How long a drain of in-flight mutations waits before giving up. A mutation
+    /// is a grain call bounded by the caller's response timeout, so a drain that
+    /// outlasts this is waiting on something that will not finish soon, or on the
+    /// mutation that called it.
+    /// </summary>
+    internal static readonly TimeSpan MutationDrainDeadline = TimeSpan.FromSeconds(10);
+
+    /// <summary>This activation's drain deadline; <see cref="MutationDrainDeadline"/> unless a test shortens it.</summary>
+    private TimeSpan _mutationDrainDeadline = MutationDrainDeadline;
+
+    /// <summary>Test seam: shortens this activation's drain deadline.</summary>
+    internal void SetMutationDrainDeadlineForTest(TimeSpan deadline) => _mutationDrainDeadline = deadline;
+
+    /// <summary>
+    /// Waits until at most <paramref name="allowance"/> of the mutations admitted
+    /// before this call are still in flight (issue #5706). A mutation admitted
+    /// afterwards is not waited for. Returns <see langword="false"/> when
+    /// <see cref="MutationDrainDeadline"/> passes first.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Why a narrowing waits for this.</b> A commit checks its key against the
+    /// declared span before it awaits the WAL append, and stores the row after it.
+    /// In between, the record is durable at an allocated offset that the leaf has
+    /// not applied. A split and a bulk append give the leaves that take over a
+    /// range a read position captured from the WAL's head, and then narrow this
+    /// leaf. If this activation died with such a commit unapplied, after the
+    /// narrow, its own replay would skip the record as out of span and the new
+    /// leaf's replay would start above it: no leaf on the origin would apply a
+    /// record replicas and views apply. Every record allocated before the head was
+    /// captured belongs to a mutation admitted before it, so draining the
+    /// mutations admitted before the narrow, after the head was captured, closes
+    /// the window. A mutation admitted afterwards allocates at or above the head,
+    /// which the new leaf replays.
+    /// </para>
+    /// <para>
+    /// <paramref name="allowance"/> is the number of the caller's own mutation
+    /// scopes: a split runs inside the mutation that triggered it, whose rows are
+    /// already applied. Concurrent drains are safe: each counts every mutation
+    /// admitted before the latest flip, which only waits for more.
+    /// </para>
+    /// <para>
+    /// <b>What is drained.</b> Every path that appends a record for a data key and
+    /// applies it afterwards runs in a mutation scope: the set, delete, batch,
+    /// conditional, merge and CRDT entry points (saga prepares included, which
+    /// commit through them), and the replayed-terminal prepare
+    /// (<c>ApplyPreparedReplayCommitAsync</c>). Two appends are deliberately
+    /// unscoped. The saga terminal backstop (<c>ApplyTxTerminalAsync</c>) appends
+    /// terminal records, which replay applies whatever the span, so no narrow can
+    /// make a leaf skip one. The tombstone reap (<c>CompactTombstonesCoreAsync</c>)
+    /// appends reap records, whose loss only defers a reap.
+    /// </para>
+    /// </remarks>
+    private ValueTask<bool> DrainMutationsAdmittedBeforeAsync(int allowance)
+    {
+        _mutationsInEarlierEpochs += _mutationsInCurrentEpoch;
+        _mutationsInCurrentEpoch = 0;
+        _mutationEpoch++;
+
+        // The common case: nothing admitted earlier is still in flight, so the
+        // drain completes synchronously and allocates nothing.
+        return _mutationsInEarlierEpochs <= allowance
+            ? new ValueTask<bool>(true)
+            : new ValueTask<bool>(WaitForEarlierMutationsAsync(allowance));
+    }
+
+    private async Task<bool> WaitForEarlierMutationsAsync(int allowance)
+    {
+        // One timer for the whole wait, released on every exit (review N1 of #5702):
+        // a drain that completes early leaves no deadline timer behind.
+        using var deadline = new CancellationTokenSource(_mutationDrainDeadline);
+        while (_mutationsInEarlierEpochs > allowance)
+        {
+            _earlierMutationsFell ??= new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            try
+            {
+                await _earlierMutationsFell.Task.WaitAsync(deadline.Token);
+            }
+            catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <inheritdoc />

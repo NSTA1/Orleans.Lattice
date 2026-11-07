@@ -47,14 +47,31 @@ namespace Orleans.Lattice.Storage.AzureTable;
 /// </summary>
 internal sealed class PhaseTwoWorker : IAsyncDisposable
 {
-    private readonly Func<IReadOnlyList<TableTransactionAction>, CancellationToken, Task> _submit;
+    /// <summary>
+    /// Submits a manifest transaction and returns the ETag its last action - the
+    /// <c>TAIL</c> write, when there is one - left on the row.
+    /// </summary>
+    private readonly Func<IReadOnlyList<TableTransactionAction>, CancellationToken, Task<ETag?>> _submit;
+
+    /// <summary>
+    /// The shard's commit fence on this provider instance (issue #5810), or
+    /// <see langword="null"/> for a test worker with no table behind it, which keeps
+    /// the historical unconditional <c>TAIL</c> upsert.
+    /// </summary>
+    private readonly WalShardCommitFence? _fence;
+
+    /// <summary>
+    /// Where the batches of a failed commit are recorded for reconciliation to
+    /// reclaim, or <see langword="null"/> for a test worker that does not track them.
+    /// </summary>
+    private readonly WalShardFailedBatches? _failedBatches;
 
     /// <summary>
     /// Proves a manifest transaction that failed with 409 / 404 already committed
     /// (see <see cref="AzureTableWalStorageProvider.IsIdempotentPhaseTwoReplayAsync"/>),
     /// or <see langword="null"/> when a failed submit is never re-examined.
     /// </summary>
-    private readonly Func<IReadOnlyList<TableTransactionAction>, CancellationToken, Task<bool>>? _verifyReplay;
+    private readonly Func<IReadOnlyList<TableTransactionAction>, CancellationToken, Task<PhaseTwoReplayProof>>? _verifyReplay;
     private readonly string _manifestPartitionKey;
     private readonly Channel<PhaseTwoCommit> _arrivals;
     private readonly Task _drainLoop;
@@ -210,12 +227,16 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
         KeyValuePair<string, object?> pipelinePhaseTwoTag,
         TimeSpan coalescingWindow,
         TimeSpan? commitTimeout = null,
-        TimeSpan? abandonedSubmitSettleCap = null)
+        TimeSpan? abandonedSubmitSettleCap = null,
+        WalShardCommitFence? fence = null,
+        WalShardFailedBatches? failedBatches = null)
         : this(
             async (actions, cancellationToken) =>
             {
                 var table = await tableProvider(cancellationToken).ConfigureAwait(false);
-                await table.SubmitTransactionAsync(actions, cancellationToken).ConfigureAwait(false);
+                var response = await table.SubmitTransactionAsync(actions, cancellationToken).ConfigureAwait(false);
+                var results = response.Value;
+                return results.Count == actions.Count ? results[^1].Headers.ETag : null;
             },
             manifestPartitionKey,
             treeId,
@@ -227,9 +248,11 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
             async (actions, cancellationToken) =>
             {
                 var table = await tableProvider(cancellationToken).ConfigureAwait(false);
-                return await AzureTableWalStorageProvider.IsIdempotentPhaseTwoReplayAsync(table, actions, cancellationToken)
+                return await AzureTableWalStorageProvider.ProvePhaseTwoReplayAsync(table, actions, cancellationToken)
                     .ConfigureAwait(false);
-            })
+            },
+            fence,
+            failedBatches)
     {
     }
 
@@ -261,9 +284,13 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
         TimeSpan coalescingWindow,
         TimeSpan? commitTimeout = null,
         TimeSpan? abandonedSubmitSettleCap = null,
-        Func<IReadOnlyList<TableTransactionAction>, CancellationToken, Task<bool>>? verifyReplay = null)
+        Func<IReadOnlyList<TableTransactionAction>, CancellationToken, Task<PhaseTwoReplayProof>>? verifyReplay = null)
         : this(
-            submit,
+            async (actions, cancellationToken) =>
+            {
+                await submit(actions, cancellationToken).ConfigureAwait(false);
+                return (ETag?)null;
+            },
             manifestPartitionKey,
             treeId: string.Empty,
             shardIndex: 0,
@@ -275,12 +302,34 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
             coalescingWindow,
             commitTimeout,
             abandonedSubmitSettleCap,
-            verifyReplay)
+            verifyReplay,
+            fence: null)
+    {
+    }
+
+    /// <summary>
+    /// Test-only constructor for the fenced commit path (issue #5810): the submit seam
+    /// returns the ETag the transaction left on <c>TAIL</c>, as the production seam does.
+    /// </summary>
+    internal PhaseTwoWorker(
+        Func<IReadOnlyList<TableTransactionAction>, CancellationToken, Task<ETag?>> submit,
+        string manifestPartitionKey,
+        WalShardCommitFence fence,
+        WalShardFailedBatches? failedBatches = null)
+        : this(
+            submit,
+            manifestPartitionKey,
+            treeId: string.Empty,
+            shardIndex: 0,
+            pipelinePhaseTwoTag: new KeyValuePair<string, object?>(LatticeMetrics.TagPipelinePhaseTwo, false),
+            TimeSpan.Zero,
+            fence: fence,
+            failedBatches: failedBatches)
     {
     }
 
     private PhaseTwoWorker(
-        Func<IReadOnlyList<TableTransactionAction>, CancellationToken, Task> submit,
+        Func<IReadOnlyList<TableTransactionAction>, CancellationToken, Task<ETag?>> submit,
         string manifestPartitionKey,
         string treeId,
         int shardIndex,
@@ -288,9 +337,13 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
         TimeSpan coalescingWindow,
         TimeSpan? commitTimeout = null,
         TimeSpan? abandonedSubmitSettleCap = null,
-        Func<IReadOnlyList<TableTransactionAction>, CancellationToken, Task<bool>>? verifyReplay = null)
+        Func<IReadOnlyList<TableTransactionAction>, CancellationToken, Task<PhaseTwoReplayProof>>? verifyReplay = null,
+        WalShardCommitFence? fence = null,
+        WalShardFailedBatches? failedBatches = null)
     {
         _submit = submit;
+        _fence = fence;
+        _failedBatches = failedBatches;
         _verifyReplay = verifyReplay;
         _manifestPartitionKey = manifestPartitionKey;
         _treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
@@ -328,11 +381,13 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
     /// when the worker has durably written the manifest row + TAIL
     /// pointer. The task faults with the underlying
     /// <see cref="Exception"/> on transaction failure.
+    /// <paramref name="generation"/> is the commit fence generation the batch was
+    /// claimed under (issue #5810); a batch claimed under an older one is refused.
     /// </summary>
-    public Task EnqueueAsync(long startOffset, long endOffsetInclusive, bool hasCandidateRow = true, long payloadBytes = 0L)
+    public Task EnqueueAsync(long startOffset, long endOffsetInclusive, bool hasCandidateRow = true, long payloadBytes = 0L, long generation = 0L)
     {
-        var tcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var commit = new PhaseTwoCommit(startOffset, endOffsetInclusive, hasCandidateRow, payloadBytes, tcs);
+        var tcs = new PhaseTwoCompletion();
+        var commit = new PhaseTwoCommit(startOffset, endOffsetInclusive, hasCandidateRow, payloadBytes, tcs, generation);
 
         // The publish and the accept happen under one gate. The drain
         // loop can pick the arrival up and fault it the instant it is
@@ -543,20 +598,40 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
     /// </summary>
     internal WalShardWriteTracker OutstandingCommits { get; } = new();
 
+    // #5843: the outstanding count is released BEFORE the completion is set. The completion
+    // runs its continuations asynchronously, so a caller awaiting it can resume on another
+    // thread the instant it is set; releasing afterwards let that caller observe the tracker
+    // still busy with its own, already-reported commit. Each accepted commit is settled once,
+    // so the count is released exactly once, whichever path settles it first.
     private void SettleSuccess(in PhaseTwoCommit commit)
     {
-        if (commit.Completion.TrySetResult())
+        if (commit.Completion.TryClaimSettle())
         {
             OutstandingCommits.Exit();
+            commit.Completion.SetResult();
         }
     }
 
     private void SettleFault(in PhaseTwoCommit commit, Exception ex)
     {
-        if (commit.Completion.TrySetException(ex))
+        if (commit.Completion.TryClaimSettle())
         {
             OutstandingCommits.Exit();
+            commit.Completion.SetException(ex);
         }
+    }
+
+    /// <summary>
+    /// A phase-2 commit's completion, settled at most once (#5843): the settle that claims it
+    /// releases the outstanding count and then completes it, so the count is never released
+    /// twice and never after a caller could observe the completion.
+    /// </summary>
+    internal sealed class PhaseTwoCompletion() : TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
+    {
+        private int _settled;
+
+        /// <summary>Claims the one settle of this completion; <see langword="false"/> when it was already claimed.</summary>
+        public bool TryClaimSettle() => Interlocked.Exchange(ref _settled, 1) == 0;
     }
 
     private int _disposed;
@@ -718,8 +793,29 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
         // matching duration histogram is recorded around the actual
         // _submit call below.
         LatticeMetrics.ProviderPhase2BatchSize.Record(commits.Count, _treeTag, _shardTag, _tenantTag);
+        var generation = commits[0].Generation;
         try
         {
+            // The commit fence (issue #5810). Every batch in the group must have been
+            // claimed under the fence's current generation, while it held TAIL's ETag;
+            // one claimed earlier may overlap a batch another writer committed since,
+            // at a different start offset, so it is refused here without a submit.
+            ETag? fenceETag = null;
+            var fenceTail = -1L;
+            if (_fence is not null)
+            {
+                var fenced = !_fence.TryGetCondition(generation, out fenceETag, out fenceTail);
+                for (var i = 1; i < commits.Count && !fenced; i++)
+                {
+                    fenced = commits[i].Generation != generation;
+                }
+
+                if (fenced)
+                {
+                    throw FenceRefusal(cause: null);
+                }
+            }
+
             var actions = new List<TableTransactionAction>((commits.Count * 2) + 1);
             for (var i = 0; i < commits.Count; i++)
             {
@@ -781,10 +877,29 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
             // skipped entirely (no action in the transaction) when
             // the current group's max does not advance the mark.
             var highestCommitted = Interlocked.Read(ref _highestCommittedEndOffset);
-            var tailToPersist = Math.Max(highestEndOffset, highestCommitted);
+            var tailToPersist = Math.Max(Math.Max(highestEndOffset, highestCommitted), fenceTail);
             var tailAdvances = tailToPersist > highestCommitted
                 || (highestCommitted == -1L && highestEndOffset >= 0L);
-            if (tailAdvances)
+            if (_fence is not null)
+            {
+                // Fenced: TAIL is written by every commit, conditionally on the ETag the
+                // fence holds and never below the value it was observed with, so a writer
+                // that moved TAIL since refuses this transaction with 412 (or 409 for a
+                // row this instance last saw absent) instead of being lowered by it.
+                var tail = new AzureTableWalEntity
+                {
+                    PartitionKey = _manifestPartitionKey,
+                    RowKey = AzureTableWalStorageProvider.TailRowKey,
+                    Offset = tailToPersist,
+                    Payload = null,
+                    // Names this commit, so a replay proof adopts only its own TAIL (#5605 W7).
+                    CommitNonce = Guid.NewGuid().ToString("N"),
+                };
+                actions.Add(fenceETag is { } etag
+                    ? new TableTransactionAction(TableTransactionActionType.UpdateReplace, tail, etag)
+                    : new TableTransactionAction(TableTransactionActionType.Add, tail));
+            }
+            else if (tailAdvances)
             {
                 actions.Add(new TableTransactionAction(
                     TableTransactionActionType.UpsertReplace,
@@ -798,6 +913,7 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
             }
 
             var phaseTwoStartTicks = System.Diagnostics.Stopwatch.GetTimestamp();
+            ETag? landedETag = null;
             try
             {
                 if (_commitTimeout is { } commitTimeout)
@@ -825,7 +941,7 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
                     // tail read wait for it instead of resyncing
                     // underneath it.
                     var submitCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                    Task submitTask;
+                    Task<ETag?> submitTask;
                     try
                     {
                         submitTask = SubmitResolvingReplayAsync(actions, submitCts.Token);
@@ -838,7 +954,7 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
 
                     try
                     {
-                        await submitTask.WaitAsync(commitTimeout, cancellationToken).ConfigureAwait(false);
+                        landedETag = await submitTask.WaitAsync(commitTimeout, cancellationToken).ConfigureAwait(false);
                     }
                     catch (TimeoutException) when (!submitTask.IsCompleted && !cancellationToken.IsCancellationRequested)
                     {
@@ -861,7 +977,7 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
                 }
                 else
                 {
-                    await SubmitResolvingReplayAsync(actions, cancellationToken).ConfigureAwait(false);
+                    landedETag = await SubmitResolvingReplayAsync(actions, cancellationToken).ConfigureAwait(false);
                 }
             }
             finally
@@ -879,6 +995,10 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
                     });
             }
 
+            // The fence now holds the ETag this commit left on TAIL. A response that did
+            // not carry it (a proven replay, whose landed ETag is unknown) invalidates
+            // the fence instead, so the next commit cannot be conditioned on a stale one.
+            _fence?.Advance(generation, landedETag, tailToPersist);
             RaiseHighestCommittedEndOffset(tailToPersist);
             PruneAcceptedRanges(tailToPersist);
             for (var i = 0; i < commits.Count; i++)
@@ -888,6 +1008,20 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
         }
         catch (Exception ex)
         {
+            // Any failed or abandoned commit - a refusal by the fence included - may
+            // mean another writer moved TAIL, or that this one's own submit can still
+            // land: either way the held ETag can no longer condition a commit, and the
+            // batches claimed under it are refused (issue #5810).
+            _fence?.Invalidate();
+
+            // A fenced TAIL write refused with 412 is the commit fence refusing at the
+            // store: another writer moved TAIL (issue #5810). Surfaced as the fence's
+            // own refusal, a retryable transient (#5605 W7).
+            if (_fence is not null && ex is RequestFailedException { Status: 412 })
+            {
+                ex = FenceRefusal(ex);
+            }
+
             // The producer will resync from the persisted TAIL, so the
             // worker can no longer vouch for anything above what it
             // actually committed.
@@ -898,7 +1032,7 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
             // before completing its commits.
             //
             // A caller awaiting EnqueueAsync resumes the moment
-            // TrySetException runs below, and its Completion is created
+            // SettleFault runs below, and its Completion is created
             // with RunContinuationsAsynchronously, so it resumes on the
             // thread pool CONCURRENTLY with the remainder of this catch
             // block rather than after it. Were the discard left below
@@ -920,12 +1054,16 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
             // TAIL and committing them would silently advance the
             // pointer past a hole the reconciliation step needs to
             // see.
+            // Every faulted batch's entry rows have landed (phase 2 follows phase 1),
+            // so record each for the reconciliation this fault triggers to reclaim.
             for (var i = 0; i < commits.Count; i++)
             {
+                _failedBatches?.Add(commits[i].StartOffset, commits[i].EndOffsetInclusive);
                 SettleFault(commits[i], ex);
             }
             foreach (var pending in _pending)
             {
+                _failedBatches?.Add(pending.StartOffset, pending.EndOffsetInclusive);
                 SettleFault(pending, ex);
             }
             _pending.Clear();
@@ -943,6 +1081,23 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
     }
 
     /// <summary>
+    /// The commit fence's refusal of a phase-2 commit (issue #5810): its batches were
+    /// claimed before another writer moved <c>TAIL</c>, or before this instance knew
+    /// <c>TAIL</c>, so it is never submitted. It is a retryable transient, never a
+    /// terminal error (#5605 W7): the batches' entry rows are durable, and the shard's
+    /// resync from storage rolls each forward or back, so, as for a phase-2 commit that
+    /// outran its deadline, its outcome is decided by that resync and the write may be
+    /// retried.
+    /// </summary>
+    private TimeoutException FenceRefusal(Exception? cause) =>
+        new(
+            $"Phase-2 commit for partition '{_manifestPartitionKey}' was refused: its batches were claimed before "
+            + "another writer moved TAIL, or before this instance knew TAIL, so they may overlap a batch committed "
+            + "since. The shard resyncs from storage, which decides the batches' outcome; the write may be retried "
+            + "(issue #5810).",
+            cause);
+
+    /// <summary>
     /// Maps a provider exception to a low-cardinality
     /// <see cref="LatticeMetrics.TagStatus"/> tag value. The Azure
     /// Tables SDK surfaces transient and exhausted retries as
@@ -950,9 +1105,10 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
     /// the catch-all <c>unknown</c> bucket so the tag's cardinality
     /// stays bounded.
     /// </summary>
-    private static string ResolveProviderStatusTag(Exception ex) => ex switch
+    internal static string ResolveProviderStatusTag(Exception ex) => ex switch
     {
         RequestFailedException rfe => rfe.Status.ToString(System.Globalization.CultureInfo.InvariantCulture),
+        TimeoutException { InnerException: RequestFailedException refused } => refused.Status.ToString(System.Globalization.CultureInfo.InvariantCulture),
         _ => "unknown",
     };
 
@@ -1001,25 +1157,25 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
     /// including a manifest row that records a different batch, rethrows the original
     /// failure, so a genuine conflict still surfaces and nothing is overwritten.
     /// </summary>
-    private async Task SubmitResolvingReplayAsync(IReadOnlyList<TableTransactionAction> actions, CancellationToken cancellationToken)
+    private async Task<ETag?> SubmitResolvingReplayAsync(IReadOnlyList<TableTransactionAction> actions, CancellationToken cancellationToken)
     {
         try
         {
-            await _submit(actions, cancellationToken).ConfigureAwait(false);
+            return await _submit(actions, cancellationToken).ConfigureAwait(false);
         }
-        catch (RequestFailedException rfe) when (_verifyReplay is not null && rfe.Status is 409 or 404)
+        catch (RequestFailedException rfe) when (_verifyReplay is not null && rfe.Status is 409 or 404 or 412)
         {
-            bool isReplay;
+            PhaseTwoReplayProof proof;
             try
             {
-                isReplay = await _verifyReplay(actions, cancellationToken).ConfigureAwait(false);
+                proof = await _verifyReplay(actions, cancellationToken).ConfigureAwait(false);
             }
             catch (RequestFailedException)
             {
-                isReplay = false;
+                proof = default;
             }
 
-            if (!isReplay)
+            if (!proof.Proven)
             {
                 throw;
             }
@@ -1033,6 +1189,12 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
                     LatticeMetrics.PhasePhase2Tag,
                     _tenantTag,
                 });
+
+            // Proven durable. The proof read TAIL; when it is still the row this
+            // transaction wrote - its value and its commit nonce - its ETag conditions the
+            // next commit as the landed attempt's response would have (#5605 W7).
+            // Otherwise it is unknown, and the fence is invalidated (issue #5810).
+            return proof.TailETag;
         }
     }
 
@@ -1089,7 +1251,8 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
         long EndOffsetInclusive,
         bool HasCandidateRow,
         long PayloadBytes,
-        TaskCompletionSource Completion);
+        PhaseTwoCompletion Completion,
+        long Generation = 0L);
 
     /// <summary>
     /// <see cref="IComparer{T}"/> that orders

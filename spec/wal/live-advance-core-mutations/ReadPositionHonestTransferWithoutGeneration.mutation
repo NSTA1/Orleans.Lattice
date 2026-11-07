@@ -1,0 +1,24 @@
+# #5837, the claimless advance: the split transfer and the receiver's close heads.
+MODULE: ReadPositionHonestTransferWithoutGeneration
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: T1: a stale duplicate receiver, passing its in-memory span check, appends a transfer of keys it no longer owns with no routing generation: admitted after the re-claim and in no staleHigh
+PERTURBS: StaleRouteAlloc
+BOUNDS: WithFreeAdvance = TRUE, WithKeyMove = TRUE, MaxWindows = 0, WithMixedVersion = FALSE
+
+--- FIND
+    /\ next < MaxOff
+    /\ 1 >= gL
+    /\ dUsed' = TRUE
+--- REPLACE
+    /\ next < MaxOff
+\* MUTATION: no generation, so never refused.
+    /\ dUsed' = TRUE
+--- END
+
+--- FIND
+    /\ sHi' = IF FreeOn THEN next ELSE sHi
+--- REPLACE
+\* MUTATION: and in no generation's staleHigh.
+    /\ UNCHANGED sHi
+--- END

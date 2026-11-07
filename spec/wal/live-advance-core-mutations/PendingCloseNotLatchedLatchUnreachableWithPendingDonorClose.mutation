@@ -1,0 +1,13 @@
+# #5837: the reachability latch exemption and the split transfer's link obligation.
+MODULE: PendingCloseNotLatchedLatchUnreachableWithPendingDonorClose
+TARGET: PendingCloseNotLatched
+CLASS: Invariant
+SUMMARY: #5709's latch as it stands: an unlinked L with its donor's close pending is latched, and its routed writes after the link raise the shared watermark (#5837's engagement gap)
+BOUNDS: WithFreeAdvance = TRUE, WithSplitBirth = TRUE, WithKeyMove = TRUE, MaxWindows = 1, WithMixedVersion = FALSE, WithDuplicate = FALSE, WithLatch = TRUE
+
+--- FIND
+ExemptPending == BoundPending /\ ~eagerG /\ ~repair
+--- REPLACE
+\* MUTATION: no exemption.
+ExemptPending == FALSE
+--- END

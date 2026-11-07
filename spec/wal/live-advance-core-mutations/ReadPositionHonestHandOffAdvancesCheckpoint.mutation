@@ -1,0 +1,17 @@
+# A hand-off moves the receiving activation's read position to the record it
+# delivers, passing an earlier record of the window it has not read.
+MODULE: ReadPositionHonestHandOffAdvancesCheckpoint
+TARGET: ReadPositionHonest
+CLASS: Invariant
+SUMMARY: a hand-off advances the receiver's read position to the delivered record
+PERTURBS: HandOff
+
+--- FIND
+    /\ acked' = acked \cup {o}
+    /\ UNCHANGED <<next, author, inflight, durable, floor, up, rp, mine, snapCov, snapRows>>
+--- REPLACE
+    /\ acked' = acked \cup {o}
+\* MUTATION: the hand-off moves the read position.
+    /\ rp' = [rp EXCEPT ![a] = Max2(@, o)]
+    /\ UNCHANGED <<next, author, inflight, durable, floor, up, mine, snapCov, snapRows>>
+--- END

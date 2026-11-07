@@ -1,5 +1,6 @@
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
@@ -63,7 +64,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
             Received.InOrder(() =>
             {
                 leaf.InitializeSiblingAsync(Arg.Any<SiblingInitialization>());
-                leaf.MergeEntriesAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>());
+                leaf.MergeBulkSeedAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>(), Arg.Any<WalRoutingStamp>());
             });
         }
         Assert.That(newLeaves.Sum(l => l.ReceivedCalls().Count(c =>
@@ -87,7 +88,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
 
         var append = h.Grain.BulkAppendAsync("pin-gate", Pairs(2));
         Assert.That(append.IsCompleted, Is.False);
-        await leaf.DidNotReceive().MergeEntriesAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>());
+        await leaf.DidNotReceive().MergeBulkSeedAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>(), Arg.Any<WalRoutingStamp>());
         await h.Leaf(existing).DidNotReceive().SetNextSiblingAsync(Arg.Any<GrainId>());
         var failure = new IOException("birth pin failed");
         pin.SetException(failure);
@@ -97,7 +98,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
 
         leaf.InitializeSiblingAsync(Arg.Any<SiblingInitialization>()).Returns(Task.CompletedTask);
         await h.Grain.BulkAppendAsync("pin-gate", Pairs(2));
-        await leaf.Received(1).MergeEntriesAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>());
+        await leaf.Received(1).MergeBulkSeedAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>(), Arg.Any<WalRoutingStamp>());
         Assert.That(h.State.State.LastCompletedBulkOperationId, Is.EqualTo("pin-gate"));
     }
 }

@@ -120,4 +120,15 @@ internal sealed class AzureTableWalEntity : ITableEntity
     /// existed.
     /// </summary>
     public int BatchEntryCount { get; set; }
+
+    /// <summary>
+    /// A fresh nonce each fenced phase-2 commit writes on the <c>TAIL</c> row
+    /// (issue #5810, #5605 W7); <see langword="null"/> on every other row. A replay
+    /// proof adopts the ETag of the <c>TAIL</c> it reads only when this nonce is the
+    /// one its own commit wrote, never on the value alone: a successor's same-value
+    /// re-stamp, a reconcile's roll-forward, and a writer that predates the column
+    /// all replace the row without it, so a proof that meets their write fails safe.
+    /// Additive: a reader that predates the column ignores it.
+    /// </summary>
+    public string? CommitNonce { get; set; }
 }

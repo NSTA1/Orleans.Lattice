@@ -35,9 +35,10 @@ public sealed class ScriptSuiteProcessTimeoutTests
         var pidFile = Path.Combine(directory, "child.pid");
         var script = Path.Combine(directory, "sleeps.ps1");
 
-        // The child records its own PID first so the test can prove it was killed rather
-        // than leaked, then sleeps far beyond the bound.
-        File.WriteAllText(script, $"Set-Content -LiteralPath '{pidFile}' -Value $PID\nStart-Sleep -Seconds 120\nexit 0\n");
+        // The child prints a line, then records its own PID so the test can prove it was
+        // killed rather than leaked, then sleeps far beyond the bound. The line comes first
+        // so that a PID on disk proves the line was written before the kill (#5783).
+        File.WriteAllText(script, $"Write-Host 'reached-the-sleep'\nSet-Content -LiteralPath '{pidFile}' -Value $PID\nStart-Sleep -Seconds 120\nexit 0\n");
 
         int? childPid = null;
         try
@@ -63,11 +64,24 @@ public sealed class ScriptSuiteProcessTimeoutTests
                 Assert.That(thrown?.Message, Does.Contain("sleeps.ps1"),
                     "the diagnosis must name the child it bounded.");
 
-                // The PID file is written by the script's first line. A host so contended that
+                // #5783: a timeout with empty captured output said nothing about where the
+                // child was. The diagnosis must say when either pipe last spoke and how much
+                // CPU the child had used, so a starved child and a busy one read differently.
+                Assert.That(thrown?.Message, Does.Contain("At the kill, "),
+                    "the diagnosis must say where the child was when it was killed.");
+                Assert.That(
+                    thrown?.Message,
+                    Does.Contain("ms of CPU").Or.Contain("CPU time was unreadable"),
+                    "the diagnosis must report the child's CPU time.");
+
+                // The PID file is written by the script's second line. A host so contended that
                 // pwsh had not reached it inside the bound has no PID to check; the timeout
                 // assertions above still hold in that case.
                 if (childPid is { } pid)
                 {
+                    Assert.That(thrown?.Message, Does.Contain("reached-the-sleep").And.Contain("the last line arrived "),
+                        "the child printed a line before the kill, so the diagnosis must carry it and say how "
+                        + "long ago it arrived rather than claiming the pipes were silent.");
                     Assert.That(WaitUntilGone(pid, TimeSpan.FromSeconds(15)), Is.True,
                         $"the timed-out child (PID {pid}) is still running. A timeout must kill the process "
                         + "tree, or the hung suite keeps consuming the CPU whose contention caused the overrun.");

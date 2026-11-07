@@ -43,6 +43,8 @@ public sealed partial class ShardRootGrainSplitLinkTests
         public required Dictionary<GrainId, IBPlusLeafGrain> Leaves { get; init; }
         public required IBPlusInternalGrain NewRoot { get; init; }
 
+        public required IGrainFactory Factory { get; init; }
+
         public IBPlusInternalGrain Node(GrainId id) => Internals[id];
 
         public IBPlusLeafGrain Leaf(GrainId id) => Leaves[id];
@@ -113,10 +115,14 @@ public sealed partial class ShardRootGrainSplitLinkTests
         return h;
     }
 
-    private static Harness CreateEmptyHarness()
+    private static Harness CreateEmptyHarness(IServiceProvider? activationServices = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("shard", ShardKey));
+        if (activationServices is not null)
+        {
+            context.ActivationServices.Returns(activationServices);
+        }
 
         var state = new FakePersistentState<ShardRootState>();
         state.State.RootNodeId = RootId;
@@ -158,6 +164,7 @@ public sealed partial class ShardRootGrainSplitLinkTests
             Routing = routing,
             Leaves = leaves,
             NewRoot = newRoot,
+            Factory = factory,
         };
     }
 
