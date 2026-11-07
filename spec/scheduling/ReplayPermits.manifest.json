@@ -5,19 +5,19 @@
     "Stutter"
   ],
   "counts": {
-    "invariants": 9,
-    "properties": 12,
-    "actions": 20,
-    "mutations": 30,
-    "behaviourRows": 39,
-    "distinctStates": 695064
+    "invariants": 10,
+    "properties": 16,
+    "actions": 21,
+    "mutations": 36,
+    "behaviourRows": 45,
+    "distinctStates": 1020744
   },
   "variants": {
     "TwoPartitions": {
-      "distinctStates": 2762408
+      "distinctStates": 4061816
     },
     "PartialPrefix": {
-      "distinctStates": 1038664
+      "distinctStates": 1526360
     }
   }
 }

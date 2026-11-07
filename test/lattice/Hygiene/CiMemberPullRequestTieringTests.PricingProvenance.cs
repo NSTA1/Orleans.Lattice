@@ -47,7 +47,7 @@ public sealed partial class CiMemberPullRequestTieringTests
         {
             Assert.That(shards["formal-tlc-scheduling"], Does.Contain("106-case group")
                 .And.Contain("123577568364").And.Contain("123623834850").And.Contain("31.05"));
-            Assert.That(shards["formal-tlc-scheduling-workload-b"], Does.Contain("87-case group")
+            Assert.That(shards["formal-tlc-scheduling-workload-b"], Does.Contain("93-case group")
                 .And.Contain("123577568215").And.Contain("123623834772").And.Contain("16.38"));
             Assert.That(shards["formal-tlc-scheduling-replay-two-partitions"], Does.Contain("dedicated")
                 .And.Contain("123577568395").And.Contain("123623834893").And.Contain("44.00"));

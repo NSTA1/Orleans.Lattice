@@ -1,0 +1,14 @@
+MODULE: RetentionExpiresExpiryKeepsEntry
+TARGET: RetentionExpires
+CLASS: Action
+SUMMARY: reaching the maximum age leaves the retained entry parked in the gate
+
+--- FIND
+    /\ queue' = Remove(queue, r) /\ status' = [status EXCEPT ![r] = "idle"]
+    /\ retained' = retained \ {r}
+    /\ role' = [role EXCEPT ![r] = "Interactive"]
+--- REPLACE
+    /\ queue' = queue /\ status' = status
+    /\ retained' = retained
+    /\ role' = role
+--- END

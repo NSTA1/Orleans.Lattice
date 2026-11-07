@@ -75,7 +75,7 @@ once, either here or in the
 | Tenant quotas | 3 | 29 | 26 | 32 | [Quota admission](../../spec/tenant-quotas/README.md) |
 | Tenant rate budgets | 1 | 14 | 23 | 22 | [Rate-budget leases](../../spec/tenant-rate-budget/README.md) |
 | Tenant isolation | 1 | 25 | 25 | 31 | [Isolation epochs and leases](../../spec/tenant-isolation/README.md) |
-| Scheduling and progress | 10 | 197 | 245 | 121 | [Verified Scheduling and Progress](verified-scheduling.md) |
+| Scheduling and progress | 10 | 203 | 251 | 127 | [Verified Scheduling and Progress](verified-scheduling.md) |
 | Schema enforcement and versioning | 9 | 149 | 178 | 299 | [Schema enforcement and versioning](../../spec/schema/README.md) |
 | Schema and view composition | 1 | 23 | 23 | 28 | [Schema and view composition](../../spec/schema-view/README.md) |
 
@@ -245,9 +245,10 @@ rows. Its sixteen distinct detector methods do not overlap the prior six-module
 set, so the seven-module aggregate is 133 mutations/172 rows/91 methods.
 Work-conserving refusal (#5992 A1) later adds one mutation, one behaviour row
 and one detector method, bringing the module to thirty mutations, thirty-nine
-rows and seventeen methods.
-The three full configurations retain all temporal branches at 695064,
-2762408 and 1038664 distinct states. The
+rows and seventeen methods. Retained arrivals (#5992) add six mutations, six
+rows and seven methods: thirty-six mutations, forty-five rows and twenty-four
+methods. The three full configurations retain all temporal branches at 1020744,
+4061816 and 1526360 distinct states. The
 [area description](../../spec/scheduling/README.md#replay-permits) states the
 physical-owner, warm-drive and earned-prefix progress premises without imposing
 an unconditional lifetime bound on shared cold work.
