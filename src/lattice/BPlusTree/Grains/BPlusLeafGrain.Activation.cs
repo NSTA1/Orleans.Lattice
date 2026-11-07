@@ -3883,9 +3883,6 @@ internal sealed partial class BPlusLeafGrain
         }
         finally
         {
-            if (_declaredReplayDemandPartitions > 0)
-                await ClearDeclaredReplayDemandAsync();
-
             if (replayPermit is not null)
             {
                 // Memory-adaptive backpressure (issues #2781 and #2862).
@@ -3948,6 +3945,22 @@ internal sealed partial class BPlusLeafGrain
                     if (withholdReplayPermitOnPressure)
                         TryRestoreWithheldReplayPermit();
                     RecordReplayPermitHold(replayPermitAcquiredAt, metricTreeId, _replayPermitTreeId);
+                }
+            }
+
+            // Withdrawn only after the permit is back (#5999): the withdrawal makes
+            // grain calls, and nothing it does may stand between the replay and
+            // the release. It is advisory, so a fault is swallowed; an undelivered
+            // withdrawal lapses with its lease.
+            if (_declaredReplayDemandPartitions > 0)
+            {
+                try
+                {
+                    await ClearDeclaredReplayDemandAsync();
+                }
+                catch
+                {
+                    // Advisory; see above.
                 }
             }
         }
@@ -4254,18 +4267,26 @@ internal sealed partial class BPlusLeafGrain
         _declaredReplayDemandPartitions = partitions;
     }
 
+    /// <summary>
+    /// Test-only: a fault <see cref="ClearDeclaredReplayDemandAsync"/> throws in
+    /// place of withdrawing, so a test can prove a failed withdrawal never costs
+    /// the replay its permit (#5999).
+    /// </summary>
+    internal static Exception? ReplayDemandWithdrawalFaultForTest;
+
     /// <summary>Withdraws the demand <see cref="DeclareReplayDemandAsync"/> declared.</summary>
     /// <remarks>
-    /// Runs in the replay's finally, ahead of the permit's release, so it must not
-    /// throw and must not read grain state: an activation invalidated while it
-    /// held the permit throws on every state read, and a throw here would strand
-    /// the permit for the life of the process (#5775). The tree id is the one
-    /// captured when the permit path was entered.
+    /// Runs in the replay's finally, after the permit's release, so nothing it
+    /// does can strand the permit (#5999). It still reads no grain state, since
+    /// the activation may have been invalidated during the replay: the tree id is
+    /// the one captured when the permit path was entered.
     /// </remarks>
     private async Task ClearDeclaredReplayDemandAsync()
     {
         var partitions = _declaredReplayDemandPartitions;
         _declaredReplayDemandPartitions = 0;
+        if (Volatile.Read(ref ReplayDemandWithdrawalFaultForTest) is { } fault)
+            throw fault;
         var treeId = _replayPermitTreeId;
         if (string.IsNullOrEmpty(treeId))
             return;
