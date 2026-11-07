@@ -141,7 +141,7 @@ internal sealed partial class WalShardGrain
     /// </summary>
     private async Task PersistClockFloorAsync(HybridLogicalClock target)
     {
-        await _floorStateWriteGate.WaitAsync().ConfigureAwait(true);
+        await Task.CompletedTask;
         try
         {
             var previous = floorState.State.Floor;
@@ -164,7 +164,7 @@ internal sealed partial class WalShardGrain
         }
         finally
         {
-            _floorStateWriteGate.Release();
+            _ = 0;
         }
 
         lock (_stateGate)
