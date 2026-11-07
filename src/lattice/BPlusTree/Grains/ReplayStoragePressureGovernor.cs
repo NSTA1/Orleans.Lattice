@@ -38,6 +38,19 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// the target returns to zero in one step with its own reason. Sparse evidence
 /// can therefore return permits but never withhold one.
 /// </para>
+/// <para>
+/// <b>CPU headroom (issue #5971).</b> Slice-read latency includes in-process
+/// queueing, so it rises when the silo itself is saturated; that is how the
+/// latency arm walks the ceiling down toward the CPU knee. But a ceiling walked
+/// down queues more work behind fewer permits, which keeps the latency high, so
+/// latency alone can never see the knee move back and the ceiling ratchets
+/// down after the load drops. When the window's CPU utilisation is known, the
+/// latency arm therefore withholds only at or above
+/// <see cref="HighCpuUtilisation"/>, and a window that is not throttled, has
+/// leaves queued for a permit and runs below <see cref="LowCpuUtilisation"/>
+/// returns half the withheld permits (at least one) whatever its latency,
+/// tagged as recovery. Throttling still withholds regardless of CPU.
+/// </para>
 /// </remarks>
 internal sealed class ReplayStoragePressureGovernor(long windowTicks)
 {
@@ -49,6 +62,9 @@ internal sealed class ReplayStoragePressureGovernor(long windowTicks)
     internal const double DecreaseFraction = 0.25;
     internal const int CleanWindowsPerStep = 3;
     internal const int IdleWindowsToReset = 4;
+    internal const double HighCpuUtilisation = 0.85;
+    internal const double LowCpuUtilisation = 0.6;
+    internal const double HeadroomRestoreFraction = 0.5;
 
     private bool _hasWindow;
     private long _windowStart;
@@ -57,6 +73,7 @@ internal sealed class ReplayStoragePressureGovernor(long windowTicks)
     private int _cleanWindows;
     private int _cooldown;
     private long _idleWindows;
+    private TimeSpan? _windowCpu;
 
     /// <summary>How many permits the governor currently wants withheld.</summary>
     internal int Target { get; private set; }
@@ -71,12 +88,17 @@ internal sealed class ReplayStoragePressureGovernor(long windowTicks)
     /// <param name="now">The current <see cref="System.Diagnostics.Stopwatch"/> timestamp.</param>
     /// <param name="sample">The cumulative storage-pressure tallies now.</param>
     /// <param name="ceiling">The resolved replay permit ceiling.</param>
-    internal ReplayStoragePressureStep? Observe(long now, ReplayStoragePressureSample sample, int ceiling)
+    /// <param name="queued">Activations queued for a replay permit now.</param>
+    /// <param name="processCpu">The process's cumulative CPU time now, or <see langword="null"/> when unknown.</param>
+    /// <param name="cpuCores">The CPU the process can obtain, in cores; zero when unknown.</param>
+    internal ReplayStoragePressureStep? Observe(
+        long now, ReplayStoragePressureSample sample, int ceiling,
+        int queued = 0, TimeSpan? processCpu = null, int cpuCores = 0)
     {
         Target = Math.Clamp(Target, 0, Math.Max(0, ceiling - 1));
         if (!_hasWindow || now < _windowStart || sample.SliceReads < _windowSample.SliceReads)
         {
-            StartWindow(now, sample);
+            StartWindow(now, sample, processCpu);
             return null;
         }
 
@@ -87,7 +109,10 @@ internal sealed class ReplayStoragePressureGovernor(long windowTicks)
         var reads = sample.SliceReads - _windowSample.SliceReads;
         var retries = sample.ThrottleRetries - _windowSample.ThrottleRetries;
         var p99 = reads >= MinimumLatencyReads ? sample.P99MillisecondsSince(_windowSample) : null;
-        StartWindow(now, sample);
+        var cpu = processCpu is { } end && _windowCpu is { } start && cpuCores > 0
+            ? (end - start).TotalSeconds / ((double)(now - _windowStart) / System.Diagnostics.Stopwatch.Frequency * cpuCores)
+            : (double?)null;
+        StartWindow(now, sample, processCpu);
 
         if (p99 is null && reads < MinimumThrottleReads && retries == 0)
         {
@@ -105,7 +130,19 @@ internal sealed class ReplayStoragePressureGovernor(long windowTicks)
         _idleWindows = 0;
 
         var throttled = reads >= MinimumThrottleReads && retries >= reads * ThrottleRatio;
-        var slow = p99 is { } windowP99 && _baselineP99 is { } baseline && windowP99 >= baseline * LatencyFactor;
+        var latencyHigh = p99 is { } windowP99 && _baselineP99 is { } baseline && windowP99 >= baseline * LatencyFactor;
+
+        // The latency arm tracks the CPU knee, so it withholds only while the
+        // silo is near it (issue #5971).
+        var slow = latencyHigh && (cpu is not { } utilisation || utilisation >= HighCpuUtilisation);
+        if (!throttled && Target > 0 && queued > 0 && cpu is { } headroom && headroom < LowCpuUtilisation)
+        {
+            _cleanWindows = 0;
+            _cooldown = 0;
+            Target = Math.Max(0, Target - Math.Max(1, (int)Math.Ceiling(Target * HeadroomRestoreFraction)));
+            return new ReplayStoragePressureStep(1, ReplayStoragePressureReason.Recovery);
+        }
+
         if (throttled || slow)
         {
             _cleanWindows = 0;
@@ -131,7 +168,9 @@ internal sealed class ReplayStoragePressureGovernor(long windowTicks)
         if (_cooldown > 0)
             _cooldown--;
 
-        if (p99 is not { } cleanP99)
+        // A window whose latency was high but which was not judged pressured
+        // (CPU below the knee) is not a clean sample for the baseline.
+        if (p99 is not { } cleanP99 || latencyHigh)
             return null;
 
         _baselineP99 = _baselineP99 is { } prior ? (prior * 0.8) + (cleanP99 * 0.2) : cleanP99;
@@ -143,11 +182,12 @@ internal sealed class ReplayStoragePressureGovernor(long windowTicks)
         return new ReplayStoragePressureStep(1, ReplayStoragePressureReason.Recovery);
     }
 
-    private void StartWindow(long now, ReplayStoragePressureSample sample)
+    private void StartWindow(long now, ReplayStoragePressureSample sample, TimeSpan? processCpu)
     {
         _hasWindow = true;
         _windowStart = now;
         _windowSample = sample;
+        _windowCpu = processCpu;
     }
 }
 

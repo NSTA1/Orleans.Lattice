@@ -643,6 +643,7 @@ internal sealed partial class BPlusLeafGrain
             _replayServiceRateController = null;
             _storageWithheldReplayPermits = 0;
             _replayStoragePressureGovernor = null;
+            _replayProcessCpu = RealProcessCpu;
             Volatile.Write(ref _queuedReplayPermitWaiters, 0);
             Volatile.Write(ref _replayPermitWaitEwmaTicks, 0);
             Volatile.Write(ref _replayPermitWaitSample, 0);
