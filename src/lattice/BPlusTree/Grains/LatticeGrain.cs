@@ -2598,10 +2598,22 @@ internal sealed partial class LatticeGrain(
                     StageTagTenant);
             }
             cancellationToken.ThrowIfCancellationRequested();
-            var movedTo = await RetryOnStaleRoutingAsync(
-                (self: this, entries, stageTagTree, envelope, boundPhysicalTreeId),
-                static args => args.self.SetManyAsyncCore(args.entries, args.stageTagTree, args.envelope, args.boundPhysicalTreeId),
-                cancellationToken);
+            string? movedTo;
+            try
+            {
+                movedTo = await RetryOnStaleRoutingAsync(
+                    (self: this, entries, stageTagTree, envelope, boundPhysicalTreeId),
+                    static args => args.self.SetManyAsyncCore(args.entries, args.stageTagTree, args.envelope, args.boundPhysicalTreeId),
+                    cancellationToken);
+            }
+            catch (LatticeSaturatedException refused) when (refused.UnappliedKeys is not null)
+            {
+                // Issue #5970: the keys the refusal leaves out landed and will not
+                // be re-sent by a caller retrying only the listed ones, so their
+                // Set events are published now, before the refusal surfaces.
+                await PublishLandedSetEventsAsync(entries, refused.UnappliedKeys);
+                throw;
+            }
             if (movedTo is not null)
             {
                 // The logical tree no longer resolves to the copy the saga's
@@ -2812,8 +2824,7 @@ internal sealed partial class LatticeGrain(
                 var singleWait = WriteEnvelopeBudget.ResolveFanOutWait(
                     envelope, Timeout.InfiniteTimeSpan);
                 var shard = GetShardGrainByIndex(physicalTreeId, singleShardIdx);
-                var single = ShardActivationRetry.RunAsync(
-                    () => shard.SetManyAsync(singleShardEntries));
+                var single = ShardActivationRetry.RunSetManyAsync(shard, singleShardEntries);
 
                 if (!singleWait.IsArmed)
                 {
@@ -2915,8 +2926,11 @@ internal sealed partial class LatticeGrain(
                         // of the seams an automatic retry would amplify, so the
                         // write-path retry filter leaves it alone rather than
                         // re-fanning the whole batch into a tree that is already
-                        // failing to settle.
-                        throw CreateFanOutRefusal(envelope, fanOutWait, shardBuckets.Count);
+                        // failing to settle. It lists the keys of every branch
+                        // that had not confirmed (issue #5970).
+                        var timedOut = CreateFanOutRefusal(envelope, fanOutWait, shardBuckets.Count);
+                        throw AttributeFanOutRefusal(timedOut, shardBuckets, tasks, entries.Count, boundPhysicalTreeId)
+                            ?? timedOut;
                     }
                 }
 
@@ -2931,8 +2945,18 @@ internal sealed partial class LatticeGrain(
                     ObserveInBackground(all);
 
                     // Rethrows the first branch fault with its own type intact,
-                    // which the saturation back-pressure contract depends on.
-                    await firstFault.Task;
+                    // which the saturation back-pressure contract depends on. A
+                    // saturation refusal is re-raised listing the keys that may
+                    // not have landed (issue #5970).
+                    try
+                    {
+                        await firstFault.Task;
+                    }
+                    catch (LatticeSaturatedException refused) when (
+                        AttributeFanOutRefusal(refused, shardBuckets, tasks, entries.Count, boundPhysicalTreeId) is { } attributed)
+                    {
+                        throw attributed;
+                    }
                 }
 
                 // `all` won the race, which includes the case where every
@@ -2942,7 +2966,15 @@ internal sealed partial class LatticeGrain(
                 // therefore be faulted and about to be dropped unobserved, so
                 // observe it before awaiting the aggregate that will rethrow.
                 ObserveInBackground(firstFault.Task);
-                await all;
+                try
+                {
+                    await all;
+                }
+                catch (LatticeSaturatedException refused) when (
+                    AttributeFanOutRefusal(refused, shardBuckets, tasks, entries.Count, boundPhysicalTreeId) is { } attributed)
+                {
+                    throw attributed;
+                }
             }
         }
         finally
@@ -2967,8 +2999,9 @@ internal sealed partial class LatticeGrain(
             {
                 // Per-shard ShardActivationRetry wrap: a single shard's cold-start
                 // seed-timeout retries only that shard, not the whole fan-out.
-                await ShardActivationRetry.RunAsync(
-                    () => shard.SetManyAsync(entries));
+                // Issue #5970: a retry re-sends only the keys the refused attempt
+                // reported unapplied.
+                await ShardActivationRetry.RunSetManyAsync(shard, entries);
             }
             catch (Exception ex)
             {

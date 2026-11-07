@@ -167,6 +167,119 @@ public sealed class LatticeSaturatedException : InvalidOperationException, ILatt
     public LatticeSaturationSource SaturationSource { get; }
 
     /// <summary>
+    /// For a refused <c>SetManyAsync</c> batch, a superset of the batch's keys
+    /// that may not have been applied, each listed once; <see langword="null"/>
+    /// when that is not known (issue #5970).
+    /// <para>
+    /// The batch is not atomic, so a refusal can leave part of it applied. A key
+    /// is left out of this list only when the shard, or the leaf, that owns it
+    /// returned success for it, and its post-commit obligations (the adaptive
+    /// split forward, the online-resize mirror, and its <c>Set</c> event) ran
+    /// before the refusal was raised. Every key on a refused branch, or on a
+    /// branch still in flight when the refusal was raised, is listed. So a
+    /// caller may retry only these keys, and every key the batch held still
+    /// lands; retrying the whole batch also remains correct, as it always was. A
+    /// branch still in flight is not cancelled and can land after the retry, as
+    /// before, so re-read a key if the order of its writes matters.
+    /// </para>
+    /// <para>
+    /// <see langword="null"/> whenever the outcome cannot be attributed key by
+    /// key: a fault other than saturation on any branch, a cancelled branch, a
+    /// branch with an adaptive split, moved slots or an online resize to
+    /// forward to, an atomic-write saga's prepared dispatch, a host that
+    /// predates this property, or a list past <see cref="MaxUnappliedKeys"/>
+    /// keys or <see cref="MaxUnappliedKeyChars"/> characters. A truncated list
+    /// is never reported, because it would not be a superset. The keys are not
+    /// part of <see cref="Exception.Message"/>, since keys can be user data;
+    /// the message gives only their count.
+    /// </para>
+    /// </summary>
+    [Id(2)]
+    public IReadOnlyList<string>? UnappliedKeys { get; }
+
+    /// <summary>
+    /// The most keys <see cref="UnappliedKeys"/> lists. A refusal with more
+    /// unapplied keys reports <see langword="null"/> and gives the count in its
+    /// message.
+    /// </summary>
+    public const int MaxUnappliedKeys = 16_384;
+
+    /// <summary>
+    /// The most characters, summed over its keys, that
+    /// <see cref="UnappliedKeys"/> carries, which bounds the list's size on the
+    /// wire. Past it the list is <see langword="null"/>.
+    /// </summary>
+    public const int MaxUnappliedKeyChars = 1_048_576;
+
+    /// <summary>
+    /// Initialises a refusal of a batch write that reports the keys it may not
+    /// have applied (issue #5970). <paramref name="unappliedKeys"/> is copied,
+    /// with duplicates removed; past <see cref="MaxUnappliedKeys"/> keys or
+    /// <see cref="MaxUnappliedKeyChars"/> characters it is dropped and
+    /// <see cref="UnappliedKeys"/> is <see langword="null"/>. The message is
+    /// <paramref name="message"/> followed by the count, never the keys.
+    /// </summary>
+    /// <param name="message">Diagnostic context describing which operation was refused and why.</param>
+    /// <param name="treeId">Logical tree id whose saturation regime caused the refusal.</param>
+    /// <param name="source">The admission seam that refused the operation.</param>
+    /// <param name="unappliedKeys">A superset of the keys that may not have been applied.</param>
+    /// <param name="batchCount">The number of entries in the refused batch.</param>
+    /// <param name="innerException">The underlying cause, or <see langword="null"/>.</param>
+    internal LatticeSaturatedException(
+        string message,
+        string treeId,
+        LatticeSaturationSource source,
+        IEnumerable<string> unappliedKeys,
+        int batchCount,
+        Exception? innerException)
+        : this(message, treeId, source, Bound(unappliedKeys), batchCount, innerException)
+    {
+    }
+
+    private LatticeSaturatedException(
+        string message,
+        string treeId,
+        LatticeSaturationSource source,
+        (IReadOnlyList<string>? Keys, int Count) bounded,
+        int batchCount,
+        Exception? innerException)
+        : base(DescribeUnapplied(message, bounded, batchCount), innerException)
+    {
+        ArgumentNullException.ThrowIfNull(treeId);
+        TreeId = treeId;
+        SaturationSource = source;
+        UnappliedKeys = bounded.Keys;
+    }
+
+    private static (IReadOnlyList<string>? Keys, int Count) Bound(IEnumerable<string> unappliedKeys)
+    {
+        ArgumentNullException.ThrowIfNull(unappliedKeys);
+        var distinct = new HashSet<string>(StringComparer.Ordinal);
+        var ordered = new List<string>();
+        long chars = 0;
+        var overflow = false;
+        foreach (var key in unappliedKeys)
+        {
+            if (!distinct.Add(key))
+                continue;
+
+            chars += key.Length;
+            if (ordered.Count >= MaxUnappliedKeys || chars > MaxUnappliedKeyChars)
+                overflow = true;
+
+            if (!overflow)
+                ordered.Add(key);
+        }
+
+        return overflow ? (null, distinct.Count) : (ordered.AsReadOnly(), ordered.Count);
+    }
+
+    private static string DescribeUnapplied(string message, (IReadOnlyList<string>? Keys, int Count) bounded, int batchCount)
+        => bounded.Keys is null
+            ? $"{message} {bounded.Count} of {batchCount} key(s) may not have been applied; too many to list, so UnappliedKeys is null and the whole batch should be retried."
+            : $"{message} {bounded.Count} of {batchCount} key(s) may not have been applied; retry those listed in UnappliedKeys.";
+
+    /// <summary>
     /// Initialises a new instance with no diagnostic message and an
     /// empty <see cref="TreeId"/>. Provided to satisfy the framework's
     /// exception construction contract; production throw sites use

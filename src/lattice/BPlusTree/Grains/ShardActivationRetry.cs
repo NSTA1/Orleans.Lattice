@@ -248,6 +248,66 @@ internal static class ShardActivationRetry
     }
 
     /// <summary>
+    /// <see cref="RunAsync(Func{Task}, CancellationToken)"/> for one shard's
+    /// share of a <c>SetManyAsync</c> batch, which narrows each retry to the keys
+    /// the refused attempt reported as unapplied (issue #5970).
+    /// </summary>
+    /// <remarks>
+    /// Same attempts, backoffs and retry filter as <see cref="RunAsync(Func{Task}, CancellationToken)"/>;
+    /// only what a retry re-sends changes. A refusal that lists its
+    /// <see cref="LatticeSaturatedException.UnappliedKeys"/> has confirmed every
+    /// other key of the attempt, so the next attempt sends only the listed ones,
+    /// in their original order and with their duplicates, so the batch's
+    /// last-writer-wins outcome per key is unchanged. A refusal without a list
+    /// re-sends the attempt whole, as before. The final refusal's list is
+    /// therefore a superset of the bucket's unapplied keys.
+    /// </remarks>
+    /// <param name="shard">The shard the entries route to.</param>
+    /// <param name="entries">The shard's bucket of the batch.</param>
+    /// <param name="cancellationToken">Honoured between attempts, as <see cref="RunAsync(Func{Task}, CancellationToken)"/>.</param>
+    internal static async Task RunSetManyAsync(
+        IShardRootGrain shard,
+        List<KeyValuePair<string, byte[]>> entries,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(shard);
+        ArgumentNullException.ThrowIfNull(entries);
+
+        Exception? last = null;
+        for (var attempt = 1; attempt <= MaxAttempts; attempt++)
+        {
+            try
+            {
+                await shard.SetManyAsync(entries).ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+                return;
+            }
+            catch (Exception ex) when (
+                ex is ShardActivationTimeoutException
+                || IsTransientSiloChurn(ex)
+                || IsRetryableSaturation(ex)
+                || GrainStateWriteFaults.IsTranslatedConflict(ex))
+            {
+                last = ex;
+                if (attempt == MaxAttempts) break;
+                if (ex is LatticeSaturatedException { UnappliedKeys: { } unapplied })
+                    entries = Narrow(entries, unapplied);
+                var backoff = NextBackoff(ex, attempt);
+                await Task.Delay(backoff, cancellationToken)
+                    .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+            }
+        }
+
+        throw last!;
+    }
+
+    private static List<KeyValuePair<string, byte[]>> Narrow(
+        List<KeyValuePair<string, byte[]>> entries, IReadOnlyList<string> unapplied)
+    {
+        var keep = new HashSet<string>(unapplied, StringComparer.Ordinal);
+        return entries.FindAll(e => keep.Contains(e.Key));
+    }
+
+    /// <summary>
     /// Generic overload of <see cref="RunAsync(Func{Task}, CancellationToken)"/>
     /// for operations that produce a value. Same retry semantics; preserved as
     /// a distinct overload rather than wrapping the void path in a sentinel
