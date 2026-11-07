@@ -671,7 +671,7 @@ internal sealed partial class BPlusLeafGrain
         }
 
         (_pendingCheckpointOffsetsByPartition ??= new Dictionary<int, long>())[partition] = offset;
-        NoteCheckpointAdvanceOrigin(partition, live: liveStamp == (partition, offset));
+        NoteCheckpointAdvanceOrigin(partition, live: _liveAdvanceInFlight);
 
         // Coalescing predicate: persist if either threshold has been
         // exceeded. Zero interval means every-entry mode.
