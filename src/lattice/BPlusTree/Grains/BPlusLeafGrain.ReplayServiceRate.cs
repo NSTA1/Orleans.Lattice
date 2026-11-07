@@ -194,7 +194,7 @@ internal sealed partial class BPlusLeafGrain
             step.Reason switch
             {
                 ReplayStoragePressureReason.Throttle => StorageThrottleTrigger,
-                ReplayStoragePressureReason.Latency => StorageLatencyTrigger,
+                ReplayStoragePressureReason.Latency => ReplayLatencyTrigger,
                 ReplayStoragePressureReason.Idle => StorageIdleTrigger,
                 _ => StorageRecoveryTrigger,
             });

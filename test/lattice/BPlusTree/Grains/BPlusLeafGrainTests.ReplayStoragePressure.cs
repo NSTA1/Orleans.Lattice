@@ -1,3 +1,4 @@
+using NSubstitute;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Testing;
 
@@ -111,6 +112,51 @@ public partial class BPlusLeafGrainTests
 
     [Test]
     [NonParallelizable]
+    public async Task A_latency_step_is_tagged_replay_latency_because_it_includes_in_process_queueing()
+    {
+        BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
+        ReplayStoragePressure.ResetForTest();
+        try
+        {
+            var gate = await QuiescentReplayGateAsync(permitCeiling: 4);
+            BPlusLeafGrain.SeedReplayStoragePressureForTest(100);
+            BPlusLeafGrain.AdaptReplayStoragePressure(gate, 0);
+
+            var triggers = new List<string?>();
+            using var counter = MeterListening.StartForInstrument(LatticeMetrics.WalReplayPermitAdaptations,
+                l => l.SetMeasurementEventCallback<long>((_, value, tags, _) =>
+                {
+                    if (value == 0)
+                        return;
+                    foreach (var tag in tags)
+                        if (tag.Key == LatticeMetrics.TagTrigger)
+                            lock (triggers)
+                                triggers.Add(tag.Value as string);
+                }));
+
+            var fast = 4 * System.Diagnostics.Stopwatch.Frequency / 1000;
+            for (var i = 0; i < 20; i++)
+                ReplayStoragePressure.RecordSliceRead(fast);
+            Assert.That(gate.Wait(0), Is.True);
+            Assert.That(BPlusLeafGrain.AdaptReplayStoragePressure(gate, 100), Is.False, "seeds the baseline");
+            gate.Release();
+
+            for (var i = 0; i < 20; i++)
+                ReplayStoragePressure.RecordSliceRead(fast * 4);
+            Assert.That(gate.Wait(0), Is.True);
+            Assert.That(BPlusLeafGrain.AdaptReplayStoragePressure(gate, 200), Is.True);
+
+            Assert.That(triggers, Is.EqualTo(new[] { "replay_latency" }));
+        }
+        finally
+        {
+            BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
+            ReplayStoragePressure.ResetForTest();
+        }
+    }
+
+    [Test]
+    [NonParallelizable]
     public async Task Storage_pressure_publishes_the_walked_ceiling_and_a_reason_for_each_step()
     {
         BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
@@ -162,12 +208,14 @@ public partial class BPlusLeafGrainTests
 
     [Test]
     [NonParallelizable]
-    public async Task A_silo_left_at_the_defaults_replays_32_leaves_at_once_with_the_controller_on()
+    public async Task A_silo_left_at_the_defaults_on_a_remote_wal_store_replays_32_leaves_at_once_with_the_controller_on()
     {
         BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
         try
         {
-            var gate = await QuiescentReplayGateAsync(controller: null);
+            var remote = Substitute.For<IWalStorageProvider>();
+            remote.IsRemote.Returns(true);
+            var gate = await QuiescentReplayGateAsync(controller: null, walStorageProvider: remote);
 
             Assert.That(BPlusLeafGrain.ReplayConcurrencyCeilingForTest, Is.EqualTo(32));
             Assert.That(gate.CurrentCount, Is.EqualTo(32));
@@ -203,8 +251,8 @@ public partial class BPlusLeafGrainTests
     {
         Assert.That(BPlusLeafGrain.ResolveGateSizing(0, 16, 4).Ceiling, Is.EqualTo(4));
         Assert.That(BPlusLeafGrain.ResolveGateSizing(0, 6, null).Ceiling, Is.EqualTo(6));
-        Assert.That(BPlusLeafGrain.ResolveGateSizing(LatticeOptions.DefaultWalMaterialiserMaxConcurrentReplays, 4, 4).Ceiling,
-            Is.EqualTo(32), "the default does not scale with CPU");
+        Assert.That(BPlusLeafGrain.ResolveGateSizing(LatticeOptions.DefaultWalMaterialiserMaxConcurrentReplays, 4, 4, walStoreIsRemote: true).Ceiling,
+            Is.EqualTo(32), "the default on a remote store does not scale with CPU");
     }
 
     [Test]

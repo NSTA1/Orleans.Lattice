@@ -450,7 +450,10 @@ gaps, states its full scope.
     override holds, the in-memory cursor registry, the order of the steps inside a
     purge's tree-level tail, and a resized tree's logical purge completion (both
     pinned by tests instead), or how long a live leaf's pin stays at the block
-    value before its first WAL replay; for the live advance, the fences'
+    value before its first WAL replay; nor the replay read path's shared
+    per-partition page cache (#5877 A), which refines to the model's read step by
+    slice equivalence and is served only at the partition's current durable
+    incarnation, both pinned by tests instead; for the live advance, the fences'
     scheduling rather than their effect at the partition (seam retries,
     multi-entry stamped batches, the leaf's gate that serialises its own clear
     with its claims, the purge's steps one by one, the range-delete fence as a

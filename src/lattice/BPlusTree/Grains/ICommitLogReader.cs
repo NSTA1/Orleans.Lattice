@@ -122,4 +122,18 @@ internal interface ICommitLogReader
         string treeId,
         int shardIndex,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the WAL partition's durable incarnation (issue #5896), which every
+    /// path that resets, truncates or rewrites the partition advances. A replay
+    /// page cached at one incarnation is never served at another. Answered from
+    /// memory; reads no storage.
+    /// </summary>
+    /// <param name="treeId">The physical tree id the WAL is written under.</param>
+    /// <param name="shardIndex">The WAL partition index.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    ValueTask<long> GetIncarnationAsync(
+        string treeId,
+        int shardIndex,
+        CancellationToken cancellationToken = default);
 }

@@ -366,6 +366,29 @@ class ContractLegTests(unittest.TestCase):
     def contract_names(self, result):
         return [name for name in names(result) if name.startswith("contract-")]
 
+    def test_only_the_contract_legs_named_in_NEEDS_POOL_are_pinned_to_the_pool(self):
+        # contract-c4 fails on GitHub-hosted runners and passes on the pool (#5965).
+        self.assertEqual(frozenset({"C4"}), planner.NEEDS_POOL)
+        self.assertIs(True, planner.contract_leg("C4", "contoso", "Contoso")["needsPool"])
+        for chapter in ("C1", "C10", "C3", "T5"):
+            with self.subTest(chapter=chapter):
+                self.assertIs(False, planner.contract_leg(chapter, "contoso", "Contoso")["needsPool"])
+        legs = self.plan(event="workflow_dispatch", action="", base="")["legs"]
+        self.assertTrue(all(leg.get("needsPool") is not True for leg in legs),
+                        "no leg this tree plans is in NEEDS_POOL")
+
+    def test_a_pinned_contract_leg_runs_on_the_pool_with_hosted_headroom_and_hosted_without_a_pool(self):
+        overflow = load_router()
+        pool = ["self-hosted", "lattice-pool"]
+        legs = self.plan(event="workflow_dispatch", action="", base="")["legs"]
+        legs.append(planner.contract_leg("C4", "contoso", "Contoso"))
+        hosted, pooled = overflow.route([legs], pool, busy=0, budget=15, hosted="ubuntu-24.04")
+        self.assertEqual((len(legs) - 1, 1), (hosted, pooled))
+        self.assertEqual(["contract-c4"], [leg["name"] for leg in legs if leg["pool"]])
+        self.assertEqual(pool, json.loads(legs[-1]["runsOn"]))
+        self.assertEqual((len(legs), 0), overflow.route([legs], None, busy=0, budget=15, hosted="ubuntu-24.04"))
+        self.assertEqual("ubuntu-24.04", json.loads(legs[-1]["runsOn"]))
+
     def test_story_only_chapters_are_discovered_from_the_tree(self):
         found = planner.story_only_contracts(self.tree.root, planner.discover_journeys(self.tree.root),
                                              planner.conformance_shards(self.tree.root), [])
