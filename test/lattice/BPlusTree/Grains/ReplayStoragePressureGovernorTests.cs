@@ -432,4 +432,81 @@ public class ReplayStoragePressureGovernorTests
 
         Assert.That(step, Is.EqualTo(new ReplayStoragePressureStep(-1, ReplayStoragePressureReason.Throttle)));
     }
+
+    /// <summary>
+    /// The utilisation is CPU time over the CPU the process can obtain, not
+    /// over host cores: the same CPU time is headroom on a 4-core quota and a
+    /// saturated knee on a 2-core one (issue #5971).
+    /// </summary>
+    [Test]
+    public void Utilisation_is_measured_against_the_cpu_the_process_can_obtain()
+    {
+        static ReplayStoragePressureStep? Run(int cores)
+        {
+            var governor = new ReplayStoragePressureGovernor(Window);
+            var tallies = new Tallies();
+            var cpu = new Cpu();
+            governor.Observe(0, tallies.Sample, 32, 0, cpu.Total, cores);
+            governor.Observe(Window, tallies.Add(20, 4), 32, 0, cpu.Advance(0.1, 4), cores);
+
+            // Two cores' worth of CPU time in the window, slow reads, a queue.
+            return governor.Observe(2 * Window, tallies.Add(20, 16), 32, 10, cpu.Advance(0.5, 4), cores);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Run(cores: 4), Is.Null, "two of four cores is below the knee: no latency step");
+            Assert.That(Run(cores: 2), Is.EqualTo(new ReplayStoragePressureStep(-1, ReplayStoragePressureReason.Latency)),
+                "two of two cores is the knee: the latency arm withholds");
+        });
+    }
+
+    [Test]
+    public void The_cpu_denominator_is_the_lesser_of_the_processor_count_and_the_container_grant()
+        => Assert.That(BPlusLeafGrain.ReplayCpuCoresForTest, Is.EqualTo(
+            BPlusLeafGrain.ResolveDefaultReplayCeiling(Environment.ProcessorCount, Orleans.Lattice.Internal.Cgroups.ContainerCpuGrant.Read())));
+
+    /// <summary>
+    /// The band between <see cref="ReplayStoragePressureGovernor.LowCpuUtilisation"/>
+    /// and <see cref="ReplayStoragePressureGovernor.HighCpuUtilisation"/> takes no
+    /// step, so under a steady load whose CPU scales with the permits in
+    /// circulation the ceiling settles instead of flapping: at most one change
+    /// of direction, then no step for the rest of the run.
+    /// </summary>
+    [TestCase(16.0)]
+    [TestCase(22.0)]
+    [TestCase(28.0)]
+    public void Under_a_steady_load_the_ceiling_settles_inside_the_cpu_band_without_flapping(double kneePermits)
+    {
+        const int cores = 4, ceiling = 32, windows = 60;
+        var governor = new ReplayStoragePressureGovernor(Window);
+        var tallies = new Tallies();
+        var cpu = new Cpu();
+        long now = 0;
+        governor.Observe(now, tallies.Sample, ceiling, 0, cpu.Total, cores);
+        now += Window;
+        governor.Observe(now, tallies.Add(20, 4), ceiling, 0, cpu.Advance(0.2, cores), cores);
+
+        var directions = new List<int>();
+        var lastStepWindow = -1;
+        for (var w = 0; w < windows; w++)
+        {
+            var circulating = ceiling - governor.Target;
+            var utilisation = Math.Min(1.0, circulating / kneePermits);
+            now += Window;
+            var step = governor.Observe(now, tallies.Add(100, 64), ceiling, 100, cpu.Advance(utilisation, cores), cores);
+            if (step is { } taken)
+            {
+                directions.Add(taken.Direction);
+                lastStepWindow = w;
+            }
+        }
+
+        var reversals = directions.Zip(directions.Skip(1)).Count(pair => pair.First != pair.Second);
+        Assert.Multiple(() =>
+        {
+            Assert.That(reversals, Is.LessThanOrEqualTo(1), $"directions: {string.Join(",", directions)}");
+            Assert.That(lastStepWindow, Is.LessThan(windows / 2), "the ceiling settles in the first half of the run");
+        });
+    }
 }
