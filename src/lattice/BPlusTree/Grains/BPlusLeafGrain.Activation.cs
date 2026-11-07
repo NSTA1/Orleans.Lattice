@@ -3838,6 +3838,10 @@ internal sealed partial class BPlusLeafGrain
         }
         finally
         {
+            // RED S1r: the withdrawal back ahead of the release, unguarded.
+            if (_declaredReplayDemandPartitions > 0)
+                await ClearDeclaredReplayDemandAsync();
+
             if (replayPermit is not null)
             {
                 // Memory-adaptive backpressure (issues #2781 and #2862).
@@ -3907,17 +3911,7 @@ internal sealed partial class BPlusLeafGrain
             // grain calls, and nothing it does may stand between the replay and
             // the release. It is advisory, so a fault is swallowed; an undelivered
             // withdrawal lapses with its lease.
-            if (_declaredReplayDemandPartitions > 0)
-            {
-                try
-                {
-                    await ClearDeclaredReplayDemandAsync();
-                }
-                catch
-                {
-                    // Advisory; see above.
-                }
-            }
+
         }
 
         // Step 1.35 - account this activation's resident footprint against the
