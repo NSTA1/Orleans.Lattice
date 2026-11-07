@@ -100,10 +100,11 @@ internal sealed partial class BPlusLeafGrain
 
     /// <summary>
     /// Lets the storage-pressure governor (issue #5877) close a window and moves
-    /// its ledger one permit toward the governor's target. True means this
-    /// acquired permit must be withheld; a step up releases one extra permit
-    /// here. One permit per release keeps every ledger change paired with a
-    /// physical permit, so the gate's count never drifts from the ledgers.
+    /// its ledger toward the governor's target. True means this acquired permit
+    /// must be withheld (a withhold is still one permit per release). A step up
+    /// returns every storage-withheld permit down to the new target at once
+    /// (issue #5971), each release paired with one ledger decrement, so the
+    /// gate's count never drifts from the ledgers.
     /// </summary>
     internal static bool AdaptReplayStoragePressure(SemaphoreSlim gate, long now)
     {
