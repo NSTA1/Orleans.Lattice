@@ -68,6 +68,56 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable, IWalAppend
     /// <summary>Set once the durable routing floor row has been read into <see cref="_generationFloors"/>.</summary>
     private bool _generationFloorLoaded;
 
+    /// <summary>The in-flight read of the retired-epoch floor row, shared by concurrent first loads (#5987).</summary>
+    private Task? _epochFloorLoad;
+
+    /// <summary>The in-flight read of the routing floor row, shared by concurrent first loads (#5987).</summary>
+    private Task? _generationFloorLoad;
+
+    /// <summary>
+    /// This activation's read of the partition's routing-generation table (#5987), shared
+    /// by every initiator's cold load: a new tree pays one read per partition, not one per
+    /// partition and initiator. A cold load takes the slot it holds, max-merged with every
+    /// value this activation has seen durable for the initiator since
+    /// (<see cref="FenceEntry.DurableSeen"/>).
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Two writers can raise a slot after the read: this grain's own claims, which record
+    /// the value in <see cref="FenceEntry.DurableSeen"/>, and a duplicate activation of
+    /// the partition, whose raise this activation does not see (#5988 review, B1). A
+    /// cached slot can therefore be stale-low, which is no weaker than the per-initiator
+    /// rows' read at load time and is covered by the model's lost-update run (a slot
+    /// dropped to 0 at any time). It is still narrowed: every claim's fresh read of the
+    /// row is max-merged into the cache, an ETag conflict drops it, and it is re-read once
+    /// older than <see cref="GenerationRowCacheMaxAge"/>, so a first-touch burst shares
+    /// one read while a stale value lives a bounded time.
+    /// </para>
+    /// <para>
+    /// The retirement's storage fallback is the one writer outside every activation. It
+    /// runs only when the partition is hosted by a build without the retirement call, and
+    /// it never raises a slot: it raises the floors, then deletes the row, so it can only
+    /// leave the cache stale-high.
+    /// </para>
+    /// </remarks>
+    private Task<IReadOnlyDictionary<string, long>>? _generationRowLoad;
+
+    /// <summary>When <see cref="_generationRowLoad"/> was filled, in <see cref="GenerationRowCacheClock"/> UTC ticks.</summary>
+    private long _generationRowLoadedUtcTicks;
+
+    /// <summary>How long a cached routing-generation table serves cold loads before they re-read it (#5988 review, B1).</summary>
+    internal static readonly TimeSpan GenerationRowCacheMaxAge = TimeSpan.FromSeconds(5);
+
+    /// <summary>The clock <see cref="GenerationRowCacheMaxAge"/> is measured on; replaced only by tests.</summary>
+    internal TimeProvider GenerationRowCacheClock { get; set; } = TimeProvider.System;
+
+    /// <summary>
+    /// Serialises this activation's conditional read-modify-writes of the routing-generation
+    /// table (#5987): claims of different initiators write the same row, and each holds only
+    /// its own initiator's gate.
+    /// </summary>
+    private readonly SemaphoreSlim _generationRowGate = new(1, 1);
+
     /// <summary>Waiters for a leaf's multi-entry stamped batches to finish assigning; created on demand.</summary>
     private Dictionary<Guid, TaskCompletionSource>? _batchDrains;
 
@@ -248,7 +298,7 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable, IWalAppend
     {
         var storage = FenceStorage();
         await EnsureFloorsLoadedAsync(storage).ConfigureAwait(true);
-        var key = WalAppendFenceRows.GenerationKey(_treeId, _shardIndex, initiator.Kind, initiator.Index);
+        var key = WalAppendFenceRows.GenerationsKey(_treeId, _shardIndex);
         var gate = GenerationGate(initiator);
         var deadline = Options.WalFlushTimeout;
         TimeSpan? bound = deadline > TimeSpan.Zero && deadline != Timeout.InfiniteTimeSpan ? deadline : null;
@@ -269,20 +319,40 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable, IWalAppend
                 storage,
                 WalAppendFenceRows.GenerationGrainType,
                 key,
-                () => Bound(WalAppendFenceRows.ReadGenerationAsync(storage, _treeId, _shardIndex, initiator), bound),
-                static row => row.State.Generation,
-                static (row, value) => row.State.Generation = value,
+                async () =>
+                {
+                    var row = await Bound(WalAppendFenceRows.ReadGenerationsAsync(storage, _treeId, _shardIndex), bound).ConfigureAwait(true);
+                    lock (_stateGate)
+                    {
+                        RefreshGenerationRowLocked(row.State);
+                    }
+
+                    return row;
+                },
+                row => WalAppendFenceRows.SlotOf(row.State, initiator),
+                (row, value) => WalAppendFenceRows.RaiseSlot(row.State, initiator, value),
                 GenerationEntries(),
                 initiator,
                 generation,
                 epochTable: false,
                 batchLeaf: null,
                 batchInitiator: initiator,
-                ioBound: bound).ConfigureAwait(true);
+                ioBound: bound,
+                rowGate: _generationRowGate,
+                onConflict: DropGenerationRowCache).ConfigureAwait(true);
         }
         finally
         {
             gate.Release();
+        }
+    }
+
+    /// <summary>Drops the cached table after an ETag conflict on it: another writer moved the row (#5988 review, B1).</summary>
+    private void DropGenerationRowCache()
+    {
+        lock (_stateGate)
+        {
+            _generationRowLoad = null;
         }
     }
 
@@ -370,20 +440,24 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable, IWalAppend
                 return;
             }
 
-            var row = await Bound(WalAppendFenceRows.ReadGenerationAsync(storage, _treeId, _shardIndex, initiator), bound).ConfigureAwait(true);
+            var slot = await GenerationSlotAsync(storage, initiator, bound).ConfigureAwait(true);
             lock (_stateGate)
             {
                 var table = GenerationEntries();
-                var entry = NoteDurableLocked(table, initiator, row.State.Generation);
+
+                // The row as a fresh read would return it (#5987): the activation's one read
+                // of the table, max-merged with every value seen durable since.
+                var entry = NoteDurableLocked(table, initiator, slot);
+                var durable = entry.DurableSeen;
                 var floor = GenerationFloorLocked(initiator);
-                var loaded = WalAppendFenceCore.LoadedGeneration(row.State.Generation, floor);
+                var loaded = WalAppendFenceCore.LoadedGeneration(durable, floor);
                 if (entry.Memory == WalAppendFenceCore.Unloaded)
                 {
                     // The floor is read here, when the load lands, not when the row was
                     // read: a purge that retired the entry in between raised it (R). Only a
                     // load from unloaded marks the entry floor-only.
                     entry.Memory = loaded;
-                    entry.FloorOnly = row.State.Generation <= floor;
+                    entry.FloorOnly = durable <= floor;
                     table[initiator] = entry;
                 }
                 else if (entry.Memory < loaded)
@@ -391,7 +465,7 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable, IWalAppend
                     // max(existing, row, floor), never newly floor-only over a value a
                     // concurrent claim installed.
                     entry.Memory = loaded;
-                    entry.FloorOnly &= row.State.Generation <= floor;
+                    entry.FloorOnly &= durable <= floor;
                     table[initiator] = entry;
                 }
             }
@@ -467,33 +541,25 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable, IWalAppend
             }
         }
 
-        var retiring = initiators.ToArray();
-        var keys = new string[retiring.Length];
-        for (var i = 0; i < retiring.Length; i++)
-        {
-            keys[i] = WalAppendFenceRows.GenerationKey(_treeId, _shardIndex, retiring[i].Kind, retiring[i].Index);
-        }
-
-        // The floors are raised in memory, and the loaded entries dropped, before any
-        // row is deleted: from then on a claim at or below its initiator's floor is
-        // refused at its row write and at its raise, and a stamped append meets an
-        // unloaded entry and re-presents a claim that is refused.
-        var stored = await TreeRoutingFenceRetirement.RetireRowsAsync<WalRoutingGenerationState>(
+        // The floors are raised in memory, and the loaded entries dropped, before the row
+        // is deleted: from then on a claim at or below its initiator's floor is refused at
+        // its row write and at its raise, and a stamped append meets an unloaded entry and
+        // re-presents a claim that is refused. The table's own slots are covered too.
+        var stored = await TreeRoutingFenceRetirement.RetireGenerationsRowAsync(
             storage,
             _treeId,
-            WalAppendFenceRows.GenerationGrainType,
-            keys,
-            retiring,
-            static row => row.Generation,
+            _shardIndex,
             loaded,
-            async floors =>
+            async (floors, covered) =>
             {
                 lock (_stateGate)
                 {
                     MergeGenerationFloorsLocked(floors);
+                    _generationRowLoad = null;
                 }
 
-                foreach (var initiator in retiring)
+                initiators.UnionWith(covered);
+                foreach (var initiator in initiators)
                 {
                     await RemoveLoadedGenerationAsync(initiator).ConfigureAwait(true);
                 }
@@ -549,21 +615,113 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable, IWalAppend
         };
     }
 
-    private async Task EnsureGenerationFloorLoadedAsync(IGrainStorage storage)
+    /// <summary>
+    /// Loads the routing floor row once (#5987): concurrent first loads share one read, and
+    /// a load that failed is retried by the next caller.
+    /// </summary>
+    private Task EnsureGenerationFloorLoadedAsync(IGrainStorage storage)
     {
         lock (_stateGate)
         {
             if (_generationFloorLoaded)
             {
-                return;
+                return Task.CompletedTask;
+            }
+
+            if (_generationFloorLoad is { IsFaulted: false, IsCanceled: false } inFlight)
+            {
+                return inFlight;
             }
         }
 
+        var load = LoadGenerationFloorCoreAsync(storage);
+        lock (_stateGate)
+        {
+            if (_generationFloorLoad is not { IsFaulted: false, IsCanceled: false })
+            {
+                _generationFloorLoad = load;
+            }
+
+            return _generationFloorLoad;
+        }
+    }
+
+    private async Task LoadGenerationFloorCoreAsync(IGrainStorage storage)
+    {
         var row = await WalAppendFenceRows.ReadRoutingFloorAsync(storage, _treeId).ConfigureAwait(true);
         lock (_stateGate)
         {
             MergeGenerationFloorsLocked(row.State);
         }
+    }
+
+    /// <summary>
+    /// <paramref name="initiator"/>'s slot in the partition's routing-generation table, from
+    /// this activation's one read of it (#5987): concurrent cold loads of every initiator
+    /// share the read, and a read that failed is retried by the next caller.
+    /// </summary>
+    private async Task<long> GenerationSlotAsync(IGrainStorage storage, WalRoutingInitiator initiator, TimeSpan? bound)
+    {
+        Task<IReadOnlyDictionary<string, long>>? load;
+        lock (_stateGate)
+        {
+            load = CachedGenerationRowLocked();
+        }
+
+        if (load is null)
+        {
+            var created = ReadGenerationRowAsync(storage);
+            lock (_stateGate)
+            {
+                if (CachedGenerationRowLocked() is null)
+                {
+                    _generationRowLoad = created;
+                    _generationRowLoadedUtcTicks = GenerationRowCacheClock.GetUtcNow().UtcTicks;
+                }
+
+                load = _generationRowLoad!;
+            }
+        }
+
+        var slots = await Bound(load, bound).ConfigureAwait(true);
+        return slots.TryGetValue(WalAppendFenceRows.InitiatorTag(initiator), out var slot) ? slot : 0;
+    }
+
+    /// <summary>The cached table, when it is neither faulted nor older than <see cref="GenerationRowCacheMaxAge"/>.</summary>
+    private Task<IReadOnlyDictionary<string, long>>? CachedGenerationRowLocked() =>
+        _generationRowLoad is { IsFaulted: false, IsCanceled: false } cached
+        && GenerationRowCacheClock.GetUtcNow().UtcTicks - _generationRowLoadedUtcTicks <= GenerationRowCacheMaxAge.Ticks
+            ? cached
+            : null;
+
+    /// <summary>
+    /// Max-merges a claim's fresh read of the table into the cache and restarts its age
+    /// (#5988 review, B1), so a slot a duplicate activation raised reaches this
+    /// activation's next cold load. A value cached above the read (a row the fallback
+    /// deleted) is kept: stale-high only refuses more.
+    /// </summary>
+    private void RefreshGenerationRowLocked(WalRoutingGenerationsState fresh)
+    {
+        var merged = new Dictionary<string, long>(fresh.Generations, StringComparer.Ordinal);
+        if (_generationRowLoad is { IsCompletedSuccessfully: true } cached)
+        {
+            foreach (var (tag, slot) in cached.Result)
+            {
+                if (!merged.TryGetValue(tag, out var current) || current < slot)
+                {
+                    merged[tag] = slot;
+                }
+            }
+        }
+
+        _generationRowLoad = Task.FromResult<IReadOnlyDictionary<string, long>>(merged);
+        _generationRowLoadedUtcTicks = GenerationRowCacheClock.GetUtcNow().UtcTicks;
+    }
+
+    private async Task<IReadOnlyDictionary<string, long>> ReadGenerationRowAsync(IGrainStorage storage)
+    {
+        var row = await WalAppendFenceRows.ReadGenerationsAsync(storage, _treeId, _shardIndex).ConfigureAwait(true);
+        return new Dictionary<string, long>(row.State.Generations, StringComparer.Ordinal);
     }
 
     private bool HasLoadedEpochEntry(Guid leafId)
@@ -807,7 +965,9 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable, IWalAppend
         bool epochTable,
         Guid? batchLeaf,
         WalRoutingInitiator? batchInitiator,
-        TimeSpan? ioBound = null)
+        TimeSpan? ioBound = null,
+        SemaphoreSlim? rowGate = null,
+        Action? onConflict = null)
         where TId : notnull
     {
         var listed = false;
@@ -815,84 +975,110 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable, IWalAppend
         {
             GrainState<TRow>? row = null;
             long durable;
-            if (attempt == 1 && batchInitiator is not null && !DisableLoadedClaimFastPathForTesting && TryLandedLocked(table, id, value, out var landed))
+            var rowGateHeld = false;
+            try
             {
-                // #5831, F1: a re-presentation of a value this activation has loaded and
-                // knows durable - read back or written by a write known to have landed -
-                // is decided from that value with no storage op. It cannot need a write
-                // (value <= durable), and the decision below is the one the I/O path
-                // reaches when its read returns that value.
-                durable = landed;
-            }
-            else if (attempt == 1 && batchLeaf is { } leafToList && value == 1 && !IsLoaded(table, id))
-            {
-                // #5831, F3: a leaf's first activation (epoch 1) has no entry at any
-                // partition, so its first claim lists it in parallel with reading the
-                // entry. A later activation re-claims an entry that exists and is listed,
-                // so it reads the entry alone and lists only if absent, as before, rather
-                // than paying a page read on every re-claim. Listing is idempotent and
-                // needs no decision: one left listed by a refused claim is harmless and
-                // swept. The entry is still written only after the listing has landed
-                // (#5634), conditionally on the ETag read, or as a create of an absent row.
-                var listing = DirectoryOpAsync(leafToList, () => WalAppendEpochDirectory.AddAsync(storage, _treeId, _shardIndex, leafToList, DateTime.UtcNow.Ticks));
-                var reading = read();
-                await Task.WhenAll(listing, reading).ConfigureAwait(true);
-                listed = true;
-                row = reading.Result;
-                durable = getValue(row);
-            }
-            else
-            {
-                row = await read().ConfigureAwait(true);
-                durable = getValue(row);
-            }
-
-            WalAppendFenceCore.ClaimWriteDecision decision;
-            long threshold;
-            lock (_stateGate)
-            {
-                var entry = NoteDurableLocked(table, id, durable);
-                var floor = epochTable ? _epochFloor : GenerationFloorLocked(batchInitiator!.Value);
-                decision = WalAppendFenceCore.DecideClaimWrite(value, entry.Memory, durable, floor);
-                threshold = WalAppendFenceCore.ClaimThreshold(entry.Memory, Math.Max(durable, entry.DurableSeen), floor);
-            }
-
-            if (decision == WalAppendFenceCore.ClaimWriteDecision.Refuse)
-            {
-                return WalAppendFenceClaimResult.Refuse(threshold);
-            }
-
-            if (decision == WalAppendFenceCore.ClaimWriteDecision.Write)
-            {
-                if (row is null)
+                if (attempt == 1 && batchInitiator is not null && !DisableLoadedClaimFastPathForTesting && TryLandedLocked(table, id, value, out var landed))
                 {
-                    // Unreachable: the memory decision never writes. Fail safe to the read path.
-                    continue;
+                    // #5831, F1: a re-presentation of a value this activation has loaded and
+                    // knows durable - read back or written by a write known to have landed -
+                    // is decided from that value with no storage op. It cannot need a write
+                    // (value <= durable), and the decision below is the one the I/O path
+                    // reaches when its read returns that value.
+                    durable = landed;
                 }
-
-                if (batchLeaf is { } listedLeaf && !row.RecordExists && !listed)
+                else if (attempt == 1 && batchLeaf is { } leafToList && value == 1 && !IsLoaded(table, id))
                 {
-                    // #5634: listed before the entry row is first written, so every
-                    // entry is enumerable by the sweep. Idempotent across retries.
-                    await DirectoryOpAsync(listedLeaf, () => WalAppendEpochDirectory.AddAsync(storage, _treeId, _shardIndex, listedLeaf, DateTime.UtcNow.Ticks)).ConfigureAwait(true);
+                    // #5831, F3: a leaf's first activation (epoch 1) has no entry at any
+                    // partition, so its first claim lists it in parallel with reading the
+                    // entry. A later activation re-claims an entry that exists and is listed,
+                    // so it reads the entry alone and lists only if absent, as before, rather
+                    // than paying a page read on every re-claim. Listing is idempotent and
+                    // needs no decision: one left listed by a refused claim is harmless and
+                    // swept. The entry is still written only after the listing has landed
+                    // (#5634), conditionally on the ETag read, or as a create of an absent row.
+                    var listing = DirectoryOpAsync(leafToList, () => WalAppendEpochDirectory.AddAsync(storage, _treeId, _shardIndex, leafToList, DateTime.UtcNow.Ticks));
+                    var reading = read();
+                    await Task.WhenAll(listing, reading).ConfigureAwait(true);
+                    listed = true;
+                    row = reading.Result;
+                    durable = getValue(row);
                 }
-
-                setValue(row, value);
-                try
+                else
                 {
-                    await Bound(WalAppendFenceRows.WriteAsync(storage, grainType, key, row), ioBound).ConfigureAwait(true);
-                }
-                catch (InconsistentStateException)
-                {
-                    if (attempt < MaxFenceRowAttempts)
+                    if (rowGate is not null)
                     {
+                        // #5987: the row is shared by every initiator's slot, so its
+                        // read-modify-write is serialised in this activation; the ETag
+                        // condition still orders it against any writer outside it.
+                        if (!await rowGate.WaitAsync(ioBound ?? Timeout.InfiniteTimeSpan).ConfigureAwait(true))
+                        {
+                            throw new TimeoutException(
+                                $"WAL shard {_treeId}/{_shardIndex}: a routing-generation table write waited {ioBound} for the one ahead of it.");
+                        }
+
+                        rowGateHeld = true;
+                    }
+
+                    row = await read().ConfigureAwait(true);
+                    durable = getValue(row);
+                }
+
+                WalAppendFenceCore.ClaimWriteDecision decision;
+                long threshold;
+                lock (_stateGate)
+                {
+                    var entry = NoteDurableLocked(table, id, durable);
+                    var floor = epochTable ? _epochFloor : GenerationFloorLocked(batchInitiator!.Value);
+                    decision = WalAppendFenceCore.DecideClaimWrite(value, entry.Memory, durable, floor);
+                    threshold = WalAppendFenceCore.ClaimThreshold(entry.Memory, Math.Max(durable, entry.DurableSeen), floor);
+                }
+
+                if (decision == WalAppendFenceCore.ClaimWriteDecision.Refuse)
+                {
+                    return WalAppendFenceClaimResult.Refuse(threshold);
+                }
+
+                if (decision == WalAppendFenceCore.ClaimWriteDecision.Write)
+                {
+                    if (row is null)
+                    {
+                        // Unreachable: the memory decision never writes. Fail safe to the read path.
                         continue;
                     }
 
-                    // Persistently losing the row to other claims of the same
-                    // claimant id: refuse rather than surface a storage fault. The
-                    // claimant re-persists its own row, which fails if it is stale.
-                    return WalAppendFenceClaimResult.Refuse(value);
+                    if (batchLeaf is { } listedLeaf && !row.RecordExists && !listed)
+                    {
+                        // #5634: listed before the entry row is first written, so every
+                        // entry is enumerable by the sweep. Idempotent across retries.
+                        await DirectoryOpAsync(listedLeaf, () => WalAppendEpochDirectory.AddAsync(storage, _treeId, _shardIndex, listedLeaf, DateTime.UtcNow.Ticks)).ConfigureAwait(true);
+                    }
+
+                    setValue(row, value);
+                    try
+                    {
+                        await Bound(WalAppendFenceRows.WriteAsync(storage, grainType, key, row), ioBound).ConfigureAwait(true);
+                    }
+                    catch (InconsistentStateException)
+                    {
+                        onConflict?.Invoke();
+                        if (attempt < MaxFenceRowAttempts)
+                        {
+                            continue;
+                        }
+
+                        // Persistently losing the row to other claims of the same
+                        // claimant id: refuse rather than surface a storage fault. The
+                        // claimant re-persists its own row, which fails if it is stale.
+                        return WalAppendFenceClaimResult.Refuse(value);
+                    }
+                }
+            }
+            finally
+            {
+                if (rowGateHeld)
+                {
+                    rowGate!.Release();
                 }
             }
 
@@ -1183,16 +1369,39 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable, IWalAppend
                 $"WAL shard {_treeId}/{_shardIndex} cannot serve the append fence: no grain storage provider is "
                 + $"registered under '{LatticeOptions.StorageProviderName}'.");
 
-    private async Task EnsureEpochFloorLoadedAsync(IGrainStorage storage)
+    /// <summary>
+    /// Loads the retired-epoch floor row once (#5987): concurrent first loads share one
+    /// read, and a load that failed is retried by the next caller.
+    /// </summary>
+    private Task EnsureEpochFloorLoadedAsync(IGrainStorage storage)
     {
         lock (_stateGate)
         {
             if (_epochFloorLoaded)
             {
-                return;
+                return Task.CompletedTask;
+            }
+
+            if (_epochFloorLoad is { IsFaulted: false, IsCanceled: false } inFlight)
+            {
+                return inFlight;
             }
         }
 
+        var load = LoadEpochFloorCoreAsync(storage);
+        lock (_stateGate)
+        {
+            if (_epochFloorLoad is not { IsFaulted: false, IsCanceled: false })
+            {
+                _epochFloorLoad = load;
+            }
+
+            return _epochFloorLoad;
+        }
+    }
+
+    private async Task LoadEpochFloorCoreAsync(IGrainStorage storage)
+    {
         var row = await WalAppendFenceRows.ReadFloorAsync(storage, _treeId, _shardIndex).ConfigureAwait(true);
         lock (_stateGate)
         {

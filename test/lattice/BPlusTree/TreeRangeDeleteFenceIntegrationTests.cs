@@ -116,8 +116,8 @@ public sealed class TreeRangeDeleteFenceIntegrationTests
 
         for (var partition = 0; partition < partitions; partition++)
         {
-            var generation = await WalAppendFenceRows.ReadGenerationAsync(Storage, Name, partition, WalRoutingInitiator.TreeRangeDelete);
-            Assert.That(generation.State.Generation, Is.EqualTo(2),
+            var generation = await RoutingGenerationSlots.ReadAsync(Storage, Name, partition, WalRoutingInitiator.TreeRangeDelete);
+            Assert.That(generation.Generation, Is.EqualTo(2),
                 $"partition {partition} holds the re-claimed generation 2: the intent handed out 1 and its close re-claimed above it, once");
         }
 

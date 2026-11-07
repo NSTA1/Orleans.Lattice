@@ -944,8 +944,12 @@ internal static class TypeAliases
     /// <summary>Alias for a WAL partition's durable retired-epoch floor.</summary>
     internal const string WalAppendEpochFloorState = "ol.xff";
 
-    /// <summary>Alias for a WAL partition's durable routing-generation entry for one initiator.</summary>
-    internal const string WalRoutingGenerationState = "ol.xfg";
+    /// <summary>
+    /// Alias for a WAL partition's durable routing-generation table, a slot per initiator
+    /// (#5987). It replaced the per-initiator entry row and its alias <c>ol.xfg</c> before
+    /// either was released: no build that shipped ever wrote or read them.
+    /// </summary>
+    internal const string WalRoutingGenerationsState = "ol.xft";
 
     /// <summary>Alias for the fence stamp a stamped WAL append carries.</summary>
     internal const string WalAppendStamp = "ol.xfs";

@@ -36,6 +36,7 @@ internal sealed partial class ShardRootGrain
 {
     private IWalAppendFenceGate? _routingFenceGate;
     private bool _routingFenceGateResolved;
+    private Task? _routingGenerationEnsure;
 
     private bool RoutingFenceGateOpen()
     {
@@ -65,7 +66,50 @@ internal sealed partial class ShardRootGrain
     private Task EnsureRoutingGenerationAsync() =>
         _handOffMarker is { RoutingGeneration: > 0 } || !RoutingFenceGateOpen()
             ? Task.CompletedTask
-            : EnsureRoutingGenerationSlowAsync();
+            : EnsureRoutingGenerationSingleFlightAsync();
+
+    /// <summary>
+    /// #5987: the writes that reach this shard root before its generation is seeded share
+    /// one slow path, so a new tree's first touch reads the routing floor once per
+    /// activation rather than once per concurrent write. A failed run is not cached: the
+    /// next write runs it again.
+    /// </summary>
+    private Task EnsureRoutingGenerationSingleFlightAsync()
+    {
+        if (_routingGenerationEnsure is { } inFlight)
+        {
+            return inFlight;
+        }
+
+        var run = EnsureRoutingGenerationSlowAsync();
+        if (!run.IsCompleted)
+        {
+            _routingGenerationEnsure = run;
+            _ = ForgetRoutingGenerationEnsureAsync(run);
+        }
+
+        return run;
+    }
+
+    private async Task ForgetRoutingGenerationEnsureAsync(Task run)
+    {
+        try
+        {
+            await run;
+        }
+        catch (Exception)
+        {
+            // Observed here so the discarded task never surfaces an unobserved fault; every
+            // caller awaits the run itself and sees its outcome (#5988 review, S1).
+        }
+        finally
+        {
+            if (ReferenceEquals(_routingGenerationEnsure, run))
+            {
+                _routingGenerationEnsure = null;
+            }
+        }
+    }
 
     private async Task EnsureRoutingGenerationSlowAsync()
     {

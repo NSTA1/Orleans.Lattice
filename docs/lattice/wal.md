@@ -1466,10 +1466,20 @@ as unloaded eight times in a row is not a supersession: the append goes unstampe
 and the activation stays.
 
 **Durable rows.** The epoch row, each partition's entries, its retired floor and
-its routing-generation entries are rows of their own under reserved grain types
+its routing-generation table are rows of their own under reserved grain types
 (`_lattice_leaf-append-epoch`, `_lattice_wal-append-epoch`,
-`_lattice_wal-append-epoch-floor`, `_lattice_wal-routing-generation`), written
+`_lattice_wal-append-epoch-floor`, `_lattice_wal-routing-generations`), written
 through the tree's grain storage provider. No existing state type gains a field.
+A partition's routing generations are one row with a slot per shard-level initiator
+(each shard root, and the tree's range-delete fence)
+([#5987](https://github.com/NSTA1/Orleans.Lattice/issues/5987)). Every write to it is a
+conditional read-modify-write that raises one slot and leaves the others as read, so
+two initiators raising their slots at once both survive, and the partition loads every
+slot with one read. That read is refreshed by every claim's read of the row and re-read
+once it is five seconds old, so a raise by a duplicate activation of the partition
+reaches it within a bounded time. Every raise rewrites the whole row; raises are rare (an arm or a
+close), and at the largest tree a slot per shard (4,096 shards) still fits one Azure
+Table entity.
 The rows are keyed by tree and partition, not by WAL provider, so a WAL move
 carries them unchanged. When a leaf is cleared (purge, reclaim, orphan repair) or
 the WAL GC retires an orphaned leaf's materialiser pin, each partition raises its
@@ -1808,8 +1818,11 @@ A WAL partition that receives a stamped write under a generation it has not load
 exactly as the writer's re-presented claim would, and then checks the write again
 from the start; a close that re-claimed a higher generation in between still rejects
 it. Claims of one initiator at a partition run one at a time, so a fresh tree's
-concurrent first writes create each generation row once, and a claim of a generation
-the partition already holds needs no storage operation (#5831).
+concurrent first writes create each generation slot once, and a claim of a generation
+the partition already holds needs no storage operation (#5831). A new tree's first
+touch reads each partition's generation table and floors once, and each shard root's
+routing floor and hand-off marker once, so its fence cost grows with shard roots plus
+partitions, not their product (#5987).
 
 **A split close does not supersede the donor.** The donor's epoch raise rejects its
 own appends stamped before it. Those are **self-fenced**: refused for the caller to
@@ -2042,8 +2055,8 @@ drain adds two counter updates to each leaf write, on fields the activation alre
 owns, and no allocation or call.
 
 **Purging a tree's fence rows.** The per-tree rows - each shard root's
-`_lattice_shard-handoff` marker, each partition's `_lattice_wal-routing-generation`
-entries for the shard roots and the range-delete fence, and the range-delete fence
+`_lattice_shard-handoff` marker, each partition's `_lattice_wal-routing-generations`
+table with its slots for the shard roots and the range-delete fence, and the range-delete fence
 grain's own state - are retired when the tree is purged
 ([#5668](https://github.com/NSTA1/Orleans.Lattice/issues/5668)), before the purge
 removes the tree's registry entry, which is what frees the id for re-use. A soft

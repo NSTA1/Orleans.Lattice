@@ -32,8 +32,8 @@ internal static class WalAppendFenceRows
     /// <summary>Reserved grain type and state name of a partition's retired-epoch floor.</summary>
     internal const string FloorGrainType = "_lattice_wal-append-epoch-floor";
 
-    /// <summary>Reserved grain type and state name of a partition's routing-generation entry for one initiator.</summary>
-    internal const string GenerationGrainType = "_lattice_wal-routing-generation";
+    /// <summary>Reserved grain type and state name of a partition's routing-generation table, a slot per initiator (#5987).</summary>
+    internal const string GenerationGrainType = "_lattice_wal-routing-generations";
 
     /// <summary>Reserved grain type and state name of a page of a partition's append-epoch directory (#5634).</summary>
     internal const string DirectoryPageGrainType = "_lattice_wal-append-epoch-dir";
@@ -64,10 +64,26 @@ internal static class WalAppendFenceRows
     internal static string EntryKey(string treeId, int partition, Guid leafId) =>
         string.Concat(FloorKey(treeId, partition), "~", leafId.ToString("N", CultureInfo.InvariantCulture));
 
-    /// <summary>The key of a WAL partition's routing-generation row for one initiator.</summary>
+    /// <summary>The key of a WAL partition's routing-generation table row (#5987).</summary>
     [GrainKeyBuilder]
-    internal static string GenerationKey(string treeId, int partition, WalRoutingInitiatorKind kind, int index) =>
-        string.Concat(FloorKey(treeId, partition), "~", InitiatorTag(kind, index));
+    internal static string GenerationsKey(string treeId, int partition) => FloorKey(treeId, partition);
+
+    /// <summary><paramref name="initiator"/>'s slot in <paramref name="table"/>; 0 when the table names none.</summary>
+    internal static long SlotOf(WalRoutingGenerationsState table, WalRoutingInitiator initiator) =>
+        table.Generations.TryGetValue(InitiatorTag(initiator), out var generation) ? generation : 0;
+
+    /// <summary>
+    /// Raises <paramref name="initiator"/>'s slot in <paramref name="table"/> to
+    /// <paramref name="generation"/>, never lowering it, and leaves every other slot as it is.
+    /// </summary>
+    internal static void RaiseSlot(WalRoutingGenerationsState table, WalRoutingInitiator initiator, long generation)
+    {
+        var tag = InitiatorTag(initiator);
+        if (!table.Generations.TryGetValue(tag, out var current) || current < generation)
+        {
+            table.Generations[tag] = generation;
+        }
+    }
 
     /// <summary>
     /// An initiator's tag: a one-letter kind and its index. It is the suffix of the
@@ -150,11 +166,10 @@ internal static class WalAppendFenceRows
     internal static Task<GrainState<WalAppendEpochFloorState>> ReadFloorAsync(IGrainStorage storage, string treeId, int partition) =>
         ReadAsync<WalAppendEpochFloorState>(storage, FloorGrainType, FloorKey(treeId, partition));
 
-    /// <summary>Reads a partition's routing-generation row for one initiator.</summary>
-    internal static Task<GrainState<WalRoutingGenerationState>> ReadGenerationAsync(
-        IGrainStorage storage, string treeId, int partition, WalRoutingInitiator initiator) =>
-        ReadAsync<WalRoutingGenerationState>(
-            storage, GenerationGrainType, GenerationKey(treeId, partition, initiator.Kind, initiator.Index));
+    /// <summary>Reads a partition's routing-generation table row (#5987); an absent row reads as every slot 0, with no ETag.</summary>
+    internal static Task<GrainState<WalRoutingGenerationsState>> ReadGenerationsAsync(
+        IGrainStorage storage, string treeId, int partition) =>
+        ReadAsync<WalRoutingGenerationsState>(storage, GenerationGrainType, GenerationsKey(treeId, partition));
 
     /// <summary>Reads one page of a partition's append-epoch directory bucket.</summary>
     internal static Task<GrainState<WalAppendEpochDirectoryPageState>> ReadDirectoryPageAsync(

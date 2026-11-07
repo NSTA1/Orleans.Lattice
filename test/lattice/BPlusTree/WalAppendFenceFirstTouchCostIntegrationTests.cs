@@ -60,9 +60,9 @@ public sealed class WalAppendFenceFirstTouchCostIntegrationTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(first.Get("R _lattice_wal-routing-generation"), Is.EqualTo(1),
+            Assert.That(first.Get($"R {WalAppendFenceRows.GenerationGrainType}"), Is.EqualTo(1),
                 "the first write did not load its shard root's routing generation at the partition, so the fence is not under test");
-            Assert.That(first.Get("W _lattice_wal-routing-generation"), Is.Zero,
+            Assert.That(first.Get($"W {WalAppendFenceRows.GenerationGrainType}"), Is.Zero,
                 "#5833 C1: the first write's cold load claimed its generation instead of loading it read-only");
             Assert.That(first.Get("R _lattice_shard-handoff"), Is.EqualTo(1), "the shard root re-read its hand-off marker");
             Assert.That(first.Get("W _lattice_shard-handoff"), Is.EqualTo(1), "the shard root wrote its hand-off marker more than once");
@@ -106,6 +106,104 @@ public sealed class WalAppendFenceFirstTouchCostIntegrationTests
         });
     }
 
+    // #5987, D5: a new tree's first touch pays O(shard roots + partitions) fence
+    // operations, never O(shard roots x partitions). Each term is its own detector, measured
+    // on its own new tree at the defaults (64 shard roots, 8 partitions), where every shard
+    // root and every partition is touched.
+    private const int DefaultShards = LatticeConstants.DefaultShardCount;
+    private const int DefaultPartitions = LatticeOptions.DefaultWalPartitions;
+
+    private async Task<CountSnapshot> DefaultShapeFirstTouchAsync()
+    {
+        var treeId = $"first-touch-default-{Guid.NewGuid():N}";
+        var registry = _cluster.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        await registry.RegisterAsync(treeId, new TreeRegistryEntry { ShardCount = DefaultShards, WalPartitions = DefaultPartitions });
+        var tree = _cluster.Client.GetGrain<ILattice>(treeId);
+        Counters.Target = (await tree.GetRoutingAsync()).PhysicalTreeId;
+
+        Counters.Reset();
+        var rows = Enumerable.Range(0, 4000)
+            .Select(i => new KeyValuePair<string, byte[]>($"archive/{i:D6}", Encoding.UTF8.GetBytes("v")))
+            .ToList();
+        foreach (var page in rows.Chunk(500))
+        {
+            await tree.SetManyAsync(page.ToList());
+        }
+
+        var touch = Counters.Snapshot();
+        TestContext.Out.WriteLine(string.Join(", ", touch.Values.OrderBy(v => v.Key, StringComparer.Ordinal).Select(v => $"{v.Key}={v.Value}")));
+        Assert.That(touch.Get($"W {HandOffMarkerRows.ShardGrainType}"), Is.EqualTo(DefaultShards),
+            "precondition: every shard root seeded its marker, so the shard-root terms are not vacuous");
+        return touch;
+    }
+
+    [Test]
+    public async Task A_default_shape_trees_first_touch_reads_each_partition_s_generation_table_once()
+    {
+        var touch = await DefaultShapeFirstTouchAsync();
+
+        Assert.That(touch.Get($"R {WalAppendFenceRows.GenerationGrainType}"), Is.EqualTo(DefaultPartitions),
+            "one routing-generation table read per partition, never one per partition and initiator: the cold load serves every slot from it");
+    }
+
+    [Test]
+    public async Task A_default_shape_trees_first_touch_reads_the_routing_floor_once_per_shard_root_and_partition()
+    {
+        var touch = await DefaultShapeFirstTouchAsync();
+
+        Assert.That(touch.Get($"R {WalAppendFenceRows.RoutingFloorGrainType}"), Is.LessThanOrEqualTo(DefaultShards + DefaultPartitions),
+            "the routing floor is read once per shard-root activation and once per partition");
+    }
+
+    [Test]
+    public async Task A_default_shape_trees_first_touch_reads_the_retired_epoch_floor_once_per_partition()
+    {
+        var touch = await DefaultShapeFirstTouchAsync();
+
+        Assert.That(touch.Get($"R {WalAppendFenceRows.FloorGrainType}"), Is.LessThanOrEqualTo(DefaultPartitions),
+            "the retired-epoch floor is read once per partition");
+    }
+
+    [Test]
+    public async Task A_default_shape_trees_first_touch_reads_and_writes_each_hand_off_marker_once()
+    {
+        var touch = await DefaultShapeFirstTouchAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(touch.Get($"R {HandOffMarkerRows.ShardGrainType}"), Is.LessThanOrEqualTo(DefaultShards),
+                "each shard root reads its hand-off marker once");
+            Assert.That(touch.Get($"W {HandOffMarkerRows.ShardGrainType}"), Is.LessThanOrEqualTo(DefaultShards),
+                "each shard root writes its hand-off marker once (the initialise write is inherent to the hand-off fence)");
+        });
+    }
+
+    [Test]
+    public async Task Concurrent_first_writes_at_one_shard_root_read_its_routing_floor_once()
+    {
+        // #5987: the writes that reach a shard root before its generation is seeded share
+        // one seeding, so the activation reads its routing floor once, not once per write.
+        var treeId = $"first-touch-concurrent-{Guid.NewGuid():N}";
+        var registry = _cluster.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        await registry.RegisterAsync(treeId, new TreeRegistryEntry { ShardCount = 1 });
+        var tree = _cluster.Client.GetGrain<ILattice>(treeId);
+        Counters.Target = (await tree.GetRoutingAsync()).PhysicalTreeId;
+
+        Counters.Reset();
+        await Task.WhenAll(Enumerable.Range(0, 16).Select(i => tree.SetAsync($"k{i:D2}", Encoding.UTF8.GetBytes("v"))));
+        var touch = Counters.Snapshot();
+        TestContext.Out.WriteLine(string.Join(", ", touch.Values.OrderBy(v => v.Key, StringComparer.Ordinal).Select(v => $"{v.Key}={v.Value}")));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(touch.Get($"W {HandOffMarkerRows.ShardGrainType}"), Is.EqualTo(1), "precondition: the shard root seeded its marker once");
+            Assert.That(touch.Get($"R {WalAppendFenceRows.RoutingFloorGrainType}"), Is.LessThanOrEqualTo(2),
+                "the shard root read its routing floor once, and the one partition once");
+        });
+    }
+
+    private static readonly TimeSpan ReadLatency = TimeSpan.FromMilliseconds(5);
+
     private static CountingStorage Storage { get; } = new();
 
     private sealed record CountSnapshot(IReadOnlyDictionary<string, int> Values)
@@ -140,10 +238,17 @@ public sealed class WalAppendFenceFirstTouchCostIntegrationTests
     {
         private readonly EnumerableMemoryGrainStorage _inner = new();
 
-        public Task ReadStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
+        public async Task ReadStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
         {
-            Count("R", stateName, grainId);
-            return _inner.ReadStateAsync(stateName, grainId, grainState);
+            if (Count("R", stateName, grainId))
+            {
+                // A real provider's read takes time (about 10 ms on Azure Table), so
+                // concurrent first touches overlap an in-flight read; the in-memory store
+                // completes at once and would hide a missing single-flight (#5987).
+                await Task.Delay(ReadLatency);
+            }
+
+            await _inner.ReadStateAsync(stateName, grainId, grainState);
         }
 
         public async Task WriteStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)

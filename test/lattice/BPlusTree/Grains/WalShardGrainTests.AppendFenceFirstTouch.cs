@@ -54,7 +54,7 @@ public partial class WalShardGrainTests
         await restarted.ClaimAppendEpochAsync(FenceLeaf, 1, CancellationToken.None);
 
         var first = await restarted.AppendBatchStampedAsync(new[] { MakeEntry("a") }, new WalAppendStamp(FenceLeaf, 1, initiator, 5), CancellationToken.None);
-        var durable = (await WalAppendFenceRows.ReadGenerationAsync(storage, TreeId, ShardIndex, initiator)).State.Generation;
+        var durable = (await RoutingGenerationSlots.ReadAsync(storage, TreeId, ShardIndex, initiator)).Generation;
         var stillAdmitsDurable = await restarted.AppendStampedAsync(MakeEntry("b"), new WalAppendStamp(FenceLeaf, 1, initiator, 2), CancellationToken.None);
 
         Assert.Multiple(() =>
@@ -242,13 +242,7 @@ public partial class WalShardGrainTests
 
         if (row > 0)
         {
-            var stored = await WalAppendFenceRows.ReadGenerationAsync(storage, TreeId, ShardIndex, initiator);
-            stored.State.Generation = row;
-            await WalAppendFenceRows.WriteAsync(
-                storage,
-                WalAppendFenceRows.GenerationGrainType,
-                WalAppendFenceRows.GenerationKey(TreeId, ShardIndex, initiator.Kind, initiator.Index),
-                stored);
+            await RoutingGenerationSlots.WriteAsync(storage, TreeId, ShardIndex, initiator, row);
         }
 
         var grain = await CreateFencedGrainAsync(storage);

@@ -99,20 +99,26 @@ public sealed class TreeFenceRowPurgeIntegrationTests
         return row;
     }
 
-    /// <summary>Every routing-generation row of the tree, by partition and initiator, that exists.</summary>
+    /// <summary>
+    /// Every routing-generation slot of the tree, by partition and initiator, that exists
+    /// (#5987: one table row per partition). A table row that exists with no slot is keyed
+    /// under the partition with a default initiator, so a surviving empty row still counts.
+    /// </summary>
     private async Task<Dictionary<(int Partition, WalRoutingInitiator Initiator), long>> GenerationRowsAsync(string name)
     {
         var rows = new Dictionary<(int, WalRoutingInitiator), long>();
         var partitions = await PartitionsAsync(name);
         for (var partition = 0; partition < partitions; partition++)
         {
-            foreach (var initiator in TreeRoutingFenceRetirement.Initiators(Shards))
+            var (exists, slots) = await RoutingGenerationSlots.ReadAllAsync(Storage, name, partition);
+            if (exists && slots.Count == 0)
             {
-                var row = await WalAppendFenceRows.ReadGenerationAsync(Storage, name, partition, initiator);
-                if (row.RecordExists)
-                {
-                    rows[(partition, initiator)] = row.State.Generation;
-                }
+                rows[(partition, default)] = 0;
+            }
+
+            foreach (var (initiator, generation) in slots)
+            {
+                rows[(partition, initiator)] = generation;
             }
         }
 
