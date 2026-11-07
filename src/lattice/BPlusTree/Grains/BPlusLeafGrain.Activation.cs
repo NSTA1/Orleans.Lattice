@@ -1513,7 +1513,7 @@ internal sealed partial class BPlusLeafGrain
         // The reading expires once its samples age out: a mean sampled more than
         // maxQueueWait before now says nothing about the queue now.
         var sample = Volatile.Read(ref _replayPermitWaitSample);
-        var meanIsCurrent = sample != 0 && Stopwatch.GetElapsedTime(sample, now) < maxQueueWait;
+        var meanIsCurrent = sample != 0 && Stopwatch.GetElapsedTime(sample, now) < maxQueueWait * 3; // RED A1e: the reading outlives its samples
         if (meanIsCurrent && Volatile.Read(ref _replayPermitWaitEwmaTicks) >= maxQueueWait.Ticks)
             return ReplayPermitDrainVerdict.WaitExceeded;
 
@@ -1828,7 +1828,7 @@ internal sealed partial class BPlusLeafGrain
             : ReplayPermitDrainVerdict.Draining;
         if ((verdict == ReplayPermitDrainVerdict.WaitExceeded
                 || (!belowBound && verdict is ReplayPermitDrainVerdict.NoProgress or ReplayPermitDrainVerdict.HoldersSlow))
-            && !IsReplayPermitFreeWithNoWaiterAhead())
+            /* RED A1r: no work-available re-check */)
         {
             _replayAdmissionPhase = ReplayAdmissionPhase.RefusedAdmission;
 
