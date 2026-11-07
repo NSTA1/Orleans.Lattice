@@ -301,7 +301,7 @@ internal sealed class ReplayPageLedger
         {
             // No declared readers: the head is what the next wave reads first,
             // so the highest pages go first.
-            return (1, page.FromExclusive, slot.Bytes);
+            return (1, slot.Sequence, slot.Bytes);
         }
 
         if (demand[0] >= page.CoveredThroughInclusive)
