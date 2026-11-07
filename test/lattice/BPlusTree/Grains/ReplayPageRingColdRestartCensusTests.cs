@@ -39,12 +39,15 @@ public sealed class ReplayPageRingColdRestartCensusTests
 
     /// <summary>
     /// The cold-restart shape a permit gate produces (issue #5877): leaves
-    /// replay in sequential waves, the waves still queued having declared where
-    /// they start, and the cache holds only a fraction <c>f</c> of the log. Each
+    /// replay in waves, each starting while the previous one is half way
+    /// through the log, the waves still queued having declared where they
+    /// start, and the cache holds only a fraction <c>f</c> of the log. Each
     /// later wave then re-reads at most the part of the log the cache could not
     /// keep, so the reads per entry are bounded by <c>1 + (1 - f)(W - 1)</c>.
-    /// Evicting the lowest pages first, which every new wave reads first, read
-    /// about once per wave instead (9.81 here).
+    /// Evicting the lowest pages first, which every new wave reads first,
+    /// exceeds it (7.25 against 6.38 here). Strictly sequential waves do not
+    /// discriminate: there, lowest-first ends each wave holding the tail, which
+    /// the next wave reads last, and meets the bound too.
     /// </summary>
     [Test]
     public async Task A_cold_restart_in_waves_re_reads_at_most_what_the_cache_could_not_hold()
@@ -53,14 +56,15 @@ public sealed class ReplayPageRingColdRestartCensusTests
         const double fraction = 0.25;
         var logBytes = (Entries * (96L + (2 * 6) + 1)) + ((Entries / SliceBudget) * 64L);
 
-        var readsPerEntry = await RunCensusAsync((long)(logBytes * fraction), waveSize: Leaves / waves, declareQueued: true);
+        var readsPerEntry = await RunCensusAsync(
+            (long)(logBytes * fraction), waveSize: Leaves / waves, declareQueued: true, overlap: true);
 
         var bound = 1 + ((1 - fraction) * (waves - 1)) + 0.5;
         Assert.That(readsPerEntry, Is.LessThanOrEqualTo(bound),
             "a wave may re-read only what the cache could not hold, not the whole log");
     }
 
-    private static async Task<double> RunCensusAsync(long ringBytes, int waveSize, bool declareQueued)
+    private static async Task<double> RunCensusAsync(long ringBytes, int waveSize, bool declareQueued, bool overlap = false)
     {
         CountingWalStorageProvider.Reset();
         RingSwitch.Bytes = ringBytes;
@@ -100,9 +104,12 @@ public sealed class ReplayPageRingColdRestartCensusTests
             }
 
             var deliveredByLeaf = new List<int>();
+            var waveTasks = new List<Task<int[]>>();
+            var halfway = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             foreach (var wave in Enumerable.Range(0, Leaves).Chunk(waveSize))
             {
-                deliveredByLeaf.AddRange(await Task.WhenAll(wave.Select(async leaf =>
+                var waveHalfway = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                var waveTask = Task.WhenAll(wave.Select(async leaf =>
                 {
                     using var reader = LeafReplayReaderContext.BeginScope($"leaf-{leaf}");
                     var filter = new WalKeyFilter(
@@ -117,12 +124,26 @@ public sealed class ReplayPageRingColdRestartCensusTests
                             break;
                         owned += slice.Count(e => e.Mutation.Value is not null);
                         from = slice[^1].Offset;
+                        if (from >= head / 2)
+                            waveHalfway.TrySetResult();
                     }
 
+                    waveHalfway.TrySetResult();
                     return owned;
-                })));
+                }));
+                waveTasks.Add(waveTask);
+
+                // Sequential waves wait for the previous wave to finish; overlapping
+                // ones start as soon as it is half way through the log, as a permit
+                // gate that admits a leaf whenever one finishes would.
+                if (overlap)
+                    await waveHalfway.Task;
+                else
+                    await waveTask;
             }
 
+            foreach (var task in waveTasks)
+                deliveredByLeaf.AddRange(await task);
             var delivered = deliveredByLeaf.ToArray();
 
             var examined = CountingWalStorageProvider.EntriesExamined;
