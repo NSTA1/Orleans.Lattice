@@ -223,6 +223,8 @@ internal sealed class ReplayPageLedger
         var n = 0;
         foreach (var ring in _rings)
         {
+            if (!ReferenceEquals(ring, _rings[^1]))
+                continue;
             var demand = ring.LiveDemand(now);
             foreach (var slot in ring.SlotsLocked)
                 candidates[n] = new Candidate(ring, slot, Rank(slot, demand), n++);
