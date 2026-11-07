@@ -180,7 +180,10 @@ Which legs run depends on the event:
 Legs are routed between GitHub-hosted runners and the self-hosted runner pool
 as CI's legs are: the planner runs `.github/workflows/runner-overflow.py`, which
 keeps legs hosted while the repository's busy hosted jobs (CI's included) stay
-under `HOSTED_RUNNER_BUDGET`, and sends the rest to the pool, longest first. A
+under `HOSTED_RUNNER_BUDGET`, and sends the rest to the pool, longest first. The
+`contract-c4` leg is pinned to the pool whenever there is one (the planner's
+`NEEDS_POOL`): it establishes the whole Contoso storyline in both regions and
+times out on a GitHub-hosted runner (#5965). A
 pool leg's name starts with `[pool] `; it runs Azurite from npm and the
 Prometheus binary the pool image bakes in. With `RUNNER_POOL` unset every leg
 runs hosted. A `workflow_dispatch` run's `hosted_budget` input overrides the

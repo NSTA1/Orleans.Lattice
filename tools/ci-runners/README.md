@@ -24,13 +24,17 @@ same way by a small `route-content-gates` job, so it need not wait for the plann
   (default 15, five short of the cap so lanes planning at the same moment, and the planning
   and routing jobs that always run hosted, do not tip into
   a queue). The rest go to the pool, longest first, since a long leg holds a slot longest.
+- A leg the planner marks `"needsPool": true` is pinned: it runs on the pool whenever
+  `RUNNER_POOL` is set, whatever the hosted count, and takes no hosted slot. Only a leg
+  known not to pass on a hosted runner is pinned; `explorer-journeys-plan.py`'s
+  `NEEDS_POOL` lists them with the reason (today `contract-c4`, #5965).
 - A pool leg's check name starts with `[pool] `. A routed job must declare no `services:`
   or `container:`: the runner probes the Docker daemon for any services block, even one
   whose image is empty, and Container Apps runs none. So the legs start Azurite from a
   step - the pinned image on hosted runners, the npm build baked into the pool image.
   `CiSelfHostedRunnerScopeTests` enforces this.
-- It fails toward hosted: with `RUNNER_POOL` unset, or if the API cannot be read, every
-  leg stays hosted.
+- It fails toward hosted: with `RUNNER_POOL` unset every leg stays hosted, a pinned one
+  included; if the API cannot be read, every unpinned leg stays hosted.
 
 Repository variables:
 

@@ -162,6 +162,13 @@ TIMEOUTS = {"harness": 60, "isolated": 60, "contract": 60, "story": 150}
 # first and has taken 28 minutes or more under replay-permit starvation (#5569), so both
 # carry 50 minutes, inside their 60-minute job timeouts.
 HANGS = {"harness": 20, "isolated": 50, "contract": 50, "story": 20}
+# Contract legs pinned to the self-hosted pool (runner-overflow.py's `needsPool`). C4
+# establishes the whole Contoso storyline across both regions against one co-located
+# Azurite, and on a GitHub-hosted ubuntu-24.04 runner its WAL reads time out at 30 s
+# (DeadlineExceeded) at every commit tried, including 29961f265, whose nightly passed it
+# on the pool (#5965). Pinning keeps it off the overflow lottery; without RUNNER_POOL it
+# still runs hosted.
+NEEDS_POOL = frozenset({"C4"})
 
 
 class PlanError(Exception):
@@ -439,6 +446,7 @@ def contract_leg(chapter, storyline, shard):
         "timeout": TIMEOUTS["contract"],
         "estimate": TIMEOUTS["contract"],
         "hang": HANGS["contract"],
+        "needsPool": chapter.upper() in NEEDS_POOL,
         # The leading underscore keeps _C1_ from selecting a C10 case.
         "filter": (f"(FullyQualifiedName~{fixture}.&FullyQualifiedName~_{chapter}{CONFORMANCE_CASE_SUFFIX})"
                    f"|FullyQualifiedName~{PENDING_GATE}"),
