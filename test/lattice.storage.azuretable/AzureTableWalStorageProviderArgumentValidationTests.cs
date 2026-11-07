@@ -76,6 +76,17 @@ public class AzureTableWalStorageProviderArgumentValidationTests
     }
 
     [Test]
+    public async Task IsRemote_reports_a_remote_store_through_the_interface()
+    {
+        await using var sut = CreateProvider();
+
+        // Issue #5957: an auto-sized replay gate admits the remote ceiling only
+        // for a provider that reports remote through the interface.
+        IWalStorageProvider provider = sut;
+        Assert.That(provider.IsRemote, Is.True);
+    }
+
+    [Test]
     public async Task AppendBatchAsync_returns_without_io_for_an_empty_batch()
     {
         await using var sut = CreateProvider();

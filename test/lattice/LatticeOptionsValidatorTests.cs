@@ -360,9 +360,9 @@ public class LatticeOptionsValidatorTests
 
     // --- issue #1030: WAL replay throttles ------------------------------
 
-    [TestCase(-1)]
+    [TestCase(-2)]
     [TestCase(-8)]
-    public void WalMaterialiserMaxConcurrentReplays_negative_fails(int value)
+    public void WalMaterialiserMaxConcurrentReplays_below_auto_fails(int value)
     {
         var result = Validate(o => o.WalMaterialiserMaxConcurrentReplays = value);
         Assert.That(result.Failed, Is.True);
@@ -370,20 +370,23 @@ public class LatticeOptionsValidatorTests
             Does.Contain(nameof(LatticeOptions.WalMaterialiserMaxConcurrentReplays)));
     }
 
+    [TestCase(-1)]
     [TestCase(0)]
     [TestCase(1)]
     [TestCase(32)]
-    public void WalMaterialiserMaxConcurrentReplays_non_negative_passes(int value)
+    public void WalMaterialiserMaxConcurrentReplays_auto_zero_or_positive_passes(int value)
     {
         var result = Validate(o => o.WalMaterialiserMaxConcurrentReplays = value);
         Assert.That(result.Succeeded, Is.True);
     }
 
     [Test]
-    public void WalMaterialiserMaxConcurrentReplays_default_is_32()
+    public void WalMaterialiserMaxConcurrentReplays_default_is_auto_with_a_remote_ceiling_of_32()
     {
-        Assert.That(new LatticeOptions().WalMaterialiserMaxConcurrentReplays, Is.EqualTo(32));
-        Assert.That(LatticeOptions.DefaultWalMaterialiserMaxConcurrentReplays, Is.EqualTo(32));
+        Assert.That(new LatticeOptions().WalMaterialiserMaxConcurrentReplays, Is.EqualTo(-1));
+        Assert.That(LatticeOptions.DefaultWalMaterialiserMaxConcurrentReplays,
+            Is.EqualTo(LatticeOptions.AutoWalMaterialiserMaxConcurrentReplays));
+        Assert.That(LatticeOptions.RemoteWalMaterialiserMaxConcurrentReplays, Is.EqualTo(32));
     }
 
     [TestCase(-1)]

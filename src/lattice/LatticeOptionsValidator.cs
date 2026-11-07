@@ -473,11 +473,12 @@ if (options.WalMaterialiserPinBuckets < 1)
         + "(one persists the whole shard to the single legacy wal-materialiser-pins slot; a higher value splits it "
         + "across that many independently-written durable slots so a pin advance rewrites only its own bucket).");
 }
-if (options.WalMaterialiserMaxConcurrentReplays < 0)
+if (options.WalMaterialiserMaxConcurrentReplays < LatticeOptions.AutoWalMaterialiserMaxConcurrentReplays)
 {
     return ValidateOptionsResult.Fail(
-        $"{nameof(LatticeOptions.WalMaterialiserMaxConcurrentReplays)} must be greater than or equal to 0 "
-        + "(zero resolves the per-silo concurrent-leaf-replay ceiling to the lesser of "
+        $"{nameof(LatticeOptions.WalMaterialiserMaxConcurrentReplays)} must be greater than or equal to -1 "
+        + "(-1, the default, resolves the per-silo concurrent-leaf-replay ceiling to 32 when the registered "
+        + "WAL storage provider is remote and otherwise like zero; zero resolves it to the lesser of "
         + "Environment.ProcessorCount and the enforced container CPU grant; a positive "
         + "value pins it explicitly).");
 }

@@ -50,7 +50,8 @@ public partial class BPlusLeafGrainTests
         // The replay concurrency controller defaults to on (issue #5877). These
     // fixtures drive the ledgers by hand, so the harness sizes the gate with it
     // off unless a test asks for it; pass null to keep the library default.
-    private static async Task<SemaphoreSlim> QuiescentReplayGateAsync(int? permitCeiling = null, bool? controller = false)
+    private static async Task<SemaphoreSlim> QuiescentReplayGateAsync(
+        int? permitCeiling = null, bool? controller = false, IWalStorageProvider? walStorageProvider = null)
     {
         var (warmGrain, warmState, _, _) = CreateGrainWithSnapshotAndCoordinator(
             preloadedSnapshot: null,
@@ -62,7 +63,8 @@ public partial class BPlusLeafGrainTests
                     options.WalMaterialiserMaxConcurrentReplays = ceiling;
                 if (controller is { } enabled)
                     options.WalReplayServiceRateControllerEnabled = enabled;
-            });
+            },
+            walStorageProvider: walStorageProvider);
         warmState.State.TreeId = UniqueReplayPermitTree();
         await LeafActivationHarness.ActivateAsync(warmGrain, CancellationToken.None);
 

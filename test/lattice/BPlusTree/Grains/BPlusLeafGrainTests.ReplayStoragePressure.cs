@@ -1,3 +1,4 @@
+using NSubstitute;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Testing;
 
@@ -207,12 +208,14 @@ public partial class BPlusLeafGrainTests
 
     [Test]
     [NonParallelizable]
-    public async Task A_silo_left_at_the_defaults_replays_32_leaves_at_once_with_the_controller_on()
+    public async Task A_silo_left_at_the_defaults_on_a_remote_wal_store_replays_32_leaves_at_once_with_the_controller_on()
     {
         BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
         try
         {
-            var gate = await QuiescentReplayGateAsync(controller: null);
+            var remote = Substitute.For<IWalStorageProvider>();
+            remote.IsRemote.Returns(true);
+            var gate = await QuiescentReplayGateAsync(controller: null, walStorageProvider: remote);
 
             Assert.That(BPlusLeafGrain.ReplayConcurrencyCeilingForTest, Is.EqualTo(32));
             Assert.That(gate.CurrentCount, Is.EqualTo(32));
@@ -248,8 +251,8 @@ public partial class BPlusLeafGrainTests
     {
         Assert.That(BPlusLeafGrain.ResolveGateSizing(0, 16, 4).Ceiling, Is.EqualTo(4));
         Assert.That(BPlusLeafGrain.ResolveGateSizing(0, 6, null).Ceiling, Is.EqualTo(6));
-        Assert.That(BPlusLeafGrain.ResolveGateSizing(LatticeOptions.DefaultWalMaterialiserMaxConcurrentReplays, 4, 4).Ceiling,
-            Is.EqualTo(32), "the default does not scale with CPU");
+        Assert.That(BPlusLeafGrain.ResolveGateSizing(LatticeOptions.DefaultWalMaterialiserMaxConcurrentReplays, 4, 4, walStoreIsRemote: true).Ceiling,
+            Is.EqualTo(32), "the default on a remote store does not scale with CPU");
     }
 
     [Test]
