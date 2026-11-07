@@ -96,6 +96,12 @@ internal sealed class FakeCommitLogReader : ICommitLogReader
     }
 
     /// <inheritdoc />
+    /// <summary>The partition incarnation (issue #5896); this fake never resets.</summary>
+    public ValueTask<long> GetIncarnationAsync(string treeId, int shardIndex, CancellationToken cancellationToken = default) => ValueTask.FromResult(Incarnation);
+
+    /// <summary>The incarnation <see cref="GetIncarnationAsync"/> reports.</summary>
+    public long Incarnation { get; set; }
+
     public Task<long> GetTailOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken = default)
     {
         TailProbes++;

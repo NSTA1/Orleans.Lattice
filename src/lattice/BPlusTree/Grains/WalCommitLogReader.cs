@@ -213,4 +213,8 @@ internal sealed class WalCommitLogReader(IGrainFactory grainFactory) : ICommitLo
 
         return grain.GetTailOffsetAsync(cancellationToken);
     }
+
+    /// <inheritdoc />
+    public ValueTask<long> GetIncarnationAsync(string treeId, int shardIndex, CancellationToken cancellationToken = default) =>
+        grainFactory.GetGrain<IWalShardGrain>($"{treeId}/{shardIndex}").GetIncarnationAsync(cancellationToken);
 }
