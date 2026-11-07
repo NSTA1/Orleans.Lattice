@@ -4210,11 +4210,18 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>Withdraws the demand <see cref="DeclareReplayDemandAsync"/> declared.</summary>
+    /// <remarks>
+    /// Runs in the replay's finally, ahead of the permit's release, so it must not
+    /// throw and must not read grain state: an activation invalidated while it
+    /// held the permit throws on every state read, and a throw here would strand
+    /// the permit for the life of the process (#5775). The tree id is the one
+    /// captured when the permit path was entered.
+    /// </remarks>
     private async Task ClearDeclaredReplayDemandAsync()
     {
         var partitions = _declaredReplayDemandPartitions;
         _declaredReplayDemandPartitions = 0;
-        var treeId = state.State.TreeId;
+        var treeId = _replayPermitTreeId;
         if (string.IsNullOrEmpty(treeId))
             return;
 
