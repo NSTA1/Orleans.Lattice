@@ -48,7 +48,7 @@ internal sealed partial class LatticeGrain
             // A shard's own list covers only its bucket. Surfacing it here, where
             // another branch's keys cannot be accounted for, would let a caller
             // that retries only the listed keys drop those keys for good.
-            return refusal.UnappliedKeys is null ? null : WithoutUnappliedKeys(refusal);
+            return null; // RED Mstrip: a shard's partial list surfaces for the whole batch.
         }
 
         var unapplied = new List<string>();
@@ -71,13 +71,7 @@ internal sealed partial class LatticeGrain
             }
         }
 
-        return new LatticeSaturatedException(
-            RootMessage(refusal),
-            TreeId,
-            refusal.SaturationSource,
-            unapplied,
-            batchCount,
-            refusal);
+        return WithoutUnappliedKeys(refusal); // RED M3: UnappliedKeys never populated across shards.
     }
 
     /// <summary>

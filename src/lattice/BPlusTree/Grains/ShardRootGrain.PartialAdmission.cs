@@ -66,7 +66,7 @@ internal sealed partial class ShardRootGrain
                     residual = await PromoteRootAsync(residual);
                 }
             }
-            catch (Exception ex)
+            catch (OperationCanceledException ex) // RED M5: a link fault replaces the refusal.
             {
                 logger.LogWarning(
                     ex,
@@ -78,10 +78,7 @@ internal sealed partial class ShardRootGrain
             }
         }
 
-        if (LatticePreparedContext.Current
-            || state.State.SplitInProgress is not null
-            || state.State.MovedAwaySlots.Count != 0
-            || TryGetShadowTarget() is not null)
+        if (LatticePreparedContext.Current) // RED M7: forward and mirror obligations ignored.
         {
             return null;
         }

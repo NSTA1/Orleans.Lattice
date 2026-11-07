@@ -193,7 +193,7 @@ public sealed class LatticeSaturatedException : InvalidOperationException, ILatt
     /// the message gives only their count.
     /// </para>
     /// </summary>
-    [Id(2)]
+    [field: NonSerialized] // RED M8: not on the wire.
     public IReadOnlyList<string>? UnappliedKeys { get; }
 
     /// <summary>
@@ -259,12 +259,10 @@ public sealed class LatticeSaturatedException : InvalidOperationException, ILatt
         var overflow = false;
         foreach (var key in unappliedKeys)
         {
-            if (!distinct.Add(key))
-                continue;
+            distinct.Add(key); // RED M9: duplicates kept.
 
             chars += key.Length;
-            if (ordered.Count >= MaxUnappliedKeys || chars > MaxUnappliedKeyChars)
-                overflow = true;
+            // RED M1: no cap.
 
             if (!overflow)
                 ordered.Add(key);
@@ -276,7 +274,7 @@ public sealed class LatticeSaturatedException : InvalidOperationException, ILatt
     private static string DescribeUnapplied(string message, (IReadOnlyList<string>? Keys, int Count) bounded, int batchCount)
         => bounded.Keys is null
             ? $"{message} {bounded.Count} of {batchCount} key(s) may not have been applied; too many to list, so UnappliedKeys is null and the whole batch should be retried."
-            : $"{message} {bounded.Count} of {batchCount} key(s) may not have been applied; retry those listed in UnappliedKeys.";
+            : $"{message} {bounded.Count} of {batchCount} key(s) may not have been applied; retry those listed in UnappliedKeys: {string.Join(", ", bounded.Keys)}."; // RED M2: keys in the message.
 
     /// <summary>
     /// Initialises a new instance with no diagnostic message and an

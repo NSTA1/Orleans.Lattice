@@ -289,8 +289,7 @@ internal static class ShardActivationRetry
             {
                 last = ex;
                 if (attempt == MaxAttempts) break;
-                if (ex is LatticeSaturatedException { UnappliedKeys: { } unapplied })
-                    entries = Narrow(entries, unapplied);
+                // RED M4: a retry re-sends the whole bucket.
                 var backoff = NextBackoff(ex, attempt);
                 await Task.Delay(backoff, cancellationToken)
                     .ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
