@@ -46,6 +46,42 @@ public sealed class InMemoryWalCursorRegistry : IWalCursorRegistry
     }
 
     /// <inheritdoc />
+    /// <remarks>
+    /// Removes the partition from <see cref="WalCursorSnapshot.CheckpointOffsets"/>. The map is
+    /// left empty rather than <see langword="null"/> - and a consumer that never claimed an offset
+    /// gets an empty one - so it reads as offset-aware with no current claim, not as a legacy
+    /// HLC-only consumer whose drain age is unknown. Changes no cursor, vector or blocked floor,
+    /// so the GC's memoised meets stay valid.
+    /// </remarks>
+    public Task ClearCheckpointAsync(
+        string treeName, string consumerId, int walPartition, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(treeName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(consumerId);
+        ArgumentOutOfRangeException.ThrowIfNegative(walPartition);
+        cancellationToken.ThrowIfCancellationRequested();
+        lock (_gate)
+        {
+            if (_byTree.TryGetValue(treeName, out var state)
+                && state.PerConsumer.TryGetValue(consumerId, out var existing))
+            {
+                IReadOnlyDictionary<int, long>? next = existing.CheckpointOffsets switch
+                {
+                    null => ImmutableDictionary<int, long>.Empty,
+                    var offsets when offsets.ContainsKey(walPartition) => ((ImmutableDictionary<int, long>)offsets).Remove(walPartition),
+                    _ => null,
+                };
+                if (next is not null)
+                {
+                    state.PerConsumer[consumerId] = existing with { CheckpointOffsets = next };
+                }
+            }
+        }
+
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
     public Task ReportCursorAsync(
         string treeName,
         string consumerId,

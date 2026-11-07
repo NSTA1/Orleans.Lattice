@@ -45,6 +45,11 @@ internal sealed class InMemoryLeafCursorReporter(IWalCursorRegistry registry) : 
         => registry.ReportCheckpointAsync(treeName, consumerId, cursor, walPartition, checkpointOffset, cancellationToken);
 
     /// <inheritdoc />
+    public Task ClearCheckpointAsync(
+        string treeName, string consumerId, int walPartition, CancellationToken cancellationToken)
+        => registry.ClearCheckpointAsync(treeName, consumerId, walPartition, cancellationToken);
+
+    /// <inheritdoc />
     public Task UnregisterAsync(
         string treeName,
         string consumerId,

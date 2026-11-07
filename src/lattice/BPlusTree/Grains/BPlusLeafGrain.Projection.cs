@@ -505,6 +505,32 @@ internal sealed partial class BPlusLeafGrain
         }
     }
 
+    /// <summary>
+    /// The partitions whose latest checkpoint advance came from the live advance (#5572), not
+    /// from a replay or a hint. Activation memory. A resident leaf applies its own writes
+    /// synchronously, so the live advance's checkpoint is no claim about undrained work: the
+    /// cursor report for such a partition carries the HLC only and withdraws its advisory
+    /// offset (#5981). A later replay or hint advance claims an offset again.
+    /// </summary>
+    private HashSet<int>? _liveAdvancedPartitions;
+
+    /// <summary>Records whether <paramref name="partition"/>'s latest advance was the live advance's.</summary>
+    private void NoteCheckpointAdvanceOrigin(int partition)
+    {
+        if (_liveAdvanceInFlight)
+        {
+            (_liveAdvancedPartitions ??= new HashSet<int>()).Add(partition);
+        }
+        else
+        {
+            _liveAdvancedPartitions?.Remove(partition);
+        }
+    }
+
+    /// <summary>Whether <paramref name="partition"/>'s latest advance was the live advance's.</summary>
+    private bool IsLiveAdvancedPartition(int partition) =>
+        _liveAdvancedPartitions is { } live && live.Contains(partition);
+
     private long GetPersistedCheckpointForPartition(int partition)
     {
         if (partition == 0)
@@ -632,6 +658,7 @@ internal sealed partial class BPlusLeafGrain
         }
 
         (_pendingCheckpointOffsetsByPartition ??= new Dictionary<int, long>())[partition] = offset;
+        NoteCheckpointAdvanceOrigin(partition);
 
         // Coalescing predicate: persist if either threshold has been
         // exceeded. Zero interval means every-entry mode.

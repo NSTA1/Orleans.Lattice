@@ -176,9 +176,19 @@ internal sealed partial class BPlusLeafGrain
                 // keeps the persisted checkpoint). It is the APPLIED position, so a
                 // born leaf whose hinted checkpoint is held back from persistence
                 // until a capture covers it (#5877, H2) does not read as lagging
-                // from the partition's first append (#5969).
-                await reporter.ReportCheckpointAsync(treeId, consumerId, clock,
-                    partition, GetCurrentCheckpointForPartition(partition), CancellationToken.None);
+                // from the partition's first append (#5969). A partition the live
+                // advance moved last reports its cursor - the WAL GC reads it - and
+                // withdraws its offset: that checkpoint is no drain claim (#5981).
+                if (IsLiveAdvancedPartition(partition))
+                {
+                    await reporter.ReportAsync(treeId, consumerId, clock, CancellationToken.None);
+                    await reporter.ClearCheckpointAsync(treeId, consumerId, partition, CancellationToken.None);
+                }
+                else
+                {
+                    await reporter.ReportCheckpointAsync(treeId, consumerId, clock,
+                        partition, GetCurrentCheckpointForPartition(partition), CancellationToken.None);
+                }
             }
             catch (Exception ex)
             {

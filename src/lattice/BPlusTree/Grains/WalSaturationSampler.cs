@@ -575,7 +575,18 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
                     eligible = true;
                     if (entry.CheckpointOffsets is not { Count: > 0 } offsets)
                     {
-                        incomplete = true;
+                        // An empty map is a withdrawn claim (ClearCheckpointAsync, #5981):
+                        // a resident leaf the live advance moved. Only a null map - a
+                        // legacy HLC-only consumer - is unknown history.
+                        if (entry.CheckpointOffsets is null)
+                        {
+                            incomplete = true;
+                        }
+                        else
+                        {
+                            unclaimed++;
+                        }
+
                         continue;
                     }
                     long? age = null;
