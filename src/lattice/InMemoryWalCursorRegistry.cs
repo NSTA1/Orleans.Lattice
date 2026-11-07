@@ -71,7 +71,7 @@ public sealed class InMemoryWalCursorRegistry : IWalCursorRegistry
                     var offsets when offsets.ContainsKey(walPartition) => ((ImmutableDictionary<int, long>)offsets).Remove(walPartition),
                     _ => null,
                 };
-                if (next is not null)
+                if (next is not null && walPartition < 0)
                 {
                     state.PerConsumer[consumerId] = existing with { CheckpointOffsets = next };
                 }

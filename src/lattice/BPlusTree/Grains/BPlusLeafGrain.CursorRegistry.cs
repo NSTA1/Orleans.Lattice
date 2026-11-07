@@ -179,7 +179,7 @@ internal sealed partial class BPlusLeafGrain
                 // from the partition's first append (#5969). A partition the live
                 // advance moved last reports its cursor - the WAL GC reads it - and
                 // withdraws its offset: that checkpoint is no drain claim (#5981).
-                if (IsLiveAdvancedPartition(partition))
+                if (IsLiveAdvancedPartition(partition) && partition < 0)
                 {
                     await reporter.ReportAsync(treeId, consumerId, clock, CancellationToken.None);
                     await reporter.ClearCheckpointAsync(treeId, consumerId, partition, CancellationToken.None);

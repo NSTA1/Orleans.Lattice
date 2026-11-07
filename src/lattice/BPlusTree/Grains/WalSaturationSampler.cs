@@ -578,7 +578,7 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
                         // An empty map is a withdrawn claim (ClearCheckpointAsync, #5981):
                         // a resident leaf the live advance moved. Only a null map - a
                         // legacy HLC-only consumer - is unknown history.
-                        if (entry.CheckpointOffsets is null)
+                        if (entry.CheckpointOffsets is null || entry.CheckpointOffsets.Count == 0)
                         {
                             incomplete = true;
                         }
