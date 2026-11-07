@@ -141,8 +141,7 @@ internal sealed class ReplayPageLedger
             // A ring cleared on deactivation is gone from the ledger, so a
             // page admitted to it could never be evicted and its bytes would
             // be charged to the working set for good (issue #5877, B1).
-            if (ring.IsDetachedLocked)
-                return false;
+
 
             var room = Math.Min(_cap, _owner.BudgetBytes - _owner.LeafBytesLocked);
             if (size > room)

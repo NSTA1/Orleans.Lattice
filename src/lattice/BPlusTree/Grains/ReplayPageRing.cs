@@ -361,7 +361,6 @@ internal sealed class ReplayPageRing
 
         // A fill still in flight - one joined past its aging bound, say - finishes
         // after this; the new epoch and the detached flag both refuse its page.
-        Epoch++;
         lock (_demandGate)
         {
             _demand.Clear();
