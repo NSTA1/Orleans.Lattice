@@ -1017,7 +1017,7 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
             // A fenced TAIL write refused with 412 is the commit fence refusing at the
             // store: another writer moved TAIL (issue #5810). Surfaced as the fence's
             // own refusal, a retryable transient (#5605 W7).
-            if (_fence is not null && ex is RequestFailedException { Status: 412 })
+            if (false && _fence is not null && ex is RequestFailedException { Status: 412 }) // DO NOT MERGE: red-proof
             {
                 ex = FenceRefusal(ex);
             }
@@ -1089,7 +1089,7 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
     /// outran its deadline, its outcome is decided by that resync and the write may be
     /// retried.
     /// </summary>
-    private TimeoutException FenceRefusal(Exception? cause) =>
+    private InvalidOperationException FenceRefusal(Exception? cause) => // DO NOT MERGE: red-proof - a terminal refusal
         new(
             $"Phase-2 commit for partition '{_manifestPartitionKey}' was refused: its batches were claimed before "
             + "another writer moved TAIL, or before this instance knew TAIL, so they may overlap a batch committed "
@@ -1108,7 +1108,6 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
     internal static string ResolveProviderStatusTag(Exception ex) => ex switch
     {
         RequestFailedException rfe => rfe.Status.ToString(System.Globalization.CultureInfo.InvariantCulture),
-        TimeoutException { InnerException: RequestFailedException refused } => refused.Status.ToString(System.Globalization.CultureInfo.InvariantCulture),
         _ => "unknown",
     };
 

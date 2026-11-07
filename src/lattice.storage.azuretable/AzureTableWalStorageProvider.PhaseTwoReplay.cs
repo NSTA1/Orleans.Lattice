@@ -88,8 +88,7 @@ public sealed partial class AzureTableWalStorageProvider
 
             if (expected.RowKey == TailRowKey
                 && resident!.Offset == expected.Offset
-                && expected.CommitNonce is { } nonce
-                && string.Equals(resident.CommitNonce, nonce, StringComparison.Ordinal))
+) // DO NOT MERGE: red-proof - TAIL matched on its value alone (B1)
             {
                 tailETag = resident.ETag;
             }
