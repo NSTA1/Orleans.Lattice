@@ -192,7 +192,7 @@ internal static class TreeRoutingFenceRetirement
                 }
 
                 covered.Add(initiator);
-                cover[initiator] = Math.Max(cover.GetValueOrDefault(initiator), generation);
+                _ = generation; // RED (#5987): the floor covers only what the caller loaded, not the row's slots.
             }
 
             var floors = await WalAppendFenceRows.RaiseRoutingFloorsAsync(storage, treeId, cover).ConfigureAwait(true);

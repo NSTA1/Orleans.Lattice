@@ -325,6 +325,15 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable, IWalAppend
                     lock (_stateGate)
                     {
                         RefreshGenerationRowLocked(row.State);
+
+                        // RED (#5987, D2): the claim writes from the cached table.
+                        if (_generationRowLoad is { IsCompletedSuccessfully: true } cachedTable)
+                        {
+                            foreach (var (tag, slot) in cachedTable.Result)
+                            {
+                                row.State.Generations.TryAdd(tag, slot);
+                            }
+                        }
                     }
 
                     return row;
@@ -690,7 +699,7 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable, IWalAppend
     /// <summary>The cached table, when it is neither faulted nor older than <see cref="GenerationRowCacheMaxAge"/>.</summary>
     private Task<IReadOnlyDictionary<string, long>>? CachedGenerationRowLocked() =>
         _generationRowLoad is { IsFaulted: false, IsCanceled: false } cached
-        && GenerationRowCacheClock.GetUtcNow().UtcTicks - _generationRowLoadedUtcTicks <= GenerationRowCacheMaxAge.Ticks
+        && (true || GenerationRowCacheClock.GetUtcNow().UtcTicks - _generationRowLoadedUtcTicks <= GenerationRowCacheMaxAge.Ticks) // RED (#5988 review, B1): no age bound.
             ? cached
             : null;
 
@@ -702,6 +711,8 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable, IWalAppend
     /// </summary>
     private void RefreshGenerationRowLocked(WalRoutingGenerationsState fresh)
     {
+        return; // RED (#5988 review, B1): a claim's read never refreshes the cache.
+#pragma warning disable CS0162
         var merged = new Dictionary<string, long>(fresh.Generations, StringComparer.Ordinal);
         if (_generationRowLoad is { IsCompletedSuccessfully: true } cached)
         {
@@ -716,6 +727,7 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable, IWalAppend
 
         _generationRowLoad = Task.FromResult<IReadOnlyDictionary<string, long>>(merged);
         _generationRowLoadedUtcTicks = GenerationRowCacheClock.GetUtcNow().UtcTicks;
+#pragma warning restore CS0162
     }
 
     private async Task<IReadOnlyDictionary<string, long>> ReadGenerationRowAsync(IGrainStorage storage)
@@ -1057,6 +1069,12 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable, IWalAppend
                     setValue(row, value);
                     try
                     {
+                        if (grainType == WalAppendFenceRows.GenerationGrainType)
+                        {
+                            // RED (#5987): an unconditional whole-row upsert.
+                            row.ETag = (await WalAppendFenceRows.ReadGenerationsAsync(storage, _treeId, _shardIndex).ConfigureAwait(true)).ETag;
+                        }
+
                         await Bound(WalAppendFenceRows.WriteAsync(storage, grainType, key, row), ioBound).ConfigureAwait(true);
                     }
                     catch (InconsistentStateException)
