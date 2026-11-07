@@ -217,7 +217,7 @@ internal sealed class ReplayPageLedger
         {
             var demand = ring.LiveDemand(now);
             foreach (var slot in ring.SlotsLocked)
-                candidates[n++] = new Candidate(ring, slot, Rank(slot, demand));
+                candidates[n] = new Candidate(ring, slot, Rank(slot, demand), n++);
         }
 
         Array.Sort(candidates, 0, n, EvictFirst.Instance);
@@ -240,14 +240,22 @@ internal sealed class ReplayPageLedger
     }
 
     /// <summary>One page considered for eviction, with its rank.</summary>
-    internal readonly record struct Candidate(ReplayPageRing Ring, ReplayPageRing.Slot Slot, (int Class, long Key, long Bytes) Rank);
+    internal readonly record struct Candidate(ReplayPageRing Ring, ReplayPageRing.Slot Slot, (int Class, long Key, long Bytes) Rank, int Index);
 
-    /// <summary>Orders candidates so the page to evict first comes first.</summary>
+    /// <summary>
+    /// Orders candidates so the page to evict first comes first. Equal ranks
+    /// keep scan order (ring, then ascending offset), so the order is
+    /// deterministic although the sort is not stable.
+    /// </summary>
     private sealed class EvictFirst : IComparer<Candidate>
     {
         public static readonly EvictFirst Instance = new();
 
-        public int Compare(Candidate x, Candidate y) => ReplayPageLedger.Compare(y.Rank, x.Rank);
+        public int Compare(Candidate x, Candidate y)
+        {
+            var byRank = ReplayPageLedger.Compare(y.Rank, x.Rank);
+            return byRank != 0 ? byRank : x.Index.CompareTo(y.Index);
+        }
     }
 
     /// <summary>Groups candidates by ring so each ring's array is rebuilt once.</summary>
