@@ -3797,6 +3797,21 @@ public static class LatticeMetrics
     public const string WalReplayPermitsQueuedName = "orleans.lattice.wal.replay.permits_queued";
 
     /// <summary>
+    /// Tag key on <see cref="WalReplayPermitsQueuedName"/> splitting the queued
+    /// waits into ordinary arrivals (<c>false</c>) and retained ones
+    /// (<c>true</c>): refused Interactive replays whose wait kept its gate
+    /// position (issue #6006). Both values are always published, so the total
+    /// queue is their sum.
+    /// </summary>
+    public const string TagRetained = "retained";
+
+    /// <summary>The <see cref="TagRetained"/> value for an ordinary queued wait.</summary>
+    public static readonly KeyValuePair<string, object?> ReplayPermitWaitNotRetained = new(TagRetained, "false");
+
+    /// <summary>The <see cref="TagRetained"/> value for a retained queued wait.</summary>
+    public static readonly KeyValuePair<string, object?> ReplayPermitWaitRetained = new(TagRetained, "true");
+
+    /// <summary>
     /// Tag marking a replay permit queue wait that ended in the permit being
     /// <b>acquired</b>, on <see cref="WalReplayPermitQueueWait"/>.
     /// </summary>

@@ -94,8 +94,17 @@ internal static class LeafActivationHarness
             }
 
             // Null on a leaf whose replay was retired, or one that armed nothing.
+            // A retained replay refuses its caller fast while its own wait stays
+            // parked (issue #6006), so the caller here is refused as a production
+            // caller would be, rather than waiting out the retention.
             if (leaf.ReplayBarrierForTest is { } replay)
             {
+                if (await Task.WhenAny(replay, leaf.WhenReplayRetainedForTest()) != replay
+                    && leaf.CreateRetainedRefusalForTest() is { } refusal)
+                {
+                    throw refusal;
+                }
+
                 await replay;
             }
         }

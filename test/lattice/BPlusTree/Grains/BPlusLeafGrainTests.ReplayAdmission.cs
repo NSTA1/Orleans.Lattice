@@ -254,11 +254,14 @@ public partial class BPlusLeafGrainTests
                 Assert.That(refusal.Message, Does.Not.Contain("waiter(s), at or above")
                     .And.Contain("even below the queue-depth limit"));
             }
-            Assert.That(BPlusLeafGrain.QueuedReplayPermitWaitersForTest, Is.EqualTo(1));
+            // Bulk is refused without queueing. An Interactive replay is refused
+            // the same way to its caller, but keeps its gate position (issue #6006).
+            Assert.That(BPlusLeafGrain.QueuedReplayPermitWaitersForTest, Is.EqualTo(bulk ? 1 : 2));
+            Assert.That(BPlusLeafGrain.RetainedReplayWaitersForTest, Is.EqualTo(bulk ? 0 : 1));
         }
         finally
         {
-            ClearSeededAdmittedWaiters();
+            await DrainRetainedReplaysAsync(1);
         }
 
         Assert.That(refusals, Has.Count.EqualTo(1));

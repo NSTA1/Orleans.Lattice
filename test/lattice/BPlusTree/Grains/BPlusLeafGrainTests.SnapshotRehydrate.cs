@@ -27,7 +27,8 @@ public partial class BPlusLeafGrainTests
         long walHead,
         ILoggerFactory? loggerFactory = null,
         Action<LatticeOptions>? configureOptions = null,
-        IWalStorageProvider? walStorageProvider = null)
+        IWalStorageProvider? walStorageProvider = null,
+        LeafResidentWorkingSet? workingSet = null)
     {
         var snapshotStub = Substitute.For<ILeafSnapshotStorageGrain>();
         snapshotStub.LoadAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(preloadedSnapshot));
@@ -52,6 +53,8 @@ public partial class BPlusLeafGrainTests
             sc.AddSingleton(loggerFactory);
         if (walStorageProvider is not null)
             sc.AddSingleton(walStorageProvider);
+        if (workingSet is not null)
+            sc.AddSingleton(workingSet);
         var services = sc.BuildServiceProvider();
 
         var leafKey = Guid.NewGuid();

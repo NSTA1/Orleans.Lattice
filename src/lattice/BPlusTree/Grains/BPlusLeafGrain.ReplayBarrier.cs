@@ -265,6 +265,7 @@ internal sealed partial class BPlusLeafGrain
 
         var cts = new CancellationTokenSource();
         _replayBarrierCts = cts;
+        _replayRetainedSignal = null;
 
         // Until this replay's start decision anchors the cache - a snapshot
         // rehydrate, a pre-populated cache, or a converged cold rebuild - the
@@ -327,6 +328,12 @@ internal sealed partial class BPlusLeafGrain
         if (barrier is null)
             return;
 
+        // A retained replay keeps its gate position but has not been admitted
+        // (issue #6006): a caller is refused fast rather than waiting behind it,
+        // and the barrier stays armed so the replay keeps its place.
+        if (_replayRetention is { } retained)
+            throw retained.Create();
+
         // Wait on the barrier's OWN cancellation token rather than on the replay
         // task alone. Awaiting the task by itself makes acceptance criterion 3 -
         // "a cancelled wait fails the request and leaves the activation usable" -
@@ -351,10 +358,20 @@ internal sealed partial class BPlusLeafGrain
             cancellation = new CancellationToken(canceled: true);
         }
 
+        RetainedReplayRefusal? retainedWhileWaiting = null;
         try
         {
             using var awaitDiag = AwaitDiagnostics.Begin("leaf.replay-wait", context.GrainId, "tree=" + state.State.TreeId);
-            await barrier.WaitAsync(cancellation);
+
+            // Woken as well when the replay becomes retained, so a caller already
+            // waiting is refused at once rather than waiting out the retention.
+            var retainedSignal = (_replayRetainedSignal ??= new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously)).Task;
+            var first = await Task.WhenAny(barrier, retainedSignal).WaitAsync(cancellation);
+            if (!ReferenceEquals(first, barrier) && _replayRetention is { } retainedNow)
+                retainedWhileWaiting = retainedNow;
+            else
+                await barrier.WaitAsync(cancellation);
         }
         catch
         {
@@ -381,6 +398,10 @@ internal sealed partial class BPlusLeafGrain
             // acceptance criterion 3).
             throw;
         }
+
+        // Outside the disarming catch: a retained replay is still the live one.
+        if (retainedWhileWaiting is not null)
+            throw retainedWhileWaiting.Create();
     }
 
     /// <summary>
@@ -449,7 +470,11 @@ internal sealed partial class BPlusLeafGrain
             // (issue #3906). It still fails the request and is still rethrown.
             if (IsOwnReplayAdmissionRefusal(ex))
             {
-                ReportReplayAdmissionRefusal(treeId);
+                // A retained replay aging out was already reported when its
+                // callers were refused (issue #6006); it is not a second refusal.
+                if (!_retainedReplayExpired)
+                    ReportReplayAdmissionRefusal(treeId);
+                _retainedReplayExpired = false;
                 throw;
             }
 

@@ -39,6 +39,7 @@ public sealed class ReplayGateAcquireSiteTests
         "BPlusLeafGrain.Activation.cs | AcquireReplayPermitAsync | gate.WaitAsync(cancellationToken)",
         "BPlusLeafGrain.Activation.cs | TryAcquireStarvationReplayPermit | gate.Wait(0)",
         "BPlusLeafGrain.ReplayPermitNesting.cs | ResumeReplayPermitAsync | lease.Gate.WaitAsync()",
+        "BPlusLeafGrain.ReplayRetention.cs | WaitRetainedReplayPermitAsync | gate.WaitAsync(expiry.Token)",
     ];
 
     [Test]
