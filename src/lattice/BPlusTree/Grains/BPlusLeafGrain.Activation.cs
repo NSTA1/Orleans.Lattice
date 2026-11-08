@@ -2109,7 +2109,6 @@ internal sealed partial class BPlusLeafGrain
                     // A replay retained before on this activation, which aged
                     // out, still holds its registration; replace it rather than
                     // add a second.
-                    ReleaseResidentFootprint();
                     RegisterResidentFootprint(rehydratedFromSnapshot);
                 }
 
