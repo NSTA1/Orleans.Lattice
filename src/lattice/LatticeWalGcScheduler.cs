@@ -5617,7 +5617,8 @@ internal sealed class LatticeWalGcScheduler(
             // no progress. The read is bounded by StallPinReadBudget rather than
             // left to the response timeout, so the storage stall that timed the
             // drive out cannot also hold the touch for a second full timeout.
-            if (drive == LeafStarvationDriveOutcome.TimedOut)
+            // DO NOT MERGE: red proof for #6007 - today's arms charge a timed-out drive as Completed.
+            if (drive == LeafStarvationDriveOutcome.TimedOut && false)
             {
                 long? stallPinOffset;
                 try

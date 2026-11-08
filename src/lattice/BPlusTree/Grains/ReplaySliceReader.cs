@@ -148,7 +148,8 @@ internal sealed class ReplaySliceReader
         _partition = partition;
         _filter = filter;
         _reader = reader;
-        _readDeadline = readDeadline > TimeSpan.Zero ? readDeadline : Timeout.InfiniteTimeSpan;
+        // DO NOT MERGE: red proof for #6007 - today's arms ignore the deadline.
+        _readDeadline = Timeout.InfiniteTimeSpan;
         // Clamp rather than throw, and do not "tidy" this into agreement with
         // the validator. The two guards sit on the same value at seams where
         // failure costs differently, so their postures differ deliberately.
