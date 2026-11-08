@@ -81,7 +81,9 @@ internal sealed class WalPartitionUsageCarry
     /// (<c>-1</c>) is replaced by the partition's last measured figures when
     /// they were measured under the same <paramref name="partitionIdentity"/>
     /// no more than <see cref="MaxCarryAge"/> ago; otherwise it stays
-    /// <c>-1</c>.
+    /// <c>-1</c>. Under the unreadable-pin identity nothing is recorded and
+    /// nothing is carried, so a figure measured while the pin could not be
+    /// read never stands in for a later sample, unreadable or not.
     /// </summary>
     /// <param name="partition">The WAL partition index.</param>
     /// <param name="partitionIdentity">The identity from <see cref="PartitionIdentity"/>.</param>
@@ -95,6 +97,11 @@ internal sealed class WalPartitionUsageCarry
     internal (long Retained, long Physical, DateTimeOffset? CarriedFrom) Resolve(
         int partition, string partitionIdentity, long retained, long physical, DateTimeOffset now)
     {
+        if (string.Equals(partitionIdentity, UnreadablePinIdentity, StringComparison.Ordinal))
+        {
+            return (retained, physical, null);
+        }
+
         if (retained >= 0)
         {
             _last[partition] = new Entry(partitionIdentity, retained, physical >= 0 ? physical : retained, now);
@@ -130,19 +137,27 @@ internal sealed class WalPartitionUsageCarry
     /// <summary>
     /// The partition half of the carry identity: the placement pin version and
     /// the provider key backing <paramref name="partition"/>, which a placement
-    /// move changes. A pin that could not be read yields an identity no
-    /// readable pin matches, so nothing is carried across it.
+    /// move changes. A pin that could not be read yields
+    /// <see cref="UnreadablePinIdentity"/>, under which <see cref="Resolve"/>
+    /// neither records nor carries, so nothing is carried across it.
     /// </summary>
     /// <param name="pin">The physical tree's WAL placement pin, or <see langword="null"/> when unread.</param>
     /// <param name="partition">The WAL partition index.</param>
     internal static string PartitionIdentity(WalPlacementPin? pin, int partition)
-        => pin is null ? "?" : $"{pin.Version}|{pin.ResolveKey(partition)}";
+        => pin is null ? UnreadablePinIdentity : $"{pin.Version}|{pin.ResolveKey(partition)}";
+
+    /// <summary>
+    /// The partition identity used when the WAL placement pin could not be read.
+    /// No readable pin yields it, and <see cref="Resolve"/> records nothing under it.
+    /// </summary>
+    internal const string UnreadablePinIdentity = "?";
 
     /// <summary>
     /// Reads the WAL placement pin of the physical tree being measured. The
     /// logical entry already carries it when the tree is not aliased, so only an
     /// aliased tree costs a registry read. Returns <see langword="null"/> when
-    /// the pin cannot be read, which disables carrying for this sample.
+    /// the pin cannot be read: the sample then neither records nor carries any
+    /// partition figure.
     /// </summary>
     /// <param name="optionsResolver">The options resolver.</param>
     /// <param name="treeId">The addressed tree id.</param>

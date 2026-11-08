@@ -78,6 +78,14 @@ internal sealed class LatticeWalUsageGrain(
         if (pending is null || pending.IsCompleted)
         {
             pending = BuildReportAsync();
+            // Every caller may have detached before the shared fan-out faults;
+            // observe the fault so it never surfaces as an UnobservedTaskException.
+            // The continuation touches no grain state, so it runs off the activation.
+            _ = pending.ContinueWith(
+                static t => _ = t.Exception,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
             _inFlight = pending;
         }
 

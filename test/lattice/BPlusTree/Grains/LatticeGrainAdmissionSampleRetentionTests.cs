@@ -56,6 +56,27 @@ public sealed class LatticeGrainAdmissionSampleRetentionTests
         Assert.That(reports, Is.Empty);
     }
 
+    [Test]
+    public async Task SetAsync_with_only_rising_partial_reports_trips_the_cap()
+    {
+        // Issue #6025 B1: a tree whose every report is partial (a provider without
+        // byte accounting, say) must still follow its growth. Only a complete
+        // sample is held across a partial report; partial figures are not frozen.
+        var reports = new Queue<TreeStorageUsageReport>(
+        [
+            new TreeStorageUsageReport { TreeId = TreeId, LiveKeys = 1, TotalBytes = 100, Partial = true },
+            new TreeStorageUsageReport { TreeId = TreeId, LiveKeys = 3, TotalBytes = 300, Partial = true },
+            new TreeStorageUsageReport { TreeId = TreeId, LiveKeys = 10, TotalBytes = 1_000, Partial = true },
+        ]);
+        var grain = CreateGrain(reports);
+
+        await grain.SetAsync("k1", [1]);
+        await grain.SetAsync("k2", [1]);
+        Assert.ThrowsAsync<LatticeQuotaExceededException>(() => grain.SetAsync("k3", [1]),
+            "a rising partial figure past the cap must trip it");
+        Assert.That(reports, Is.Empty, "every report was read");
+    }
+
     private static LatticeGrain CreateGrain(Queue<TreeStorageUsageReport> reports)
     {
         var context = Substitute.For<IGrainContext>();

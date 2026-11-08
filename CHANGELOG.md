@@ -125,11 +125,11 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **Storage - WAL usage polling no longer stalls storage.** Silos share one WAL usage poll, scans are bounded per silo, and a fan-out past its budget cancels its scans. A partition that does not answer reports its last figure for up to five minutes, flagged `Stale` (also in the Explorer). ([#6017](https://github.com/NSTA1/Orleans.Lattice/issues/6017)) (`Orleans.Lattice`, `Orleans.Lattice.Storage.AzureTable`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Explorer.UI`)
 
-- **Writes - Partial usage reports no longer weaken write admission.** A partial storage-usage report no longer replaces a tree's last complete sample, so `MaxLiveKeys` and `MaxEstimatedBytes` keep binding while a WAL partition cannot be measured. ([#6017](https://github.com/NSTA1/Orleans.Lattice/issues/6017)) (`Orleans.Lattice`)
+- **Writes - Partial usage reports no longer weaken write admission.** Write admission keeps a tree's last complete storage-usage sample, and a partial report can only raise it, so `MaxLiveKeys` and `MaxEstimatedBytes` keep binding while a WAL partition cannot be measured. ([#6017](https://github.com/NSTA1/Orleans.Lattice/issues/6017)) (`Orleans.Lattice`)
 
 - **Atomic - Partial usage reports no longer weaken cross-tree admission.** A cross-tree write compares each participating tree's caps with the last complete storage-usage sample the coordinator read for it when the current report is partial. ([#6017](https://github.com/NSTA1/Orleans.Lattice/issues/6017)) (`Orleans.Lattice`)
 
-- **Tenancy - Partial usage reports no longer shrink tenant usage.** Tenant metering keeps a tree's last-known footprint when its storage-usage report is partial, so a WAL partition that cannot be measured no longer lowers the tenant's usage and lifts its quota ceiling. ([#6017](https://github.com/NSTA1/Orleans.Lattice/issues/6017)) (`Orleans.Lattice.Tenancy`)
+- **Tenancy - Partial usage reports no longer shrink tenant usage.** Tenant metering keeps a tree's last complete footprint, and a partial storage-usage report can only raise it, so a WAL partition that cannot be measured no longer lowers the tenant's usage and lifts its quota ceiling. ([#6017](https://github.com/NSTA1/Orleans.Lattice/issues/6017)) (`Orleans.Lattice.Tenancy`)
 
 - **Storage - Scaling pressure skips partial trees.** The storage pressure signal leaves trees with a partial WAL byte figure out of its byte and capacity comparisons, so a lower bound no longer understates an account's pressure. `StoragePressure.ExcludedPartialTrees` counts them. ([#6017](https://github.com/NSTA1/Orleans.Lattice/issues/6017)) (`Orleans.Lattice.Scaling`)
 
