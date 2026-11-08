@@ -70,6 +70,33 @@ public sealed partial class WalLogSubscriberTests
     }
 
     [Test]
+    public void A_partial_recovery_counts_recovered_and_hole_offsets_once_each()
+    {
+        var (subscriber, reader, _) = Create();
+        for (var i = 0; i < 5; i++)
+        {
+            reader.Append(Tree, 0, Set((i + 1) * 10));
+        }
+
+        // Offsets 0 and 1 are genuine holes; 2 and 3 are stored but hidden.
+        reader.HoleAt(Tree, 0, 0);
+        reader.HoleAt(Tree, 0, 1);
+        reader.ClampReadsThrough(Tree, 0, 3);
+        var handler = new CollectingHandler();
+
+        var outcomes = CountHoleOutcomes(() =>
+            subscriber.DrainAsync(
+                Context(1, new Dictionary<int, long> { [0] = -1 }, pinWal: false), handler).GetAwaiter().GetResult(), Tree);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(handler.Entries.Select(e => e.Offset), Is.EqualTo(new long[] { 2, 3, 4 }));
+            Assert.That(outcomes, Is.EquivalentTo(new Dictionary<string, long> { ["recovered"] = 2, ["hole"] = 2 }),
+                "recovery counts from the first offset the re-read returned, so no offset is counted as both");
+        });
+    }
+
+    [Test]
     public void A_genuine_hole_is_read_past_after_one_refresh_and_metered()
     {
         var (subscriber, reader, _) = Create();
