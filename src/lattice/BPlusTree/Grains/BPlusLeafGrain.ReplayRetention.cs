@@ -186,16 +186,6 @@ internal sealed partial class BPlusLeafGrain
                     // The wait already holds a gate position. Withdraw it, and
                     // return the permit if it was granted meanwhile, so a fault
                     // here strands nothing.
-                    expiry.Cancel();
-                    try
-                    {
-                        await wait.ConfigureAwait(true);
-                        gate.Release();
-                    }
-                    catch (OperationCanceledException)
-                    {
-                    }
-
                     throw;
                 }
 
