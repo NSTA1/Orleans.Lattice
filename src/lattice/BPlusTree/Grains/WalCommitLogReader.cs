@@ -209,7 +209,7 @@ internal sealed class WalCommitLogReader(IGrainFactory grainFactory) : ICommitLo
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        return grainFactory.GetGrain<IWalShardGrain>($"{treeId}/{shardIndex}").RefreshTrimWatermarkAsync(cancellationToken);
+        return Task.CompletedTask;
     }
 
     /// <inheritdoc />
