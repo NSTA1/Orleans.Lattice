@@ -167,13 +167,13 @@ internal sealed partial class BPlusLeafGrain
         using var expiry = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         try
         {
-            expiry.CancelAfter(EffectiveRetainedReplayMaxAge);
             try
             {
+                EnterReplayRetention(refusal);
+                await Task.Delay(100).ConfigureAwait(true);
                 var wait = gate.WaitAsync(expiry.Token);
                 try
                 {
-                    EnterReplayRetention(refusal);
                     if (Volatile.Read(ref RetainedReplayFaultForTest) is { } fault)
                         throw fault;
 

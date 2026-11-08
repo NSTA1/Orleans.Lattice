@@ -1329,7 +1329,7 @@ internal sealed partial class BPlusLeafGrain
         // DepthPerPermit, including after a walk-down left more entries retained
         // than the current R.
         bound = Math.Max(1, interactive - circulating);
-        return admitted - Volatile.Read(ref _retainedReplayWaiters) < bound && admitted < interactive;
+        return admitted - Volatile.Read(ref _retainedReplayWaiters) < bound;
     }
 
     /// <summary>
@@ -3361,7 +3361,7 @@ internal sealed partial class BPlusLeafGrain
     private void RecordReplayPermitQueueWait(long queuedAt, KeyValuePair<string, object?> outcome, bool retained = false)
     {
         var elapsed = Stopwatch.GetElapsedTime(queuedAt);
-        if (!retained)
+        if (!retained || retained)
             NoteReplayPermitQueueWait(elapsed, acquired: outcome.Equals(LatticeMetrics.PermitQueueWaitAcquired));
         else if (outcome.Equals(LatticeMetrics.PermitQueueWaitAcquired))
             Volatile.Write(ref _lastReplayPermitProgress, Stopwatch.GetTimestamp());
