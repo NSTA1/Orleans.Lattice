@@ -277,12 +277,18 @@ public partial class BPlusLeafGrainTests
 
             Assert.That(
                 abandonments.Single().Tags.Select(t => t.Key),
-                Is.EquivalentTo(new[] { LatticeMetrics.TagTree, LatticeTenantLabel.TagTenant }),
+                Is.EquivalentTo(new[] { LatticeMetrics.TagTree, LatticeTenantLabel.TagTenant, LatticeMetrics.TagReason }),
                 "tagged by tree plus the universal derived tenant dimension, which is exactly the tag set "
                 + "the scheduler's priming site emits (it resolves the same LatticeTenantLabel.ForTree from "
                 + "the same tree id). A tag set the priming site cannot reproduce would leave the primed "
                 + "series and the emitted series unjoinable, which is the whole point of co-priming them - "
                 + "the primed zero would sit beside the real count forever instead of being it");
+
+            Assert.That(
+                abandonments.Single().Tags.Single(t => t.Key == LatticeMetrics.TagReason).Value,
+                Is.EqualTo("budget"),
+                "a drive that spent its whole budget is the 'budget' reason; 'slice_read_deadline' is a single "
+                + "slice read given up below the response timeout (issue #6007)");
         }
         finally
         {
