@@ -3596,7 +3596,6 @@ internal sealed partial class ReplicationShipperGrain(
             }
             else
             {
-                ReportHoleSkipped(partition, requested, first, LatticeReplicationMetrics.ShipHoleOutcomeHole);
             }
         }
 
