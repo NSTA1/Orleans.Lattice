@@ -238,17 +238,26 @@ its historical name; it skips the phase refresh and does not model randomness.
   `BPlusLeafGrain.ReleaseStarvationReplayPermit` calls `gate.Release()` before it
   decrements the reservation. The model's `DriveStart` and closing
   `DriveOpportunity` are atomic. They refine with the linearisation points at the
-  reservation: a drive is in `Running` from its compare-and-swap to its decrement,
-  and its physical permit is held inside that interval. A failed `gate.Wait(0)`
-  returns the reservation before the attempt ends, which is `PermitConservation`'s
-  "failed admission retains neither" at step granularity. In between, the gate can
+  reservation: an admitted drive is in `Running` from its compare-and-swap to its
+  decrement, and its physical permit is held inside that interval. A reservation
+  whose `gate.Wait(0)` fails is not mapped into `Running`: the attempt refines as
+  stutters followed by `DriveRefused`, its outcome being fixed within the same
+  synchronous step (a prophecy on `Wait(0)`), and it returns the reservation before
+  the attempt ends, which is `PermitConservation`'s "failed admission retains
+  neither". Mapping it into `Running` would put the model's `free` at -1, since
+  `Wait(0)` fails only with no permit free. A sibling refused on the reservation
+  count while it was outstanding saw no free permit beyond the successful
+  reservations, so `~CanAdmit` holds through `free = 0`; the only exception is an
+  ordinary holder acquiring inside the window, which is the existing cold-owner
+  abstraction. Between an admitted drive's reservation and its permit, the gate can
   report more free permits than the model's `free`, so a reading of held
   reservations plus free permits can exceed the permits in circulation. A sweep
   refused then (the #6009 probe saw circulating 4, limit 2, held 2, free 3) is a
   `~CanAdmit("sweep")` refusal with `Running = Share`. It is not a share left idle
   while a sweep waits. The sibling whose release was in flight completes after its
-  decrement, so the refused touch is retried in the same pass under
-  `RetryAfterSibling`, and `PassRearm` re-drives it in any case.
+  decrement, so when that sibling is a sweep drive the refused touch is retried in
+  the same pass under `RetryAfterSibling`; a timer sibling gives no credit, and
+  `PassRearm` re-drives the touch in any case.
   Production symbols: `BPlusLeafGrain.TryAcquireStarvationReplayPermit`,
   `BPlusLeafGrain.ReleaseStarvationReplayPermit`.
 - **No three-leaf liveness claim.** A three-leaf instance of this core was
