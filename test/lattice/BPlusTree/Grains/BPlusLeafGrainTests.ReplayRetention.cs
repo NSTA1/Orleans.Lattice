@@ -30,9 +30,14 @@ public partial class BPlusLeafGrainTests
 
     /// <summary>Activates a fresh leaf against the seeded refusal, expecting its caller to be refused.</summary>
     private static BPlusLeafGrain ActivateRetained(string treeId, out LatticeSaturatedException refusal)
+        => ActivateRetained(treeId, out refusal, out _);
+
+    private static BPlusLeafGrain ActivateRetained(
+        string treeId, out LatticeSaturatedException refusal, out ILeafReplayCoordinatorGrain coordinator)
     {
-        var (grain, state, _, _) = CreateGrainWithSnapshotAndCoordinator(
+        var (grain, state, _, coord) = CreateGrainWithSnapshotAndCoordinator(
             preloadedSnapshot: null, persistedCheckpoint: 0, walHead: 0);
+        coordinator = coord;
         state.State.TreeId = treeId;
         refusal = Assert.ThrowsAsync<LatticeSaturatedException>(
             async () => await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None))!;
@@ -95,10 +100,17 @@ public partial class BPlusLeafGrainTests
         {
             BPlusLeafGrain grain;
             LatticeSaturatedException refusal;
+            ILeafReplayCoordinatorGrain coordinator;
             using (ListenForSaturationRefusals(treeId, refusals))
             {
-                grain = ActivateRetained(treeId, out refusal);
+                grain = ActivateRetained(treeId, out refusal, out coordinator);
             }
+
+            // The retained replay still declares the pages it will read (#5877
+            // DT1), once its wait holds its gate position.
+            await WaitUntilAsync(
+                () => coordinator.ReceivedCalls().Any(c => c.GetMethodInfo().Name == nameof(ILeafReplayCoordinatorGrain.DeclareReplayDemandAsync)),
+                "a retained replay declares its replay demand");
 
             Assert.Multiple(() =>
             {
@@ -481,6 +493,64 @@ public partial class BPlusLeafGrainTests
         {
             BPlusLeafGrain.SeedRetainedReplayWaitersForTest(0);
             await DrainRetainedReplaysAsync(1);
+        }
+    }
+
+    [Test]
+    [NonParallelizable]
+    public async Task A_fault_after_the_retained_wait_registers_strands_no_permit_and_no_retention_slot()
+    {
+        var seeded = await SeedRetainableRefusalAsync();
+        var gate = BPlusLeafGrain.ReplayConcurrencyGateForTest!;
+        var free = gate.CurrentCount;
+        var fault = new InvalidOperationException("injected fault between the retained wait's registration and its await");
+        BPlusLeafGrain.RetainedReplayFaultForTest = fault;
+        try
+        {
+            var (grain, state, _, _) = CreateGrainWithSnapshotAndCoordinator(
+                preloadedSnapshot: null, persistedCheckpoint: 0, walHead: 0);
+            state.State.TreeId = UniqueReplayPermitTree();
+            try
+            {
+                await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
+            }
+            catch (Exception)
+            {
+                // The caller is refused; the replay itself ends on the injected fault.
+            }
+
+            var barrier = grain.ReplayBarrierForTest;
+            if (barrier is not null)
+                await WaitUntilAsync(() => barrier.IsCompleted, "the faulted retained replay ends");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(barrier?.Exception?.InnerException, Is.SameAs(fault),
+                    "instrument validation: the fault was raised inside the window");
+                Assert.That(gate.CurrentCount, Is.EqualTo(free), "the withdrawn wait took no permit");
+                Assert.That(BPlusLeafGrain.RetainedReplayWaitersForTest, Is.Zero, "the retention slot is returned once");
+                Assert.That(BPlusLeafGrain.QueuedReplayPermitWaitersForTest, Is.EqualTo(seeded), "and the arrival once");
+            });
+
+            gate.Release();
+            _seededHeldReplayPermits--;
+            Assert.That(gate.CurrentCount, Is.EqualTo(free + 1),
+                "a permit released afterwards is not taken by the withdrawn wait");
+        }
+        finally
+        {
+            BPlusLeafGrain.RetainedReplayFaultForTest = null;
+            try
+            {
+                await DrainRetainedReplaysAsync(seeded);
+            }
+            finally
+            {
+                // A wait stranded by a fault in that window holds no counter, so
+                // no drain can see it; replace the gate so it cannot take a later
+                // test's permit.
+                BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
+            }
         }
     }
 

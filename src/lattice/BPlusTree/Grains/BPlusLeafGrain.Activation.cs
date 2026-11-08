@@ -671,6 +671,7 @@ internal sealed partial class BPlusLeafGrain
             _replayProcessCpu = RealProcessCpu;
             Volatile.Write(ref _queuedReplayPermitWaiters, 0);
             Volatile.Write(ref _retainedReplayWaiters, 0);
+            Volatile.Write(ref RetainedReplayFaultForTest, null);
             Interlocked.Increment(ref _replayGateGeneration);
             RetainedReplayMaxAgeForTest = null;
             Volatile.Write(ref _replayPermitWaitEwmaTicks, 0);
@@ -2106,19 +2107,21 @@ internal sealed partial class BPlusLeafGrain
                 if (retention is not null)
                     RegisterResidentFootprint(rehydratedFromSnapshot);
 
-                // Only a leaf that actually queues declares the pages it will
-                // read (issue #5877, condition DT1); one admitted at once
-                // records its position with its first read.
-                if (gate.CurrentCount == 0)
-                    await DeclareReplayDemandAsync(options);
-
                 if (retention is not null)
                 {
+                    // A retained replay declares its demand once its wait holds
+                    // its gate position (issue #6006).
                     retentionHandedOff = true;
-                    await WaitRetainedReplayPermitAsync(gate, queuedAt, retention, cancellationToken);
+                    await WaitRetainedReplayPermitAsync(gate, queuedAt, retention, options, cancellationToken);
                 }
                 else
                 {
+                    // Only a leaf that actually queues declares the pages it will
+                    // read (issue #5877, condition DT1); one admitted at once
+                    // records its position with its first read.
+                    if (gate.CurrentCount == 0)
+                        await DeclareReplayDemandAsync(options);
+
                     try
                     {
                         await gate.WaitAsync(cancellationToken).ConfigureAwait(true);

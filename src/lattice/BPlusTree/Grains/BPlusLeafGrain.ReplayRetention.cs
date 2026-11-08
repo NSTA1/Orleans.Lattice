@@ -65,12 +65,20 @@ internal sealed partial class BPlusLeafGrain
     private bool _retainedReplayExpired;
 
     /// <summary>
-    /// Advanced by <see cref="ResetReplayConcurrencyGateForTest"/>. A retained
-    /// wait parked on a gate that has since been discarded must not return its
-    /// slot or its arrival to the counters of the gate that replaced it. The gate
-    /// is never discarded in production, so this only ever reads zero there.
+    /// Test isolation only. Advanced by <see cref="ResetReplayConcurrencyGateForTest"/>,
+    /// so a retained wait parked on a gate a test discarded never returns its
+    /// slot or its arrival to the counters of the gate that replaced it. The
+    /// gate is never discarded in production, where this reads zero for the
+    /// life of the process and costs one integer compare when a retained wait ends.
     /// </summary>
     private static int _replayGateGeneration;
+
+    /// <summary>
+    /// Test-only: a fault thrown after a retained wait has registered and before
+    /// it is awaited, so a test can prove that window strands no permit and no
+    /// retention slot.
+    /// </summary>
+    internal static Exception? RetainedReplayFaultForTest;
 
     private static TimeSpan EffectiveRetainedReplayMaxAge
         => RetainedReplayMaxAgeForTest ?? RetainedReplayMaxAge;
@@ -154,7 +162,7 @@ internal sealed partial class BPlusLeafGrain
     /// enters the wait-arm mean.
     /// </summary>
     private async Task WaitRetainedReplayPermitAsync(
-        SemaphoreSlim gate, long queuedAt, RetainedReplayRefusal refusal, CancellationToken cancellationToken)
+        SemaphoreSlim gate, long queuedAt, RetainedReplayRefusal refusal, LatticeOptions options, CancellationToken cancellationToken)
     {
         using var expiry = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         try
@@ -163,7 +171,34 @@ internal sealed partial class BPlusLeafGrain
             try
             {
                 var wait = gate.WaitAsync(expiry.Token);
-                EnterReplayRetention(refusal);
+                try
+                {
+                    EnterReplayRetention(refusal);
+                    if (Volatile.Read(ref RetainedReplayFaultForTest) is { } fault)
+                        throw fault;
+
+                    // Advisory (#5877 DT2): its order against the gate does not
+                    // matter, only that a retained replay declares at all.
+                    await DeclareReplayDemandAsync(options);
+                }
+                catch
+                {
+                    // The wait already holds a gate position. Withdraw it, and
+                    // return the permit if it was granted meanwhile, so a fault
+                    // here strands nothing.
+                    expiry.Cancel();
+                    try
+                    {
+                        await wait.ConfigureAwait(true);
+                        gate.Release();
+                    }
+                    catch (OperationCanceledException)
+                    {
+                    }
+
+                    throw;
+                }
+
                 await wait.ConfigureAwait(true);
             }
             catch (OperationCanceledException)
