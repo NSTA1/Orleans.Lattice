@@ -970,7 +970,7 @@ Implemented by [`Orleans.Lattice.Api.State`](../lattice.api.state/README.md) and
 
 ## `Orleans.Lattice.Api.Data`
 
-Implemented by [`Orleans.Lattice.Api.Data`](../lattice.api.data/README.md) and exposed remotely by [`Orleans.Lattice.Api.Data.Grpc`](../lattice.api.data.grpc/README.md). 10 public types.
+Implemented by [`Orleans.Lattice.Api.Data`](../lattice.api.data/README.md) and exposed remotely by [`Orleans.Lattice.Api.Data.Grpc`](../lattice.api.data.grpc/README.md). 15 public types.
 
 | Type | Kind | Summary |
 |---|---|---|
@@ -978,12 +978,17 @@ Implemented by [`Orleans.Lattice.Api.Data`](../lattice.api.data/README.md) and e
 | `DataApiTypeAliases` | static class | Centralised Orleans serialization alias constants for every `Orleans.Lattice.Api.Data` type that participates in the wire format. |
 | `DataAtomicBatch` | sealed record | A single-tree atomic write batch: the key / value `Upserts` and the `DeleteKeys` to commit all-or-nothing on one tree, so no reader ever observes a partial application. |
 | `DataEntry` | sealed record | A single key / value entry. |
+| `DataEntryRejection` | sealed record | One entry a streamed write refused, as reported in `DataSetManyStreamBatch.Rejections`: where it was in the stream, its key, and why it was refused (`denied`, `schema` or `invalid`). A rejection never carries the value. |
 | `DataRangeDeleteRequest` | sealed record | Request to delete every authorized key in a bounded half-open key range `[`StartInclusive`, `EndExclusive`)` on a single tree. |
 | `DataRangeDeleteResult` | sealed record | Result of a `DataRangeDeleteRequest`: the tree the delete ran against and the total number of keys tombstoned across the whole range. |
 | `DataRangePage` | sealed record | One page of a bounded range read: the key-ordered `Entries` and, when more entries remain beyond this page, a `ContinuationToken` to pass back on the next `DataRangeRequest` to resume. |
 | `DataRangeRequest` | sealed record | Request for a single-page, bounded range read over a tree's entries in ascending key order. |
 | `DataReadResult` | sealed record | Result of a point read. |
+| `DataSetManyStreamBatch` | sealed record | The outcome of one batch of a streamed write (`SetManyStreamAsync`), reported as the batch completes: how many of its entries were written and which were refused. The entries a batch committed are durable once it is reported. |
+| `DataSetManyStreamOptions` | sealed record | Shapes a streamed write through `SetManyStreamAsync`: how many entries each batch carries (default 256, at most 10,000) and the ordinal the stream's first entry is numbered with in the rejections it reports. |
+| `DataSetManyStreamResult` | sealed record | The totals of a streamed write from `SetManyStreamAsync`: how many entries the stream carried, how many were written, how many were refused, and in how many batches. |
 | `DataTreeBatch` | sealed record | One participating tree's slice of a cross-tree atomic write: the logical `TreeId` to write into, the key / value `Upserts`, and the `DeleteKeys` to commit atomically on that tree. |
+| `LatticeDataCapabilities` | sealed record | The read-only result of a data-plane capability probe (`ProbeCapabilitiesAsync`): whether the current caller may write or delete in a tree, or at one key of it, evaluated through the same fail-closed access gate the real writes use but with no side effects. Every flag is default-deny; the probe is a UX affordance, not a security boundary. |
 
 ### `ILatticeDataApi`
 
@@ -997,8 +1002,10 @@ Implemented by [`Orleans.Lattice.Api.Data`](../lattice.api.data/README.md) and e
 - `Task SetManyAtomicAsync(string treeId, DataAtomicBatch batch, string operationId, CancellationToken cancellationToken = default)`
 - `Task<CrossTreeAtomicWriteOutcome> SetManyAtomicCrossTreeAsync(IReadOnlyList<DataTreeBatch> batches, string operationId, CancellationToken cancellationToken = default)`
 - `Task SetManyAsync(string treeId, IReadOnlyList<DataEntry> upserts, CancellationToken cancellationToken = default)`
+- `Task<DataSetManyStreamResult> SetManyStreamAsync(string treeId, IAsyncEnumerable<DataEntry> upserts, IProgress<DataSetManyStreamBatch>? progress = null, DataSetManyStreamOptions? options = null, CancellationToken cancellationToken = default)`
 - `Task<DataReadResult> GetAsync(string treeId, string key, CancellationToken cancellationToken = default)`
 - `Task<DataRangePage> ReadRangeAsync(DataRangeRequest request, CancellationToken cancellationToken = default)`
+- `Task<LatticeDataCapabilities> ProbeCapabilitiesAsync(string treeId, string? key = null, CancellationToken cancellationToken = default)`
 - `Task CounterIncrementAsync(string treeId, string key, string replicaId, long amount, CancellationToken cancellationToken = default)`
 - `Task CounterDecrementAsync(string treeId, string key, string replicaId, long amount, CancellationToken cancellationToken = default)`
 - `Task<long> CounterGetAsync(string treeId, string key, CancellationToken cancellationToken = default)`
@@ -1047,6 +1054,10 @@ Implemented by [`Orleans.Lattice.Api.Data`](../lattice.api.data/README.md) and e
 - `public const string DataReadResult`
 - `public const string DataRangeDeleteRequest`
 - `public const string DataRangeDeleteResult`
+- `public const string LatticeDataCapabilities`
+- `public const string DataEntryRejection`
+- `public const string DataSetManyStreamBatch`
+- `public const string DataSetManyStreamResult`
 
 ### `DataAtomicBatch`
 
@@ -1069,6 +1080,20 @@ Implemented by [`Orleans.Lattice.Api.Data`](../lattice.api.data/README.md) and e
 - `public bool Raw { get; init; }`
 - `public bool Equals(DataEntry? other)`
 - `public override int GetHashCode()`
+
+### `DataEntryRejection`
+
+[Source](../../src/lattice.api.abstractions/Data/Model/DataEntryRejection.cs) (line 11).
+
+`public sealed record DataEntryRejection`
+
+- `public const string DeniedCode`
+- `public const string SchemaCode`
+- `public const string InvalidCode`
+- `public required long Ordinal { get; init; }`
+- `public required string Key { get; init; }`
+- `public required string Code { get; init; }`
+- `public required string Reason { get; init; }`
 
 ### `DataRangeDeleteRequest`
 
@@ -1126,6 +1151,44 @@ Implemented by [`Orleans.Lattice.Api.Data`](../lattice.api.data/README.md) and e
 - `public bool Equals(DataReadResult? other)`
 - `public override int GetHashCode()`
 
+### `DataSetManyStreamBatch`
+
+[Source](../../src/lattice.api.abstractions/Data/Model/DataSetManyStreamBatch.cs) (line 11).
+
+`public sealed record DataSetManyStreamBatch`
+
+- `public required string TreeId { get; init; }`
+- `public required long BatchIndex { get; init; }`
+- `public required long FirstOrdinal { get; init; }`
+- `public required int EntryCount { get; init; }`
+- `public required int CommittedCount { get; init; }`
+- `public IReadOnlyList<DataEntryRejection> Rejections { get; init; }`
+
+### `DataSetManyStreamOptions`
+
+[Source](../../src/lattice.api.abstractions/Data/Model/DataSetManyStreamOptions.cs) (line 8).
+
+`public sealed record DataSetManyStreamOptions`
+
+- `public const int DefaultBatchSize`
+- `public const int MaxBatchSize`
+- `public static DataSetManyStreamOptions Default { get; }`
+- `public int BatchSize { get; init; }`
+- `public long FirstOrdinal { get; init; }`
+- `public void Validate()`
+
+### `DataSetManyStreamResult`
+
+[Source](../../src/lattice.api.abstractions/Data/Model/DataSetManyStreamResult.cs) (line 11).
+
+`public sealed record DataSetManyStreamResult`
+
+- `public required string TreeId { get; init; }`
+- `public required long EntryCount { get; init; }`
+- `public required long CommittedCount { get; init; }`
+- `public required long RejectedCount { get; init; }`
+- `public required long BatchCount { get; init; }`
+
 ### `DataTreeBatch`
 
 [Source](../../src/lattice.api.abstractions/Data/Model/DataTreeBatch.cs) (line 19).
@@ -1135,6 +1198,17 @@ Implemented by [`Orleans.Lattice.Api.Data`](../lattice.api.data/README.md) and e
 - `public required string TreeId { get; init; }`
 - `public List<DataEntry> Upserts { get; init; }`
 - `public List<string> DeleteKeys { get; init; }`
+
+### `LatticeDataCapabilities`
+
+[Source](../../src/lattice.api.abstractions/Data/Model/LatticeDataCapabilities.cs) (line 27).
+
+`public sealed record LatticeDataCapabilities`
+
+- `public required string TreeId { get; init; }`
+- `public string? Key { get; init; }`
+- `public bool CanWrite { get; init; }`
+- `public bool CanDelete { get; init; }`
 
 ## `Orleans.Lattice.Api.Auth`
 
@@ -1713,7 +1787,7 @@ Implemented by [`Orleans.Lattice.Api.Replication`](../lattice.api.replication/ap
 
 ### `ReplicationDisableResult`
 
-[Source](../../src/lattice.api.abstractions/Replication/Model/ReplicationDisableResult.cs) (line 16).
+[Source](../../src/lattice.api.abstractions/Replication/Model/ReplicationDisableResult.cs) (line 15).
 
 `public sealed record ReplicationDisableResult`
 
@@ -1723,7 +1797,7 @@ Implemented by [`Orleans.Lattice.Api.Replication`](../lattice.api.replication/ap
 
 ### `ReplicationEnableResult`
 
-[Source](../../src/lattice.api.abstractions/Replication/Model/ReplicationEnableResult.cs) (line 14).
+[Source](../../src/lattice.api.abstractions/Replication/Model/ReplicationEnableResult.cs) (line 13).
 
 `public sealed record ReplicationEnableResult`
 
@@ -2157,7 +2231,7 @@ Implemented by [`Orleans.Lattice.Api.Telemetry`](../lattice.api.telemetry/README
 
 ## `Orleans.Lattice.Api.TreeAdmin`
 
-Implemented by [`Orleans.Lattice.Api.TreeAdmin`](../lattice.api.treeadmin/api.md) and exposed remotely by [`Orleans.Lattice.Api.TreeAdmin.Grpc`](../lattice.api.treeadmin.grpc/README.md). 68 public types.
+Implemented by [`Orleans.Lattice.Api.TreeAdmin`](../lattice.api.treeadmin/api.md) and exposed remotely by [`Orleans.Lattice.Api.TreeAdmin.Grpc`](../lattice.api.treeadmin.grpc/README.md). 73 public types.
 
 | Type | Kind | Summary |
 |---|---|---|
@@ -2184,6 +2258,7 @@ Implemented by [`Orleans.Lattice.Api.TreeAdmin`](../lattice.api.treeadmin/api.md
 | `TreeBulkLoadChunkAck` | sealed record | The acknowledgement of a single appended bulk-load chunk from `AppendBulkLoadAsync`. |
 | `TreeBulkLoadResult` | sealed record | The result of finalizing a resumable bulk-load session with `CommitBulkLoadAsync`. |
 | `TreeBulkLoadSession` | sealed record | The result of opening a resumable bulk-load (tree creation) session with `BeginBulkLoadAsync`. |
+| `TreeBulkLoadStreamOptions` | sealed record | Shapes a streamed bulk load through `BulkLoadStreamAsync`: how many entries each chunk carries, the chunk index the stream starts at, and - for a transport binding that streams the chunks over the wire - how many chunks may be in flight unacknowledged and how many times a broken stream is resumed. |
 | `TreeCompactionTriggerResult` | sealed record | The outcome of an operator-triggered tombstone-compaction pass scoped to a single physical shard. |
 | `TreeConfigurationReport` | sealed record | A read-only snapshot of a tree's registry-backed configuration: its structural sizing pins, its alias target, and its per-tree runtime overrides (publish-events, projection-digest maintenance, durable-history retention, WAL retained-byte ceiling). |
 | `TreeConfigurationUpdate` | sealed record | A partial update to a tree's per-tree registry configuration. |
@@ -2217,6 +2292,10 @@ Implemented by [`Orleans.Lattice.Api.TreeAdmin`](../lattice.api.treeadmin/api.md
 | `TreeTagReconcileReport` | sealed record | The idempotent outcome of an operator-driven tag-index reconciliation sweep, pairing the index identity with the counts the core reconcile pass reports: how much of the covered keyspace was inspected and how many orphaned membership rows were repaired. |
 | `TreeViewCatalog` | sealed record | The result of listing the cluster's runtime-registered materialised views: a snapshot of every durable runtime-view registration. |
 | `TreeViewInfo` | sealed record | A single entry in the materialised-view catalog listing, describing one runtime-registered view's identity and shape. |
+| `TreeViewProviderCatalog` | sealed record | The runtime-view projection providers a caller may create a view with over one source tree (`ListViewProvidersAsync`): every provider the cluster's host registered, with its description and the shape of its payload. A pure projection; provider code is never run to produce it. |
+| `TreeViewProviderField` | sealed record | One property of a described provider's JSON payload object. |
+| `TreeViewProviderFieldKind` | enum | The JSON value type of a `TreeViewProviderField`: `Text`, `Number` or `Boolean`. |
+| `TreeViewProviderInfo` | sealed record | One host-registered runtime-view projection provider, as `ListViewProvidersAsync` lists it. |
 | `TreeViewReconcileResult` | sealed record | The outcome of a materialised-view reconcile: view anti-entropy that builds the expected view from current source state into a shadow generation, compares it against the live view via a content digest, and swaps the shadow in (repairing the view) only when they diverge. |
 | `TreeViewStatus` | sealed record | The read-only status of a single materialised view, returned by the view status read and the view rebuild verb. |
 | `TreeWalFloorHolder` | sealed record | The durable write-ahead-log materialiser pin holding a tree's WAL floor, and the leaf behind it. |

@@ -1678,6 +1678,57 @@
       ],
       "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeSnapshotStatus.cs#TreeSnapshotStatus"
     },
+    "TreeStorageUsageSnapshot": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "WalRetainedBytes",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "SnapshotBytes",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "LeafStateBytes",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "TotalBytes",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "Partial",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "LiveKeys",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "SampledAt",
+          "type": "DateTimeOffset",
+          "required": true
+        },
+        {
+          "name": "Stale",
+          "type": "bool",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeStorageUsageSnapshot.cs#TreeStorageUsageSnapshot"
+    },
     "TreeStatsReport": {
       "kind": "record",
       "fields": [
@@ -6041,6 +6092,22 @@
       "grpc_status": "Unavailable",
       "retryable": true,
       "meaning": "A silo was unavailable or rejected the message, or a remote enumerator was lost to a grain deactivation mid-read: a transient cluster fault. Retry after a short backoff (#5742).",
+      "source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcService.cs#ToRpcException"
+    },
+    {
+      "id": "saturated",
+      "type": "LatticeSaturatedException",
+      "grpc_status": "ResourceExhausted",
+      "retryable": true,
+      "meaning": "Storage back-pressure: the store refused the call on purpose and nothing was applied. Retry after a short backoff (#5722, #5723).",
+      "source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcService.cs#ToRpcException"
+    },
+    {
+      "id": "wal-quiescing",
+      "type": "LatticeWalQuiescingException",
+      "grpc_status": "Unavailable",
+      "retryable": true,
+      "meaning": "A WAL shard is briefly quiesced for a placement move: the write was refused without being applied, and the shard accepts writes again once the move lifts its fence. Retry after a short backoff (#5800).",
       "source": "src/lattice.api.treeadmin.grpc/LatticeTreeAdminGrpcService.cs#ToRpcException"
     },
     {

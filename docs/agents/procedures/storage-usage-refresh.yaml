@@ -51,7 +51,7 @@ steps:
   - n: 5
     action: "Read the refreshed per-tree figures with the cheap storage-usage read (deep false)."
     api: "ILatticeTreeAdmin.GetStorageUsageAsync / GetStorageUsage / lattice_treeadmin_storage_usage"
-    expects: "Returns per-tree WAL, snapshot, leaf-state and total bytes with each tree's SampledAt and Partial flag."
+    expects: "Returns per-tree WAL, snapshot, leaf-state and total bytes with each tree's SampledAt, Partial and Stale flags, and a cluster-level Stale flag set when any tree's figures are carried."
     source: "docs/lattice.api.treeadmin/operations.md"
   - n: 6
     action: "To abandon a running refresh, request cancellation and poll status until it reads Cancelled."
@@ -63,6 +63,10 @@ postconditions:
     source: "src/lattice.api.treeadmin/LatticeStorageUsageOperations.cs#LatticeStorageUsageOperations.RefreshAsync"
   - check: "partial true means at least one tree reported a partial reading, so the cluster totals are a lower bound."
     source: "src/lattice.api.abstractions/TreeAdmin/Model/ClusterStorageUsageSummary.cs#Partial"
+  - check: "A WAL partition whose retained-byte scan was refused under LatticeOptions.MaxConcurrentWalUsageScansPerSilo, or failed, reports its last measured figure if it is no more than five minutes old; the tree's report is then Stale (an estimate) rather than Partial, and only past five minutes does the partition contribute nothing and flag Partial."
+    source: "src/lattice/BPlusTree/TreeStorageUsageReport.cs#TreeStorageUsageReport.Stale"
+  - check: "The refresh's result map carries no stale key, so the summary StorageUsageRefreshResults.TryReadSummary rebuilds always reports Stale false; read Stale from the cheap per-tree read."
+    source: "src/lattice.api.abstractions/TreeAdmin/StorageUsageRefreshResults.cs#TryReadSummary"
   - check: "Each tree's total bytes sum its physical WAL bytes, snapshot bytes and leaf-state bytes, so totalBytes can exceed walRetainedBytes plus snapshotBytes plus leafStateBytes."
     source: "src/lattice/BPlusTree/TreeStorageUsageReport.cs#TreeStorageUsageReport.TotalBytes"
   - check: "Each measured tree's report is cached by its aggregator; a cheap read within LatticeOptions.StorageUsageCacheTtl (10 seconds by default) of that tree's sample returns the refreshed report."

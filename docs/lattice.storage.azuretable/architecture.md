@@ -141,9 +141,9 @@ Every `Orleans.Lattice.Storage.AzureTable` release from 10.0.0 to 10.2.0 with pi
 
 For every tree whose WAL is on Azure Table:
 
-- **Views.** Reconcile each view (`ILatticeView.ReconcileAsync`, or `lattice_treeadmin_view_reconcile_start`), and rebuild (`lattice_treeadmin_view_rebuild_start`) any that still lags or differs from its source.
+- **Views.** Reconcile each view (`ILatticeView.ReconcileAsync`, or `lattice_treeadmin_view_reconcile_start`), and rebuild (`ILatticeView.RebuildAsync`, or `lattice_treeadmin_view_rebuild_start`) any that still lags or differs from its source.
 - **Replication.** Re-seed every peer the tree replicates to - see the [replication re-seed procedure](../agents/procedures/replication-reseed.yaml) - or, where anti-entropy is enabled, let its [digest probe](../lattice.replication/anti-entropy-digest-probe.md) localise and repair divergence.
-- **Leaves.** Compare each shard's projection digest (`GetProjectionDigestAsync`, or `lattice_treeadmin_projection_digest`) with a replica's, or with a copy restored from a backup taken before the upgrade, and repair a shard that differs: restore it from the backup, or, in an active-active topology, let anti-entropy on a peer that holds the writes repair it. Skipped entries stay in the WAL until garbage collection trims them, but no public operation re-replays them into a leaf yet ([#6040](https://github.com/NSTA1/Orleans.Lattice/issues/6040) tracks a bounded repair), so do not plan on recovering them from the log.
+- **Leaves.** Compare each shard's projection digest (`ILatticeTreeAdmin.GetProjectionDigestAsync`, or `lattice_treeadmin_projection_digest`) with a replica's, or with a copy restored from a backup taken before the upgrade, and repair a shard that differs: restore it from the backup, or, in an active-active topology, let anti-entropy on a peer that holds the writes repair it. Skipped entries stay in the WAL until garbage collection trims them, but no public operation re-replays them into a leaf yet ([#6040](https://github.com/NSTA1/Orleans.Lattice/issues/6040) tracks a bounded repair), so do not plan on recovering them from the log.
 
 ### Trim and the sweep
 

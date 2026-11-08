@@ -37,6 +37,7 @@ The service maps facade outcomes to stable gRPC status codes so a client sees a 
 | `LatticeReplicationModeChangeRejectedException` | `FailedPrecondition` |
 | `LatticeReplicationPeerStillConfiguredException` (`DecommissionPeer` while the peer is still in `ReplicationPeers`) | `FailedPrecondition` |
 | `ArgumentException` (for example a null / empty tree id) | `InvalidArgument` |
+| `LatticeSaturatedException` (storage back-pressure; nothing was applied, retry after a short backoff, #5723) | `ResourceExhausted` |
 | `OperationCanceledException` | `Cancelled` |
 | `TimeoutException` (a grain call timed out; outcome unknown, logged at Warning) | `DeadlineExceeded` |
 | `OrleansMessageRejectionException` (including `SiloUnavailableException`) or `EnumerationAbortedException` (transient, logged at Warning) | `Unavailable` |

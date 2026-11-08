@@ -109,11 +109,22 @@ fields, in this order:
 3. `lww.Timestamp.Counter` (`Int32`, little-endian)
 4. `lww.IsTombstone` (`byte`, `0x00` or `0x01`)
 5. `lww.ExpiresAtTicks` (`Int64`, little-endian - `0` when unset)
-6. `lww.OriginClusterId` (length-prefixed UTF-8, `-1` sentinel for null)
-7. `lww.VectorClock` (a deterministic ordinal-sorted feed of every
+6. `lww.VectorClock` (a deterministic ordinal-sorted feed of every
    `(replicaId, hlc.WallClockTicks, hlc.Counter)` triple, or `-1` sentinel
    when null/empty)
-8. `lww.Value` (length-prefixed bytes - `-1` sentinel for tombstones)
+7. `lww.Value` (length-prefixed bytes - `-1` sentinel for tombstones)
+
+The entry's origin cluster id is deliberately **not** folded in. It is
+observer-relative - the authoring cluster stores its own write with a null
+origin and every peer stores the author's id - so folding it made two clusters
+holding the same converged rows disagree on every authored row, and the
+anti-entropy probe could never report a match
+([#5539](https://github.com/NSTA1/Orleans.Lattice/issues/5539)). This is
+contribution-function version `1` (`LeafProjectionDigest.CurrentVersion`);
+version `0`, the original shape, folded the origin, so a version-0 digest is
+never comparable with a version-1 one. A leaf whose persisted running hash was
+produced by another version recomputes it from its entries before maintaining it
+incrementally again, and publishes the recomputed fold upward.
 
 The per-entry contributions are XOR-folded into a 16-byte running hash
 that is **maintained incrementally on every mutation** and persisted on
@@ -148,8 +159,8 @@ The digest is byte-stable across silos because every input is canonicalised:
 - All numeric fields use little-endian framing via `BinaryPrimitives`.
 - All strings use `Encoding.UTF8`, length-prefixed with an `Int32`.
 - Length-prefix sentinels (`-1`) distinguish tombstone from empty value
-  and null-string from empty-string so adjacent variable-length fields
-  cannot collide.
+  and a missing or empty vector clock from a populated one, so adjacent
+  variable-length fields cannot collide.
 - `VersionVector` keys are sorted with `StringComparer.Ordinal` before
   feeding so dictionary insertion order does not perturb the output.
 

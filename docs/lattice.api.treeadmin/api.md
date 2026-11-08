@@ -97,6 +97,10 @@ The following inventory includes directly declared public members and overloads,
 - `public const string TreeViewInfo`
 - `public const string TreeViewCatalog`
 - `public const string TreeViewReconcileResult`
+- `public const string TreeViewProviderCatalog`
+- `public const string TreeViewProviderInfo`
+- `public const string TreeViewProviderField`
+- `public const string TreeViewProviderFieldKind`
 - `public const string TreeTagIndexInfo`
 - `public const string TreeTagIndexCatalog`
 - `public const string TreeTagIndexStatus`
@@ -906,6 +910,46 @@ The following inventory includes directly declared public members and overloads,
 - `public bool Accumulative { get; init; }`
 - `public string? ProviderKey { get; init; }`
 - `public string? ProjectionVersion { get; init; }`
+
+### `Orleans.Lattice.Api.TreeAdmin.TreeViewProviderCatalog`
+
+[Source](../../src/lattice.api.abstractions/TreeAdmin/Model/TreeViewProviderCatalog.cs) (line 14).
+
+`public sealed record TreeViewProviderCatalog`
+
+- `public ImmutableArray<TreeViewProviderInfo> Providers { get; init; }`
+
+### `Orleans.Lattice.Api.TreeAdmin.TreeViewProviderField`
+
+[Source](../../src/lattice.api.abstractions/TreeAdmin/Model/TreeViewProviderField.cs) (line 7).
+
+`public sealed record TreeViewProviderField`
+
+- `public required string Name { get; init; }`
+- `public required string Label { get; init; }`
+- `public string? Description { get; init; }`
+- `public bool Required { get; init; }`
+- `public TreeViewProviderFieldKind Kind { get; init; }`
+
+### `Orleans.Lattice.Api.TreeAdmin.TreeViewProviderFieldKind`
+
+[Source](../../src/lattice.api.abstractions/TreeAdmin/Model/TreeViewProviderFieldKind.cs) (line 6).
+
+`public enum TreeViewProviderFieldKind`
+
+- `Text = 0`
+- `Number = 1`
+- `Boolean = 2`
+
+### `Orleans.Lattice.Api.TreeAdmin.TreeViewProviderInfo`
+
+[Source](../../src/lattice.api.abstractions/TreeAdmin/Model/TreeViewProviderInfo.cs) (line 12).
+
+`public sealed record TreeViewProviderInfo`
+
+- `public required string ProviderKey { get; init; }`
+- `public string? Description { get; init; }`
+- `public ImmutableArray<TreeViewProviderField> PayloadFields { get; init; }`
 
 ### `Orleans.Lattice.Api.TreeAdmin.TreeViewReconcileResult`
 

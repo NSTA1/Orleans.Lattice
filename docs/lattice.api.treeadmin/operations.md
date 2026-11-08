@@ -133,11 +133,11 @@ The optional `operationId` makes a start idempotent: a retried start with the sa
 |---|---|---|
 | `treeadmin.storage-usage-refresh` (`StorageUsageRefreshOperation.Kind`) | `Measuring` | `trees` measured against the number of registered trees. |
 
-Each tree is measured with its cache bypassed, through the same per-tree aggregator and under the same concurrency bound (`LatticeOptions.MaxConcurrentStorageUsageTrees`) as the blocking roll-up. A tree that cannot be measured contributes a flagged partial reading, as it does in the roll-up, rather than failing the refresh.
+Each tree is measured with its cache bypassed, through the same per-tree aggregator and under the same concurrency bound (`LatticeOptions.MaxConcurrentStorageUsageTrees`) as the blocking roll-up. A tree that cannot be measured contributes a flagged partial reading, as it does in the roll-up, rather than failing the refresh. A WAL partition whose retained-byte scan is refused under `LatticeOptions.MaxConcurrentWalUsageScansPerSilo`, or fails, instead reports its last measured figure when that is no more than five minutes old, which flags the tree `Stale` rather than partial (see [Tree storage](../lattice/tree-storage.md#measuring-retained-storage-at-runtime)).
 
 ### Results
 
-The operation records no result reference. Its `Result` map holds the cluster totals only, under the `StorageUsageRefreshResults` keys `treeCount`, `walRetainedBytes`, `snapshotBytes`, `leafStateBytes`, `totalBytes`, `partial` and `sampledAt`, so it stays small however many trees the cluster holds. `StorageUsageRefreshResults.TryReadSummary` rebuilds them as a `ClusterStorageUsageSummary` with `Deep` set and no per-tree rows. Read the refreshed per-tree figures afterwards with the cheap `GetStorageUsageAsync(deep: false)`, which serves what the refresh just measured.
+The operation records no result reference. Its `Result` map holds the cluster totals only, under the `StorageUsageRefreshResults` keys `treeCount`, `walRetainedBytes`, `snapshotBytes`, `leafStateBytes`, `totalBytes`, `partial` and `sampledAt`, so it stays small however many trees the cluster holds. `StorageUsageRefreshResults.TryReadSummary` rebuilds them as a `ClusterStorageUsageSummary` with `Deep` set and no per-tree rows. The map records no stale flag, so the rebuilt summary always reports `Stale` as `false`; the cheap read reports it per tree and for the cluster. Read the refreshed per-tree figures afterwards with the cheap `GetStorageUsageAsync(deep: false)`, which serves what the refresh just measured.
 
 ### Example
 

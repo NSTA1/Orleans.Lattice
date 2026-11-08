@@ -150,6 +150,8 @@ Each RPC wraps the facade DTOs in one of these Orleans-serialized request / resp
 | `BackupHealthReportResponse` | `bool Found`, `BackupHealthReport? Report`. |
 | `BackupHealthConfigureRequestMessage` | `required string BackupId`, `bool MonitoringEnabled`, `long IntervalTicks`. |
 | `BackupHealthConfigureResponse` | (empty). |
+| `BackupHealthConfigGetRequestMessage` | `required string BackupId` - the backup whose stored monitor settings `GetBackupHealthConfig` reads. |
+| `BackupHealthConfigResponse` | `bool Found`, `BackupHealthConfig? Config` - the backup's effective monitor settings: the stored override, or the deployment default when none was stored. An unknown backup has `Found` `false` and a null `Config`. |
 | `BackupOperationRequestMessage` | `required string OperationId` - used by `GetBackupOperationStatus` and `CancelBackupOperation`. |
 | `BackupOperationStatusResponse` | `LatticeOperationStatus? Status` - absent when the operation is unknown or not visible. |
 | `BackupCatalogRebuildRequestMessage` | `string? TrackingOperationId` - the `StartCatalogRebuild` idempotency id. |

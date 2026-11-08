@@ -117,7 +117,8 @@ The transport authorizer receives a `LatticeAuthApiAuthorizationContext` naming 
 | `InvalidArgument` | The facade threw an `ArgumentException` - for example the policy store rejecting a rule shape it will not persist, a `LatticeAppOwnedRuleException` for a write or delete of an app-owned (`app:`) rule id, or a `LatticeDirectoryValidationException` from identity-directory validation. The status detail is the exception message. |
 | `Cancelled` | The call was cancelled, including while the transport authorizer was deciding. |
 | `DeadlineExceeded` | A grain call timed out inside the cluster, so the outcome is unknown and a write may already have applied. Retry an idempotent read; confirm state before retrying a write. Logged at Warning (#5742). |
-| `Unavailable` | A silo was unavailable or rejected the message, or a remote enumerator was lost to a grain deactivation mid-read: a transient cluster fault. Retry after a short backoff. Logged at Warning (#5742). |
+| `ResourceExhausted` | The facade threw `LatticeSaturatedException`. Storage back-pressure: the store refused the call on purpose and nothing was applied. Retry after a short backoff (#5723). |
+| `Unavailable` | A silo was unavailable or rejected the message, or a remote enumerator was lost to a grain deactivation mid-read: a transient cluster fault. Retry after a short backoff. Logged at Warning (#5742). Also a WAL shard briefly quiesced for a placement move (`LatticeWalQuiescingException`): the write was refused without being applied and the shard accepts writes again once the move lifts its fence. Logged at Warning (#5800). |
 | `Internal` | Any other failure. The server logs it and returns a generic message. |
 
 ## Quick Start

@@ -1839,6 +1839,14 @@
       "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#InvokeAsync"
     },
     {
+      "id": "wal-quiescing",
+      "type": "LatticeWalQuiescingException",
+      "grpc_status": "Unavailable",
+      "retryable": true,
+      "meaning": "A WAL shard is briefly quiesced for a placement move: the write was refused without being applied, and the shard accepts writes again once the move lifts its fence. Retry after a short backoff (#5800).",
+      "source": "src/lattice.api.data.grpc/LatticeDataApiGrpcService.cs#InvokeAsync"
+    },
+    {
       "id": "crdt-shape-not-registered",
       "type": "LatticeCrdtShapeNotRegisteredException",
       "grpc_status": "FailedPrecondition",

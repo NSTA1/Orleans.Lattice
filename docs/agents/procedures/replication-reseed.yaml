@@ -18,6 +18,9 @@ preconditions:
   - id: fall-off-detected-or-reseed-needed
     check: "Fall-off exists when the receiver high-water mark is strictly less than the sender oldest retained WAL HLC, or an operator has chosen re-seed for a new peer or recovery."
     source: "docs/lattice.replication/auto-bootstrap.md"
+  - id: hidden-entries-remediation
+    check: "A tree whose WAL is on Azure Table and that replicated under Orleans.Lattice.Storage.AzureTable 10.0.0-10.2.0 may have peers that never received entries a stale cached trim watermark hid from the shipper (issue #6036); after upgrading, re-seed every peer it replicates to unless anti-entropy is enabled to localise and repair divergence. A nonzero outcome=recovered on orleans.lattice.replication.ship.holes_skipped shows the shipper repairing such a range as it ships."
+    source: "docs/lattice.storage.azuretable/architecture.md"
   - id: transport-authenticated
     check: "The remote snapshot gRPC calls carry an accepted shared secret and the origin header required by transport security."
     source: "docs/lattice.replication/transport-security.md"
@@ -98,6 +101,7 @@ sources:
   - "src/lattice.replication/Grains/LatticeBootstrapCoordinatorGrain.cs"
   - "docs/lattice.replication/snapshot-bootstrap.md"
   - "docs/lattice.replication/auto-bootstrap.md"
+  - "docs/lattice.storage.azuretable/architecture.md"
   - "docs/lattice.replication/transport-security.md"
   - "src/lattice.replication/ILatticeReplicationAdmin.cs"
   - "src/lattice.replication/LatticeReplicationAdmin.cs"

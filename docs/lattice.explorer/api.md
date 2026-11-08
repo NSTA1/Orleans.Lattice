@@ -118,7 +118,7 @@ This index lists every effectively public type and each member declared directly
 
 ### Orleans.Lattice.Explorer assemblies
 
-#### `Orleans.Lattice.Explorer.Core` (167 exported types)
+#### `Orleans.Lattice.Explorer.Core` (169 exported types)
 - `Orleans.Lattice.Explorer.Core.Authentication.BasicExplorerAuthMethod`
   - `constructors (1)`; `CanHandle`; `ChallengeAsync`; `SchemeId`
 - `Orleans.Lattice.Explorer.Core.Authentication.ExplorerAccessToken`
@@ -348,7 +348,7 @@ This index lists every effectively public type and each member declared directly
 - `Orleans.Lattice.Explorer.Core.History.HistoryRevisionRow`
   - `constructors (1)`; `<Clone>$`; `Category`; `Diff`; `EndKey`; `Equals (2 overloads)`; `From`; `FromLive`; `GetHashCode`; `Hlc`; `IsLiveTail`
     `IsSnapshot`; `Kind`; `MemberChanges`; `Mode`; `op_Equality`; `op_Inequality`; `OriginClusterId`; `Position`; `RenderMode`; `RetentionChange`
-    `RetentionMode`; `ToString`; `Truncated`; `Value`; `ValueHash`; `ValueLength`; `ValueRetained`
+    `RetentionMode`; `SchemaVersion`; `ToString`; `Truncated`; `Value`; `ValueHash`; `ValueLength`; `ValueRetained`
 - `Orleans.Lattice.Explorer.Core.History.HistoryRowRenderMode`
   - `CrdtMembers`; `Delete`; `LiveTail`; `MetadataOnly`; `RangeTombstone`; `value__`; `ValueDiff`
 - `Orleans.Lattice.Explorer.Core.History.HistoryTimeline`
@@ -521,7 +521,7 @@ This index lists every effectively public type and each member declared directly
     `TagIndexesLabel`; `TelemetryArea`; `TenantAdministrationArea`; `TenantAdministrationAreaShort`; `TenantGrantAudience`; `TreesLabel`
     `ViewsLabel`; `ViewsLongLabel`
 
-#### `Orleans.Lattice.Explorer.UI` (188 exported types)
+#### `Orleans.Lattice.Explorer.UI` (194 exported types)
 - `Orleans.Lattice.Explorer.UI._Imports`
   - `constructors (1)`
 - `Orleans.Lattice.Explorer.UI.Areas.Access._Imports`
@@ -547,7 +547,7 @@ This index lists every effectively public type and each member declared directly
 - `Orleans.Lattice.Explorer.UI.Areas.Access.AccessRuleTable`
   - `constructors (1)`; `Caption`; `CaptionHidden`; `DecidingRuleId`; `EmptyText`; `Rules`; `Tenant`; `TenantRules`
 - `Orleans.Lattice.Explorer.UI.Areas.Access.AccessSubjectPicker`
-  - `constructors (1)`; `AllowKindChange`; `ConfirmAsync`; `DirectoryAvailable`; `DirectoryExplanation`; `DirectorySearchDenied`; `Disabled`
+  - `constructors (1)`; `AllowKindChange`; `AllowTenantGroups`; `ConfirmAsync`; `DirectoryAvailable`; `DirectoryExplanation`; `DirectorySearchDenied`; `Disabled`
     `Error`; `Id`; `IdChanged`; `Kind`; `KindChanged`; `Label`; `OnPrincipalSelected`; `SubjectKind`; `SubjectKindChanged`; `Tenant`
 - `Orleans.Lattice.Explorer.UI.Areas.Access.Tenant.Explain.TenantExplainLayers`
   - `constructors (1)`; `Explanation`; `Tenant`
@@ -648,6 +648,8 @@ This index lists every effectively public type and each member declared directly
   - `constructors (1)`; `Dispose`; `TreeId`
 - `Orleans.Lattice.Explorer.UI.Areas.Cluster.Pages.ClusterTreeConfiguration`
   - `constructors (1)`; `Capabilities`; `Dispose`; `TreeId`
+- `Orleans.Lattice.Explorer.UI.Areas.Cluster.Pages.ClusterTreeCreateDialog`
+  - `constructors (1)`; `Created`; `Dispose`; `InitialTreeId`; `Open`; `OpenChanged`; `Placement`; `Title`
 - `Orleans.Lattice.Explorer.UI.Areas.Cluster.Pages.ClusterTreeHeader`
   - `constructors (1)`; `ChildContent`; `Heading`; `TreeId`
 - `Orleans.Lattice.Explorer.UI.Areas.Cluster.Pages.ClusterTreeLifecycle`
@@ -672,14 +674,22 @@ This index lists every effectively public type and each member declared directly
   - `constructors (1)`; `Dispose`; `TreeId`
 - `Orleans.Lattice.Explorer.UI.Areas.Data._Imports`
   - `constructors (1)`
+- `Orleans.Lattice.Explorer.UI.Areas.Data.DataCreateViewDialog`
+  - `constructors (1)`; `Dispose`; `OnCreated`; `Open`; `OpenChanged`
 - `Orleans.Lattice.Explorer.UI.Areas.Data.DataDeadLettersPanel`
   - `constructors (1)`; `Dispose`
 - `Orleans.Lattice.Explorer.UI.Areas.Data.DataDirectoryPage`
   - `constructors (1)`; `Dispose`
+- `Orleans.Lattice.Explorer.UI.Areas.Data.DataEntryEditor`
+  - `constructors (1)`; `Dispose`; `Key`; `OnSaved`; `Open`; `OpenChanged`
 - `Orleans.Lattice.Explorer.UI.Areas.Data.DataEntryView`
   - `constructors (1)`; `Dispose`; `Key`; `Version`
+- `Orleans.Lattice.Explorer.UI.Areas.Data.DataExportDialog`
+  - `constructors (1)`; `Dispose`; `Open`; `OpenChanged`; `Placement`; `Prefix`; `TreeId`; `TreeName`
 - `Orleans.Lattice.Explorer.UI.Areas.Data.DataHistoryPanel`
   - `constructors (1)`; `Dispose`
+- `Orleans.Lattice.Explorer.UI.Areas.Data.DataImportDialog`
+  - `constructors (1)`; `CanSeed`; `CanUpsert`; `Dispose`; `Imported`; `Open`; `OpenChanged`; `Placement`; `SeedFirst`; `TreeId`; `TreeName`
 - `Orleans.Lattice.Explorer.UI.Areas.Data.DataKeysPanel`
   - `constructors (1)`; `Dispose`
 - `Orleans.Lattice.Explorer.UI.Areas.Data.DataMetricsPanel`
@@ -781,7 +791,7 @@ This index lists every effectively public type and each member declared directly
   - `End`; `Start`; `value__`
 - `Orleans.Lattice.Explorer.UI.Design.Components.LtComboBox`
   - `constructors (1)`; `AdditionalAttributes`; `ConfirmAsync`; `DefaultLimit`; `Disabled`; `DisposeAsync`; `Error`; `ExistingMessage`; `FocusAsync`
-    `Hint`; `InputId`; `Label`; `Leading`; `Limit`; `Mode`; `Mono`; `Noun`; `OnChoose`; `OnCommit`; `OnDismiss`; `OpenOnFocus`; `Placeholder`
+    `Hint`; `InputId`; `Label`; `Leading`; `Limit`; `MissingMessage`; `Mode`; `Mono`; `Noun`; `OnChoose`; `OnCommit`; `OnDismiss`; `OpenOnFocus`; `Placeholder`
     `ReadOnly`; `RejectExisting`; `Source`; `Value`; `ValueChanged`
 - `Orleans.Lattice.Explorer.UI.Design.Components.LtComboBoxMode`
   - `PickExisting`; `Suggest`; `value__`
@@ -883,6 +893,8 @@ This index lists every effectively public type and each member declared directly
   - `constructors (1)`; `Dispose`
 - `Orleans.Lattice.Explorer.UI.Layout.AppearanceMenu`
   - `constructors (1)`; `Dispose`
+- `Orleans.Lattice.Explorer.UI.Layout.AreaRecheckNotice`
+  - `constructors (1)`; `Dispose`
 - `Orleans.Lattice.Explorer.UI.Layout.DirectorySpine`
   - `constructors (1)`; `OnNavigate`; `Rail`
 - `Orleans.Lattice.Explorer.UI.Layout.ExplorerPage`
@@ -910,7 +922,7 @@ This index lists every effectively public type and each member declared directly
 - `Orleans.Lattice.Explorer.UI.Session.ReauthInterstitial`
   - `constructors (1)`
 - `Orleans.Lattice.Explorer.UI.Session.ResetPage`
-  - `constructors (1)`
+  - `constructors (1)`; `Tenant`
 - `Orleans.Lattice.Explorer.UI.Session.SessionOverlay`
   - `constructors (1)`; `Dispose`
 - `Orleans.Lattice.Explorer.UI.Session.SignInDialog`

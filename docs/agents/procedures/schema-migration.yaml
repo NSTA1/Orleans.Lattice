@@ -192,6 +192,8 @@ concurrency:
     source: "docs/lattice.schema/schema-versioning.md"
   - rule: "An in-flight migration holds the tree's alias reservation, so a delete and an explicit set-alias of the tree are refused, and a migration of a deleted or delete-pending tree is refused."
     source: "docs/lattice.schema/schema-versioning.md"
+  - rule: "A tracked remediation or migration started while another alias operation (a resize, a replication bootstrap copy, a restore or its revert, or another remediation) holds the tree's alias reservation does not fail: it stays Running in phase WaitingForAliasOperation, retrying the accept with a backoff, until the holder releases it, and fails with the refusal naming the holder once the wait would pass LatticeSchemaEnforcementOptions.AliasReservationWaitTimeout (15 minutes by default). A cancel ends the wait. The blocking in-process verbs never wait."
+    source: "docs/lattice.api.schema/operations.md"
   - rule: "Work runs in bounded slices from a durable cursor; a cancel takes effect between slices and is declined during cutover."
     source: "docs/lattice.api.schema/operations.md"
   - rule: "A compliance scan leaves the tree writable; when writes pass the counted total the total becomes null."
