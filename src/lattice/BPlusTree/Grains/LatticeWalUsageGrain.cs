@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
 
@@ -17,9 +18,12 @@ internal sealed class LatticeWalUsageGrain(
     IGrainFactory grainFactory,
     LatticeOptionsResolver optionsResolver,
     LatticeStorageUsageMetrics metrics,
-    ILogger<LatticeWalUsageGrain> logger) : ILatticeWalUsage
+    ILogger<LatticeWalUsageGrain> logger,
+    TimeProvider? timeProvider = null) : ILatticeWalUsage
 {
     private string TreeId => context.GrainId.Key.ToString()!;
+
+    private TimeProvider Time => timeProvider ?? TimeProvider.System;
 
     // Per-activation cached report + single-flight in-flight task. Both are
     // gated by the tree's StorageUsageCacheTtl (default 10s). Concurrent
@@ -34,13 +38,23 @@ internal sealed class LatticeWalUsageGrain(
     private TreeWalUsageReport? _cached;
     private Task<TreeWalUsageReport>? _inFlight;
 
+    /// <summary>
+    /// Each partition's last measured figures, carried over a refused or failed
+    /// scan for up to <see cref="WalPartitionUsageCarry.MaxCarryAge"/> (issue
+    /// #6017). Activation state only.
+    /// </summary>
+    private readonly WalPartitionUsageCarry _carry = new();
+
+    /// <summary>Whether this activation has zero-primed the refused-scan counter.</summary>
+    private bool _refusalsPrimed;
+
     /// <inheritdoc />
     public async Task<TreeWalUsageReport> GetWalUsageAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
         var ttl = optionsResolver.GetConfiguredOptions(TreeId).StorageUsageCacheTtl;
-        var now = DateTimeOffset.UtcNow;
+        var now = Time.GetUtcNow();
 
         // Cache hit: serve the most recent report and re-publish it to
         // the metrics sink so a sibling silo's poller can keep the gauge
@@ -56,87 +70,162 @@ internal sealed class LatticeWalUsageGrain(
 
         // Single-flight: a concurrent caller arriving while a fan-out is
         // already in progress shares the in-flight task rather than
-        // launching a parallel one.
-        if (_inFlight is { } pending)
+        // launching a parallel one. The fan-out runs under its own budget,
+        // never under a caller's token: a caller that cancels (or whose grain
+        // call times out) only stops waiting, and the shared fan-out still
+        // answers the others. A completed or faulted fan-out is never reused.
+        var pending = _inFlight;
+        if (pending is null || pending.IsCompleted)
         {
-            return await pending;
+            pending = BuildReportAsync();
+            _inFlight = pending;
         }
 
-        _inFlight = BuildReportAsync(cancellationToken);
-        return await _inFlight;
+        return await pending.WaitAsync(cancellationToken);
     }
 
-    private async Task<TreeWalUsageReport> BuildReportAsync(CancellationToken cancellationToken)
+    /// <summary>
+    /// The wall-clock budget for one fan-out: the lesser of the cluster-wide
+    /// <see cref="LatticeOptions.StorageUsageRollupBudget"/> and two thirds of
+    /// the silo's Orleans response timeout, or <see langword="null"/> when
+    /// neither bounds it. Sized below the response timeout so the fan-out is
+    /// cancelled - and its provider scans with it - before the caller's grain
+    /// call gives up on it; an abandoned scan otherwise keeps running and the
+    /// next poll stacks a fresh fan-out on top of it (issue #6017).
+    /// </summary>
+    internal static TimeSpan? ComputeFanOutBudget(TimeSpan rollupBudget, TimeSpan responseTimeout)
     {
-        try
+        TimeSpan? fromResponse = responseTimeout > TimeSpan.Zero && responseTimeout != Timeout.InfiniteTimeSpan
+            ? responseTimeout * 2 / 3
+            : null;
+        TimeSpan? fromRollup = rollupBudget > TimeSpan.Zero ? rollupBudget : null;
+        return (fromResponse, fromRollup) switch
         {
-            // Resolve the physical tree id directly via the registry rather
-            // than through ILattice.GetRoutingAsync. The public ILattice
-            // grain sits in the producer's hot path (every SetAsync /
-            // SetManyAsync routes through it), so polling it on the
-            // storage-usage cadence forces a sync point on a non-reentrant
-            // activation that is otherwise saturated with foreground
-            // mutations. The registry is the source of truth for alias
-            // resolution and is not in the per-write path.
-            var registry = grainFactory.GetLatticeRegistry();
-            // Derive initial options from this fresh topology read, retaining
-            // lazy seeding and the partition cache used below.
-            var (entry, _) = await RegistryEntryOptions.ReadAsync(registry, optionsResolver, TreeId);
-            var physicalTreeId = entry?.PhysicalTreeId ?? TreeId;
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var walPartitions = await optionsResolver.GetWalPartitionsAsync(physicalTreeId);
-            var walTasks = new Task<(long Retained, long Physical)>[walPartitions];
-            for (var partition = 0; partition < walPartitions; partition++)
-            {
-                var wal = grainFactory.GetGrain<IWalShardGrain>($"{physicalTreeId}/{partition}");
-                walTasks[partition] = GetByteSizesAsync(wal, partition, cancellationToken);
-            }
-
-            var walSizes = await Task.WhenAll(walTasks);
-            cancellationToken.ThrowIfCancellationRequested();
-
-            long walRetainedBytes = 0;
-            long walPhysicalBytes = 0;
-            var partial = false;
-            foreach (var (retained, physical) in walSizes)
-            {
-                if (retained < 0)
-                {
-                    partial = true;
-                }
-                else
-                {
-                    walRetainedBytes += retained;
-                }
-
-                if (physical >= 0)
-                {
-                    walPhysicalBytes += physical;
-                }
-            }
-
-            // Runtime ceilings may change during the fan-out: read them again.
-            var options = await optionsResolver.ResolveAsync(TreeId);
-            var report = new TreeWalUsageReport
-            {
-                TreeId = TreeId,
-                WalRetainedBytes = walRetainedBytes,
-                WalPhysicalBytes = walPhysicalBytes,
-                Partial = partial,
-                SampledAt = DateTimeOffset.UtcNow,
-            };
-
-            _cached = report;
-            PublishToMetrics(report, options);
-            return report;
-        }
-        finally
-        {
-            _inFlight = null;
-        }
+            ({ } a, { } b) => a < b ? a : b,
+            ({ } a, null) => a,
+            (null, { } b) => b,
+            _ => null,
+        };
     }
 
+    private async Task<TreeWalUsageReport> BuildReportAsync()
+    {
+        var budget = ComputeFanOutBudget(
+            optionsResolver.GetConfiguredOptions(Options.DefaultName).StorageUsageRollupBudget,
+            optionsResolver.ResponseTimeout);
+        using var budgetSource = budget is { } limit
+            ? new CancellationTokenSource(limit, Time)
+            : new CancellationTokenSource();
+        var budgetToken = budgetSource.Token;
+
+        // Resolve the physical tree id directly via the registry rather
+        // than through ILattice.GetRoutingAsync. The public ILattice
+        // grain sits in the producer's hot path (every SetAsync /
+        // SetManyAsync routes through it), so polling it on the
+        // storage-usage cadence forces a sync point on a non-reentrant
+        // activation that is otherwise saturated with foreground
+        // mutations. The registry is the source of truth for alias
+        // resolution and is not in the per-write path.
+        var registry = grainFactory.GetLatticeRegistry();
+        // Derive initial options from this fresh topology read, retaining
+        // lazy seeding and the partition cache used below.
+        var (entry, _) = await RegistryEntryOptions.ReadAsync(registry, optionsResolver, TreeId);
+        var physicalTreeId = entry?.PhysicalTreeId ?? TreeId;
+
+        var walPartitions = await optionsResolver.GetWalPartitionsAsync(physicalTreeId);
+        var pin = await WalPartitionUsageCarry.ReadPinAsync(optionsResolver, TreeId, physicalTreeId, entry);
+
+        var walTasks = new Task<(long Retained, long Physical, bool BudgetExpired)>[walPartitions];
+        for (var partition = 0; partition < walPartitions; partition++)
+        {
+            var wal = grainFactory.GetGrain<IWalShardGrain>($"{physicalTreeId}/{partition}");
+            walTasks[partition] = GetByteSizesAsync(wal, partition, budgetToken);
+        }
+
+        var walSizes = await Task.WhenAll(walTasks);
+
+        var sampledAt = Time.GetUtcNow();
+        _carry.Begin(WalPartitionUsageCarry.TreeIdentity(physicalTreeId, entry), walPartitions);
+
+        long walRetainedBytes = 0;
+        long walPhysicalBytes = 0;
+        var partial = false;
+        DateTimeOffset? oldestCarried = null;
+        var budgetRefusals = 0;
+        for (var partition = 0; partition < walSizes.Length; partition++)
+        {
+            var (measuredRetained, measuredPhysical, budgetExpired) = walSizes[partition];
+            if (budgetExpired)
+            {
+                budgetRefusals++;
+            }
+
+            var (retained, physical, carriedFrom) = _carry.Resolve(
+                partition,
+                WalPartitionUsageCarry.PartitionIdentity(pin, partition),
+                measuredRetained,
+                measuredPhysical,
+                sampledAt);
+            if (retained < 0)
+            {
+                partial = true;
+            }
+            else
+            {
+                walRetainedBytes += retained;
+            }
+
+            if (physical >= 0)
+            {
+                walPhysicalBytes += physical;
+            }
+
+            if (carriedFrom is { } measuredAt && (oldestCarried is null || measuredAt < oldestCarried))
+            {
+                oldestCarried = measuredAt;
+            }
+        }
+
+        // Runtime ceilings may change during the fan-out: read them again.
+        var options = await optionsResolver.ResolveAsync(TreeId);
+        RecordBudgetRefusals(budgetRefusals);
+
+        var report = new TreeWalUsageReport
+        {
+            TreeId = TreeId,
+            WalRetainedBytes = walRetainedBytes,
+            WalPhysicalBytes = walPhysicalBytes,
+            Partial = partial,
+            SampledAt = sampledAt,
+            Stale = oldestCarried is not null,
+            OldestMeasuredAtUtc = oldestCarried,
+        };
+
+        _cached = report;
+        PublishToMetrics(report, options);
+        return report;
+    }
+
+    /// <summary>
+    /// Zero-primes the refused-scan counter for this tree on the first report
+    /// and counts the partitions whose scan this report's budget cancelled.
+    /// Runs after <see cref="LatticeOptionsResolver.ResolveAsync"/>, so the
+    /// metric tree id is the cached logical one.
+    /// </summary>
+    private void RecordBudgetRefusals(int budgetRefusals)
+    {
+        var metricTreeId = optionsResolver.GetMetricTreeId(TreeId);
+        if (!_refusalsPrimed)
+        {
+            _refusalsPrimed = true;
+            LatticeMetrics.PrimeStorageUsageScansRefused(metricTreeId);
+        }
+
+        for (var i = 0; i < budgetRefusals; i++)
+        {
+            LatticeMetrics.RecordStorageUsageScanRefusedBudget(metricTreeId);
+        }
+    }
     /// <summary>
     /// Publishes the freshly-served WAL report to the observable-gauge sink.
     /// Only the WAL-bytes series and the over-threshold flag are measured
@@ -189,20 +278,31 @@ internal sealed class LatticeWalUsageGrain(
     /// Reads a WAL partition's logical retained total and its physical
     /// occupancy, returning <c>-1</c> for either that is unavailable. Physical
     /// falls back to retained when the provider reports it unsupported, which
-    /// is exact for a backend whose trim deletes rows outright.
+    /// is exact for a backend whose trim deletes rows outright. A read the
+    /// fan-out budget cancelled is also unavailable, and is flagged so the
+    /// caller can count it; the cancellation reaches the partition grain and
+    /// its provider scan, so the scan stops rather than running on unobserved.
+    /// A provider cancelled part-way through a scan throws rather than
+    /// returning the part it summed, so a cancelled scan can never surface as
+    /// a smaller figure.
     /// </summary>
-    private async Task<(long Retained, long Physical)> GetByteSizesAsync(
-        IWalShardGrain wal, int partition, CancellationToken cancellationToken)
+    private async Task<(long Retained, long Physical, bool BudgetExpired)> GetByteSizesAsync(
+        IWalShardGrain wal, int partition, CancellationToken budgetToken)
     {
         try
         {
-            var (retained, physical) = await wal.GetByteSizesAsync(cancellationToken);
-            return (retained, physical < 0 ? retained : physical);
+            var (retained, physical) = await wal.GetByteSizesAsync(budgetToken);
+            return (retained, physical < 0 ? retained : physical, false);
+        }
+        catch (OperationCanceledException) when (budgetToken.IsCancellationRequested)
+        {
+            logger.LogDebug("WAL byte-size read for partition {Partition} in tree {TreeId} was cancelled by the usage fan-out budget", partition, TreeId);
+            return (-1, -1, true);
         }
         catch (Exception ex)
         {
             logger.LogWarning(ex, "WAL byte-size fan-out failed for partition {Partition} in tree {TreeId}", partition, TreeId);
-            return (-1, -1);
+            return (-1, -1, false);
         }
     }
 }

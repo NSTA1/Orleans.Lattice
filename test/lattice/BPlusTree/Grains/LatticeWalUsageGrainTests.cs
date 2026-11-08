@@ -15,7 +15,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// polling.
 /// </summary>
 [TestFixture]
-public sealed class LatticeWalUsageGrainTests
+public sealed partial class LatticeWalUsageGrainTests
 {
     private const string TreeId = "wal-usage-tree";
 
@@ -39,7 +39,8 @@ public sealed class LatticeWalUsageGrainTests
     private LatticeWalUsageGrain CreateGrain(
         IGrainFactory factory,
         out LatticeStorageUsageMetrics metrics,
-        LatticeOptions? options = null)
+        LatticeOptions? options = null,
+        TimeProvider? timeProvider = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("ol.gwu", TreeId));
@@ -59,7 +60,8 @@ public sealed class LatticeWalUsageGrainTests
             factory,
             resolver,
             metrics,
-            Substitute.For<ILogger<LatticeWalUsageGrain>>());
+            Substitute.For<ILogger<LatticeWalUsageGrain>>(),
+            timeProvider);
     }
 
     [Test]

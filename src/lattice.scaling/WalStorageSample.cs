@@ -36,7 +36,10 @@ internal readonly record struct WalTreeSample
 
     /// <summary>
     /// <see langword="true"/> when the tree's WAL byte figure is a lower bound (a
-    /// provider without byte accounting), so the aggregate is a lower bound too.
+    /// provider without byte accounting, or a partition that did not answer and
+    /// had no recent figure to stand in). The collector leaves such a tree out of
+    /// every byte and capacity comparison and counts it in
+    /// <see cref="StoragePressure.ExcludedPartialTrees"/>.
     /// </summary>
     public bool Partial { get; init; }
 

@@ -197,6 +197,7 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`MaxConcurrentSnapshotCaptures`](#maxconcurrentsnapshotcaptures) | `int` | 4 | Yes |
 | [`MaxConcurrentStorageUsageSurfaces`](#maxconcurrentstorageusagesurfaces) | `int` | 16 | Yes |
 | [`MaxConcurrentStorageUsageTrees`](#maxconcurrentstorageusagetrees) | `int` | 8 | Yes (cluster-wide; read from the default options) |
+| [`MaxConcurrentWalUsageScansPerSilo`](#maxconcurrentwalusagescanspersilo) | `int` | 4 | Yes (per silo; read from the default options at silo start) |
 | [`MaxCursorSnapshotPinTtl`](#maxcursorsnapshotpinttl) | `TimeSpan` | 7 days | Yes |
 | [`MaxDurableUnresolvedReplayWork`](#maxdurableunresolvedreplaywork) | `int` | 1 024 | Yes |
 | [`MaxEstimatedBytes`](#maxestimatedbytes) | `long?` | `null` (unbounded) | Yes |
@@ -928,6 +929,21 @@ siloBuilder.ConfigureLattice(o =>
 // A single very wide tree can narrow its own surface fan-out further
 // without changing the cluster-wide roll-up bound.
 siloBuilder.ConfigureLattice("wide-archive", o => o.MaxConcurrentStorageUsageSurfaces = 4);
+```
+
+### `MaxConcurrentWalUsageScansPerSilo`
+
+Maximum number of retained-byte WAL usage scans one silo runs at once, across every tree and WAL partition it hosts (default: 4). On the Azure Table provider a retained-byte scan is a full manifest scan of one WAL partition, against the same table the foreground appends write to. The WAL-usage poll, the deep storage-usage roll-up and `ILattice.GetStorageUsageAsync` all reach it, so without a silo-wide bound their fan-outs multiply into tens of concurrent scans that stall storage for every caller ([#6017](https://github.com/NSTA1/Orleans.Lattice/issues/6017)).
+
+The bound is enforced in the WAL partition grain, where the scan runs, so every usage path is covered. Admission does not queue: a scan that cannot take a slot within a fixed one-second wait is refused, and that partition reports its retained bytes as unavailable for that sample. The storage-usage aggregators then report the partition's last measured figure, if it is no more than five minutes old, and flag the report `Stale`; past five minutes the report is `Partial`, as for any surface that did not answer. Refusals are counted on `orleans.lattice.storage.usage_scans_refused` with `reason = slot`, and `orleans.lattice.storage.usage_scans_in_flight` shows how close the silo runs to the bound (see [Metrics](metrics.md)). The cheap physical-size read is not bounded.
+
+Raising it lets a silo hosting many WAL partitions measure them faster at the cost of more concurrent manifest scans against storage; lowering it protects foreground writes further and leaves more partitions reporting carried figures. Values below 1 are rejected by options validation.
+
+This is a per-silo knob read from the default (unnamed) options when the silo starts; per-tree overrides do not apply, and a changed value takes effect on the next silo start.
+
+```csharp verify
+// Allow at most two concurrent retained-byte WAL scans on this silo.
+siloBuilder.ConfigureLattice(o => o.MaxConcurrentWalUsageScansPerSilo = 2);
 ```
 
 ### `ShedSnapshotOpensWhenSaturated`

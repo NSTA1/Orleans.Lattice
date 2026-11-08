@@ -428,6 +428,18 @@ internal sealed partial class LatticeGrain(
             var report = await grainFactory
                 .GetGrain<ILatticeStorageUsage>(TreeId)
                 .GetReportAsync(forceRefresh: false, CancellationToken.None);
+            // A partial report is a lower bound: a surface that did not answer
+            // contributes nothing to it. Replacing a real sample with it would
+            // lower the figure the caps compare against and admit writes past
+            // them (issue #6017), so a partial report never displaces a
+            // sample this activation already holds. With no sample yet it is
+            // still the best figure available and is taken as before.
+            if (report.Partial && _admHasSample)
+            {
+                _admSampledAt = DateTimeOffset.UtcNow;
+                return;
+            }
+
             _admLiveKeys = report.LiveKeys;
             _admEstimatedBytes = report.TotalBytes;
             _admHasSample = true;

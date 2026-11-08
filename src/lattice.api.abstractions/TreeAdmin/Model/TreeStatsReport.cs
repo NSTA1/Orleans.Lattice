@@ -50,4 +50,12 @@ public sealed record TreeStatsReport
 
     /// <summary>The wall-clock instant the statistics were sampled.</summary>
     [Id(10)] public DateTimeOffset SampledAt { get; init; }
+
+    /// <summary>
+    /// <see langword="true"/> when some WAL partition of the tree did not answer
+    /// in time and its last measured figures, no more than a few minutes old,
+    /// stand in for it, so the byte totals are a recent estimate rather than a
+    /// fresh measurement.
+    /// </summary>
+    [Id(11)] public bool StaleStorage { get; init; }
 }

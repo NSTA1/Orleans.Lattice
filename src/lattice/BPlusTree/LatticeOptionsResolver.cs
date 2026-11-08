@@ -98,6 +98,13 @@ internal sealed class LatticeOptionsResolver(
         siloMessagingOptions?.Value.ResponseTimeout ?? new SiloMessagingOptions().ResponseTimeout;
 
     /// <summary>
+    /// The Orleans response timeout this silo is configured with. Exposed so a
+    /// fan-out that must finish inside one grain call can size its own budget
+    /// below the deadline its caller is held to.
+    /// </summary>
+    internal TimeSpan ResponseTimeout => _responseTimeout;
+
+    /// <summary>
     /// Per-tree cache of the registry-pinned <see cref="LatticeOptions.WalPartitions"/>
     /// value. The pin is established at first <see cref="ILatticeRegistry.RegisterAsync"/>
     /// from the silo's then-current <see cref="LatticeOptions.WalPartitions"/> and is

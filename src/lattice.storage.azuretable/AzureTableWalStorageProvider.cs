@@ -2117,14 +2117,33 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         var manifestFilter =
             $"PartitionKey eq '{Escape(manifestPartitionKey)}' and RowKey ge '{ManifestRowKeyPrefix}' and RowKey lt '{TailRowKey}'";
 
+        return await SumManifestPayloadBytesAsync(table, manifestFilter, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Sums the <c>PayloadBytes</c> column over the manifest rows
+    /// <paramref name="manifestFilter"/> selects. Cancellation is checked on
+    /// every row as well as handed to the query: a pageable that has already
+    /// buffered its next page would otherwise run to the end of it, and a scan
+    /// stopped part-way must throw rather than return the part it had summed,
+    /// which a caller would read as a smaller - and wrong - retained figure
+    /// (issue #6017).
+    /// </summary>
+    internal static async Task<long> SumManifestPayloadBytesAsync(
+        TableClient table,
+        string manifestFilter,
+        CancellationToken cancellationToken)
+    {
         long total = 0L;
         await foreach (var manifestRow in table
             .QueryAsync<AzureTableWalEntity>(manifestFilter, cancellationToken: cancellationToken)
             .ConfigureAwait(false))
         {
+            cancellationToken.ThrowIfCancellationRequested();
             total += manifestRow.PayloadBytes;
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
         return total;
     }
 

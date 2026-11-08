@@ -405,6 +405,20 @@ internal sealed class TenantUsageMeteringService : IHostedService
                         .ConfigureAwait(false);
                 }
 
+                // A partial report is a lower bound: a surface that did not
+                // answer contributes nothing to it. Publishing it in place of the
+                // tree's last footprint would shrink the tenant's accounted usage
+                // and lift its quota ceiling exactly as an unreadable tree would
+                // (issue #6017), so it is treated the same way: the last-known
+                // footprint is retained. A tree never sampled before still
+                // contributes the partial figure, the best one available.
+                if (usage.Partial
+                    && lastKnown is not null
+                    && lastKnown.TryGetValue(treeId, out var retainedSample))
+                {
+                    return (retainedSample, true);
+                }
+
                 var sample = new TreeUsageSample(
                     bytes: usage.TotalBytes,
                     keys: usage.LiveKeys,
