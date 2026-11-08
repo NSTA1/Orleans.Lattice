@@ -1796,12 +1796,12 @@ internal sealed partial class BPlusLeafGrain
     /// queued for.
     /// </para>
     /// <para>
-    /// That premise is #5992's G1, which the retention slice pins: its detector
-    /// <c>A_drive_probe_is_refused_while_a_replay_waiter_is_parked_even_just_after_a_release</c>
-    /// and a hygiene test fixing the replay gate's acquire sites, so a new
-    /// acquire that could overtake a parked waiter fails the build. Until then
-    /// the sites are <see cref="AcquireReplayPermitAsync"/> (and its permit
-    /// re-takes across nested calls), which wait, and
+    /// That premise is #5992's G1, pinned by issue #6006: the detector
+    /// <c>A_drive_probe_is_refused_while_a_replay_waiter_is_parked_even_just_after_a_release</c>,
+    /// and <c>ReplayGateAcquireSiteTests</c>, which fixes the gate's acquire
+    /// sites so a new acquire that could overtake a parked waiter fails the
+    /// build. The sites are <see cref="AcquireReplayPermitAsync"/> and the
+    /// permit re-take in <c>ResumeReplayPermitAsync</c>, which wait, and
     /// <see cref="TryAcquireStarvationReplayPermit"/>, which probes.
     /// </para>
     /// </remarks>
