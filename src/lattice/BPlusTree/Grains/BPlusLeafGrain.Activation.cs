@@ -2280,7 +2280,7 @@ internal sealed partial class BPlusLeafGrain
             {
                 // The timer's limit is one short of the share: a held count the
                 // sweep could still reach is the reserved slot, not a full share.
-                timerReserve = timer && held < StarvationReplayLimit(circulating, StarvationDriveOrigin.WalGcSweep);
+                timerReserve = false;
                 break;
             }
             if (Interlocked.CompareExchange(ref _starvationReplayPermits, held + 1, held) == held)
