@@ -2217,6 +2217,9 @@ internal sealed partial class BPlusLeafGrain
         _replayPermitMetricTreeId = MetricTreeId;
 
         cancellationToken.ThrowIfCancellationRequested();
+        // DO NOT MERGE: #6006 red (b) - an unreviewed second acquire site.
+        if (gate.Wait(0))
+            gate.Release();
         if (!TryAcquireStarvationReplayPermit(gate, origin))
         {
             _replayAdmissionPhase = ReplayAdmissionPhase.RefusedAdmission;
