@@ -437,6 +437,15 @@ never suddenly throttles an existing workload.
   `MaxBytes` and `MaxTreeCount` kept binding. The cost is self-limiting: a large
   tree re-anchors once and then reports non-zero, so only a genuinely empty tree
   that still retains WAL is re-walked, and walking an empty tree is cheap.
+- **A partial reading never lowers a complete footprint.** A tree's storage-usage
+  report is partial - a lower bound - when a surface did not answer, so publishing
+  it in place of the tree's last complete footprint could shrink the tenant's
+  accounted usage and lift its quota ceiling (#6017). Metering therefore holds each
+  tree's last complete footprint and, against a partial report, meters the larger of
+  the two for bytes, keys and memory, so growth the lower bound already shows still
+  counts. Only a complete footprint is held across a partial report, so a tree that
+  reports partial every time is metered from its partial figures rather than frozen
+  at its first reading.
 - **Request rate is enforced with the footprint dimensions.** `MaxOpsPerSecond` is
   applied by the same admission seam, ahead of the footprint checks, from the
   tenant's silo-local token budget. A breach surfaces as

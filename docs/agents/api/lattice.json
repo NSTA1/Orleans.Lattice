@@ -123,6 +123,11 @@
           "name": "SampledAt",
           "type": "DateTimeOffset",
           "required": true
+        },
+        {
+          "name": "Stale",
+          "type": "bool",
+          "required": true
         }
       ],
       "source": "src/lattice/ClusterStorageUsageReport.cs#ClusterStorageUsageReport"
@@ -957,6 +962,16 @@
         {
           "name": "WalMaxRetainedBytes",
           "type": "long?",
+          "required": false
+        },
+        {
+          "name": "Stale",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "OldestMeasuredAtUtc",
+          "type": "DateTimeOffset?",
           "required": false
         }
       ],
@@ -5116,7 +5131,7 @@
         "source": "src/lattice/ILatticeAdmin.cs#PollWalUsageAsync"
       },
       "concurrency": {
-        "rule": "AlwaysInterleave read-only fan-out methods do not block sibling administrative calls.",
+        "rule": "AlwaysInterleave read-only fan-out methods do not block sibling administrative calls. Concurrent PollWalUsageAsync calls join the poll already running rather than starting another, so every silo's poller adds up to one cluster-wide fan-out at a time; a caller's cancellation stops only its own wait, never a poll other callers joined, and a finished poll is never reused (#6017).",
         "source": "src/lattice/ILatticeAdmin.cs#PollWalUsageAsync"
       },
       "sources": [

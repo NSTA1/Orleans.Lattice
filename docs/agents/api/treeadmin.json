@@ -1678,6 +1678,57 @@
       ],
       "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeSnapshotStatus.cs#TreeSnapshotStatus"
     },
+    "TreeStorageUsageSnapshot": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TreeId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "WalRetainedBytes",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "SnapshotBytes",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "LeafStateBytes",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "TotalBytes",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "Partial",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "LiveKeys",
+          "type": "long",
+          "required": true
+        },
+        {
+          "name": "SampledAt",
+          "type": "DateTimeOffset",
+          "required": true
+        },
+        {
+          "name": "Stale",
+          "type": "bool",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeStorageUsageSnapshot.cs#TreeStorageUsageSnapshot"
+    },
     "TreeStatsReport": {
       "kind": "record",
       "fields": [
