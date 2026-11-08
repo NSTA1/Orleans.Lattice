@@ -99,7 +99,7 @@ public sealed partial class AzureTableWalStorageProvider
         var recorded = await ReadTrimWatermarkAsync(table, manifestPartitionKey, cancellationToken).ConfigureAwait(false);
         var (persistedTail, _) = await ReadHighestOffsetsAsync(table, treeId, shardIndex, cancellationToken).ConfigureAwait(false);
         var lowest = await GetLowestOffsetAsync(treeId, shardIndex, cancellationToken).ConfigureAwait(false);
-        var inferred = lowest >= 0 ? lowest - 1 : persistedTail;
+        var inferred = lowest >= 0 ? lowest - 1 : await GetHighestOffsetAsync(treeId, shardIndex, cancellationToken).ConfigureAwait(false);
         return (manifestPartitionKey, Math.Max(recorded, inferred));
     }
 
