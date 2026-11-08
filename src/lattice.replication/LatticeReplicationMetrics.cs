@@ -473,11 +473,16 @@ public static class LatticeReplicationMetrics
     /// <summary>
     /// Counter of WAL offsets the shipper consumed past as a hole rather than
     /// a trim: a shipping read that jumped above the requested sequence while
-    /// the shard's trim watermark said nothing there was trimmed. A hole is
-    /// legitimate - a flush abandoned at its deadline that never lands leaves
-    /// one (#4621) - but each one is offsets the peer never receives, so it is
-    /// never skipped quietly (#6036). Incremented by the width of the skipped
-    /// range, tagged by <see cref="TagTree"/> and <see cref="TagPeer"/>; every
+    /// the shard's trim watermark said nothing there was trimmed. Before
+    /// consuming one the shipper refreshes the shard's trim watermark from
+    /// storage and re-reads once, so a range a stale cached watermark hid is
+    /// shipped rather than skipped (#6036). Incremented by the width of the
+    /// range, tagged by <see cref="TagTree"/>, <see cref="TagPeer"/> and
+    /// <see cref="TagOutcome"/>: <see cref="ShipHoleOutcomeRecovered"/> for
+    /// offsets the re-read returned and that shipped, and
+    /// <see cref="ShipHoleOutcomeHole"/> for offsets still missing, which the
+    /// shipper consumes past because a genuine hole - a flush abandoned at its
+    /// deadline that never landed (#4621) - holds nothing to ship. Every
     /// increment is also logged at Warning.
     /// </summary>
     public static readonly Counter<long> ShipHolesSkipped =
@@ -488,6 +493,18 @@ public static class LatticeReplicationMetrics
     /// Canonical name of the <see cref="ShipHolesSkipped"/> counter.
     /// </summary>
     public const string ShipHolesSkippedName = "orleans.lattice.replication.ship.holes_skipped";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="ShipHolesSkipped"/> for
+    /// offsets a watermark refresh and re-read recovered, which then shipped.
+    /// </summary>
+    public const string ShipHoleOutcomeRecovered = "recovered";
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="ShipHolesSkipped"/> for
+    /// offsets still missing after the re-read, which the shipper consumed past.
+    /// </summary>
+    public const string ShipHoleOutcomeHole = "hole";
 
     /// <summary>
     /// Counter of value bytes shipped redundantly - the sum of the

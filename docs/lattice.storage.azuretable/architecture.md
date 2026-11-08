@@ -129,6 +129,22 @@ The filtered replay read (`ReadFilteredAsync`, issue #3565) walks the same metad
 
 Trim first raises the shard's durable trim watermark to the trimmed offset (capped at the committed tail), then deletes old retained entry rows in bounded Azure Table transactions and removes matching commit metadata in order; see [Trim and the sweep](#trim-and-the-sweep). A crash during trim can leave a stale retained prefix below the watermark, but not a gap in the live tail; reads on an instance that knows the watermark never return an entry at or below it, and a later trim can resume cleanup. `GetTrimWatermarkAsync` reports the larger of the recorded watermark and the offset just below the lowest stored entry, so a shard trimmed before the watermark row existed still answers exactly. A shard with no stored entry was trimmed through its committed `TAIL`, never through the highest offset, which also counts accepted batches whose phase 2 has not landed; inferring from that cached those batches as trimmed and hid them from every later read on the instance (issue #6036). `RefreshTrimWatermarkAsync` replaces the cached value with the stored one.
 
+### Hidden committed entries (issue #6036)
+
+Every read clamps to the trim watermark the provider instance has cached, so a cached value above the stored trim point hides committed entries from that instance. Up to 10.2.0 the provider could cache one: it inferred the watermark of a shard with no stored entry from the highest offset, which counts batches accepted but not yet committed, so a probe while a shard's first batch - or its first after a full trim - was still committing cached that batch as trimmed. The provider now infers from the committed `TAIL`; the WAL subscriber and the replication shipper refresh the watermark and re-read once whenever a read jumps a range that was not trimmed, and meter what they recover or skip (`orleans.lattice.wal.subscriber.holes_skipped`, `orleans.lattice.replication.ship.holes_skipped`).
+
+#### Releases affected
+
+Every `Orleans.Lattice.Storage.AzureTable` release from 10.0.0 to 10.2.0 with pipelined phase-2 commits, the default. On a silo that cached such a watermark, reads skipped the batch until the silo restarted or the WAL partition moved: a view stalled on the partition, and once a later entry landed, view subscribers and the replication shipper read past the range, so views missed those writes and peers never received them. A leaf that replayed the range on reactivation could lose acknowledged writes its snapshot did not hold. The upgrade's restart clears any cached value.
+
+#### Remediation after upgrading
+
+For every tree whose WAL is on Azure Table:
+
+- **Views.** Reconcile each view (`ILatticeView.ReconcileAsync`, or `lattice_treeadmin_view_reconcile_start`), and rebuild (`lattice_treeadmin_view_rebuild_start`) any that still lags or differs from its source.
+- **Replication.** Re-seed every peer the tree replicates to - see the [replication re-seed procedure](../agents/procedures/replication-reseed.yaml) - or, where anti-entropy is enabled, let its [digest probe](../lattice.replication/anti-entropy-digest-probe.md) localise and repair divergence.
+- **Leaves.** Compare each shard's projection digest (`GetProjectionDigestAsync`, or `lattice_treeadmin_projection_digest`) with a replica's, or with a copy restored from a backup taken before the upgrade, and repair a shard that differs: restore it from the backup, or, in an active-active topology, let anti-entropy on a peer that holds the writes repair it. Skipped entries stay in the WAL until garbage collection trims them, but no public operation re-replays them into a leaf, so do not plan on recovering them from the log.
+
 ### Trim and the sweep
 
 Trim deletes entry rows with one key-range query over the WAL partition's batch partitions, streamed page by page, rather than one query per metadata row. The sweep therefore also reaches a batch partition that no metadata row names: the rows a refused or failed completion leaves when its writer stops before reconciling, which nothing else reaches below the tail. Each row's keys are checked against the WAL partition and the bounds before it is deleted; a row that fails the check is left in place and the trim reports it as a failure once it has finished everything else.

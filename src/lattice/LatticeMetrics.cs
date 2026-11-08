@@ -1851,6 +1851,37 @@ public static class LatticeMetrics
         Meter.CreateCounter<long>("orleans.lattice.wal.subscriber.empty_backlog_reads", unit: "{read}",
             description: "WAL subscriber reads that returned nothing from a partition whose readable head said entries were waiting, tagged by physical tree and partition.");
 
+    /// <summary>
+    /// Counter of offsets a WAL subscriber found missing between its position
+    /// and the next entry a read returned, where the retention tail said nothing
+    /// there was trimmed, tagged with <see cref="TagTree"/> (the physical WAL
+    /// id) and <see cref="TagOutcome"/>. On such a jump the subscriber refreshes
+    /// the partition's trim watermark from storage and re-reads once, so entries
+    /// a stale cached watermark hid are surfaced rather than skipped (issue
+    /// #6036): <see cref="WalSubscriberHoleRecovered"/> counts offsets the
+    /// re-read returned, and <see cref="WalSubscriberHoleSkipped"/> offsets
+    /// still missing, which the consumer reads past because a genuine hole - a
+    /// flush abandoned at its deadline that never landed (#4621) - holds
+    /// nothing. Both arms are primed at zero the first time a tree is drained,
+    /// so an absent series means the tree was never tailed on this silo. Each
+    /// increment is also logged at Warning.
+    /// </summary>
+    public static readonly Counter<long> WalSubscriberHolesSkipped =
+        Meter.CreateCounter<long>("orleans.lattice.wal.subscriber.holes_skipped", unit: "{offset}",
+            description: "Offsets a WAL subscriber found missing above its position with nothing trimmed there, tagged by physical tree and outcome: recovered by a watermark refresh, or skipped as a hole.");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="WalSubscriberHolesSkipped"/>
+    /// for offsets a watermark refresh and re-read recovered.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> WalSubscriberHoleRecovered = new(TagOutcome, "recovered");
+
+    /// <summary>
+    /// <see cref="TagOutcome"/> value on <see cref="WalSubscriberHolesSkipped"/>
+    /// for offsets still missing after the re-read, which the consumer read past.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> WalSubscriberHoleSkipped = new(TagOutcome, "hole");
+
     // --- WAL garbage-collector instruments ----------------------------------
 
     /// <summary>

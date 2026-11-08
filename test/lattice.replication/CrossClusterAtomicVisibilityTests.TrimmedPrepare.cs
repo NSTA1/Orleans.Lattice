@@ -288,10 +288,55 @@ public partial class CrossClusterAtomicVisibilityTests
     [Test]
     public async Task Shipper_meters_and_logs_every_untrimmed_hole_it_consumes_past()
     {
-        // Issue #6036: a jump the trim watermark says was not trimmed is shipped
-        // over as a hole. It holds nothing to ship, but it is never skipped
-        // quietly: each one is metered by its width and logged.
+        // Issue #6036: a jump the trim watermark says was not trimmed is
+        // refreshed and re-read once; a genuine hole still holds nothing, so the
+        // shipper consumes past it - never quietly: it is metered by its width.
         const string tree = "ccv-shipper-hole-metered";
+        var (shipper, feed, shipped, outcomes) = await PumpOverHoleAsync(tree, configure: feed =>
+        {
+            feed.TrimmedThrough = 1;
+            feed.Holes.Add(1);
+        }, cursor: 1);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(shipper.ReseedRequired, Is.False, "a hole above the trim watermark is not a trim");
+            Assert.That(feed.WatermarkRefreshes, Is.EqualTo(1), "the shipper refreshes the watermark once before consuming the hole");
+            Assert.That(outcomes, Is.EquivalentTo(new Dictionary<string, long> { [LatticeReplicationMetrics.ShipHoleOutcomeHole] = 1 }),
+                "the one-offset hole the shipper consumed past must be metered exactly once, by its width");
+            Assert.That(shipped, Is.SupersetOf(new[] { "hole-2", "hole-3" }), "every retained record ships");
+            Assert.That(LatticeReplicationMetrics.ShipHolesSkipped.Name,
+                Is.EqualTo(LatticeReplicationMetrics.ShipHolesSkippedName));
+        });
+    }
+
+    [Test]
+    public async Task Shipper_ships_entries_a_stale_trim_watermark_hid_after_refreshing_it()
+    {
+        // Issue #6036: a provider whose cached trim watermark runs above the
+        // stored trim point hides committed entries from shipping reads, and the
+        // first later entry reads as an untrimmed hole. The refresh and re-read
+        // must ship the hidden entries rather than consume past them.
+        const string tree = "ccv-shipper-hole-recovered";
+        var (shipper, feed, shipped, outcomes) = await PumpOverHoleAsync(tree, configure: feed =>
+        {
+            feed.HiddenThrough = 2;
+        }, cursor: 0);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(shipper.ReseedRequired, Is.False, "nothing was trimmed, so the peer stays on the log");
+            Assert.That(feed.WatermarkRefreshes, Is.EqualTo(1));
+            Assert.That(shipped, Is.SupersetOf(new[] { "hole-0", "hole-1", "hole-2", "hole-3" }),
+                "the entries the stale watermark hid must ship once the refresh lifts it");
+            Assert.That(outcomes, Is.EquivalentTo(new Dictionary<string, long> { [LatticeReplicationMetrics.ShipHoleOutcomeRecovered] = 3 }),
+                "the three recovered offsets are metered as recovered, and nothing as a hole");
+        });
+    }
+
+    private async Task<(ReplicationShipperGrain Shipper, ReplicationShipperGrainTests.StubReplogShardGrain Feed, List<string> Shipped, Dictionary<string, long> Outcomes)>
+        PumpOverHoleAsync(string tree, Action<ReplicationShipperGrainTests.StubReplogShardGrain> configure, long cursor)
+    {
         var ticks = DateTime.UtcNow.Ticks;
         var walEncoder = new ReplicationShipperGrainTests.StubWalRecordEncoder();
         var feeds = new[]
@@ -304,41 +349,46 @@ public partial class CrossClusterAtomicVisibilityTests
             feeds[0].Append(LocalSet(tree, $"hole-{i}", Hlc(ticks, i + 1)));
         }
 
-        feeds[0].TrimmedThrough = 1;
-        feeds[0].Holes.Add(1);
         feeds[0].ReportsTrimWatermark = true;
+        configure(feeds[0]);
 
+        var shipped = new List<string>();
         var transport = Substitute.For<IReplicationTransport>();
         transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
-            .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero });
+            .Returns(call =>
+            {
+                var segments = call.Arg<ReplicationBatch>().EncodedEnvelope?.EncodedEntries.ToArray() ?? [];
+                shipped.AddRange(segments.Select(s => walEncoder.Decode(s.AsSpan()).Key));
+                return Task.FromResult(new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero });
+            });
 
-        var skipped = 0L;
+        var outcomes = new Dictionary<string, long>();
         using var listener = Orleans.Lattice.Testing.MeterListening.StartForInstrument(
             LatticeReplicationMetrics.ShipHolesSkipped,
             l => l.SetMeasurementEventCallback<long>((_, value, tags, _) =>
             {
+                string? treeTag = null;
+                string? outcome = null;
                 foreach (var tag in tags)
                 {
-                    if (tag.Key == LatticeReplicationMetrics.TagTree && Equals(tag.Value, tree))
+                    if (tag.Key == LatticeReplicationMetrics.TagTree) treeTag = tag.Value as string;
+                    if (tag.Key == LatticeReplicationMetrics.TagOutcome) outcome = tag.Value as string;
+                }
+
+                if (treeTag == tree && outcome is not null)
+                {
+                    lock (outcomes)
                     {
-                        Interlocked.Add(ref skipped, value);
+                        outcomes[outcome] = outcomes.GetValueOrDefault(outcome) + value;
                     }
                 }
             }));
 
         var state = new FakePersistentState<ReplicationShipperState>();
-        state.State.PartitionCursors[0] = 1;
+        state.State.PartitionCursors[0] = cursor;
         var shipper = CreateShipper(tree, feeds, walEncoder, transport, state: state);
         await PumpAsync(shipper, ticks: 3);
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(shipper.ReseedRequired, Is.False, "a hole above the trim watermark is not a trim");
-            Assert.That(Interlocked.Read(ref skipped), Is.EqualTo(1L),
-                "the one-offset hole the shipper consumed past must be metered exactly once, by its width");
-            Assert.That(LatticeReplicationMetrics.ShipHolesSkipped.Name,
-                Is.EqualTo(LatticeReplicationMetrics.ShipHolesSkippedName));
-        });
+        return (shipper, feeds[0], shipped, outcomes);
     }
 
     [Test]

@@ -166,13 +166,13 @@ The measurement is **observability-only**: it never elides, reorders, or alters 
 
 ## Untrimmed holes (`ship.holes_skipped`)
 
-A shipping read that jumps above the requested sequence is either a trim, which takes the peer off the log for a re-seed, or a hole the shard's trim watermark says was never trimmed. A hole is legitimate: a flush abandoned at its deadline that never lands leaves one (#4621). It holds nothing to ship, so the shipper consumes past it, but never quietly ([#6036](https://github.com/NSTA1/Orleans.Lattice/issues/6036)).
+A shipping read that jumps above the requested sequence is either a trim, which takes the peer off the log for a re-seed, or a range the shard's trim watermark says was never trimmed. That range is a genuine hole - a flush abandoned at its deadline that never landed (#4621) - or committed entries a stale cached trim watermark hides from reads ([#6036](https://github.com/NSTA1/Orleans.Lattice/issues/6036)). The page cannot tell them apart, so the shipper refreshes the shard's watermark from storage and re-reads once from the same sequence: what reappears ships, and only what is still missing is consumed past. Neither re-seeds the peer, unless the refreshed watermark now reports the range trimmed.
 
 | Counter | Constant | Unit | Tags | Recorded |
 |---|---|---|---|---|
-| `orleans.lattice.replication.ship.holes_skipped` | `LatticeReplicationMetrics.ShipHolesSkippedName` | `{offset}` | `tree`, `peer` | Once per hole the shipper consumes past, incremented by the hole's width. Each one is also logged at Warning with the partition and the skipped range. |
+| `orleans.lattice.replication.ship.holes_skipped` | `LatticeReplicationMetrics.ShipHolesSkippedName` | `{offset}` | `tree`, `peer`, `outcome` | Incremented by the width of each range: `outcome` = `recovered` (`ShipHoleOutcomeRecovered`) for offsets the re-read returned and that shipped, `hole` (`ShipHoleOutcomeHole`) for offsets consumed past. Each one is also logged at Warning with the partition and the range. |
 
-A hole is rare and narrow. A steady rate, or a wide one, means offsets the peer never receives: before 10.3.0, an Azure Table WAL could hide committed entries behind a stale cached trim watermark and the shipper consumed them as a hole, so treat a nonzero rate on such a build as possible divergence and re-seed the peer.
+Any `recovered` means a provider cache was hiding committed entries from the shipper, which this build repairs as it ships. A genuine hole is rare and narrow, so a steady `hole` rate means flushes are being abandoned. Before 10.3.0 an Azure Table WAL could consume hidden entries as a hole, so see [Hidden committed entries](../lattice.storage.azuretable/architecture.md#hidden-committed-entries-issue-6036) for the remediation after upgrading.
 
 ## Content-manifest payload elision
 
@@ -421,7 +421,7 @@ Every instrument on the `orleans.lattice.replication` meter. Kind and unit come 
 | `orleans.lattice.replication.ship.ack_latency` | `Histogram<double>` | `ms` | `tree`, `peer` | [Adaptive batch sizing](#sender-side-adaptive-batch-sizing-shipeffective_batch_size--shipack_latency) |
 | `orleans.lattice.replication.ship.redundant_payloads` | `Counter<long>` | `{entry}` | `tree`, `peer` | [Re-send rate](#content-hash-payload-re-send-rate-shipredundant_payloads--shipredundant_payload_bytes) |
 | `orleans.lattice.replication.ship.redundant_payload_bytes` | `Counter<long>` | `By` | `tree`, `peer` | [Re-send rate](#content-hash-payload-re-send-rate-shipredundant_payloads--shipredundant_payload_bytes) |
-| `orleans.lattice.replication.ship.holes_skipped` | `Counter<long>` | `{offset}` | `tree`, `peer` | [Untrimmed holes](#untrimmed-holes-shipholes_skipped) |
+| `orleans.lattice.replication.ship.holes_skipped` | `Counter<long>` | `{offset}` | `tree`, `peer`, `outcome` | [Untrimmed holes](#untrimmed-holes-shipholes_skipped) |
 | `orleans.lattice.replication.ship.manifest_exchanges` | `Counter<long>` | `{exchange}` | `tree`, `peer` | [Content-manifest elision](#content-manifest-payload-elision) |
 | `orleans.lattice.replication.ship.elided_payloads` | `Counter<long>` | `{entry}` | `tree`, `peer` | [Content-manifest elision](#content-manifest-payload-elision) |
 | `orleans.lattice.replication.ship.elided_payload_bytes` | `Counter<long>` | `By` | `tree`, `peer` | [Content-manifest elision](#content-manifest-payload-elision) |

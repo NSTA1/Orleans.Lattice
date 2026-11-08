@@ -56,6 +56,7 @@ internal sealed class WalLogSubscriber(
         ArgumentNullException.ThrowIfNull(handler);
 
         var sourceTreeId = context.SourceTreeId;
+        PrimeHolesSkipped(sourceTreeId);
         var partitions = context.Partitions;
         var checkpoints = context.Checkpoints;
         // The readable head of each partition with a backlog, 0 for none: a
@@ -125,77 +126,114 @@ internal sealed class WalLogSubscriber(
             var lastOffset = checkpoint;
             var readThisPartition = 0;
 
-            await foreach (var (offset, mutation) in commitLogReader
-                .ReadAsync(sourceTreeId, partition, checkpoint, cancellationToken)
-                .ConfigureAwait(false))
+            // One refresh and re-read per partition per drain on a jump that is not
+            // a trim (issue #6036): recoverUpTo is the offset that jump landed on,
+            // and recoveryPending asks the re-read's first entry how much of the
+            // range below it the refresh brought back.
+            var refreshedForHole = false;
+            var recoveryPending = false;
+            var recoverUpTo = 0L;
+            var rereadPartition = true;
+            while (rereadPartition)
             {
-                // Read-side fall-off check (issues #4584, #4579). The guard above
-                // probes the tail before the read, so a trim landing between the
-                // probe and the read, or between two pages of it, would hand back
-                // the first retained entry past a trimmed range and this consumer
-                // would advance across entries it never saw. Offsets are dense in
-                // what the log hands out, so a jump is either that trim or a slot
-                // whose flush failed and was never acknowledged (a resync after a
-                // failed slot can leave one). Only the tail, probed after the
-                // jump was observed, tells them apart: a tail past the next offset
-                // needed is a trim, and the consumer has fallen off the log.
-                if (offset > lastOffset + 1)
+                rereadPartition = false;
+                await foreach (var (offset, mutation) in commitLogReader
+                    .ReadAsync(sourceTreeId, partition, lastOffset, cancellationToken)
+                    .ConfigureAwait(false))
                 {
-                    var tailAfterRead = await commitLogReader
-                        .GetTailOffsetAsync(sourceTreeId, partition, cancellationToken)
-                        .ConfigureAwait(false);
-                    if (tailAfterRead > lastOffset + 1)
+                    if (recoveryPending)
                     {
-                        return new WalDrainResult { FellOffLog = true };
+                        recoveryPending = false;
+                        if (offset < recoverUpTo)
+                        {
+                            RecordHoleOutcome(context, partition, lastOffset + 1, recoverUpTo, recovered: true);
+                        }
                     }
-                }
 
-                lastOffset = offset;
-                readThisPartition++;
-                entriesRead++;
+                    // Read-side fall-off check (issues #4584, #4579). The guard above
+                    // probes the tail before the read, so a trim landing between the
+                    // probe and the read, or between two pages of it, would hand back
+                    // the first retained entry past a trimmed range and this consumer
+                    // would advance across entries it never saw. Offsets are dense in
+                    // what the log hands out, so a jump is either that trim or a slot
+                    // whose flush failed and was never acknowledged (a resync after a
+                    // failed slot can leave one). Only the tail, probed after the
+                    // jump was observed, tells them apart: a tail past the next offset
+                    // needed is a trim, and the consumer has fallen off the log.
+                    if (offset > lastOffset + 1)
+                    {
+                        var tailAfterRead = await commitLogReader
+                            .GetTailOffsetAsync(sourceTreeId, partition, cancellationToken)
+                            .ConfigureAwait(false);
+                        if (tailAfterRead > lastOffset + 1)
+                        {
+                            return new WalDrainResult { FellOffLog = true };
+                        }
 
-                // Advance the consumed-HLC high-water mark for every entry read
-                // past, applicable or not, so a skipped maintenance / sibling-shard
-                // entry at the source head does not leave the cursor stuck below a
-                // non-surfaced head.
-                if (mutation.Timestamp > highest)
-                {
-                    highest = mutation.Timestamp;
-                }
+                        // Not a trim, so either a genuine hole or committed entries a
+                        // stale cached trim watermark hides from reads (issue #6036).
+                        // Refresh the watermark and re-read once from the same position;
+                        // only what is still missing afterwards is read past, metered.
+                        if (!refreshedForHole)
+                        {
+                            refreshedForHole = true;
+                            recoveryPending = true;
+                            recoverUpTo = offset;
+                            await RefreshTrimWatermarkForHoleAsync(context, partition, cancellationToken).ConfigureAwait(false);
+                            rereadPartition = true;
+                            break;
+                        }
 
-                // ShardIndex partition filtering: a consumer pinned to one logical
-                // shard skips sibling chain-shard entries that share the physical
-                // WAL partition. The cursor still advances past them above.
-                if (shardFilter is { } wanted && mutation.ShardIndex != wanted)
-                {
+                        RecordHoleOutcome(context, partition, lastOffset + 1, offset, recovered: false);
+                    }
+
+                    lastOffset = offset;
+                    readThisPartition++;
+                    entriesRead++;
+
+                    // Advance the consumed-HLC high-water mark for every entry read
+                    // past, applicable or not, so a skipped maintenance / sibling-shard
+                    // entry at the source head does not leave the cursor stuck below a
+                    // non-surfaced head.
+                    if (mutation.Timestamp > highest)
+                    {
+                        highest = mutation.Timestamp;
+                    }
+
+                    // ShardIndex partition filtering: a consumer pinned to one logical
+                    // shard skips sibling chain-shard entries that share the physical
+                    // WAL partition. The cursor still advances past them above.
+                    if (shardFilter is { } wanted && mutation.ShardIndex != wanted)
+                    {
+                        if (readThisPartition >= batchSize)
+                        {
+                            break;
+                        }
+
+                        continue;
+                    }
+
+                    // Maintenance filtering: structural rewrites are replays of state
+                    // already authored by user writes; under Skip they never reach the
+                    // handler but the cursor still advances.
+                    if (skipMaintenance && mutation.Category == MutationCategory.Maintenance)
+                    {
+                        if (readThisPartition >= batchSize)
+                        {
+                            break;
+                        }
+
+                        continue;
+                    }
+
+                    var entry = new WalSubscriptionEntry(partition, offset, mutation);
+                    handler.OnEntry(in entry);
+                    entriesSurfaced++;
+
                     if (readThisPartition >= batchSize)
                     {
                         break;
                     }
-
-                    continue;
-                }
-
-                // Maintenance filtering: structural rewrites are replays of state
-                // already authored by user writes; under Skip they never reach the
-                // handler but the cursor still advances.
-                if (skipMaintenance && mutation.Category == MutationCategory.Maintenance)
-                {
-                    if (readThisPartition >= batchSize)
-                    {
-                        break;
-                    }
-
-                    continue;
-                }
-
-                var entry = new WalSubscriptionEntry(partition, offset, mutation);
-                handler.OnEntry(in entry);
-                entriesSurfaced++;
-
-                if (readThisPartition >= batchSize)
-                {
-                    break;
                 }
             }
 
@@ -291,6 +329,19 @@ internal sealed class WalLogSubscriber(
             "WAL partition {Partition} of '{Tree}' has read empty for consumer '{Consumer}' for {Age} across {Reads} drains "
             + "although its readable head ({Head}) is past the checkpoint ({Checkpoint}); refreshing its trim watermark.",
             partition, context.SourceTreeId, context.ConsumerId, now - streak.Since, streak.Reads, head, checkpoint);
+        await RefreshTrimWatermarkForHoleAsync(context, partition, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Refreshes the partition's trim watermark from storage before a re-read,
+    /// after a jump that was not a trim (issue #6036). A silo that predates the
+    /// refresh cannot answer it; the re-read then simply finds the same jump.
+    /// </summary>
+    private async Task RefreshTrimWatermarkForHoleAsync(
+        WalSubscriptionContext context,
+        int partition,
+        CancellationToken cancellationToken)
+    {
         try
         {
             await commitLogReader.RefreshTrimWatermarkAsync(context.SourceTreeId, partition, cancellationToken)
@@ -298,11 +349,59 @@ internal sealed class WalLogSubscriber(
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {
-            // A silo that predates the refresh cannot answer it; the next escalation retries.
             _logger.LogWarning(ex, "Refreshing the trim watermark of WAL partition {Partition} of '{Tree}' failed.",
                 partition, context.SourceTreeId);
         }
     }
+
+    /// <summary>
+    /// Meters and logs the offsets from <paramref name="from"/> up to
+    /// <paramref name="to"/> on <paramref name="partition"/>: recovered by a
+    /// watermark refresh, or read past as a hole (issue #6036).
+    /// </summary>
+    private void RecordHoleOutcome(WalSubscriptionContext context, int partition, long from, long to, bool recovered)
+    {
+        LatticeMetrics.WalSubscriberHolesSkipped.Add(
+            to - from,
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, context.SourceTreeId),
+            recovered ? LatticeMetrics.WalSubscriberHoleRecovered : LatticeMetrics.WalSubscriberHoleSkipped,
+            LatticeTenantLabel.ForTree(context.SourceTreeId));
+        if (recovered)
+        {
+            _logger.LogWarning(
+                "WAL partition {Partition} of '{Tree}' hid offsets {From} to {To} from consumer '{Consumer}' behind a stale trim "
+                + "watermark; a refresh recovered them.",
+                partition, context.SourceTreeId, from, to - 1, context.ConsumerId);
+        }
+        else
+        {
+            _logger.LogWarning(
+                "WAL partition {Partition} of '{Tree}' has an untrimmed hole at offsets {From} to {To}; consumer '{Consumer}' "
+                + "reads past it.",
+                partition, context.SourceTreeId, from, to - 1, context.ConsumerId);
+        }
+    }
+
+    /// <summary>
+    /// Emits both arms of <see cref="LatticeMetrics.WalSubscriberHolesSkipped"/>
+    /// at zero the first time <paramref name="treeId"/> is drained on this silo,
+    /// so an absent series means the tree was never tailed here rather than that
+    /// it never lost an offset.
+    /// </summary>
+    private static void PrimeHolesSkipped(string treeId)
+    {
+        if (!PrimedHoleTrees.TryAdd(treeId, 0))
+        {
+            return;
+        }
+
+        var treeTag = new KeyValuePair<string, object?>(LatticeMetrics.TagTree, treeId);
+        var tenantTag = LatticeTenantLabel.ForTree(treeId);
+        LatticeMetrics.WalSubscriberHolesSkipped.Add(0, treeTag, LatticeMetrics.WalSubscriberHoleRecovered, tenantTag);
+        LatticeMetrics.WalSubscriberHolesSkipped.Add(0, treeTag, LatticeMetrics.WalSubscriberHoleSkipped, tenantTag);
+    }
+
+    private static readonly ConcurrentDictionary<string, byte> PrimedHoleTrees = new(StringComparer.Ordinal);
 
     private void ClearEmptyBacklogStreak(WalSubscriptionContext context, int partition)
     {
