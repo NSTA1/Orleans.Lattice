@@ -6,10 +6,10 @@
   ],
   "counts": {
     "invariants": 9,
-    "properties": 11,
+    "properties": 12,
     "actions": 20,
-    "mutations": 29,
-    "behaviourRows": 38,
+    "mutations": 30,
+    "behaviourRows": 39,
     "distinctStates": 695064
   },
   "variants": {

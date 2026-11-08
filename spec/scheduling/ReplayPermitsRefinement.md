@@ -87,8 +87,8 @@ The environment, caller, provider and owner boundaries are kept distinct.
 |-------------|---------------|------------------|----------|
 | `Request` | Observe inherited class and current bound. | `BPlusLeafGrain.TryAdmitReplayPermitWaiter`, `LatticeReplayAdmissionContext.Current`. | Yes: `ReplayPermitsCoyoteTests.Memory_returns_and_priority_observations_preserve_the_gate_contract`. |
 | `Enqueue` | Register one admitted waiter. | `BPlusLeafGrain.AcquireReplayPermitAsync`, `BPlusLeafGrain.NoteReplayPermitArrival`. | Yes: `BPlusLeafGrainTests.Cancelled_queued_replay_replacements_leave_no_waiters_or_unowned_permits`. |
-| `RefuseWait` | Refuse fresh excessive wait below depth. | `BPlusLeafGrain.AcquireReplayPermitAsync`. | Yes: `BPlusLeafGrainTests.A_wait_exceeded_mean_refuses_below_the_admitted_waiter_bound`. |
-| `RefuseDepth` | Refuse stalled over-depth arrival. | `BPlusLeafGrain.AcquireReplayPermitAsync`. | Yes: `BPlusLeafGrainTests.A_no_progress_queue_at_the_circulating_bound_is_refused`. |
+| `RefuseWait` | Refuse fresh excessive wait below depth, re-checking at the decision that a permit is not free with no waiter ahead. | `BPlusLeafGrain.AcquireReplayPermitAsync`, `BPlusLeafGrain.IsReplayPermitFreeWithNoWaiterAhead`, `BPlusLeafGrain.ThrowIfReplayAdmissionRefused`. | Yes: `BPlusLeafGrainTests.A_wait_exceeded_mean_refuses_below_the_admitted_waiter_bound` and `BPlusLeafGrainTests.A_wait_exceeded_reading_never_refuses_while_a_permit_is_free_and_no_waiter_is_ahead`. |
+| `RefuseDepth` | Refuse stalled over-depth arrival, with the same decision-time re-check. | `BPlusLeafGrain.AcquireReplayPermitAsync`, `BPlusLeafGrain.IsReplayPermitFreeWithNoWaiterAhead`, `BPlusLeafGrain.ThrowIfReplayAdmissionRefused`. | Yes: `BPlusLeafGrainTests.A_no_progress_queue_at_the_circulating_bound_is_refused`. |
 | `DriveAdmission` | Try the nonqueueing drive share. | `BPlusLeafGrain.TryAcquireStarvationReplayPermit`. | Yes: `StarvationReplayAdmissionTests.Ordinary_replay_owners_do_not_consume_gc_reservations` and `StarvationReplayAdmissionTests.Concurrent_acquisitions_cannot_exceed_the_gc_share`. |
 | `Release` | Return physical ownership once. | `BPlusLeafGrain.FinishReplayPermit`, `BPlusLeafGrain.ReleaseStarvationReplayPermit`. | Yes: `BPlusLeafGrainTests.Activation_releases_the_replay_permit_when_the_post_acquire_observation_throws`. |
 | `Hang` | Environment parks a provider read. | `ReplaySliceReader.ReadSliceAsync`. | Yes: `BPlusLeafGrainTests.Cancelling_a_replay_returns_its_permit_before_uncooperative_storage_completes`. |
@@ -129,6 +129,7 @@ The environment, caller, provider and owner boundaries are kept distinct.
 | `ReplayConverges` | Durably shorter prefixes converge under recurring live-attempt storage completions. | Yes: `BPlusLeafGrainTests.Successive_interrupted_replays_advance_the_checkpoint_until_convergence` and `BPlusLeafGrainTests.Cancelled_cold_replay_banks_the_re_read_frontier_as_durable_snapshot_coverage`. |
 | `ColdCancellationReleases` | Actual owner cancellation unwinds the cold holder or waiter under continuation/banking opportunities. | Yes: `BPlusLeafGrainTests.Cancelling_a_replay_returns_its_permit_before_uncooperative_storage_completes` and `BPlusLeafGrainTests.Cancelled_queued_replay_replacements_leave_no_waiters_or_unowned_permits`. |
 | `ColdDeadlineIsolation` | Client deadlines preserve the independent cold owner, physical ownership, queue and cancellation membership. | Yes: `BPlusLeafGrainTests.Caller_deadlines_and_replacements_preserve_the_live_cold_owner`. |
+| `WorkConservingRefusal` | No non-drive arrival is refused while a permit is free and no waiter is ahead of it. | Yes: `BPlusLeafGrainTests.A_wait_exceeded_reading_never_refuses_while_a_permit_is_free_and_no_waiter_is_ahead`. |
 
 ## Excluded properties
 
@@ -149,8 +150,9 @@ fan-out prevent an invariant of the form `Len(queue) <= depth * circulating`.
 
 A fresh excessive mean refuses a nonempty queue even below the depth bound.
 `NoProgress` needs the additional over-depth observation. An empty queue,
-disabled bound, unsized gate and stale wait evidence preserve their recovery
-paths. The draft abstracts the classifier's outcomes; the real classifier and
+disabled bound, unsized gate and expired wait evidence preserve their recovery
+paths: no refusal is decided while a permit is free and no waiter is ahead
+(see [Work-conserving refusal](#work-conserving-refusal)). The draft abstracts the classifier's outcomes; the real classifier and
 acquisition tests remain necessary to verify freshness and threshold behavior.
 
 Actual ambient classes are Interactive and Bulk. Cold replay, vector writes,
@@ -164,6 +166,37 @@ reservation difference is `min(circulating, interactive - 1)`, not always
 `circulating`. Withholding must actually remove capacity while the floor must
 independently preserve one circulating permit. Ignoring withholding cannot
 violate that floor. Memory restoration cannot return a service-owned permit.
+
+<a id="work-conserving-refusal"></a>
+
+## Work-conserving refusal (issue #5992, A1)
+
+Before this change the model reset the drain classification to `Draining`
+whenever the queue emptied, and an arrival at an empty queue observed
+`Draining`. A probe property, "a non-drive arrival is never refused while a
+permit is free and the queue is empty", was nonetheless violated in 7 states:
+an arrival observed `WaitExceeded` behind one waiter, `CapacityOpportunity`
+admitted that waiter, and `RefuseWait` then refused the arrival on its stale
+observation with a permit free and nothing queued. The refused replay forfeits
+its position and re-enters only as a fresh `Request`. No property flagged it,
+because every liveness clause assumes arrivals have closed and the classifier
+has settled on `Draining`.
+
+`RefuseForWait` and `RefuseForDepth` now re-check `WorkAvailable` (a free
+permit and an empty queue) at the decision, so `WorkConservingRefusal` holds by
+construction. In production that is a `CurrentCount > 0` re-check with no
+waiter ahead, taken at the refusal decision rather than at the observation.
+`WorkConservingRefusalWaitIgnoresFreePermit` restores the unchecked wait arm
+and fails the property.
+
+The model deliberately does not add a sticky classification with an explicit
+expiry step. `ObserveDrain` may already set any reading whenever the queue is
+non-empty, so a production reading that outlives the waits it sampled refines
+an `ObserveDrain` step: every refusal a sticky reading enables is reachable
+without it. A trial with a sticky `drain` and a fair expiry step grew the base
+from 695,064 to 1,670,072 distinct states and added no reachable refusal.
+Explicit expiry is therefore a production obligation recorded in the
+[gap register](#deliberate-abstraction-gaps), not a modelled step.
 
 <a id="banking-and-historical-attribution"></a>
 
@@ -412,6 +445,16 @@ was relaxed, and no Replay model, bound, premise or launch policy changed.
   No production symbol: the gap states an environment premise of the model, not
   a production mechanism.
 
+- **The classifier's expiry is a production obligation.** `ObserveDrain` is
+  unconstrained whenever the queue is non-empty, and the queue emptying resets
+  the reading, so the model admits every refusal a stale reading could cause
+  and none that a correctly expiring one would forbid. A wait-exceeded reading
+  must still age out once its samples do, or a stale mean keeps refusing new
+  arrivals behind a short queue. That expiry is checked in production by
+  `BPlusLeafGrainTests.A_wait_exceeded_reading_expires_once_its_samples_age_out`, not by a model step.
+  Production symbols: `BPlusLeafGrain.ClassifyReplayPermitQueueDrain`,
+  `BPlusLeafGrain.ClassifyReplayPermitQueueDrainAt`.
+
 ## Harness and fixture corrections encountered here
 
 [#4989](https://github.com/NSTA1/Orleans.Lattice/issues/4989) repairs strict
@@ -496,6 +539,12 @@ CPUs and an 1800 MB configured heap (TLC reports 1600 MB usable).
 | Base | None. | 695,064 / 6,628,373 | 27 | 756.410 s | 1 min 50 s |
 | TwoPartitions | `Partitions = {1, 2}`. | 2,762,408 / 26,786,445 | 29 | 4,748.324 s | 23 min 45 s |
 | PartialPrefix | `GapLen = 2`, `Slice = 1`. | 1,038,664 / 9,888,749 | 29 | 1,058.110 s | 2 min 57 s |
+
+Work-conserving refusal (#5992 A1) adds `WorkConservingRefusal`, a twelfth
+property, and removes refusal transitions without changing the reachable
+states: on the new source the base again explores 695,064 distinct / 6,628,373
+generated states (depth 28, 8 min 49 s with five workers on a 16-CPU host), and
+both variants reproduce their counts above with all twelve properties checked.
 
 `TwoPartitions` exercises independent per-partition progress and durable
 coverage. `PartialPrefix` requires multiple completed slices to finish one gap;

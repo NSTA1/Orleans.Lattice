@@ -1,0 +1,14 @@
+MODULE: WorkConservingRefusalWaitIgnoresFreePermit
+TARGET: WorkConservingRefusal
+CLASS: Action
+SUMMARY: the wait arm refuses on its stale observation while a permit is free and no waiter is ahead
+PERTURBS: RefuseWait
+
+--- FIND
+RefuseWait(r) ==
+    /\ status[r] = "pending" /\ RefuseForWait(r)
+--- REPLACE
+RefuseWait(r) ==
+    /\ status[r] = "pending"
+    /\ role[r] # "Drive" /\ observed[r].depth > 0 /\ observed[r].drain = "WaitExceeded"
+--- END
