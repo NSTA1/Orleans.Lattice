@@ -13,6 +13,12 @@ public sealed class ReplaySliceReaderDeadlineTests
 {
     private static readonly TimeSpan Deadline = TimeSpan.FromMilliseconds(150);
 
+    /// <summary>
+    /// A caller token far beyond <see cref="Deadline"/>, so a reader that never
+    /// applied the deadline fails with a cancellation instead of hanging.
+    /// </summary>
+    private static CancellationTokenSource Guard() => new(TimeSpan.FromSeconds(10));
+
     private static (ReplaySliceReader Reader, ILeafReplayCoordinatorGrain Coordinator) Create(
         Func<CancellationToken, Task<IReadOnlyList<CommitLogSliceEntry>>> read, TimeSpan deadline)
     {
@@ -33,9 +39,10 @@ public sealed class ReplaySliceReaderDeadlineTests
                 return [];
             },
             Deadline);
+        using var guard = Guard();
 
         var fault = Assert.ThrowsAsync<ReplaySliceReadDeadlineExceededException>(
-            async () => await reader.ReadSliceAsync(41, 99, onNarrowed: null, CancellationToken.None));
+            async () => await reader.ReadSliceAsync(41, 99, onNarrowed: null, guard.Token));
 
         Assert.Multiple(() =>
         {
@@ -53,9 +60,10 @@ public sealed class ReplaySliceReaderDeadlineTests
     {
         var never = new TaskCompletionSource<IReadOnlyList<CommitLogSliceEntry>>();
         var (reader, _) = Create(_ => never.Task, Deadline);
+        using var guard = Guard();
 
         Assert.ThrowsAsync<ReplaySliceReadDeadlineExceededException>(
-            async () => await reader.ReadSliceAsync(-1, 99, onNarrowed: null, CancellationToken.None),
+            async () => await reader.ReadSliceAsync(-1, 99, onNarrowed: null, guard.Token),
             "the caller-side WaitAsync belt must end the wait when storage ignores the token");
         Assert.That(never.Task.IsCompleted, Is.False);
     }

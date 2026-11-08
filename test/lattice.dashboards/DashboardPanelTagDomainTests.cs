@@ -258,7 +258,8 @@ public sealed class DashboardPanelTagDomainTests
             // This list grew by three (completed, faulted, unresolvable) when
             // issue #2938 armed them, and by one (orphaned) when issue #3101
             // armed that, and by one (latched_stale) when issue #3478 armed that,
-            // and by one (admission_refused) when issue #3575 armed that.
+            // and by one (admission_refused) when issue #3575 armed that,
+            // and by one (storage_stalled) when issue #6007 armed that.
             // That growth is the whole hazard of a
             // declared-omission list: it is a statement about the complement of
             // a domain, so widening the domain silently makes every existing
@@ -267,7 +268,7 @@ public sealed class DashboardPanelTagDomainTests
             ["Replication|2692|orleans.lattice.wal.gc.blocked_leaf_reactivations|outcome"] =
                 [
                     "abandoned", "admission_refused", "attempted", "completed", "faulted", "healed",
-                    "latched_stale", "orphaned", "rearmed", "undelivered", "unresolvable",
+                    "latched_stale", "orphaned", "rearmed", "storage_stalled", "undelivered", "unresolvable",
                 ],
 
             // Panel 34 alerts on entry into saturation only. The healthy,
@@ -616,7 +617,7 @@ public sealed class DashboardPanelTagDomainTests
                     "abandoned", "admission_refused", "attempted", "completed", "drove_admission_refused",
                     "drove_already_driving", "drove_lifted", "drove_memory_refused", "drove_no_advance",
                     "drove_not_driven", "drove_timed_out", "faulted", "healed",
-                    "latched_stale", "orphaned", "rearmed", "undelivered", "unresolvable",
+                    "latched_stale", "orphaned", "rearmed", "storage_stalled", "undelivered", "unresolvable",
                 ]);
 
             // Collection-built tag list plus a static string-returning helper
