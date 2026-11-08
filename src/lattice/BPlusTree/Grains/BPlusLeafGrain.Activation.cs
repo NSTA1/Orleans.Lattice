@@ -2239,6 +2239,8 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     /// <param name="gate">The per-silo replay concurrency gate.</param>
     /// <param name="origin">Who requested the drive.</param>
+    private static int _redGateBypasses;
+
     internal static bool TryAcquireStarvationReplayPermit(SemaphoreSlim gate, StarvationDriveOrigin origin)
     {
         var circulating = CirculatingReplayPermits(
@@ -2270,6 +2272,14 @@ internal sealed partial class BPlusLeafGrain
         var acquired = false;
         try
         {
+            // DO NOT MERGE: #6006 red (a') - a drive overtakes a parked replay, outside the gate.
+            if (reserved && gate.CurrentCount == 0 && QueuedReplayPermitWaiters > 0)
+            {
+                Interlocked.Increment(ref _redGateBypasses);
+                acquired = true;
+                return true;
+            }
+
             acquired = reserved && gate.Wait(0);
             return acquired;
         }
@@ -2293,7 +2303,12 @@ internal sealed partial class BPlusLeafGrain
     /// <param name="gate">The per-silo replay concurrency gate.</param>
     internal static void ReleaseStarvationReplayPermit(SemaphoreSlim gate)
     {
-        gate.Release();
+        if (Interlocked.Decrement(ref _redGateBypasses) < 0)
+        {
+            Interlocked.Increment(ref _redGateBypasses);
+            gate.Release();
+        }
+
         Interlocked.Decrement(ref _starvationReplayPermits);
     }
 
