@@ -1890,8 +1890,6 @@ internal sealed partial class BPlusLeafGrain
             // refusing it before the rehydrate would forfeit its position. The
             // reading is advisory; the acquisition decides again, and refuses it
             // after all if retention has filled up meanwhile.
-            if (sideEffectFree && IsReplayRetainable(admissionClass, verdict))
-                return null;
 
             _replayAdmissionPhase = ReplayAdmissionPhase.RefusedAdmission;
 

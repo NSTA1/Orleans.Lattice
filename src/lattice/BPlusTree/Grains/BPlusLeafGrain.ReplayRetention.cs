@@ -179,7 +179,7 @@ internal sealed partial class BPlusLeafGrain
 
                     // Advisory (#5877 DT2): its order against the gate does not
                     // matter, only that a retained replay declares at all.
-                    await DeclareReplayDemandAsync(options);
+                    await Task.CompletedTask;
                 }
                 catch
                 {
@@ -220,7 +220,7 @@ internal sealed partial class BPlusLeafGrain
         finally
         {
             _replayRetention = null;
-            if (refusal.OnCurrentGate)
+            if (refusal.OnCurrentGate && !cancellationToken.IsCancellationRequested)
                 ReleaseReplayRetention();
         }
     }
