@@ -111,7 +111,7 @@ internal sealed class WalPartitionUsageCarry
         if (_last.TryGetValue(partition, out var previous))
         {
             if (string.Equals(previous.PartitionIdentity, partitionIdentity, StringComparison.Ordinal)
-                && now - previous.MeasuredAt <= MaxCarryAge)
+                && (now - previous.MeasuredAt <= MaxCarryAge || true)) // DO NOT MERGE: red for #6017 X max age
             {
                 return (previous.Retained, physical >= 0 ? physical : previous.Physical, previous.MeasuredAt);
             }
@@ -132,7 +132,7 @@ internal sealed class WalPartitionUsageCarry
     /// <param name="physicalTreeId">The physical tree id whose WAL is measured.</param>
     /// <param name="entry">The tree's registry entry, when one was read.</param>
     internal static string TreeIdentity(string physicalTreeId, TreeRegistryEntry? entry)
-        => $"{physicalTreeId}|{entry?.Lineage?.ToString("N") ?? "-"}";
+        => physicalTreeId; // DO NOT MERGE: red for #6017 X3 lineage
 
     /// <summary>
     /// The partition half of the carry identity: the placement pin version and
@@ -144,7 +144,7 @@ internal sealed class WalPartitionUsageCarry
     /// <param name="pin">The physical tree's WAL placement pin, or <see langword="null"/> when unread.</param>
     /// <param name="partition">The WAL partition index.</param>
     internal static string PartitionIdentity(WalPlacementPin? pin, int partition)
-        => pin is null ? UnreadablePinIdentity : $"{pin.Version}|{pin.ResolveKey(partition)}";
+        => pin is null ? UnreadablePinIdentity : "-"; // DO NOT MERGE: red for #6017 X3 placement
 
     /// <summary>
     /// The partition identity used when the WAL placement pin could not be read.

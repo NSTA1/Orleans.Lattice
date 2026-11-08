@@ -78,7 +78,7 @@ internal sealed partial class LatticeAdminGrain(
         cancellationToken.ThrowIfCancellationRequested();
 
         var shared = _walPollInFlight;
-        if (shared is null || shared.IsCompleted)
+        if (shared is null || shared.IsCompletedSuccessfully) // DO NOT MERGE: red for #6017 P1 faulted poll reused
         {
             shared = PollWalUsageOnceAsync(CancellationToken.None);
             // Every caller may have detached before the shared poll faults; observe
