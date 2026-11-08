@@ -169,6 +169,10 @@ internal static class ReplaySliceProjection
                     for (var i = 0; i < found; i++)
                         buffer[kept++] = Detached(entries[positions[i]]);
 
+                    // DO NOT MERGE: red for #5997 - a wide serve keeps an intermediate marker per page.
+                    if (incarnation is not null && found > 0 && positions[found - 1] != end - 1 && end < entries.Length && kept < buffer.Length)
+                        buffer[kept++] = entries[end - 1] with { Mutation = WalFilteredRead.RoutingOnly(entries[end - 1].Mutation) };
+
                     examined += end - start;
                     covered = entries[end - 1].Offset;
                     trailingExcluded = found == 0 || positions[found - 1] != end - 1;
