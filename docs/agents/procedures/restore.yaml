@@ -172,7 +172,7 @@ concurrency:
     source: "docs/lattice.api.abstractions/operations.md"
   - rule: "When no member of a set is replicated, set restore restores each member tree in turn through its own shadow-cutover restore."
     source: "src/lattice.backup/LatticeBackupRestoreService.cs#LatticeBackupRestoreService.RestoreSetAsync"
-  - rule: "A shadow-cutover restore and a revert each hold the target tree's alias reservation; while it is held, a delete, resize, schema remediation, or different restore or revert of the tree is refused."
+  - rule: "A shadow-cutover restore and a revert each hold the target tree's alias reservation; while it is held, a delete, resize, blocking schema remediation, or different restore or revert of the tree is refused, and a tracked schema remediation or migration waits for the reservation (up to LatticeSchemaEnforcementOptions.AliasReservationWaitTimeout) instead of failing."
     source: "docs/lattice.backup/architecture.md"
   - rule: "A revert that replaces a replicated tree's contents on one cluster alone leaves its peers holding the writes it discarded, so they may diverge."
     source: "docs/lattice.backup/disaster-recovery.md"

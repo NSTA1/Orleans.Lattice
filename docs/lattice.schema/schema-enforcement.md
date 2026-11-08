@@ -236,8 +236,11 @@ A remediation holds the tree's alias reservation from the moment it starts until
 completes or aborts - including while an interrupted one waits to be requested
 again - so a delete of the tree, and an explicit alias change through
 `ILatticeTreeAdmin.SetTreeAliasAsync`, are refused for that whole time, and a remediation
-is refused with `InvalidOperationException` while the tree is deleted, a delete is
-pending, or a resize or restore holds the reservation; see
+is refused with `InvalidOperationException` while the tree is deleted or a delete is
+pending. While a resize or restore holds the reservation, the blocking `RemediateAsync`
+is refused the same way, but a tracked remediation waits for the reservation, up to
+`AliasReservationWaitTimeout` (see
+[Schema operations](../lattice.api.schema/operations.md)); see
 [Deleting an aliased tree](../lattice/tree-deletion.md#deleting-an-aliased-tree).
 The destination inherits everything about the tree except its values. It is
 registered with the shard map the tree routes by (and with it the virtual slot

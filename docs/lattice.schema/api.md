@@ -614,3 +614,4 @@ The following inventory includes directly declared public members and overloads,
 - `public const string Completed`
 - `public const string Aborted`
 - `public const string Cancelled`
+- `public const string Superseded`

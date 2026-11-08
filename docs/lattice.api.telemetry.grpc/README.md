@@ -132,6 +132,7 @@ tenant.
 | `TelemetryBackendException` | `Unavailable` | Not the caller's fault - the retryable-with-backoff code. |
 | `LatticeAuthorizationDeniedException`, `LatticeTenantAccessDeniedException` | `PermissionDenied` | A denial, not an internal fault. |
 | `ArgumentException` | `InvalidArgument` | |
+| `LatticeSaturatedException` | `ResourceExhausted` | Storage back-pressure: the store refused the call on purpose and nothing was applied. Retry after a short backoff (#5723). |
 | `OperationCanceledException` | `Cancelled` | |
 | `TimeoutException` | `DeadlineExceeded` | A grain call timed out inside the cluster, so the outcome is unknown and a write may already have applied. Retry an idempotent read; confirm state before retrying a write. Logged at Warning (#5742). |
 | `OrleansMessageRejectionException` (including `SiloUnavailableException`) or `EnumerationAbortedException` | `Unavailable` | A silo was unavailable or rejected the message, or a remote enumerator was lost to a grain deactivation mid-read: a transient cluster fault. Retry after a short backoff. Logged at Warning (#5742). |

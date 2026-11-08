@@ -3622,6 +3622,22 @@
       "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
     },
     {
+      "id": "saturated",
+      "type": "LatticeSaturatedException",
+      "grpc_status": "ResourceExhausted",
+      "retryable": true,
+      "meaning": "Storage back-pressure: the store refused the call on purpose and nothing was applied. Retry after a short backoff (#5722, #5723).",
+      "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+    },
+    {
+      "id": "wal-quiescing",
+      "type": "LatticeWalQuiescingException",
+      "grpc_status": "Unavailable",
+      "retryable": true,
+      "meaning": "A WAL shard is briefly quiesced for a placement move: the write was refused without being applied, and the shard accepts writes again once the move lifts its fence. Retry after a short backoff (#5800).",
+      "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+    },
+    {
       "id": "failed-precondition",
       "type": "ReservedTenantOperationException, TenantAccessAdministrationDisabledException, TenantLastAdminSubjectException, TenantLastRegionException, TenantGrantTransitionException, TenantRegionNotAllowedException, InvalidOperationException",
       "grpc_status": "FailedPrecondition",

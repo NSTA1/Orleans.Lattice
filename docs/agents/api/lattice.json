@@ -7177,7 +7177,7 @@
       "type": "LatticeSaturatedException",
       "grpc_status": null,
       "retryable": true,
-      "meaning": "A tree storage or fan-out admission seam refused work because the tree is back-pressured; LatticeSaturationSource names the seam.",
+      "meaning": "A tree storage or fan-out admission seam refused work because the tree is back-pressured; LatticeSaturationSource names the seam. A refused SetManyAsync batch carries UnappliedKeys, a superset of the keys that may not have landed, or null when the outcome cannot be attributed key by key (#5970).",
       "source": "src/lattice/LatticeSaturatedException.cs#LatticeSaturatedException"
     },
     {
@@ -7235,6 +7235,14 @@
       "retryable": false,
       "meaning": "A registry verb that only changes an existing tree row targeted a tree id that was never registered or has been purged; nothing is created.",
       "source": "src/lattice/LatticeTreeNotRegisteredException.cs#LatticeTreeNotRegisteredException"
+    },
+    {
+      "id": "tree-purge-settling",
+      "type": "LatticeTreePurgeSettlingException",
+      "grpc_status": null,
+      "retryable": true,
+      "meaning": "A write reached a tree whose purge still holds the tree id: the purge is walking, or has recorded its completion and still owes the removal of the purged tree's registry entry. The write was not committed; the purge's keepalive re-drives its tail about once a minute, so retrying after about a minute succeeds (#5458).",
+      "source": "src/lattice/LatticeTreePurgeSettlingException.cs#LatticeTreePurgeSettlingException"
     },
     {
       "id": "wal-provider-missing",

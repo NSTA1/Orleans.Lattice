@@ -25,6 +25,7 @@ The contract:
 Task AppendBatchAsync(string treeId, int shardIndex, IReadOnlyList<WalEntry> entries, CancellationToken cancellationToken);
 Task AppendEncodedBatchAsync(string treeId, int shardIndex, ReadOnlyMemory<ArraySegment<byte>> encodedEntries, ReadOnlyMemory<long> offsets, IWalRecordEncoder encoder, CancellationToken cancellationToken);
 int MaxAppendBatchEntries { get; } // optional, default int.MaxValue (no per-call cap)
+bool IsRemote { get; } // optional, default false; sizes the auto WAL replay ceiling (32 when true)
 Task WaitForAppendVisibilityAsync(string treeId, int shardIndex, CancellationToken cancellationToken); // optional, default completes at once
 IAsyncEnumerable<WalEntry> ReadAsync(string treeId, int shardIndex, long fromOffsetExclusive, int maxEntries, CancellationToken cancellationToken);
 Task<WalShardEncodedPage> ReadEncodedAsync(string treeId, int shardIndex, long fromOffsetExclusive, int maxEntries, IWalRecordEncoder encoder, CancellationToken cancellationToken); // optional, default drains ReadAsync and re-encodes
