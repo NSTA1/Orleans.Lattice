@@ -112,23 +112,59 @@ internal sealed class ReplayPageRing
     /// The pages from the one covering <paramref name="fromExclusive"/>
     /// onwards, for <see cref="ReplaySliceProjection.Project"/>; empty when no
     /// page covers it. The result is a snapshot: a later eviction does not
-    /// change it.
+    /// change it, and nothing is copied: the view reads the slot array current
+    /// when it was taken, which the ring replaces rather than mutates (issue
+    /// #5997).
     /// </summary>
-    public IReadOnlyList<ReplayPage> RunFrom(long fromExclusive)
+    public RunView RunFrom(long fromExclusive)
     {
         var slots = Volatile.Read(ref _slots);
         for (var i = 0; i < slots.Length; i++)
         {
             if (slots[i].Page.CoversFrom(fromExclusive))
-            {
-                var run = new ReplayPage[slots.Length - i];
-                for (var j = i; j < slots.Length; j++)
-                    run[j - i] = slots[j].Page;
-                return run;
-            }
+                return new RunView(slots, i);
         }
 
-        return [];
+        return new RunView([], 0);
+    }
+
+    /// <summary>
+    /// A run of pages: the ring's slots from one position onwards, read from a
+    /// snapshot the ring never mutates, followed by any pages a serve has filled
+    /// since. <see cref="Sorted"/> holds while the pages ascend by start offset,
+    /// which the ring's slots always do.
+    /// </summary>
+    internal sealed class RunView(Slot[] slots, int start) : IReadOnlyList<ReplayPage>
+    {
+        private List<ReplayPage>? _appended;
+
+        /// <summary>Whether the pages ascend by <see cref="ReplayPage.FromExclusive"/>.</summary>
+        public bool Sorted { get; private set; } = true;
+
+        /// <inheritdoc />
+        public int Count => slots.Length - start + (_appended?.Count ?? 0);
+
+        /// <inheritdoc />
+        public ReplayPage this[int index] =>
+            index < slots.Length - start ? slots[start + index].Page : _appended![index - (slots.Length - start)];
+
+        /// <summary>Appends a page a serve filled after the view was taken.</summary>
+        public void Add(ReplayPage page)
+        {
+            ArgumentNullException.ThrowIfNull(page);
+            if (Count > 0 && this[Count - 1].FromExclusive > page.FromExclusive)
+                Sorted = false;
+            (_appended ??= []).Add(page);
+        }
+
+        /// <inheritdoc />
+        public IEnumerator<ReplayPage> GetEnumerator()
+        {
+            for (var i = 0; i < Count; i++)
+                yield return this[i];
+        }
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
     }
 
     /// <summary>
@@ -327,7 +363,7 @@ internal sealed class ReplayPageRing
         ArgumentNullException.ThrowIfNull(reader);
         var epoch = Epoch;
         var incarnation = Incarnation ?? await reader.GetIncarnationAsync(treeId, partition, CancellationToken.None);
-        var entries = new List<CommitLogSliceEntry>();
+        var entries = new List<CommitLogSliceEntry>(Math.Min(budget, 1024));
         await foreach (var (offset, mutation) in reader.ReadAsync(treeId, partition, fromExclusive, CancellationToken.None))
         {
             if (offset > toInclusive)
@@ -369,7 +405,7 @@ internal sealed class ReplayPageRing
         }
     }
 
-    /// <summary>An estimate of the bytes a page holds: per entry, its key, value and a fixed overhead.</summary>
+    /// <summary>An estimate of the bytes a page holds: per entry, its key, value and a fixed overhead, plus its owner index (issue #5997).</summary>
     internal static long EstimateBytes(ReplayPage page)
     {
         long bytes = 64;
@@ -381,6 +417,6 @@ internal sealed class ReplayPageRing
                 + (entry.Mutation.Value?.Length ?? 0);
         }
 
-        return bytes;
+        return bytes + page.Index.EstimatedBytes;
     }
 }

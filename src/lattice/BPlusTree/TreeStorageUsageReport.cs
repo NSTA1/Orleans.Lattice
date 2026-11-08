@@ -90,8 +90,9 @@ public readonly record struct TreeStorageUsageReport
     /// <see cref="IWalStorageProvider.GetRetainedByteSizeAsync"/>, or a
     /// snapshot store without content-length metadata); or</description></item>
     /// <item><description>a shard root or WAL partition did not answer the
-    /// fan-out at all (it failed or timed out). Such a surface contributes
-    /// nothing rather than a zero, because summing its zeroes would understate
+    /// fan-out at all (it failed or timed out), and - for a WAL partition - no
+    /// figure measured for it in the last five minutes was available to stand
+    /// in (see <see cref="Stale"/>). Such a surface contributes nothing rather than a zero, because summing its zeroes would understate
     /// the tree while still presenting the total as complete.</description></item>
     /// </list>
     /// Either way, consumers should render the affected gauge as "no data"
@@ -145,4 +146,22 @@ public readonly record struct TreeStorageUsageReport
     /// </para>
     /// </summary>
     [Id(9)] public long? WalMaxRetainedBytes { get; init; }
+
+    /// <summary>
+    /// <c>true</c> when at least one WAL partition did not answer this sample
+    /// (its retained-byte scan was refused under the silo's scan bound, or
+    /// failed) and the report carries that partition's last measured figures,
+    /// no more than five minutes old, instead of leaving it out. A stale report
+    /// is an estimate rather than a lower bound, so it does not set
+    /// <see cref="Partial"/> on that account (issue #6017).
+    /// <see cref="OldestMeasuredAtUtc"/> says how old the oldest carried figure
+    /// is. Shard surfaces are never carried.
+    /// </summary>
+    [Id(10)] public bool Stale { get; init; }
+
+    /// <summary>
+    /// When <see cref="Stale"/> is <c>true</c>, the UTC time the oldest carried
+    /// WAL partition figure was measured; otherwise <see langword="null"/>.
+    /// </summary>
+    [Id(11)] public DateTimeOffset? OldestMeasuredAtUtc { get; init; }
 }

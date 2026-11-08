@@ -15,7 +15,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// (<see cref="ILatticeAdmin.RefreshStorageUsageAsync"/>).
 /// </summary>
 [TestFixture]
-public sealed class LatticeAdminGrainTests
+public sealed partial class LatticeAdminGrainTests
 {
     private static LatticeAdminGrain CreateGrain(
         IGrainFactory factory,

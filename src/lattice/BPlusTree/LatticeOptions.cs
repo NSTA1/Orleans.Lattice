@@ -3423,6 +3423,40 @@ public class LatticeOptions
     public const int DefaultMaxConcurrentStorageUsageSurfaces = 16;
 
     /// <summary>
+    /// Maximum number of retained-byte WAL usage scans a single silo runs at
+    /// once, across every tree and WAL partition it hosts.
+    /// <para>
+    /// A retained-byte scan
+    /// (<see cref="IWalStorageProvider.GetRetainedByteSizeAsync"/>) is a full
+    /// manifest scan of one WAL partition on the Azure Table provider, issued
+    /// against the same table the foreground appends write to. The
+    /// storage-usage poll, the deep storage-usage roll-up and the on-demand
+    /// <see cref="ILattice.GetStorageUsageAsync"/> all reach it, so without a
+    /// silo-wide bound their fan-outs multiply into tens of concurrent scans
+    /// that stall storage for every caller (issue #6017).
+    /// </para>
+    /// <para>
+    /// The bound is enforced where the scan runs, in the WAL partition grain,
+    /// so every usage path is covered. Admission does not queue: a scan that
+    /// cannot take a slot within a short fixed wait (one second) is refused,
+    /// and that partition reports its retained bytes as unavailable for that
+    /// sample, which the storage-usage aggregators then cover with the
+    /// partition's last-known figure. Each refusal is counted on
+    /// <c>orleans.lattice.storage.usage_scans_refused</c> with
+    /// <c>reason = slot</c>. The cheap physical-size read is not bounded.
+    /// </para>
+    /// This is a silo-wide knob read from the default (unnamed) options when
+    /// the silo starts; per-tree overrides do not apply and a later change
+    /// takes effect on the next silo start. Defaults to
+    /// <see cref="DefaultMaxConcurrentWalUsageScansPerSilo"/> (4). Must be at
+    /// least 1; options validation rejects smaller values.
+    /// </summary>
+    public int MaxConcurrentWalUsageScansPerSilo { get; set; } = DefaultMaxConcurrentWalUsageScansPerSilo;
+
+    /// <summary>Default value for <see cref="MaxConcurrentWalUsageScansPerSilo"/> (4).</summary>
+    public const int DefaultMaxConcurrentWalUsageScansPerSilo = 4;
+
+    /// <summary>
     /// Wall-clock budget a cluster-wide storage-usage roll-up
     /// (<see cref="ILatticeAdmin.GetTotalStorageUsageAsync"/>) may spend sampling
     /// trees before it stops dispatching and returns what it has.

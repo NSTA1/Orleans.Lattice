@@ -462,6 +462,9 @@ public sealed partial class TenantUsageMeteringServiceTests
 
         public void Broken(string treeId) =>
             _behaviour[treeId] = () => throw new InvalidOperationException($"'{treeId}' is down");
+
+        public void Report(string treeId, TreeStorageUsageReport report) =>
+            _behaviour[treeId] = () => report;
     }
 
     [Test]

@@ -148,6 +148,11 @@
           "name": "Trees",
           "type": "ImmutableArray<TreeStorageUsageSnapshot>",
           "required": false
+        },
+        {
+          "name": "Stale",
+          "type": "bool",
+          "required": true
         }
       ],
       "source": "src/lattice.api.abstractions/TreeAdmin/Model/ClusterStorageUsageSummary.cs#ClusterStorageUsageSummary"
@@ -1729,6 +1734,11 @@
         {
           "name": "SampledAt",
           "type": "DateTimeOffset",
+          "required": true
+        },
+        {
+          "name": "StaleStorage",
+          "type": "bool",
           "required": true
         }
       ],

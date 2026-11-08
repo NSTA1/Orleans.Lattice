@@ -1,0 +1,11 @@
+MODULE: QueueBoundedBulkIgnoresTotalDepth
+TARGET: QueueBounded
+CLASS: Action
+SUMMARY: an arrival is judged by its own class check only, so Bulk queues past the current Interactive bound
+
+--- FIND
+    /\ \/ observed[r].depth - observed[r].excl >= observed[r].bound
+       \/ observed[r].depth >= observed[r].cap
+--- REPLACE
+    /\ observed[r].depth - observed[r].excl >= observed[r].bound
+--- END

@@ -25,6 +25,12 @@ WAL-move surface yourself. Nothing on this axis ever changes the compute
   backs a WAL partition (never `null`; empty when nothing is tracked).
 - `Recommendation` - an optional `WalRebalanceRecommendation`, or `null` when no
   rebalance is warranted or `StorageRecommendationsEnabled` is `false`.
+- `ExcludedPartialTrees` - how many trees were left out because their WAL byte
+  figure was partial: some partition did not answer and had no recent figure to
+  stand in, so the figure is a lower bound. Weighing it would understate the
+  pressure on exactly the account too busy to answer, so the tree's bytes and
+  ceiling are left out of every byte and capacity comparison; its saturation
+  still counts toward throughput classification (issue #6017).
 
 ## Throughput-bound versus capacity-bound
 

@@ -48,11 +48,55 @@ internal sealed partial class LatticeAdminGrain(
     public Task<ClusterStorageUsageReport> RefreshStorageUsageAsync(CancellationToken cancellationToken = default)
         => BuildRollupAsync(forceRefresh: true, cancellationToken);
 
+    /// <summary>
+    /// The WAL-usage poll currently running on behalf of every caller, or a
+    /// completed one. See <see cref="PollWalUsageAsync"/>.
+    /// </summary>
+    private Task? _walPollInFlight;
+
     /// <inheritdoc />
-    public async Task PollWalUsageAsync(CancellationToken cancellationToken = default)
+    /// <remarks>
+    /// <para>
+    /// <b>One poll for the whole cluster at a time.</b> Every silo's
+    /// <see cref="LatticeStorageUsagePoller"/> calls this on its own cadence,
+    /// and the method interleaves, so without coalescing N silos' polls ran
+    /// side by side and multiplied the WAL manifest scans they issue (issue
+    /// #6017). A call that arrives while a poll is running joins it and
+    /// completes when it completes; a call that arrives after it finished -
+    /// successfully or not - starts a fresh one, so a fault is never served to
+    /// a later caller.
+    /// </para>
+    /// <para>
+    /// The shared poll runs on no caller's token. A caller's cancellation, or
+    /// its grain call timing out, only stops that caller waiting; the poll it
+    /// joined carries on for the others. Each tree's usage read is bounded by
+    /// its own aggregator's budget, so the shared poll cannot run unbounded.
+    /// </para>
+    /// </remarks>
+    public Task PollWalUsageAsync(CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
+        var shared = _walPollInFlight;
+        if (shared is null || shared.IsCompleted)
+        {
+            shared = PollWalUsageOnceAsync(CancellationToken.None);
+            // Every caller may have detached before the shared poll faults; observe
+            // the fault so it never surfaces as an UnobservedTaskException. The
+            // continuation touches no grain state, so it runs off the activation.
+            _ = shared.ContinueWith(
+                static t => _ = t.Exception,
+                CancellationToken.None,
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                TaskScheduler.Default);
+            _walPollInFlight = shared;
+        }
+
+        return shared.WaitAsync(cancellationToken);
+    }
+
+    private async Task PollWalUsageOnceAsync(CancellationToken cancellationToken)
+    {
         var registry = grainFactory.GetLatticeRegistry();
         var treeIds = await registry.GetAllTreeIdsAsync();
         cancellationToken.ThrowIfCancellationRequested();
@@ -139,6 +183,7 @@ internal sealed partial class LatticeAdminGrain(
         long leafState = 0;
         long total = 0;
         var partial = false;
+        var stale = false;
         foreach (var report in sorted)
         {
             walRetained += report.WalRetainedBytes;
@@ -146,6 +191,7 @@ internal sealed partial class LatticeAdminGrain(
             leafState += report.LeafStateBytes;
             total += report.TotalBytes;
             partial |= report.Partial;
+            stale |= report.Stale;
         }
 
         return new ClusterStorageUsageReport
@@ -156,6 +202,7 @@ internal sealed partial class LatticeAdminGrain(
             LeafStateBytes = leafState,
             TotalBytes = total,
             Partial = partial,
+            Stale = stale,
             Trees = sorted,
             SampledAt = DateTimeOffset.UtcNow,
         };

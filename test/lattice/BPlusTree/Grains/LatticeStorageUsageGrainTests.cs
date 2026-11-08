@@ -18,7 +18,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// dispatching every shard-root read in one burst.
 /// </summary>
 [TestFixture]
-public sealed class LatticeStorageUsageGrainTests
+public sealed partial class LatticeStorageUsageGrainTests
 {
     private const string TreeId = "usage-test-tree";
 
@@ -46,7 +46,8 @@ public sealed class LatticeStorageUsageGrainTests
         Func<int, Task<long>> walBehaviour,
         LatticeOptions? options = null,
         string? treeId = null,
-        Func<int, Task<long>>? walPhysicalBehaviour = null)
+        Func<int, Task<long>>? walPhysicalBehaviour = null,
+        TimeProvider? timeProvider = null)
     {
         var tree = treeId ?? TreeId;
         var context = Substitute.For<IGrainContext>();
@@ -106,7 +107,8 @@ public sealed class LatticeStorageUsageGrainTests
             TestOptionsResolver.ForFactory(factory, options),
             usageMetrics,
             admissionMetrics,
-            NullLogger<LatticeStorageUsageGrain>.Instance);
+            NullLogger<LatticeStorageUsageGrain>.Instance,
+            timeProvider);
     }
 
     private static Task<ShardStorageUsage> Usage(long leaf, long snapshot, long liveKeys) =>

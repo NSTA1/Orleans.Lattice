@@ -54,4 +54,12 @@ public sealed record ClusterStorageUsageSummary
     /// holds no trees).
     /// </summary>
     [Id(8)] public ImmutableArray<TreeStorageUsageSnapshot> Trees { get; init; } = ImmutableArray<TreeStorageUsageSnapshot>.Empty;
+
+    /// <summary>
+    /// <see langword="true"/> when at least one tree's reading carried a WAL
+    /// partition's last measured figures because the partition did not answer
+    /// in time, so the cluster totals are a recent estimate rather than a fresh
+    /// measurement.
+    /// </summary>
+    [Id(9)] public bool Stale { get; init; }
 }

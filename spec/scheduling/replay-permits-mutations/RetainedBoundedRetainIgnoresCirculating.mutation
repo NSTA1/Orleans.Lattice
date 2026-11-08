@@ -1,0 +1,14 @@
+MODULE: RetainedBoundedRetainIgnoresCirculating
+TARGET: RetainedBounded
+CLASS: Invariant
+SUMMARY: a refused Interactive replay is retained whatever the retained set already holds
+PERTURBS: RetainOnRefusal
+BOUNDS: Ceiling = 1
+
+--- FIND
+    /\ status[r] = "pending" /\ RefuseForWait(r) /\ Retainable(r)
+    /\ queue' = Append(queue, r)
+--- REPLACE
+    /\ status[r] = "pending" /\ RefuseForWait(r) /\ role[r] = "Interactive"
+    /\ queue' = Append(queue, r)
+--- END

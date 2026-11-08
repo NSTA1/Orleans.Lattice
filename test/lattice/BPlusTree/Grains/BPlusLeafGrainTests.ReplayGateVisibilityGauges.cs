@@ -61,7 +61,9 @@ public partial class BPlusLeafGrainTests
 
         var byName = observed
             .GroupBy(s => s.Name)
-            .ToDictionary(g => g.Key, g => g.First().Value);
+            // Summed: the queued gauge publishes one series per retained value (issue #6006),
+            // and the others publish one series each.
+            .ToDictionary(g => g.Key, g => g.Sum(s => s.Value));
 
         Assert.Multiple(() =>
         {

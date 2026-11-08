@@ -51,12 +51,32 @@ public readonly record struct TreeWalUsageReport
 
     /// <summary>
     /// <c>true</c> when at least one WAL partition's provider reported the
-    /// "byte accounting unsupported" sentinel, so <see cref="WalRetainedBytes"/>
+    /// "byte accounting unsupported" sentinel, or did not answer and had no
+    /// recent measured figure to fall back on, so <see cref="WalRetainedBytes"/>
     /// is a lower bound. The aggregator does not publish a wrong byte count
-    /// for a partial surface.
+    /// for a partial surface. A partition that did not answer but was measured
+    /// within the last five minutes reports that figure instead and sets
+    /// <see cref="Stale"/>, not this flag.
     /// </summary>
     [Id(2)] public bool Partial { get; init; }
 
     /// <summary>UTC time at which this WAL-only sample was assembled.</summary>
     [Id(3)] public DateTimeOffset SampledAt { get; init; }
+
+    /// <summary>
+    /// <c>true</c> when at least one WAL partition did not answer this sample
+    /// (its retained-byte scan was refused or failed) and its figures are the
+    /// last ones measured for it, no more than five minutes old, rather than a
+    /// fresh reading. The totals are then an estimate, not a lower bound: a
+    /// partition's bytes a moment ago are much closer to its bytes now than
+    /// zero is (issue #6017). <see cref="OldestMeasuredAtUtc"/> says how old the
+    /// oldest carried figure is.
+    /// </summary>
+    [Id(5)] public bool Stale { get; init; }
+
+    /// <summary>
+    /// When <see cref="Stale"/> is <c>true</c>, the UTC time the oldest carried
+    /// partition figure was measured; otherwise <see langword="null"/>.
+    /// </summary>
+    [Id(6)] public DateTimeOffset? OldestMeasuredAtUtc { get; init; }
 }
