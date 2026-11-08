@@ -270,7 +270,7 @@ All three configurations retain all ten invariants, sixteen properties and six
 temporal branches. PartialPrefix requires multiple completed slices to finish
 one coverage gap. Thirty-six one-target paired experiments cover the checked
 clauses and environment steps; Stutter alone is non-behavioural. The forty-five
-behaviour rows map to twenty-four distinct production methods.
+behaviour rows map to twenty-seven distinct production methods.
 `WorkConservingRefusal` (#5992 A1) re-checks a free permit with no waiter ahead
 at every refusal decision; it changes transitions, not the reachable states.
 Retained arrivals (#5992) keep a wait-refused Interactive replay parked in one
