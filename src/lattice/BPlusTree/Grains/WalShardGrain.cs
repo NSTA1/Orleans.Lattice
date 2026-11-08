@@ -2016,6 +2016,22 @@ internal sealed partial class WalShardGrain(
     }
 
     /// <inheritdoc />
+    public async Task<long?> RefreshTrimWatermarkAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureInternalOrigin(LatticeOperation.Read);
+        EnsureInitialized();
+
+        if (!(TrimWatermarkSupportForTesting?.Invoke()
+            ?? WalTrimWatermarkSupport.AllSilosMaintain(context.ActivationServices)))
+        {
+            return null;
+        }
+
+        return await _provider.RefreshTrimWatermarkAsync(_treeId, _shardIndex, cancellationToken).ConfigureAwait(true);
+    }
+
+    /// <inheritdoc />
     public async Task<long> GetTailOffsetAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();

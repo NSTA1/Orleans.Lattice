@@ -423,6 +423,8 @@ Every row in this table is charted by the Replication dashboard. The `orleans.la
 | `orleans.lattice.replication.apply.dependency_wait` | histogram (ms) | `tree`, `tenant` | Dependency wait p95 |
 | `orleans.lattice.replication.wal.entries_shipped` | counter (`{entry}`) | `tree`, `peer`, `tenant` | WAL throughput; Log-tailing producer: leaf WAL append vs ship rate |
 | `orleans.lattice.wal.entries_trimmed` | counter (`{entry}`) | `tree`, `shard`, `tenant` | WAL throughput; WAL GC trim stops by reason, whose second target keeps only the `offset_floor` stops on shards trimming nothing |
+| `orleans.lattice.wal.subscriber.empty_backlog_reads` | counter (`{read}`) | `tree`, `partition`, `tenant` | *(not charted)* - a stalled-partition signal (#6036): alert on a sustained nonzero rate rather than charting it |
+| `orleans.lattice.wal.subscriber.holes_skipped` | counter (`{offset}`) | `tree`, `outcome`, `tenant` | *(not charted)* - offsets a subscriber recovered after a watermark refresh or read past as a hole (#6036): alert on any `recovered` and on a sustained `hole` rate |
 | `orleans.lattice.wal.compactions` | counter (`{compaction}`) | `tree`, `shard`, `trigger`, `tenant` | WAL compactions by trigger over range |
 | `orleans.lattice.wal.compaction.reclaimed_bytes` | counter (`By`) | `tree`, `shard`, `trigger`, `tenant` | WAL bytes reclaimed by compaction over range |
 | `orleans.lattice.wal.compaction.eval.retained_bytes` | histogram (`By`) | `tree`, `shard`, `tenant` | WAL compaction gate inputs - bytes per shard |
@@ -453,6 +455,7 @@ Every row in this table is charted by the Replication dashboard. The `orleans.la
 | `orleans.lattice.replication.merkle_walk.aborted` | counter (`{walk}`) | `reason`, `tenant` | Merkle-walk aborted |
 | `orleans.lattice.replication.ship.redundant_payloads` | counter (`{entry}`) | `tree`, `peer`, `tenant` | Redundant payload re-send rate |
 | `orleans.lattice.replication.ship.redundant_payload_bytes` | counter (`By`) | `tree`, `peer`, `tenant` | Redundant payload re-send rate |
+| `orleans.lattice.replication.ship.holes_skipped` | counter (`{offset}`) | `tree`, `peer`, `outcome`, `tenant` | *(not charted)* - offsets the shipper recovered after a watermark refresh or consumed past as a hole (#6036): alert on any `recovered` and on a sustained `hole` rate |
 | `orleans.lattice.replication.ship.effective_batch_size` | histogram (`{entry}`) | `tree`, `peer`, `tenant` | Effective ship batch size (adaptive) |
 | `orleans.lattice.replication.ship.ack_latency` | histogram (ms) | `tree`, `peer`, `tenant` | Ship ack latency p50/p95/p99 |
 | `orleans.lattice.replication.coalesce.entries_elided` | counter (`{entry}`) | `tree`, `peer`, `tenant` | Pre-ship coalescing elided rate |

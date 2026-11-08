@@ -136,4 +136,21 @@ internal interface ICommitLogReader
         string treeId,
         int shardIndex,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Re-derives the partition's trim watermark from storage through
+    /// <see cref="IWalShardGrain.RefreshTrimWatermarkAsync"/>, replacing any value
+    /// the storage provider cached to clamp reads. A reader calls it when a
+    /// partition keeps reporting entries <see cref="ReadAsync"/> does not return
+    /// (issue #6036). The default does nothing, for a reader with no WAL grain
+    /// behind it.
+    /// </summary>
+    /// <param name="treeId">The physical tree id the WAL is written under.</param>
+    /// <param name="shardIndex">The WAL partition index.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task RefreshTrimWatermarkAsync(
+        string treeId,
+        int shardIndex,
+        CancellationToken cancellationToken = default) =>
+        Task.CompletedTask;
 }

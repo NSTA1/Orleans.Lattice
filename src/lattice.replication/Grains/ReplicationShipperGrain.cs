@@ -3528,11 +3528,109 @@ internal sealed partial class ReplicationShipperGrain(
                 // A trim removed records this shipper never delivered (#4534).
                 await MarkReseedRequiredAsync(partition, _partitionNextSeq[partition], page.Entries[0].Sequence);
             }
+            else
+            {
+                page = await RereadUntrimmedHoleAsync(grain, partition, page, pageSize, cancellationToken);
+            }
         }
         _partitionPages[partition] = page.Entries;
         _partitionPageIndex[partition] = 0;
         _partitionHeadDecoded[partition] = false;
         _partitionNextSeq[partition] = page.NextSequence;
+    }
+
+    /// <summary>
+    /// Handles a shipping read that jumped over an untrimmed hole on
+    /// <paramref name="partition"/>. The jump is either a genuine hole - a flush
+    /// abandoned at its deadline that never landed (#4621), which holds nothing
+    /// to ship - or committed entries a stale cached trim watermark hides from
+    /// reads (#6036). The shipper cannot tell which from the page, so it
+    /// refreshes the watermark from storage and re-reads once: what reappears
+    /// ships (<c>recovered</c>), and what is still missing is consumed past
+    /// (<c>hole</c>). Both are metered and logged; neither is a reason to
+    /// re-seed, unless the refreshed watermark now reports the range trimmed.
+    /// Returns the page to ship from.
+    /// </summary>
+    private async Task<WalShardShippingPage> RereadUntrimmedHoleAsync(
+        IWalShardGrain grain,
+        int partition,
+        WalShardShippingPage page,
+        int pageSize,
+        CancellationToken cancellationToken)
+    {
+        var requested = _partitionNextSeq[partition];
+        var firstReturned = page.Entries[0].Sequence;
+        long? refreshed;
+        try
+        {
+            refreshed = await grain.RefreshTrimWatermarkAsync(cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // A silo that predates the refresh cannot answer it: consume as before.
+            Logger.LogWarning(ex, "{Context}: refreshing the trim watermark of WAL partition {Partition} failed.", LogContext, partition);
+            ReportHoleSkipped(partition, requested, firstReturned, LatticeReplicationMetrics.ShipHoleOutcomeHole);
+            return page;
+        }
+
+        var reread = await grain.ReadShippingAsync(requested, pageSize, cancellationToken);
+        if (reread.Entries.Count == 0)
+        {
+            ReportHoleSkipped(partition, requested, firstReturned, LatticeReplicationMetrics.ShipHoleOutcomeHole);
+            return page;
+        }
+
+        NoteClockFloor(partition, reread.ClockFloor, reread.ClockFloorOffset);
+        var first = reread.Entries[0].Sequence;
+        if (first < firstReturned)
+        {
+            ReportHoleSkipped(partition, first, firstReturned, LatticeReplicationMetrics.ShipHoleOutcomeRecovered);
+        }
+
+        if (first > requested)
+        {
+            if (refreshed is { } watermark && watermark >= requested)
+            {
+                // The refresh found a trim the first probe did not (#4534).
+                await MarkReseedRequiredAsync(partition, requested, first);
+            }
+            else
+            {
+                ReportHoleSkipped(partition, requested, first, LatticeReplicationMetrics.ShipHoleOutcomeHole);
+            }
+        }
+
+        return reread;
+    }
+
+    /// <summary>
+    /// Meters and logs <paramref name="outcome"/> for the shipping range from
+    /// <paramref name="from"/> up to <paramref name="to"/> on
+    /// <paramref name="partition"/>: offsets a watermark refresh recovered, or
+    /// offsets still missing that the shipper consumes past (#6036).
+    /// </summary>
+    private void ReportHoleSkipped(int partition, long from, long to, string outcome)
+    {
+        LatticeReplicationMetrics.ShipHolesSkipped.Add(
+            to - from,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeName),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagOutcome, outcome),
+            LatticeTenantLabel.ForTree(_treeName));
+        if (string.Equals(outcome, LatticeReplicationMetrics.ShipHoleOutcomeRecovered, StringComparison.Ordinal))
+        {
+            Logger.LogWarning(
+                "{Context}: WAL partition {Partition} hid sequences {From} to {To} behind a stale trim watermark; "
+                + "a refresh recovered them and they ship.",
+                LogContext, partition, from, to);
+        }
+        else
+        {
+            Logger.LogWarning(
+                "{Context}: WAL partition {Partition} has an untrimmed hole from sequence {From} to {To}; "
+                + "the shipper consumes past it and the peer receives nothing for those offsets.",
+                LogContext, partition, from, to);
+        }
     }
 
     /// <summary>

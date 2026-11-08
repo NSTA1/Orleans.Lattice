@@ -220,6 +220,7 @@ replication change feed.
 | `GetNextSequenceAsync(CancellationToken)` | Returns the sequence the next append will use. |
 | `GetReadableHeadAsync(CancellationToken)` | Returns the head a reader may resume from: one past the highest sequence a read would expose. Lower than `GetNextSequenceAsync` while a flush is in flight, while an abandoned flush may still land, or while a trailing hole sits above every stored entry (issue #4621). |
 | `GetTrimWatermarkAsync(CancellationToken)` | Returns the shard's trim watermark when a reader may trust it, otherwise `null`. See [Abandoned flushes, holes and the trim watermark](#abandoned-flushes-holes-and-the-trim-watermark). |
+| `RefreshTrimWatermarkAsync(CancellationToken)` | Returns the trim watermark under the same trust rule, re-derived from storage so a value the provider cached above the stored trim point stops hiding entries from reads (issue #6036). |
 | `GetResumeFloorAsync(CancellationToken)` | Returns the next sequence minus the number of live entries currently persisted, where the live count is `highest - lowest + 1` against the storage provider. Rises by the trimmed prefix length once `IWalStorageProvider.TrimAsync` runs (driven by `ILatticeWalGc`), so it reflects the persisted footprint rather than a monotonically-growing offset counter; the state API's change observation reads it to refuse a resume point the GC has already trimmed. |
 | `GetEntryCountAsync(CancellationToken)` | **Obsolete** trim-unaware diagnostic helper retained for one minor version. Returns `_nextOffset` (the next sequence to be assigned). Use `GetResumeFloorAsync` for the trim-aware footprint. |
 
@@ -543,6 +544,40 @@ its trims would read as holes. Until then, and for a third-party provider that
 keeps no watermark, readers treat every jump in offsets as a trim, which can
 trigger a needless rebuild or re-seed during a rolling upgrade but never skips a
 trim.
+
+A watermark is only ever inferred from what was committed. Up to 10.2.0 the Azure
+Table provider inferred an empty shard's watermark from its highest offset, which
+counts batches accepted but not yet committed; a probe during a shard's first
+batch, or its first after a full trim, cached that batch as trimmed and every
+later read on the silo skipped it: a view stalled on it, and once a later entry
+landed the shipper, the views and leaf replay could read past the skipped range
+and lose it (issue #6036). The provider now
+infers from the committed tail, and `RefreshTrimWatermarkAsync` re-derives the
+watermark from storage, replacing a cached value. Two backstops use it:
+
+- A dense reader that sees a jump which is not a trim - the WAL subscriber and
+  the replication shipper - refreshes the partition's watermark and re-reads once
+  from the same position. What reappears is surfaced or shipped, and only what is
+  still missing, a genuine hole, is read past. Both outcomes are metered
+  (`orleans.lattice.wal.subscriber.holes_skipped` and
+  `orleans.lattice.replication.ship.holes_skipped`, tagged `outcome` =
+  `recovered` or `hole`) and logged at Warning.
+- The WAL subscriber meters a partition that keeps reading empty while its
+  readable head says entries are waiting
+  (`orleans.lattice.wal.subscriber.empty_backlog_reads`) and, once that has lasted
+  30 seconds across at least three drains, logs at Warning and refreshes the
+  watermark. The 30 seconds sit above twice the Azure Table provider's default
+  12-second phase-2 commit timeout; with a longer configured timeout the backstop
+  can refresh during legitimate lag, which is harmless because a refresh only
+  re-reads the stored watermark.
+
+Leaf replay has no such backstop. Its filtered reads skip excluded entries by
+design, so a range a stale watermark clamped away is indistinguishable from
+entries the filter dropped, and detecting it would cost a storage read per replay
+slice on the cold-restart path. Leaf replay therefore relies on the provider's
+watermark being exact. See
+[Hidden committed entries](../lattice.storage.azuretable/architecture.md#hidden-committed-entries-issue-6036)
+for the releases affected and the remediation after upgrading.
 
 ### Batched leaf write path
 

@@ -102,6 +102,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
+- **Storage - Azure Table WAL no longer silently loses committed entries.** In 10.0.0-10.2.0 a watermark probe during a commit could hide the batch on a silo; views, shippers and leaf replay could skip it. **Action:** reconcile views, re-seed peers and check leaf digests after upgrading. ([#6036](https://github.com/NSTA1/Orleans.Lattice/issues/6036), [remediation](docs/lattice.storage.azuretable/architecture.md#remediation-after-upgrading)) (`Orleans.Lattice.Storage.AzureTable`, `Orleans.Lattice.Replication`, `Orleans.Lattice`)
+
 - **Replay - Background drives give up stalled storage reads.** A WAL GC starvation drive abandons a slice read storage has not answered within two thirds of the response timeout instead of hitting a raw timeout, and the sweep no longer charges a timed-out drive. ([#6007](https://github.com/NSTA1/Orleans.Lattice/issues/6007)) (`Orleans.Lattice`)
 
 - **Storage - WAL usage polling no longer stalls storage.** Silos share one WAL usage poll, scans are bounded per silo, and a fan-out past its budget cancels its scans. A partition that does not answer reports its last figure for up to five minutes, flagged `Stale` (also in the Explorer). ([#6017](https://github.com/NSTA1/Orleans.Lattice/issues/6017)) (`Orleans.Lattice`, `Orleans.Lattice.Storage.AzureTable`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Explorer.UI`)

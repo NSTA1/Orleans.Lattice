@@ -768,6 +768,16 @@ the `_sum` series ranks observers by total latency contributed, while
 `histogram_quantile` over the `_bucket` series exposes a single slow observer that
 a mean would hide.
 
+### WAL subscriber (sourced from the shared WAL tailing loop)
+
+Every consumer that tails a source WAL through the shared subscriber - materialised
+views among them - reads each partition whose readable head is past its checkpoint.
+
+| Name | Kind | Unit | Description |
+|---|---|---|---|
+| `orleans.lattice.wal.subscriber.empty_backlog_reads` | `Counter<long>` | `{read}` | Reads that returned nothing from a partition whose readable head said entries were waiting, tagged `tree` (the physical WAL id) and `partition` ([#6036](https://github.com/NSTA1/Orleans.Lattice/issues/6036)). Legitimate for a few seconds while a batch's phase-2 commit lands; once such reads persist for 30 seconds across at least three drains, the subscriber logs at Warning and re-derives the partition's trim watermark from storage. A sustained rate on one partition means its consumers are stalled on it. |
+| `orleans.lattice.wal.subscriber.holes_skipped` | `Counter<long>` | `{offset}` | Offsets a subscriber found missing above its position with nothing trimmed there, tagged `tree` (the physical WAL id), `outcome` and `tenant` ([#6036](https://github.com/NSTA1/Orleans.Lattice/issues/6036)). On such a jump the subscriber refreshes the partition's trim watermark and re-reads once: `recovered` counts offsets the re-read returned, which a stale cached watermark had hidden, and `hole` offsets still missing, which the consumer reads past because a genuine hole - a flush abandoned at its deadline that never landed - holds nothing. Both arms are primed at zero the first time a tree is drained on the silo. Any `recovered` means a provider cache was hiding committed entries; a steady `hole` rate means flushes are being abandoned. |
+
 ### Materialised views
 
 The view maintainer publishes on the core `orleans.lattice` meter (views need a

@@ -197,6 +197,22 @@ internal sealed class WalCommitLogReader(IGrainFactory grainFactory) : ICommitLo
     }
 
     /// <inheritdoc />
+    public Task RefreshTrimWatermarkAsync(
+        string treeId,
+        int shardIndex,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(treeId);
+        if (shardIndex < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(shardIndex), shardIndex, "Shard index must be non-negative.");
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        return grainFactory.GetGrain<IWalShardGrain>($"{treeId}/{shardIndex}").RefreshTrimWatermarkAsync(cancellationToken);
+    }
+
+    /// <inheritdoc />
     public Task<long> GetTailOffsetAsync(
         string treeId,
         int shardIndex,
