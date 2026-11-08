@@ -334,8 +334,9 @@ variable (an absolute path), falling back to `tools/tla2tools.jar` at the
 repository root (a gitignored path), and it runs `java` from `JAVA_HOME/bin`,
 falling back to the first `java` on `PATH`. The CI workflows provision it through
 the `.github/actions/tla-toolchain` composite action, which reads every pin from
-`tools/tlc/toolchain.json`: it downloads the pinned release to
-`tools/tla2tools.jar` and verifies its SHA-256 digest before the tests run, then
+`tools/tlc/toolchain.json`: it restores the pinned `tools/tla2tools.jar` from the
+Actions cache (keyed on its pinned SHA-256), downloads the pinned release only on
+a miss, and verifies the jar's SHA-256 digest either way before the tests run, then
 restores the overlay from the Actions cache, or builds and regression-checks it
 on a miss, and verifies its receipt either way.
 

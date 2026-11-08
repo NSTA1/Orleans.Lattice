@@ -197,6 +197,7 @@ leave it off until every leaf has captured at least once, and only then roll bac
 | [`MaxConcurrentSnapshotCaptures`](#maxconcurrentsnapshotcaptures) | `int` | 4 | Yes |
 | [`MaxConcurrentStorageUsageSurfaces`](#maxconcurrentstorageusagesurfaces) | `int` | 16 | Yes |
 | [`MaxConcurrentStorageUsageTrees`](#maxconcurrentstorageusagetrees) | `int` | 8 | Yes (cluster-wide; read from the default options) |
+| [`MaxConcurrentWalUsageScansPerSilo`](#maxconcurrentwalusagescanspersilo) | `int` | 4 | Yes (per silo; read from the default options at silo start) |
 | [`MaxCursorSnapshotPinTtl`](#maxcursorsnapshotpinttl) | `TimeSpan` | 7 days | Yes |
 | [`MaxDurableUnresolvedReplayWork`](#maxdurableunresolvedreplaywork) | `int` | 1 024 | Yes |
 | [`MaxEstimatedBytes`](#maxestimatedbytes) | `long?` | `null` (unbounded) | Yes |
@@ -928,6 +929,21 @@ siloBuilder.ConfigureLattice(o =>
 // A single very wide tree can narrow its own surface fan-out further
 // without changing the cluster-wide roll-up bound.
 siloBuilder.ConfigureLattice("wide-archive", o => o.MaxConcurrentStorageUsageSurfaces = 4);
+```
+
+### `MaxConcurrentWalUsageScansPerSilo`
+
+Maximum number of retained-byte WAL usage scans one silo runs at once, across every tree and WAL partition it hosts (default: 4). On the Azure Table provider a retained-byte scan is a full manifest scan of one WAL partition, against the same table the foreground appends write to. The WAL-usage poll, the deep storage-usage roll-up and `ILattice.GetStorageUsageAsync` all reach it, so without a silo-wide bound their fan-outs multiply into tens of concurrent scans that stall storage for every caller ([#6017](https://github.com/NSTA1/Orleans.Lattice/issues/6017)).
+
+The bound is enforced in the WAL partition grain, where the scan runs, so every usage path is covered. Admission does not queue: a scan that cannot take a slot within a fixed one-second wait is refused, and that partition reports its retained bytes as unavailable for that sample. The storage-usage aggregators then report the partition's last measured figure, if it is no more than five minutes old, and flag the report `Stale`; past five minutes the report is `Partial`, as for any surface that did not answer. Refusals are counted on `orleans.lattice.storage.usage_scans_refused` with `reason = slot`, and `orleans.lattice.storage.usage_scans_in_flight` shows how close the silo runs to the bound (see [Metrics](metrics.md)). The cheap physical-size read is not bounded.
+
+Raising it lets a silo hosting many WAL partitions measure them faster at the cost of more concurrent manifest scans against storage; lowering it protects foreground writes further and leaves more partitions reporting carried figures. Values below 1 are rejected by options validation.
+
+This is a per-silo knob read from the default (unnamed) options when the silo starts; per-tree overrides do not apply, and a changed value takes effect on the next silo start.
+
+```csharp verify
+// Allow at most two concurrent retained-byte WAL scans on this silo.
+siloBuilder.ConfigureLattice(o => o.MaxConcurrentWalUsageScansPerSilo = 2);
 ```
 
 ### `ShedSnapshotOpensWhenSaturated`
@@ -1913,6 +1929,7 @@ Estimated bytes of WAL pages the per-partition replay coordinators of one silo m
 - **Memory (issue #5877).** Every coordinator's pages are charged to one silo-wide ledger, which shares its byte budget with resident leaves: a quarter of the heap limit, the same budget that sheds leaves. Pages always give way first, so a cached page never causes a leaf to be shed. With the default `-1`, that shared budget is the only bound, except that when no heap limit can be read the pages are capped at 64 MiB. A positive value caps the pages further. The cache saves the most when it can hold the log a cold restart replays: everything appended since the oldest leaf checkpoint, across the silo's WAL partitions, at about `96 + 2 x key length + value length` bytes an entry (roughly 380 bytes for a 32-character key and a 220-byte value). On an Azure Table silo restarted cold under write load, a 217,000-entry log (about 82 MB) replayed 18 times faster with room for all of it than under a 64 MiB cap. A read in flight additionally holds the page it is reading, bounded by [`WalReplaySliceBudget`](#walreplayslicebudget) entries.
 - **Eviction across partitions, by demand (issue #5877).** A full ledger evicts across every partition, so a partition that fills later is never frozen out. A leaf queued for a replay permit declares the offset it will start reading each partition from, and every slice read advances its reader's position. The pages no queued or reading leaf still needs go first; then, if a partition has no declared readers, its most recently cached pages; and last, the pages whose next reader is farthest away. A cold restart replays in waves behind the permit gate, and each new wave reads the head of the log first, so this keeps the head and evicts what is needed latest. Measured on one partition in eight sequential waves with room for a quarter of the log, each entry was read 6.63 times, against 9.81 when the lowest pages were evicted first. Declarations are advisory and leased: they change which pages are evicted, never what a leaf is served, and a reader that stops reading lapses after 10 minutes.
 - **Isolation.** Each leaf receives its own copy of every value buffer and version vector it is served, so nothing one leaf does to its slice reaches another.
+- **Owner index (issue #5997).** Each cached page carries an index of its entries by key and by virtual slot, built once when the page is filled, so a leaf's slice visits only the entries its key range and shard can own instead of every entry in the partition's log. The index adds about 8 bytes per entry and is charged to the page's size in the shared ledger.
 
 Set to `0` to disable the cache; every replay then reads storage itself, as before. The setting is silo-wide: it is read from the global options, so set it globally; a per-tree override has no effect. A WAL wiped **out of band**, behind the library's back rather than through a purge, is not detected: restart the silo, or set this to `0`, before doing that.
 
@@ -1959,6 +1976,16 @@ each one buffers; the first factor is
 [`WalMaterialiserMaxConcurrentReplays`](#walmaterialisermaxconcurrentreplays) and
 this is the second. Lowering it trades round trips for a smaller resident slice on
 a host that cannot afford the default width.
+
+**It bounds what a slice returns; a slice served from the replay page cache may
+examine more (issue #5997).** A read from storage examines at most this many
+entries, because storage must materialise an entry to filter it. A slice served
+from the coordinator's page cache (see
+[`WalReplayPageRingBytes`](#walreplaypageringbytes)) uses each cached page's owner
+index to skip the entries the leaf does not own, so it may examine up to a fixed
+64 times this budget while still returning at most this many entries plus one
+trailing routing-only marker. A leaf replaying from cached pages therefore makes
+up to 64 times fewer slice reads; the memory a slice holds is unchanged.
 
 Do not confuse it with
 [`WalReplayMaxRecordsPerTurn`](#walreplaymaxrecordsperturn), which defaults to the

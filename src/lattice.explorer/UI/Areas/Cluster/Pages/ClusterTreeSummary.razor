@@ -16,7 +16,7 @@ else
                 <LtDefinition Term="Tombstones">@ClusterFormat.Count(stats.TotalTombstones)</LtDefinition>
                 <LtDefinition Term="Physical shards">@ClusterFormat.Count(stats.ShardCount)</LtDefinition>
                 <LtDefinition Term="Virtual shards">@ClusterFormat.Count(stats.VirtualShardCount)</LtDefinition>
-                <LtDefinition Term="Stored">@ClusterFormat.Bytes(stats.TotalBytes)@(stats.PartialStorage ? " (partial)" : string.Empty)</LtDefinition>
+                <LtDefinition Term="Stored">@ClusterFormat.Bytes(stats.TotalBytes)@(stats.PartialStorage ? " (partial)" : string.Empty)@(stats.StaleStorage ? " (stale)" : string.Empty)</LtDefinition>
                 <LtDefinition Term="Sampled">@ClusterFormat.Instant(stats.SampledAt)</LtDefinition>
             </LtDefinitionList>
         }

@@ -216,6 +216,13 @@ public static class LatticeServiceCollectionExtensions
         // across every leaf on the silo and a split instance would hold only a
         // partial maximum.
         BPlusTree.Grains.LeafSnapshotCaptureConcurrencyCensus.EnsureGaugeRegistered();
+        // Per-silo bound on concurrent retained-byte WAL usage scans (issue
+        // #6017), enforced by the WAL partition grain where the scan runs. A DI
+        // singleton rather than a static, so each silo of an in-process test
+        // cluster holds its own bound; the in-flight gauge is registered here so
+        // its zero is evidential from silo build.
+        builder.Services.TryAddSingleton<BPlusTree.Grains.WalUsageScanLimiter>();
+        BPlusTree.Grains.WalUsageScanLimiter.EnsureGaugeRegistered();
         // Always-on in-memory consumer-cursor registry. The WAL is integral to
         // every Lattice deployment, so the registry that the saturation sampler
         // reads to compute materialiser drain lag must never be silently absent:

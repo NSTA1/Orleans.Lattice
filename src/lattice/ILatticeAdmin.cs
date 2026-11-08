@@ -83,8 +83,17 @@ public interface ILatticeAdmin : IGrainWithStringKey
     /// <see cref="RefreshStorageUsageAsync"/> must not be parked behind
     /// a poll fan-out already in flight.
     /// </para>
+    /// <para>
+    /// Concurrent calls share one poll: a call made while a poll is running
+    /// joins it rather than starting another, so the pollers on every silo
+    /// add up to one cluster-wide fan-out at a time (issue #6017). A poll that
+    /// has finished, successfully or not, is never reused.
+    /// </para>
     /// </summary>
-    /// <param name="cancellationToken">Cancels the WAL fan-out.</param>
+    /// <param name="cancellationToken">
+    /// Stops this caller waiting. It does not cancel a poll other callers have
+    /// joined.
+    /// </param>
     [AlwaysInterleave]
     Task PollWalUsageAsync(CancellationToken cancellationToken = default);
 

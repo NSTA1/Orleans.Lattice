@@ -2431,6 +2431,7 @@ jobs:
       # The receipt plan (#5164): which modules this run verifies and at which
       # fingerprint, so the leg can write partial receipts as items finish.
       - name: Download the TLC receipt plan
+        id: tlc-plan
         if: needs.plan.outputs.tlc_receipts == 'on'
         uses: actions/download-artifact@v8
         with:
@@ -2463,8 +2464,12 @@ jobs:
       # a partial receipt is written only for a module all of whose cases in
       # that item passed. The next run of the same scope assembles a module's
       # receipt from one run's partials when they cover its whole census.
+      # Gated on the plan download's outcome, not just on receipts being on:
+      # when an earlier step (e.g. toolchain provisioning) failed, the plan was
+      # never downloaded and the leg ran nothing, so there is nothing to write,
+      # and a FileNotFoundError here would only bury the real failure.
       - name: Write partial TLC receipts
-        if: always() && needs.plan.outputs.tlc_receipts == 'on'
+        if: always() && steps.tlc-plan.outcome == 'success'
         run: |
           set -euo pipefail
           python3 .github/workflows/tlc-receipts.py partials \
@@ -2473,7 +2478,7 @@ jobs:
             --receipts-dir "$RUNNER_TEMP/tlc-partials"
 
       - name: Save partial TLC receipts
-        if: always() && needs.plan.outputs.tlc_receipts == 'on'
+        if: always() && steps.tlc-plan.outcome == 'success'
         uses: ./.github/actions/tlc-receipts
         with:
           operation: save

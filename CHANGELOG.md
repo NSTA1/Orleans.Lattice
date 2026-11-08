@@ -12,6 +12,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Added
 
+- **Storage - Per-silo WAL usage scan bound.** `LatticeOptions.MaxConcurrentWalUsageScansPerSilo` (default 4) caps a silo's concurrent retained-byte WAL scans; one with no slot within a second is refused. `orleans.lattice.storage.usage_scans_refused` and `usage_scans_in_flight` report it. ([#6017](https://github.com/NSTA1/Orleans.Lattice/issues/6017)) (`Orleans.Lattice`, `Orleans.Lattice.Dashboards`)
+
 - **Writes - Partial admission for a refused `SetManyAsync` batch.** A batch refused for saturation now lists, in the new `LatticeSaturatedException.UnappliedKeys`, a superset of the keys that may not have landed, so a caller can retry only those instead of the whole batch, and the shard retry re-sends only them. On a cold restart a batch spanning a leaf still queued for replay no longer rewrites every leaf that already landed on each retry. The list is `null` when that cannot be determined. It is never truncated, and keys never appear in the exception message. ([#5970](https://github.com/NSTA1/Orleans.Lattice/issues/5970)) (`Orleans.Lattice`)
 - **WAL replay - Storage-pressure signal for the replay permit controller.** When `WalReplayServiceRateControllerEnabled` is on, the replay permit gate also steps down when storage throttles (408/429/5xx retries on at least 1% of replay slice reads) or replay slice-read p99 (including in-process queueing) doubles over its unpressured baseline. Throttle retries on any storage request count, including WAL appends. It steps down a quarter at a time, back up one permit per three clean windows, and all the way back after a quiet spell with no throttling, never takes the last permit, and never exceeds the configured or default ceiling. A new `orleans.lattice.wal.replay.permits_effective` gauge publishes the walked ceiling, and the step reasons are new `trigger` values on `orleans.lattice.wal.replay.permit_adaptations`. ([#5877](https://github.com/NSTA1/Orleans.Lattice/issues/5877)) (`Orleans.Lattice`, `Orleans.Lattice.Storage.AzureTable`, `Orleans.Lattice.Dashboards`)
 
@@ -75,6 +77,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **Observability - Replay admission refusal arms.** A `replay_permit_admission` refusal past the depth bound whose permit holders are still reading WAL slices is now tagged `arm=holders_slow` on `orleans.lattice.saturation.refusals`, with a capacity message; `no_progress` now means the holders have stopped advancing as well. Admission is unchanged. Dashboards and alerts that key on `no_progress` should include `holders_slow`. ([#5877](https://github.com/NSTA1/Orleans.Lattice/issues/5877)) (`Orleans.Lattice`)
 
+- **Performance - Cold-restart replay from the page cache.** Each cached WAL page carries an owner index, so a leaf's slice skips entries it cannot own instead of examining its whole partition log, and a cached slice may examine up to 64 times `WalReplaySliceBudget`: far fewer slice reads. ([#5997](https://github.com/NSTA1/Orleans.Lattice/issues/5997)) (`Orleans.Lattice`)
+
 - **Performance - Tree-admin status reads.** Resize, reshard and view status use one grain call, down from five, three and two. Tree statistics overlap diagnostics and storage reads; authorization and system-tree rejection remain. ([#5345](https://github.com/NSTA1/Orleans.Lattice/pull/5345), [#5423](https://github.com/NSTA1/Orleans.Lattice/pull/5423)) (`Orleans.Lattice`, `Orleans.Lattice.Api.TreeAdmin`)
 
 - **Performance - View sampling.** Default statistics use two calls instead of three. Catalog pages batch fresh runtime metadata and sample in settled waves of up to 32, retaining source visibility, aggregation bounds, unavailable statistics and sequential custom factories. ([#5423](https://github.com/NSTA1/Orleans.Lattice/pull/5423), [#5461](https://github.com/NSTA1/Orleans.Lattice/pull/5461)) (`Orleans.Lattice`, `Orleans.Lattice.Api.State`)
@@ -120,6 +124,16 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 ### Fixed
 
 - **Replay - Background drives give up stalled storage reads.** A WAL GC starvation drive abandons a slice read storage has not answered within two thirds of the response timeout instead of hitting a raw timeout, and the sweep no longer charges a timed-out drive. ([#6007](https://github.com/NSTA1/Orleans.Lattice/issues/6007)) (`Orleans.Lattice`)
+
+- **Storage - WAL usage polling no longer stalls storage.** Silos share one WAL usage poll, scans are bounded per silo, and a fan-out past its budget cancels its scans. A partition that does not answer reports its last figure for up to five minutes, flagged `Stale` (also in the Explorer). ([#6017](https://github.com/NSTA1/Orleans.Lattice/issues/6017)) (`Orleans.Lattice`, `Orleans.Lattice.Storage.AzureTable`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Explorer.UI`)
+
+- **Writes - Partial usage reports no longer weaken write admission.** Write admission keeps a tree's last complete storage-usage sample, and a partial report can only raise it, so `MaxLiveKeys` and `MaxEstimatedBytes` keep binding while a WAL partition cannot be measured. ([#6017](https://github.com/NSTA1/Orleans.Lattice/issues/6017)) (`Orleans.Lattice`)
+
+- **Atomic - Partial usage reports no longer weaken cross-tree admission.** A cross-tree write compares each participating tree's caps with the last complete storage-usage sample the coordinator read for it when the current report is partial. ([#6017](https://github.com/NSTA1/Orleans.Lattice/issues/6017)) (`Orleans.Lattice`)
+
+- **Tenancy - Partial usage reports no longer shrink tenant usage.** Tenant metering keeps a tree's last complete footprint, and a partial storage-usage report can only raise it, so a WAL partition that cannot be measured no longer lowers the tenant's usage and lifts its quota ceiling. ([#6017](https://github.com/NSTA1/Orleans.Lattice/issues/6017)) (`Orleans.Lattice.Tenancy`)
+
+- **Storage - Scaling pressure skips partial trees.** The storage pressure signal leaves trees with a partial WAL byte figure out of its byte and capacity comparisons, so a lower bound no longer understates an account's pressure. `StoragePressure.ExcludedPartialTrees` counts them. ([#6017](https://github.com/NSTA1/Orleans.Lattice/issues/6017)) (`Orleans.Lattice.Scaling`)
 
 - **Replay - Admission never refuses with a permit free, and a refused replay keeps its place.** Admission no longer refuses while a permit is free and no waiter is ahead, a stale wait reading expires, and a refused Interactive replay stays queued in arrival order while its callers are refused. ([#5992](https://github.com/NSTA1/Orleans.Lattice/issues/5992), [#6006](https://github.com/NSTA1/Orleans.Lattice/issues/6006)) (`Orleans.Lattice`)
 

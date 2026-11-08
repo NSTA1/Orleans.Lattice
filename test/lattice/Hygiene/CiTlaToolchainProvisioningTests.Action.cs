@@ -8,8 +8,10 @@ namespace Orleans.Lattice.Tests.Hygiene;
 /// <summary>
 /// The composite action and its pin file: <c>tools/tlc/toolchain.json</c> is
 /// well formed and is the only place a pin lives, the action reads every pin
-/// through <c>tools/tlc/toolchain.py</c>, builds the checkpoint overlay only on
-/// a cache miss, and verifies the overlay's receipt unconditionally.
+/// through <c>tools/tlc/toolchain.py</c>, restores <c>tla2tools.jar</c> from a
+/// cache keyed on its pinned digest and fetches it only on a miss, verifies
+/// the jar's digest unconditionally, builds the checkpoint overlay only on a
+/// cache miss, and verifies the overlay's receipt unconditionally.
 /// </summary>
 public sealed partial class CiTlaToolchainProvisioningTests
 {
@@ -24,6 +26,12 @@ public sealed partial class CiTlaToolchainProvisioningTests
         "run: python3 tools/tlc/toolchain.py verify --jar tools/tla2tools.jar --build tools/tlc/build";
 
     private const string CacheMiss = "if: steps.restore.outputs.cache-hit != 'true'";
+
+    private const string JarCacheKey = "key: tla2tools-${{ steps.pins.outputs.jar-sha256 }}";
+
+    private const string JarCacheMiss = "if: steps.jar.outputs.cache-hit != 'true'";
+
+    private const string JarDigestCheck = "echo \"$JAR_SHA256  tools/tla2tools.jar\" | sha256sum --check --strict";
 
     private static readonly TimeSpan ScriptTimeout = TimeSpan.FromMinutes(2);
 
@@ -60,6 +68,7 @@ public sealed partial class CiTlaToolchainProvisioningTests
         var pins = LoadToolchainPins();
         var setupJava = Step(action, "Setup Java");
         var fetch = Step(action, "Fetch TLA+ tools");
+        var verifyJar = Step(action, "Verify TLA+ tools");
 
         Assert.Multiple(() =>
         {
@@ -70,9 +79,11 @@ public sealed partial class CiTlaToolchainProvisioningTests
                 .And.Contain("distribution: ${{ steps.pins.outputs.java-distribution }}")
                 .And.Contain("java-version: ${{ steps.pins.outputs.java-version }}"));
             Assert.That(fetch, Does.Contain("JAR_URL: ${{ steps.pins.outputs.jar-url }}")
-                .And.Contain("JAR_SHA256: ${{ steps.pins.outputs.jar-sha256 }}")
-                .And.Contain("\"$JAR_URL\"")
-                .And.Contain("echo \"$JAR_SHA256  tools/tla2tools.jar\" | sha256sum --check --strict"));
+                .And.Contain("\"$JAR_URL\""));
+            Assert.That(verifyJar, Does.Contain("JAR_SHA256: ${{ steps.pins.outputs.jar-sha256 }}")
+                .And.Contain(JarDigestCheck));
+            Assert.That(Step(action, "Restore TLA+ tools"), Does.Contain(JarCacheKey));
+            Assert.That(Step(action, "Save TLA+ tools"), Does.Contain(JarCacheKey));
             Assert.That(JarReleaseUrl.IsMatch(action), Is.False, "the action must not carry the jar URL itself");
             Assert.That(Digest.IsMatch(action), Is.False, "the action must not carry a digest itself");
             Assert.That(action, Does.Not.Contain(pins.JavaDistribution + "\n")
@@ -87,7 +98,8 @@ public sealed partial class CiTlaToolchainProvisioningTests
         var order = StepHeader.Matches(action).Select(match => match.Groups["name"].Value.Trim()).ToList();
         string[] expected =
         [
-            "Read TLA+ toolchain pins", "Setup Java", "Fetch TLA+ tools", "Compute checkpoint overlay cache key",
+            "Read TLA+ toolchain pins", "Setup Java", "Restore TLA+ tools", "Fetch TLA+ tools", "Verify TLA+ tools",
+            "Save TLA+ tools", "Compute checkpoint overlay cache key",
             "Restore checkpoint overlay", "Build and regression-check TLC checkpoint overlay",
             "Verify checkpoint overlay receipt", "Save checkpoint overlay",
         ];
@@ -128,6 +140,56 @@ public sealed partial class CiTlaToolchainProvisioningTests
     }
 
     [Test]
+    public void The_action_restores_the_jar_from_the_cache_fetches_it_only_on_a_miss_and_always_verifies_it()
+    {
+        var action = ActionText();
+        var restore = Step(action, "Restore TLA+ tools");
+        var fetch = Step(action, "Fetch TLA+ tools");
+        var verify = Step(action, "Verify TLA+ tools");
+        var save = Step(action, "Save TLA+ tools");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(HasVerifiedJarCache(action), Is.True);
+            Assert.That(restore, Does.Contain("id: jar").And.Contain("uses: actions/cache/restore@")
+                .And.Contain("path: tools/tla2tools.jar").And.Contain(JarCacheKey));
+            Assert.That(restore, Does.Not.Contain("restore-keys"), "a partial key match would restore another jar");
+            Assert.That(fetch, Does.Contain(JarCacheMiss), "a restored jar is not fetched again");
+            Assert.That(verify, Does.Contain(JarDigestCheck).And.Not.Contain("if:"),
+                "the digest is checked on every leg, restored or fetched, and a mismatch fails the leg");
+            Assert.That(verify, Does.Not.Contain("continue-on-error"));
+            Assert.That(save, Does.Contain(JarCacheMiss).And.Contain("uses: actions/cache/save@")
+                .And.Contain("path: tools/tla2tools.jar").And.Contain(JarCacheKey));
+        });
+    }
+
+    [TestCase(JarCacheKey)]
+    [TestCase(JarCacheMiss)]
+    [TestCase(JarDigestCheck)]
+    [TestCase("path: tools/tla2tools.jar")]
+    public void Jar_cache_guard_rejects_an_unkeyed_ungated_or_unverified_jar(string removed)
+    {
+        var action = ActionText();
+        Assert.That(HasVerifiedJarCache(action), Is.True, "the positive control must be wired");
+        Assert.That(HasVerifiedJarCache(action.Replace(removed, "", StringComparison.Ordinal)), Is.False);
+    }
+
+    [Test]
+    public void Jar_cache_guard_rejects_a_verification_skipped_on_a_cache_hit()
+    {
+        var action = ActionText();
+        var gated = action.Replace(
+            "    - name: Verify TLA+ tools\n",
+            "    - name: Verify TLA+ tools\n      " + JarCacheMiss + "\n",
+            StringComparison.Ordinal);
+        Assert.Multiple(() =>
+        {
+            Assert.That(gated, Is.Not.EqualTo(action), "the mutation must apply");
+            Assert.That(HasVerifiedJarCache(gated), Is.False);
+        });
+    }
+
+    [Test]
     public void The_toolchain_script_self_test_passes()
     {
         var (exitCode, stdout, stderr) = RunPython(["tools/tlc/toolchain.py", "--self-test"]);
@@ -142,6 +204,44 @@ public sealed partial class CiTlaToolchainProvisioningTests
         var verify = text.IndexOf(VerifyCommand, StringComparison.Ordinal);
         return checkedJar >= 0 && build > checkedJar && verify > build
             && text.IndexOf(BuildCommand, build + BuildCommand.Length, StringComparison.Ordinal) < 0;
+    }
+
+    /// <summary>
+    /// The jar is restored under its digest key, fetched only on a miss,
+    /// verified unconditionally, and saved under the same key only on a miss
+    /// and only after the check.
+    /// </summary>
+    private static bool HasVerifiedJarCache(string text)
+    {
+        var names = StepHeader.Matches(text).Select(match => match.Groups["name"].Value.Trim()).ToList();
+        string[] order = ["Restore TLA+ tools", "Fetch TLA+ tools", "Verify TLA+ tools", "Save TLA+ tools"];
+        if (!names.Where(order.Contains).SequenceEqual(order) || order.Any(name => names.Count(n => n == name) != 1))
+        {
+            return false;
+        }
+
+        string Body(string name)
+        {
+            var headers = StepHeader.Matches(text);
+            var index = headers.ToList().FindIndex(match => match.Groups["name"].Value.Trim() == name);
+            var end = index + 1 < headers.Count ? headers[index + 1].Index : text.Length;
+            return text[headers[index].Index..end];
+        }
+
+        var restore = Body("Restore TLA+ tools");
+        var fetch = Body("Fetch TLA+ tools");
+        var verify = Body("Verify TLA+ tools");
+        var save = Body("Save TLA+ tools");
+        return restore.Contains(JarCacheKey, StringComparison.Ordinal)
+            && restore.Contains("path: tools/tla2tools.jar", StringComparison.Ordinal)
+            && !restore.Contains("restore-keys", StringComparison.Ordinal)
+            && fetch.Contains(JarCacheMiss, StringComparison.Ordinal)
+            && verify.Contains(JarDigestCheck, StringComparison.Ordinal)
+            && !verify.Contains("if:", StringComparison.Ordinal)
+            && !verify.Contains("continue-on-error", StringComparison.Ordinal)
+            && save.Contains(JarCacheMiss, StringComparison.Ordinal)
+            && save.Contains(JarCacheKey, StringComparison.Ordinal)
+            && save.Contains("path: tools/tla2tools.jar", StringComparison.Ordinal);
     }
 
     private static ToolchainPins LoadToolchainPins()

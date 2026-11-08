@@ -216,5 +216,27 @@ internal sealed class WalCommitLogReader(IGrainFactory grainFactory) : ICommitLo
 
     /// <inheritdoc />
     public ValueTask<long> GetIncarnationAsync(string treeId, int shardIndex, CancellationToken cancellationToken = default) =>
-        grainFactory.GetGrain<IWalShardGrain>($"{treeId}/{shardIndex}").GetIncarnationAsync(cancellationToken);
+        ShardGrain(treeId, shardIndex).GetIncarnationAsync(cancellationToken);
+
+    /// <summary>
+    /// Shard grain references the incarnation check resolves once per slice a
+    /// ring serves (issue #5997): resolving one formats its key and the grain
+    /// interface type on every call. Bounded by clearing, since a reference is
+    /// cheap to resolve again.
+    /// </summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<(string TreeId, int ShardIndex), IWalShardGrain> _shardGrains = new();
+
+    private const int MaxCachedShardGrains = 4096;
+
+    private IWalShardGrain ShardGrain(string treeId, int shardIndex)
+    {
+        if (_shardGrains.TryGetValue((treeId, shardIndex), out var grain))
+            return grain;
+
+        if (_shardGrains.Count >= MaxCachedShardGrains)
+            _shardGrains.Clear();
+        grain = grainFactory.GetGrain<IWalShardGrain>($"{treeId}/{shardIndex}");
+        _shardGrains[(treeId, shardIndex)] = grain;
+        return grain;
+    }
 }
