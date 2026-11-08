@@ -146,7 +146,7 @@ internal sealed class WalLogSubscriber(
                         recoveryPending = false;
                         if (offset < recoverUpTo)
                         {
-                            RecordHoleOutcome(context, partition, offset, recoverUpTo, recovered: true);
+                            RecordHoleOutcome(context, partition, lastOffset + 1, recoverUpTo, recovered: true);
                         }
                     }
 
