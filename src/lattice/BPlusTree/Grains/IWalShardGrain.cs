@@ -463,8 +463,13 @@ internal interface IWalShardGrain : IGrainWithStringKey
     /// reduces the figure as a prefix is removed. The byte-accurate
     /// storage-usage aggregator (<see cref="ILattice.GetStorageUsageAsync"/>)
     /// sums this across a tree's WAL shards to report the tree's retained
-    /// WAL footprint. Forwards directly to
-    /// <see cref="IWalStorageProvider.GetRetainedByteSizeAsync"/>.
+    /// WAL footprint. Forwards to
+    /// <see cref="IWalStorageProvider.GetRetainedByteSizeAsync"/> under the
+    /// silo's usage-scan bound
+    /// (<see cref="LatticeOptions.MaxConcurrentWalUsageScansPerSilo"/>): a scan
+    /// that cannot take a slot within a short fixed wait is refused and also
+    /// returns <c>-1</c>, so callers treat it exactly like an unsupported
+    /// surface (issue #6017).
     /// <para>
     /// Marked <see cref="Orleans.Concurrency.AlwaysInterleaveAttribute"/> so a storage-usage
     /// poll never queues behind an in-flight <c>AppendBatchAsync</c> /
@@ -510,7 +515,9 @@ internal interface IWalShardGrain : IGrainWithStringKey
     /// <summary>
     /// Reads physical occupancy followed by retained payload size in one grain
     /// call. Each is an at-a-moment provider observation, not an atomic pair;
-    /// unsupported surfaces retain their <c>-1</c> sentinel.
+    /// unsupported surfaces retain their <c>-1</c> sentinel. The retained read
+    /// is bounded exactly as <see cref="GetRetainedByteSizeAsync"/> is, so a
+    /// refused scan reports a retained <c>-1</c> beside a real physical figure.
     /// </summary>
     /// <param name="cancellationToken">Cancellation token.</param>
     [AlwaysInterleave]

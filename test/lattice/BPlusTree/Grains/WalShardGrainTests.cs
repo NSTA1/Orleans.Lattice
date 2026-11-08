@@ -30,7 +30,8 @@ public partial class WalShardGrainTests
         long placementVersion = 0,
         IPersistentState<WalShardFloorState>? floorState = null,
         IWalClockFloorGate? floorGate = null,
-        IWalSaturationSignal? saturationSignal = null)
+        IWalSaturationSignal? saturationSignal = null,
+        WalUsageScanLimiter? usageScanLimiter = null)
     {
         provider ??= new InMemoryWalStorageProvider();
         var grainContext = Substitute.For<IGrainContext>();
@@ -52,7 +53,8 @@ public partial class WalShardGrainTests
             CreatePermissiveClusterIdResolver(),
             encoder ?? CreateDefaultEncoder(),
             floorState ?? new FakePersistentState<WalShardFloorState>(),
-            floorGate ?? new TestWalClockFloorGate());
+            floorGate ?? new TestWalClockFloorGate(),
+            usageScanLimiter);
         await grain.InitializeForTestingAsync(TreeId, ShardIndex, provider, CancellationToken.None, placementVersion);
         return grain;
     }

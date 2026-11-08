@@ -60,7 +60,8 @@ public sealed class DiagnosticRegistryElisionTests
         await registry.Received(2).GetEntryAsync(TreeId);
         await registry.DidNotReceiveWithAnyArgs().RegisterAsync(default!);
         await registry.DidNotReceiveWithAnyArgs().RegisterAndGetEntryAsync(default!);
-        await wal.Received(1).GetByteSizesAsync(CancellationToken.None);
+        // The fan-out runs on its own budget token, never the caller's (issue #6017).
+        await wal.Received(1).GetByteSizesAsync(Arg.Any<CancellationToken>());
         await wal.DidNotReceiveWithAnyArgs().GetPhysicalByteSizeAsync(default);
         await wal.DidNotReceiveWithAnyArgs().GetRetainedByteSizeAsync(default);
     }

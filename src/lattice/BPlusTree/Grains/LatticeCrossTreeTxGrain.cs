@@ -978,6 +978,13 @@ internal sealed class LatticeCrossTreeTxGrain(
         return false;
     }
 
+    /// <summary>
+    /// The last complete (non-partial) admission figures read for each
+    /// participating tree on this activation, as live keys and estimated bytes.
+    /// Activation state only; see <see cref="EnforceParticipantAdmissionAsync"/>.
+    /// </summary>
+    private readonly Dictionary<string, (long LiveKeys, long EstimatedBytes)> _lastAdmissionSamples = new(StringComparer.Ordinal);
+
     private async Task EnforceParticipantAdmissionAsync(string treeId, LatticeOptions options)
     {
         // Foreign-origin (replication) and prepared (saga) turns bypass admission
@@ -1015,6 +1022,21 @@ internal sealed class LatticeCrossTreeTxGrain(
 
         var liveKeys = report.LiveKeys;
         var estimatedBytes = report.TotalBytes;
+
+        // A partial report is a lower bound: a surface that did not answer
+        // contributes nothing to it. Comparing a cap against it could admit a
+        // write past the cap (issue #6017), so a partial report never displaces
+        // a complete sample this activation already holds for the tree. With no
+        // such sample it is still the best figure available and is used as
+        // before.
+        if (report.Partial && _lastAdmissionSamples.TryGetValue(treeId, out var previous))
+        {
+            (liveKeys, estimatedBytes) = previous;
+        }
+        else if (!report.Partial)
+        {
+            _lastAdmissionSamples[treeId] = (liveKeys, estimatedBytes);
+        }
 
         if (advisoryKeys is { } advK && liveKeys >= advK)
         {

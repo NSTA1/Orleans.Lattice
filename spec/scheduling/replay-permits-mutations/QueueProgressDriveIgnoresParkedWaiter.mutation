@@ -1,0 +1,11 @@
+MODULE: QueueProgressDriveIgnoresParkedWaiter
+TARGET: QueueProgress
+CLASS: Temporal
+SUMMARY: a non-queuing drive probe takes a released permit while a replay waiter is parked
+PERTURBS: DriveAdmission
+
+--- FIND
+    /\ LET accepted == free > 0 /\ queue = <<>> /\ Cardinality(DriveHolders) < Max(1, Circulating \div 2)
+--- REPLACE
+    /\ LET accepted == free > 0 /\ Cardinality(DriveHolders) < Max(1, Circulating \div 2)
+--- END

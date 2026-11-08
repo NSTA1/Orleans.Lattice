@@ -16,11 +16,21 @@ internal sealed class LatticeStorageUsageGrain(
     LatticeOptionsResolver optionsResolver,
     LatticeStorageUsageMetrics metrics,
     LatticeAdmissionMetrics admissionMetrics,
-    ILogger<LatticeStorageUsageGrain> logger) : ILatticeStorageUsage
+    ILogger<LatticeStorageUsageGrain> logger,
+    TimeProvider? timeProvider = null) : ILatticeStorageUsage
 {
     private string TreeId => context.GrainId.Key.ToString()!;
 
+    private TimeProvider Time => timeProvider ?? TimeProvider.System;
+
     private TreeStorageUsageReport? _cached;
+
+    /// <summary>
+    /// Each WAL partition's last measured figures, carried over a refused or
+    /// failed scan for up to <see cref="WalPartitionUsageCarry.MaxCarryAge"/>
+    /// (issue #6017). Activation state only.
+    /// </summary>
+    private readonly WalPartitionUsageCarry _carry = new();
 
     /// <summary>
     /// Whether the WAL surface of <see cref="_cached"/> was fully accounted.
@@ -44,7 +54,7 @@ internal sealed class LatticeStorageUsageGrain(
         else
             options = await optionsResolver.ResolveAsync(TreeId);
         var ttl = options.StorageUsageCacheTtl;
-        var now = DateTimeOffset.UtcNow;
+        var now = Time.GetUtcNow();
 
         if (!forceRefresh && _cached is { } c && ttl > TimeSpan.Zero && (now - c.SampledAt) < ttl)
         {
@@ -53,7 +63,7 @@ internal sealed class LatticeStorageUsageGrain(
         }
 
         var routing = await ReportRouting.ResolveAsync(grainFactory, TreeId, entry, cancellationToken);
-        var (report, walComplete) = await BuildReportAsync(forceRefresh, options, routing, cancellationToken);
+        var (report, walComplete) = await BuildReportAsync(forceRefresh, options, routing, entry, cancellationToken);
         _cached = report;
         _cachedWalComplete = walComplete;
         PublishToMetrics(report, options, walComplete);
@@ -135,7 +145,7 @@ internal sealed class LatticeStorageUsageGrain(
     /// </para>
     /// </summary>
     private async Task<(TreeStorageUsageReport Report, bool WalComplete)> BuildReportAsync(
-        bool forceRefresh, LatticeOptions options, RoutingInfo routing, CancellationToken cancellationToken)
+        bool forceRefresh, LatticeOptions options, RoutingInfo routing, TreeRegistryEntry? entry, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -145,6 +155,7 @@ internal sealed class LatticeStorageUsageGrain(
         // The WAL grain key is {physicalTreeId}/{partition}; a single partition
         // is the default.
         var walPartitions = await optionsResolver.GetWalPartitionsAsync(routing.PhysicalTreeId);
+        var pin = await WalPartitionUsageCarry.ReadPinAsync(optionsResolver, TreeId, routing.PhysicalTreeId, entry);
         cancellationToken.ThrowIfCancellationRequested();
 
         // A null slot means "this shard did not answer" - distinct from a shard
@@ -213,14 +224,31 @@ internal sealed class LatticeStorageUsageGrain(
         long walRetainedBytes = 0;
         long walPhysicalBytes = 0;
         var walComplete = true;
-        foreach (var (retained, physical) in walBytes)
+        var sampledAt = Time.GetUtcNow();
+        DateTimeOffset? oldestCarried = null;
+        _carry.Begin(WalPartitionUsageCarry.TreeIdentity(routing.PhysicalTreeId, entry), walPartitions);
+        for (var partition = 0; partition < walBytes.Length; partition++)
         {
+            // A partition whose scan was refused or failed takes its last
+            // measured figures, when recent and measured on the same WAL; the
+            // report is then stale rather than partial (issue #6017).
+            var (retained, physical, carriedFrom) = _carry.Resolve(
+                partition,
+                WalPartitionUsageCarry.PartitionIdentity(pin, partition),
+                walBytes[partition].Retained,
+                walBytes[partition].Physical,
+                sampledAt);
+            if (carriedFrom is { } measuredAt && (oldestCarried is null || measuredAt < oldestCarried))
+            {
+                oldestCarried = measuredAt;
+            }
+
             if (retained < 0)
             {
                 // -1 sentinel: the provider does not support byte
-                // accounting, or the fan-out to it failed. The surface
-                // contributes 0 and the report is flagged Partial so a
-                // consumer renders it as "no data".
+                // accounting, or the fan-out to it failed and no recent
+                // figure stands in. The surface contributes 0 and the report
+                // is flagged Partial so a consumer renders it as "no data".
                 walComplete = false;
             }
             else
@@ -248,7 +276,9 @@ internal sealed class LatticeStorageUsageGrain(
             LeafStateBytes = leafStateBytes,
             TotalBytes = total,
             Partial = !walComplete || !shardsComplete,
-            SampledAt = DateTimeOffset.UtcNow,
+            SampledAt = sampledAt,
+            Stale = oldestCarried is not null,
+            OldestMeasuredAtUtc = oldestCarried,
             LiveKeys = liveKeys,
             // The resolved per-tree ceiling, echoed so a multi-tree consumer can
             // weigh this tree's bytes against its own budget rather than against

@@ -2,7 +2,7 @@
 # key<TAB>enrolment<TAB>detail
 # enrolment: primed | anchored | unresolved | open | none | unprimed
 # reach: every status records what this static analyser could READ from source, never what a running process emits. unresolved = a dimension it could not read, or read but not yet enrolled; open = every unread dimension is runtime-valued by design. Neither is evidence about runtime priming either way - query a live metrics endpoint for present-at-zero.
-# coverage-floor: 210 declarations whose every tag dimension was read. Regeneration raises it and never lowers it; lowering it is a reviewed edit.
+# coverage-floor: 211 declarations whose every tag dimension was read. Regeneration raises it and never lowers it; lowering it is a reviewed edit.
 # Regenerate with LATTICE_REWRITE_PRIMING_ENROLMENT=1; review every row it changes.
 src/lattice.api.mcp.repocontext/Archive/RepoContextMemoryRestoreReporter.cs#_restores	unresolved	reason=dimension outcome: unrecognised value expression: outcome.ToString().ToLowerInvariant()
 src/lattice.api.mcp.repocontext/Bootstrap/RepoContextBootstrapService.cs#_passArmFaults	unresolved	reason=dimension arm: no declaration found for arm
@@ -215,6 +215,7 @@ src/lattice/BPlusTree/Grains/TagIndexReconcileGrain.cs#SweepsCounter	unresolved	
 src/lattice/BPlusTree/Grains/TagIndexReconcileGrain.cs#TreesMismatchedCounter	unresolved	reason=dimension (unread-tag-argument:indexTags): tag argument(s) indexTags are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/BPlusTree/Grains/TagIndexReconcileGrain.cs#TreesProbedCounter	unresolved	reason=dimension (unread-tag-argument:indexTags): tag argument(s) indexTags are not literal KeyValuePair constructions, so neither their keys nor their domains were ever read
 src/lattice/BPlusTree/Grains/WalSaturationSignal.cs#(unassigned:LatticeMetrics.WalSaturationStateGaugeName)	unresolved	reason=dimension (unread-observable-callback:static () => _current?.ObserveStateGauge() ?? Array.Empty<Measurement<long>>()): the tags of this observable instrument are built inside its measurement callback, whose body this parser could not reach, so its tag surface was never read. This is an admission of reach, never a claim that the instrument carries no bounded dimension
+src/lattice/BPlusTree/Grains/WalUsageScanLimiter.cs#_inFlightGauge	unresolved	reason=dimension tenant: read from this observable instrument's measurement callback, which yields [_platform_]. A callback read is a lower bound on the tag surface, not a closed domain
 src/lattice/LatticeAdmissionMetrics.cs#(unassigned:LatticeMetrics.AdmissionEstimatedBytesName)	unresolved	reason=dimension (unread-observable-callback:static () => ObserveLong(static s => s.EstimatedBytes)): the tags of this observable instrument are built inside its measurement callback, whose body this parser could not reach, so its tag surface was never read. This is an admission of reach, never a claim that the instrument carries no bounded dimension
 src/lattice/LatticeAdmissionMetrics.cs#(unassigned:LatticeMetrics.AdmissionLiveKeysName)	unresolved	reason=dimension (unread-observable-callback:static () => ObserveLong(static s => s.LiveKeys)): the tags of this observable instrument are built inside its measurement callback, whose body this parser could not reach, so its tag surface was never read. This is an admission of reach, never a claim that the instrument carries no bounded dimension
 src/lattice/LatticeAdmissionMetrics.cs#(unassigned:LatticeMetrics.AdmissionOverAdvisoryName)	unresolved	reason=dimension (unread-observable-callback:static () => ObserveOverAdvisory()): the tags of this observable instrument are built inside its measurement callback, whose body this parser could not reach, so its tag surface was never read. This is an admission of reach, never a claim that the instrument carries no bounded dimension
@@ -385,6 +386,7 @@ src/lattice/LatticeMetrics.cs#SplitRetroactiveForwardDuration	open	open=shard, t
 src/lattice/LatticeMetrics.cs#SplitRetroactiveForwardEntries	open	open=shard, tenant, tree; open dimension: tree carries a runtime identifier (optionsResolver.GetMetricTreeId(TreeId))
 src/lattice/LatticeMetrics.cs#StoragePolicyBytesReclaimed	open	open=tenant, tree; open dimension: tree carries a runtime identifier (treeName)
 src/lattice/LatticeMetrics.cs#StoragePolicyTrimTriggered	open	open=tenant, tree; open dimension: tree carries a runtime identifier (treeName)
+src/lattice/LatticeMetrics.cs#StorageUsageScansRefused	primed	
 src/lattice/LatticeMetrics.cs#StorageWalCompressionSkipped	unresolved	reason=bounded domain found, enrolment not yet chosen
 src/lattice/LatticeMetrics.cs#StorageWalStoredBytes	open	open=tenant, tree; open dimension: tree carries a runtime identifier (treeId)
 src/lattice/LatticeMetrics.cs#StorageWalUncompressedBytes	open	open=tenant, tree; open dimension: tree carries a runtime identifier (treeId)

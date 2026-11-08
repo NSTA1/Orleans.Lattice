@@ -47,6 +47,7 @@ internal sealed class ReplayPage
         FromExclusive = fromExclusive;
         Entries = entries;
         Incarnation = incarnation;
+        Index = new ReplayPageIndex(entries);
     }
 
     /// <summary>The exclusive lower bound the fill read from.</summary>
@@ -60,6 +61,9 @@ internal sealed class ReplayPage
 
     /// <summary>The partition incarnation the entries were read at.</summary>
     public long Incarnation { get; }
+
+    /// <summary>The owner index over <see cref="Entries"/> (issue #5997), built with the page.</summary>
+    public ReplayPageIndex Index { get; }
 
     /// <summary>Whether the page covers <paramref name="offset"/>'s successor, i.e. a read from <paramref name="offset"/> can start inside it.</summary>
     public bool CoversFrom(long offset) => offset >= FromExclusive && offset < CoveredThroughInclusive;

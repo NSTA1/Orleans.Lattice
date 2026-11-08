@@ -32,7 +32,8 @@ public readonly record struct StoragePressure
 
     /// <summary>
     /// Total bytes of write-ahead log currently retained across every
-    /// catalogue key in the cluster.
+    /// catalogue key in the cluster, over the trees whose figure was complete
+    /// (see <see cref="ExcludedPartialTrees"/>).
     /// </summary>
     [Id(1)] public long WalRetainedBytes { get; init; }
 
@@ -52,4 +53,14 @@ public readonly record struct StoragePressure
     /// pressure, or <see langword="null"/> when no rebalance is recommended.
     /// </summary>
     [Id(3)] public WalRebalanceRecommendation? Recommendation { get; init; }
+
+    /// <summary>
+    /// The number of trees left out of the byte figures and capacity
+    /// comparisons because their WAL byte figure was partial - a lower bound
+    /// with some partition unaccounted for - so weighing them would have
+    /// under-stated pressure (issue #6017). Their saturation still counts
+    /// toward throughput classification. <c>0</c> when every tree reported a
+    /// complete figure.
+    /// </summary>
+    [Id(4)] public int ExcludedPartialTrees { get; init; }
 }

@@ -54,9 +54,10 @@ All are immutable, serializable value types.
 | Member | Type | Meaning |
 |---|---|---|
 | `OverThreshold` | `bool` | The retained WAL bytes of the trees that declare a `WalMaxRetainedBytes` ceiling reached `RetainedBytesAdvisoryRatio` of their summed ceilings. A tree with no ceiling contributes neither bytes nor budget, so the flag stays `false` when no tree declares one. |
-| `WalRetainedBytes` | `long` | Total retained WAL bytes across every catalogue key. |
+| `WalRetainedBytes` | `long` | Total retained WAL bytes across every catalogue key, over the trees whose figure was complete. |
 | `Accounts` | `IReadOnlyList<WalAccountPressure>` | Per-catalogue-key breakdown; never `null`. |
 | `Recommendation` | `WalRebalanceRecommendation?` | Optional rebalance suggestion, or `null`. |
+| `ExcludedPartialTrees` | `int` | Trees left out of the byte figures and capacity comparisons because their WAL byte figure was partial (a lower bound). Their saturation still counts toward throughput classification. |
 
 ### `WalAccountPressure`
 

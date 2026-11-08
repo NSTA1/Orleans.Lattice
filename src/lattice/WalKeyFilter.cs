@@ -257,7 +257,7 @@ public readonly record struct WalKeyFilter
         return hash.ToHashCode();
     }
 
-    private bool OwnsSlot(int slot) => (OwnedSlots[slot >> 6] & (1UL << (slot & 63))) != 0;
+    internal bool OwnsSlot(int slot) => (OwnedSlots[slot >> 6] & (1UL << (slot & 63))) != 0;
 
     private static int WordsFor(int slots) => (slots + 63) >> 6;
 }

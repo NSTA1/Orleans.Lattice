@@ -3845,6 +3845,21 @@ public static class LatticeMetrics
     public const string WalReplayPermitsQueuedName = "orleans.lattice.wal.replay.permits_queued";
 
     /// <summary>
+    /// Tag key on <see cref="WalReplayPermitsQueuedName"/> splitting the queued
+    /// waits into ordinary arrivals (<c>false</c>) and retained ones
+    /// (<c>true</c>): refused Interactive replays whose wait kept its gate
+    /// position (issue #6006). Both values are always published, so the total
+    /// queue is their sum.
+    /// </summary>
+    public const string TagRetained = "retained";
+
+    /// <summary>The <see cref="TagRetained"/> value for an ordinary queued wait.</summary>
+    public static readonly KeyValuePair<string, object?> ReplayPermitWaitNotRetained = new(TagRetained, "false");
+
+    /// <summary>The <see cref="TagRetained"/> value for a retained queued wait.</summary>
+    public static readonly KeyValuePair<string, object?> ReplayPermitWaitRetained = new(TagRetained, "true");
+
+    /// <summary>
     /// Tag marking a replay permit queue wait that ended in the permit being
     /// <b>acquired</b>, on <see cref="WalReplayPermitQueueWait"/>.
     /// </summary>
@@ -8596,6 +8611,99 @@ public static class LatticeMetrics
 
     /// <summary><see cref="TagReason"/> = <c>byte_pressure</c> (advisory storage-policy trim attribution).</summary>
     public static readonly KeyValuePair<string, object?> ReasonBytePressure = new(TagReason, "byte_pressure");
+
+    /// <summary>
+    /// Counter of retained-byte WAL usage scans that were not allowed to run
+    /// to completion, tagged with <see cref="TagTree"/> (the logical tree),
+    /// <see cref="TagReason"/> and the derived tenant dimension. The reason is
+    /// <see cref="StorageUsageScanRefusedSlot"/> when the silo's scan bound
+    /// (<see cref="LatticeOptions.MaxConcurrentWalUsageScansPerSilo"/>) had no
+    /// free slot within the short admission wait, or
+    /// <see cref="StorageUsageScanRefusedBudget"/> when the WAL usage
+    /// aggregator's fan-out budget expired and cancelled the scan (issue
+    /// #6017).
+    /// <para>
+    /// A refusal is not a data loss: the aggregator reports that partition's
+    /// last-known figure for up to five minutes and flags the report stale, or
+    /// flags it partial once no recent figure exists. A sustained rate means
+    /// the usage poll asks for more scans than storage can serve; the in-flight
+    /// gauge <see cref="StorageUsageScansInFlightGaugeName"/> shows how close
+    /// the silo runs to its bound.
+    /// </para>
+    /// <para>
+    /// Primed at zero for both reasons, per tree, when a WAL usage aggregator
+    /// or WAL partition first serves a usage read for the tree, so a flat zero
+    /// means "measured, none refused" rather than "no detector".
+    /// </para>
+    /// </summary>
+    public static readonly Counter<long> StorageUsageScansRefused =
+        Meter.CreateCounter<long>(StorageUsageScansRefusedName, unit: "{scan}",
+            description: "Retained-byte WAL usage scans refused before completing, tagged by tree, tenant and reason (slot: no free per-silo scan slot; budget: the usage fan-out budget expired).");
+
+    /// <summary>Canonical name of <see cref="StorageUsageScansRefused"/>.</summary>
+    public const string StorageUsageScansRefusedName = "orleans.lattice.storage.usage_scans_refused";
+
+    /// <summary>
+    /// <see cref="TagReason"/> = <c>slot</c> on <see cref="StorageUsageScansRefused"/>:
+    /// the silo's retained-byte scan bound had no free slot within the admission wait.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> StorageUsageScanRefusedSlot = new(TagReason, "slot");
+
+    /// <summary>
+    /// <see cref="TagReason"/> = <c>budget</c> on <see cref="StorageUsageScansRefused"/>:
+    /// the WAL usage aggregator's fan-out budget expired and cancelled the scan.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> StorageUsageScanRefusedBudget = new(TagReason, "budget");
+
+    /// <summary>
+    /// Canonical name of the observable gauge reporting how many retained-byte
+    /// WAL usage scans are running on this silo right now, against the bound
+    /// <see cref="LatticeOptions.MaxConcurrentWalUsageScansPerSilo"/>. Carries
+    /// only the platform tenant sentinel: the scan slots are a silo-wide
+    /// resource shared by every tree and tenant. Registered at silo build, so a
+    /// zero means "measured, nothing scanning".
+    /// </summary>
+    public const string StorageUsageScansInFlightGaugeName = "orleans.lattice.storage.usage_scans_in_flight";
+
+    /// <summary>
+    /// Zero-primes both reasons of <see cref="StorageUsageScansRefused"/> for
+    /// <paramref name="metricTreeId"/>.
+    /// </summary>
+    /// <param name="metricTreeId">The logical tree id the series is keyed by.</param>
+    internal static void PrimeStorageUsageScansRefused(string? metricTreeId)
+    {
+        var treeTag = new KeyValuePair<string, object?>(TagTree, metricTreeId ?? string.Empty);
+        var tenantTag = LatticeTenantLabel.ForTree(metricTreeId ?? string.Empty);
+
+        StorageUsageScansRefused.Add(0, treeTag, StorageUsageScanRefusedSlot, tenantTag);
+        StorageUsageScansRefused.Add(0, treeTag, StorageUsageScanRefusedBudget, tenantTag);
+    }
+
+    /// <summary>
+    /// Records one retained-byte WAL usage scan refused for want of a free
+    /// per-silo slot, on <see cref="StorageUsageScansRefused"/> with
+    /// <see cref="StorageUsageScanRefusedSlot"/>.
+    /// </summary>
+    /// <param name="metricTreeId">The logical tree id the series is keyed by.</param>
+    internal static void RecordStorageUsageScanRefusedSlot(string? metricTreeId)
+        => StorageUsageScansRefused.Add(
+            1,
+            new KeyValuePair<string, object?>(TagTree, metricTreeId ?? string.Empty),
+            StorageUsageScanRefusedSlot,
+            LatticeTenantLabel.ForTree(metricTreeId ?? string.Empty));
+
+    /// <summary>
+    /// Records one retained-byte WAL usage scan cancelled by the usage fan-out
+    /// budget, on <see cref="StorageUsageScansRefused"/> with
+    /// <see cref="StorageUsageScanRefusedBudget"/>.
+    /// </summary>
+    /// <param name="metricTreeId">The logical tree id the series is keyed by.</param>
+    internal static void RecordStorageUsageScanRefusedBudget(string? metricTreeId)
+        => StorageUsageScansRefused.Add(
+            1,
+            new KeyValuePair<string, object?>(TagTree, metricTreeId ?? string.Empty),
+            StorageUsageScanRefusedBudget,
+            LatticeTenantLabel.ForTree(metricTreeId ?? string.Empty));
 
     // --- Per-tree admission-control instruments ----------------------------
     //

@@ -59,7 +59,8 @@ internal sealed partial class WalShardGrain(
     ILatticeOriginClusterIdResolver clusterIdResolver,
     IWalRecordEncoder encoder,
     [PersistentState("wal-floor", LatticeOptions.StorageProviderName)] IPersistentState<WalShardFloorState> floorState,
-    IWalClockFloorGate floorGate) : IWalShardGrain, IWalClockFloorCapable, IGrainBase
+    IWalClockFloorGate floorGate,
+    WalUsageScanLimiter? usageScanLimiter = null) : IWalShardGrain, IWalClockFloorCapable, IGrainBase
 {
     /// <summary>
     /// Upper bound on the number of <see cref="WalRecord"/> entries accepted by a
@@ -2070,9 +2071,7 @@ internal sealed partial class WalShardGrain(
         cancellationToken.ThrowIfCancellationRequested();
         EnsureInternalOrigin(LatticeOperation.Read);
         EnsureInitialized();
-        return await _provider
-            .GetRetainedByteSizeAsync(_treeId, _shardIndex, cancellationToken)
-            .ConfigureAwait(true);
+        return await ReadRetainedBytesBoundedAsync(cancellationToken);
     }
 
     /// <inheritdoc />
@@ -2095,10 +2094,59 @@ internal sealed partial class WalShardGrain(
         var physical = await _provider
             .GetPhysicalByteSizeAsync(_treeId, _shardIndex, cancellationToken)
             .ConfigureAwait(true);
-        var retained = await _provider
-            .GetRetainedByteSizeAsync(_treeId, _shardIndex, cancellationToken)
-            .ConfigureAwait(true);
+        var retained = await ReadRetainedBytesBoundedAsync(cancellationToken);
         return (retained, physical);
+    }
+
+    /// <summary>
+    /// Whether this activation has zero-primed
+    /// <see cref="LatticeMetrics.StorageUsageScansRefused"/> for its tree.
+    /// </summary>
+    private bool _usageScanRefusalsPrimed;
+
+    /// <summary>
+    /// Reads the partition's retained byte total under the silo's usage-scan
+    /// bound (<see cref="LatticeOptions.MaxConcurrentWalUsageScansPerSilo"/>,
+    /// issue #6017). The retained figure is a full manifest scan on the Azure
+    /// Table provider, so this is the one read the bound exists for; the
+    /// physical read beside it is not bounded. A scan that cannot take a slot
+    /// within <see cref="WalUsageScanLimiter.AdmissionWait"/> is refused and
+    /// reports <c>-1</c>, the "unavailable" sentinel every usage aggregator
+    /// already handles. Without a registered limiter (a host that bypasses
+    /// <c>AddLattice</c>) the read is unbounded, as before.
+    /// </summary>
+    private async Task<long> ReadRetainedBytesBoundedAsync(CancellationToken cancellationToken)
+    {
+        if (usageScanLimiter is not { } limiter)
+        {
+            return await _provider
+                .GetRetainedByteSizeAsync(_treeId, _shardIndex, cancellationToken)
+                .ConfigureAwait(true);
+        }
+
+        var metricTreeId = _treeTag.Value as string ?? _treeId;
+        if (!_usageScanRefusalsPrimed)
+        {
+            _usageScanRefusalsPrimed = true;
+            LatticeMetrics.PrimeStorageUsageScansRefused(metricTreeId);
+        }
+
+        if (!await limiter.TryEnterAsync(cancellationToken).ConfigureAwait(true))
+        {
+            LatticeMetrics.RecordStorageUsageScanRefusedSlot(metricTreeId);
+            return -1L;
+        }
+
+        try
+        {
+            return await _provider
+                .GetRetainedByteSizeAsync(_treeId, _shardIndex, cancellationToken)
+                .ConfigureAwait(true);
+        }
+        finally
+        {
+            limiter.Release();
+        }
     }
 
     /// <summary>
