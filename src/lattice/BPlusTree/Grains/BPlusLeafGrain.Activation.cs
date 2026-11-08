@@ -2099,15 +2099,12 @@ internal sealed partial class BPlusLeafGrain
             var permitWaitScope = LatticeMetrics.EnterWalReplayPermitWait(state.State.TreeId);
             try
             {
-                // Retained (issue #6006): the callers are refused now, before any
-                // await, and the parked leaf is accounted against the resident
-                // working set, which may shed it like any other leaf. A shed
-                // deactivates it, and the deactivation drops the retained wait.
+                // Retained (issue #6006): the parked leaf is accounted against the
+                // resident working set, which may shed it like any other leaf. A
+                // shed deactivates it, and the deactivation drops the retained wait.
+                // Its callers are refused once its wait holds a gate position.
                 if (retention is not null)
-                {
-                    EnterReplayRetention(retention);
                     RegisterResidentFootprint(rehydratedFromSnapshot);
-                }
 
                 // Only a leaf that actually queues declares the pages it will
                 // read (issue #5877, condition DT1); one admitted at once

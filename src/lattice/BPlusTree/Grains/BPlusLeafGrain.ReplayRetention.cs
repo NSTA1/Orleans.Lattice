@@ -148,8 +148,10 @@ internal sealed partial class BPlusLeafGrain
 
     /// <summary>
     /// Waits retained: the same gate wait an ordinary arrival takes, dropped at
-    /// the maximum age. The retention slot is returned exactly once, on every
-    /// exit, and the wait never enters the wait-arm mean.
+    /// the maximum age. The callers are refused only once the wait holds its
+    /// gate position, so a caller's retry can never arrive ahead of it. The
+    /// retention slot is returned exactly once, on every exit, and the wait never
+    /// enters the wait-arm mean.
     /// </summary>
     private async Task WaitRetainedReplayPermitAsync(
         SemaphoreSlim gate, long queuedAt, RetainedReplayRefusal refusal, CancellationToken cancellationToken)
@@ -160,7 +162,9 @@ internal sealed partial class BPlusLeafGrain
             expiry.CancelAfter(EffectiveRetainedReplayMaxAge);
             try
             {
-                await gate.WaitAsync(expiry.Token).ConfigureAwait(true);
+                var wait = gate.WaitAsync(expiry.Token);
+                EnterReplayRetention(refusal);
+                await wait.ConfigureAwait(true);
             }
             catch (OperationCanceledException)
             {
