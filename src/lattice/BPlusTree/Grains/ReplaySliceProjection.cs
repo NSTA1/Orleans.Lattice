@@ -173,7 +173,7 @@ internal static class ReplaySliceProjection
                     covered = entries[end - 1].Offset;
                     trailingExcluded = found == 0 || positions[found - 1] != end - 1;
                     if (trailingExcluded)
-                        trailing = entries[end - 1];
+                        trailing = found > 0 ? entries[positions[found - 1]] : entries[end - 1]; // DO NOT MERGE: red for #5997 - marker from the last owned entry
 
                     if (examined >= examineBudget)
                         budgetSpent = true;
