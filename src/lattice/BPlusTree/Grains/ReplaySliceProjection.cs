@@ -166,7 +166,8 @@ internal static class ReplaySliceProjection
                         buffer = grown;
                     }
 
-                    for (var i = 0; i < found; i++)
+                    // DO NOT MERGE: red for #5997 - a wide serve skips the first owned entry of each later page.
+                    for (var i = (incarnation is not null && r > 0 && found > 1) ? 1 : 0; i < found; i++)
                         buffer[kept++] = Detached(entries[positions[i]]);
 
                     examined += end - start;
