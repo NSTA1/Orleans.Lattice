@@ -15,7 +15,7 @@ else
                 <LtDefinition Term="Leaf state">@ClusterFormat.Bytes(stats.LeafStateBytes)</LtDefinition>
                 <LtDefinition Term="Snapshots">@ClusterFormat.Bytes(stats.SnapshotBytes)</LtDefinition>
                 <LtDefinition Term="Retained WAL">@ClusterFormat.Bytes(stats.WalRetainedBytes)</LtDefinition>
-                <LtDefinition Term="Total">@ClusterFormat.Bytes(stats.TotalBytes)@(stats.PartialStorage ? " (partial: some shards did not answer)" : string.Empty)</LtDefinition>
+                <LtDefinition Term="Total">@ClusterFormat.Bytes(stats.TotalBytes)@(stats.PartialStorage ? " (partial: some shards did not answer)" : string.Empty)@(stats.StaleStorage ? " (stale: some WAL figures are last measured)" : string.Empty)</LtDefinition>
             </LtDefinitionList>
         }
         else

@@ -37,6 +37,221 @@ internal static class ReplaySliceProjection
         ArgumentNullException.ThrowIfNull(run);
         ArgumentOutOfRangeException.ThrowIfLessThan(budget, 1);
 
+        var projection = ProjectIndexed(run, fromExclusive, toInclusive, budget, int.MaxValue, null, filter);
+        return (projection.Slice, projection.Complete, projection.CoveredThroughInclusive);
+    }
+
+    /// <summary>
+    /// How many times <see cref="LatticeOptions.WalReplaySliceBudget"/> a
+    /// ring-served slice may examine (issue #5997). Examining is cheap once the
+    /// owner index skips what a filter excludes, so a slice served from the ring
+    /// spans a wider window and a leaf makes this many times fewer calls; what it
+    /// returns stays bounded by the budget.
+    /// </summary>
+    internal const int RingExamineFactor = 64;
+
+    /// <summary>
+    /// Projects a wide slice from <paramref name="run"/> for a ring serve (issue
+    /// #5997): examines up to <see cref="RingExamineFactor"/> x
+    /// <paramref name="budget"/> entries, returns at most
+    /// <paramref name="budget"/> kept entries plus one trailing routing-only
+    /// marker, and widens only over pages read at
+    /// <paramref name="incarnation"/>.
+    /// </summary>
+    /// <returns>
+    /// The slice equals the concatenation of the consecutive budget-sized
+    /// filtered reads over the window it covers, with their intermediate
+    /// routing-only markers elided: a marker only advances a reader past entries
+    /// it does not own, and the next returned entry advances it further. It is
+    /// complete when a bound was reached - the examine cap, the return cap or
+    /// <paramref name="toInclusive"/> - and otherwise ends where the run's
+    /// coverage at this incarnation ends, at
+    /// <see cref="IndexedProjection.CoveredThroughInclusive"/>.
+    /// </returns>
+    internal static IndexedProjection ProjectWide(
+        IReadOnlyList<ReplayPage> run,
+        long fromExclusive,
+        long toInclusive,
+        int budget,
+        WalKeyFilter filter,
+        long incarnation)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+        ArgumentOutOfRangeException.ThrowIfLessThan(budget, 1);
+
+        var examine = (int)Math.Min(int.MaxValue, (long)budget * RingExamineFactor);
+        return ProjectIndexed(run, fromExclusive, toInclusive, examine, budget, incarnation, filter);
+    }
+
+    /// <summary>
+    /// The outcome of an indexed projection: the slice, whether it is complete,
+    /// how far it covers, and how many entries it examined.
+    /// </summary>
+    internal readonly record struct IndexedProjection(
+        CommitLogSliceEntry[] Slice, bool Complete, long CoveredThroughInclusive, long Examined);
+
+    /// <summary>
+    /// <see cref="ProjectLinear"/> computed through each page's
+    /// <see cref="ReplayPage.Index"/>: the same entries, order, coverage,
+    /// completeness and trailing marker, without visiting what the filter
+    /// excludes (issue #5997). With an unbounded <paramref name="returnBudget"/>
+    /// and no <paramref name="incarnation"/> it is exactly the narrow projection.
+    /// </summary>
+    private static IndexedProjection ProjectIndexed(
+        IReadOnlyList<ReplayPage> run,
+        long fromExclusive,
+        long toInclusive,
+        int examineBudget,
+        int returnBudget,
+        long? incarnation,
+        WalKeyFilter filter)
+    {
+        var ordered = InOffsetOrder(run);
+        long examined = 0;
+        var kept = 0;
+        var covered = fromExclusive;
+        var trailingExcluded = false;
+        var trailing = default(CommitLogSliceEntry);
+        var budgetSpent = false;
+        CommitLogSliceEntry[]? buffer = null;
+        int[]? positions = null;
+        try
+        {
+            for (var r = 0; r < ordered.Count; r++)
+            {
+                var page = ordered[r];
+                if (page.CoveredThroughInclusive <= covered)
+                    continue;
+
+                // Contiguity: a page that starts above what is already covered
+                // would stitch across an uncovered gap.
+                if (page.FromExclusive > covered)
+                    break;
+
+                // A wide serve never widens across an incarnation change.
+                if (incarnation is { } current && page.Incarnation != current)
+                    break;
+
+                var entries = page.Entries;
+                var start = FirstAbove(entries, covered);
+                var end = Math.Min(FirstAbove(entries, toInclusive), start + (int)Math.Min(int.MaxValue, examineBudget - examined));
+                if (start < end)
+                {
+                    if (positions is null || positions.Length < end - start)
+                    {
+                        if (positions is not null)
+                            System.Buffers.ArrayPool<int>.Shared.Return(positions);
+                        positions = System.Buffers.ArrayPool<int>.Shared.Rent(end - start);
+                    }
+
+                    var found = page.Index.Collect(in filter, start, end, positions);
+
+                    // The return cap ends the slice at its last returned entry.
+                    if (kept + found >= returnBudget)
+                    {
+                        found = returnBudget - kept;
+                        end = positions[found - 1] + 1;
+                        budgetSpent = true;
+                    }
+
+                    if (buffer is null || buffer.Length < kept + found)
+                    {
+                        var grown = System.Buffers.ArrayPool<CommitLogSliceEntry>.Shared.Rent(Math.Max(kept + found, 16));
+                        if (buffer is not null)
+                        {
+                            Array.Copy(buffer, grown, kept);
+                            System.Buffers.ArrayPool<CommitLogSliceEntry>.Shared.Return(buffer, clearArray: true);
+                        }
+
+                        buffer = grown;
+                    }
+
+                    for (var i = 0; i < found; i++)
+                        buffer[kept++] = Detached(entries[positions[i]]);
+
+                    examined += end - start;
+                    covered = entries[end - 1].Offset;
+                    trailingExcluded = found == 0 || positions[found - 1] != end - 1;
+                    if (trailingExcluded)
+                        trailing = entries[end - 1];
+
+                    if (examined >= examineBudget)
+                        budgetSpent = true;
+                }
+
+                if (budgetSpent || covered >= toInclusive)
+                    break;
+
+                // A page covers through its last returned entry (condition A-b).
+                if (page.CoveredThroughInclusive > covered)
+                    covered = Math.Min(page.CoveredThroughInclusive, toInclusive);
+            }
+
+            var length = kept + (trailingExcluded ? 1 : 0);
+            var slice = length == 0 ? [] : new CommitLogSliceEntry[length];
+            if (kept > 0)
+                Array.Copy(buffer!, slice, kept);
+            if (trailingExcluded)
+                slice[kept] = trailing with { Mutation = WalFilteredRead.RoutingOnly(trailing.Mutation) };
+
+            var complete = budgetSpent || covered >= toInclusive;
+            return new IndexedProjection(slice, complete, covered, examined);
+        }
+        finally
+        {
+            if (positions is not null)
+                System.Buffers.ArrayPool<int>.Shared.Return(positions);
+            if (buffer is not null)
+                System.Buffers.ArrayPool<CommitLogSliceEntry>.Shared.Return(buffer, clearArray: true);
+        }
+    }
+
+    /// <summary>The run in ascending start order, sorting only when it is not already.</summary>
+    private static IReadOnlyList<ReplayPage> InOffsetOrder(IReadOnlyList<ReplayPage> run)
+    {
+        if (run is ReplayPageRing.RunView { Sorted: true })
+            return run;
+
+        for (var i = 1; i < run.Count; i++)
+        {
+            if (run[i - 1].FromExclusive > run[i].FromExclusive)
+                return [.. run.OrderBy(p => p.FromExclusive)];
+        }
+
+        return run;
+    }
+
+    /// <summary>The first position whose offset is above <paramref name="offset"/>; entries ascend by offset.</summary>
+    private static int FirstAbove(CommitLogSliceEntry[] entries, long offset)
+    {
+        int lo = 0, hi = entries.Length;
+        while (lo < hi)
+        {
+            var mid = (lo + hi) >>> 1;
+            if (entries[mid].Offset <= offset)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+
+        return lo;
+    }
+
+    /// <summary>
+    /// The reference projection (issue #5896): visits every entry of the window
+    /// and applies <see cref="WalKeyFilter.Excludes"/> to each. Retained as the
+    /// specification <see cref="Project"/> is proven equal to (issue #5997).
+    /// </summary>
+    internal static (CommitLogSliceEntry[] Slice, bool Complete, long CoveredThroughInclusive) ProjectLinear(
+        IReadOnlyList<ReplayPage> run,
+        long fromExclusive,
+        long toInclusive,
+        int budget,
+        WalKeyFilter filter)
+    {
+        ArgumentNullException.ThrowIfNull(run);
+        ArgumentOutOfRangeException.ThrowIfLessThan(budget, 1);
+
         var result = new List<CommitLogSliceEntry>();
         var examined = 0;
         var covered = fromExclusive;

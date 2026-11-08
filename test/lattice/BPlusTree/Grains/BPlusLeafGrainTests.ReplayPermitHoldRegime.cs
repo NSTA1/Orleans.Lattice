@@ -209,7 +209,9 @@ public partial class BPlusLeafGrainTests
         }
         finally
         {
-            ClearSeededAdmittedWaiters();
+            // A wait_exceeded refusal of an Interactive replay is retained (issue
+            // #6006), so the parked wait is drained before the seed is cleared.
+            await DrainRetainedReplaysAsync(BPlusLeafGrain.QueuedReplayPermitWaitersForTest - BPlusLeafGrain.RetainedReplayWaitersForTest);
             BPlusLeafGrain.ResetReplayAdmissionRefusalLogForTest();
         }
 

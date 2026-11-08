@@ -187,6 +187,12 @@ internal sealed class LatticeOptionsValidator : IValidateOptions<LatticeOptions>
                 $"{nameof(LatticeOptions.AdmissionAdvisoryBytes)} must be greater than or equal to 1 when set "
                 + "(null disables the byte advisory dry-run signal; a positive value drives the over-advisory and would-reject metrics without rejecting any write).");
         }
+        if (options.MaxConcurrentWalUsageScansPerSilo < 1)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.MaxConcurrentWalUsageScansPerSilo)} must be greater than or equal to 1 "
+                + "(it bounds how many retained-byte WAL usage scans one silo runs at once; a scan past the bound is refused, not queued).");
+        }
         if (options.MaxLeafReplayEntries < 1)
             return ValidateOptionsResult.Fail($"{nameof(LatticeOptions.MaxLeafReplayEntries)} must be greater than or equal to 1.");
         if (options.MaterialiserCheckpointEntries < 1)

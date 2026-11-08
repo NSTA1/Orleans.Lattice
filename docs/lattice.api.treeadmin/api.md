@@ -146,6 +146,7 @@ The following inventory includes directly declared public members and overloads,
 - `public bool Deep { get; init; }`
 - `public DateTimeOffset SampledAt { get; init; }`
 - `public ImmutableArray<TreeStorageUsageSnapshot> Trees { get; init; }`
+- `public bool Stale { get; init; }`
 
 ### `Orleans.Lattice.Api.TreeAdmin.ILatticeStorageUsageOperations`
 
@@ -827,6 +828,7 @@ The following inventory includes directly declared public members and overloads,
 - `public long TotalBytes { get; init; }`
 - `public bool PartialStorage { get; init; }`
 - `public DateTimeOffset SampledAt { get; init; }`
+- `public bool StaleStorage { get; init; }`
 
 ### `Orleans.Lattice.Api.TreeAdmin.TreeStorageUsageSnapshot`
 
@@ -842,6 +844,7 @@ The following inventory includes directly declared public members and overloads,
 - `public bool Partial { get; init; }`
 - `public long LiveKeys { get; init; }`
 - `public DateTimeOffset SampledAt { get; init; }`
+- `public bool Stale { get; init; }`
 
 ### `Orleans.Lattice.Api.TreeAdmin.TreeTagIndexCatalog`
 

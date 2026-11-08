@@ -55,7 +55,7 @@ public sealed class ReplayPageRingColdRestartCensusTests
     {
         const int waves = 8;
         const double fraction = 0.25;
-        var logBytes = (Entries * (96L + (2 * 6) + 1)) + ((Entries / SliceBudget) * 64L);
+        var logBytes = (Entries * (96L + (2 * 6) + 1 + 8)) + ((Entries / SliceBudget) * (64L + 96));
 
         var readsPerEntry = await RunCensusAsync(
             (long)(logBytes * fraction), waveSize: Leaves / waves, declareQueued: true, overlap: true, overlapAt: 0.25);
@@ -75,7 +75,7 @@ public sealed class ReplayPageRingColdRestartCensusTests
     {
         const int waves = 8;
         const double fraction = 0.25;
-        var logBytes = (Entries * (96L + (2 * 6) + 1)) + ((Entries / SliceBudget) * 64L);
+        var logBytes = (Entries * (96L + (2 * 6) + 1 + 8)) + ((Entries / SliceBudget) * (64L + 96));
 
         var readsPerEntry = await RunCensusAsync(
             (long)(logBytes * fraction), waveSize: Leaves / waves, declareQueued: true);

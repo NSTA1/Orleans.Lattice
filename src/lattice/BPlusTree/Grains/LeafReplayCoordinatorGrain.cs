@@ -206,7 +206,20 @@ internal sealed class LeafReplayCoordinatorGrain(
         {
             await VerifyRingIncarnationAsync(cancellationToken);
             var epoch = ring.Epoch;
-            var run = new List<ReplayPage>(ring.RunFrom(fromOffsetExclusive));
+            var run = ring.RunFrom(fromOffsetExclusive);
+
+            // Issue #5997: serve a wide slice from what the ring already holds
+            // at the verified incarnation. It is served when it reached a bound,
+            // or examined at least a narrow slice's worth before the ring's
+            // coverage ended; otherwise the narrow path below reads the gap.
+            if (ring.Incarnation is { } incarnation && run.Count > 0)
+            {
+                var wide = ReplaySliceProjection.ProjectWide(
+                    run, fromOffsetExclusive, toOffsetInclusive, budget, filter, incarnation);
+                if (wide.Complete || wide.Examined >= budget)
+                    return wide.Slice;
+            }
+
             var restart = false;
             while (true)
             {

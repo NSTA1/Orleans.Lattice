@@ -9,11 +9,11 @@ CONSTANTS Requests, Partitions, Ceiling, DepthPerPermit, GapLen, Slice,
 VARIABLES holders, free, withheld, queue, status, role, observed,
           pressure, pressurePhase, drain, hung, holdLeft, deadline,
           frontier, banked, checkpoint, holes, ledger, opportunity, arrivalsClosed, dispatchEpoch,
-          clientActive, cancelled
+          clientActive, cancelled, retained
 vars == <<holders, free, withheld, queue, status, role, observed,
           pressure, pressurePhase, drain, hung, holdLeft, deadline,
           frontier, banked, checkpoint, holes, ledger, opportunity, arrivalsClosed, dispatchEpoch,
-          clientActive, cancelled>>
+          clientActive, cancelled, retained>>
 
 Classes == {"Interactive", "Bulk", "Drive"}
 Min(a, b) == IF a < b THEN a ELSE b
@@ -30,16 +30,26 @@ Complete == \A p \in Partitions : banked[p] = GapLen
 Focal == 1
 OwnerComplete(r) == r # Focal \/ Complete
 Live == {"pending", "queued", "holding"}
-NoObservation == [depth |-> 0, bound |-> 1, drain |-> "Draining"]
+NoObservation == [depth |-> 0, bound |-> 1, drain |-> "Draining", excl |-> 0, cap |-> 1]
 \* Work-conserving refusal (#5992 A1): a refusal is decided only while no
 \* permit is free or a waiter is already ahead, re-checked at the decision.
 WorkAvailable == free > 0 /\ queue = <<>>
 RefuseForWait(r) ==
     /\ role[r] # "Drive" /\ observed[r].depth > 0 /\ observed[r].drain = "WaitExceeded"
     /\ ~WorkAvailable
+\* Bulk's own check excludes every retained entry; the second disjunct refuses
+\* any arrival at the current Interactive bound, at every DepthPerPermit (#5992).
 RefuseForDepth(r) ==
-    /\ role[r] # "Drive" /\ observed[r].depth >= observed[r].bound /\ observed[r].drain = "NoProgress"
+    /\ role[r] # "Drive" /\ observed[r].drain = "NoProgress"
+    /\ \/ observed[r].depth - observed[r].excl >= observed[r].bound
+       \/ observed[r].depth >= observed[r].cap
     /\ ~WorkAvailable
+\* A refused Interactive replay keeps its gate position while its caller is
+\* refused. No new retention once the retained set has reached R = Circulating.
+Retainable(r) == role[r] = "Interactive" /\ Cardinality(retained) < Circulating
+\* Every step but retention and expiry keeps a retained entry exactly as long as
+\* it stays parked in the gate.
+RetentionTracksQueue == retained' = {x \in retained : x \in Members(queue')}
 
 TypeOK ==
     /\ holders \subseteq Requests
@@ -49,7 +59,8 @@ TypeOK ==
     /\ role \in [Requests -> {"Bulk", "Interactive", "Drive"}]
     /\ observed \in [Requests -> [depth : 0..Cardinality(Requests),
           bound : 1..(DepthPerPermit * Ceiling),
-          drain : {"Draining", "NoProgress", "WaitExceeded"}]]
+          drain : {"Draining", "NoProgress", "WaitExceeded"},
+          excl : 0..Cardinality(Requests), cap : 1..(DepthPerPermit * Ceiling)]]
     /\ pressure \in BOOLEAN /\ pressurePhase \in {"new", "on", "off"}
     /\ drain \in {"Draining", "NoProgress", "WaitExceeded"}
     /\ hung \subseteq Requests
@@ -64,6 +75,7 @@ TypeOK ==
     /\ dispatchEpoch \in BOOLEAN
     /\ clientActive \in [Requests -> BOOLEAN]
     /\ cancelled \subseteq Requests
+    /\ retained \subseteq Requests
 PermitConservation ==
     /\ Cardinality(holders) + free = Circulating
     /\ holders = {r \in Requests : status[r] = "holding"}
@@ -76,12 +88,20 @@ UnresolvedWorkDurable == holes \subseteq ledger
 
 \* Admission is an observe-before-increment policy, not a hard queue cap.
 \* Fresh excessive waits refuse below depth; a draining queue may exceed depth.
+\* A retained entry queues only as a refused, retainable wait; any other arrival
+\* also respects the current Interactive bound, stated here independently.
+AtInteractiveBound(r) ==
+    /\ role[r] # "Drive" /\ observed[r].depth >= observed[r].cap
+    /\ observed[r].drain = "NoProgress" /\ ~WorkAvailable
 QueueBounded == [][\A r \in Requests :
     (status[r] = "pending" /\ status'[r] = "queued") =>
-        ~RefuseForWait(r) /\ ~RefuseForDepth(r)]_vars
+        IF r \in retained' THEN RefuseForWait(r) /\ Retainable(r)
+        ELSE ~RefuseForWait(r) /\ ~RefuseForDepth(r) /\ ~AtInteractiveBound(r)]_vars
+\* The caller is always refused; only a retainable replay keeps its position.
 SmoothedWaitRefusal == [][\A r \in Requests :
     (status[r] = "pending" /\ RefuseForWait(r) /\ status'[r] \in {"queued", "holding", "refused"})
-        => status'[r] = "refused"]_vars
+        => /\ ~clientActive'[r]
+           /\ status'[r] = IF Retainable(r) THEN "queued" ELSE "refused"]_vars
 BankingMonotone == [][\A p \in Partitions :
     banked'[p] >= banked[p] /\ Gap'[p] <= Gap[p] /\ checkpoint'[p] >= checkpoint[p]]_vars
 MemoryWithholding == [][\A r \in Requests :
@@ -96,7 +116,7 @@ ClassPriority == [][
     /\ \A r \in Requests :
         (status[r] = "pending" /\ role[r] = "Drive" /\ status'[r] \in {"holding", "refused"}) =>
             ((status'[r] = "holding") =
-                (free > 0 /\ Cardinality(DriveHolders) < Max(1, Circulating \div 2)))
+                (free > 0 /\ queue = <<>> /\ Cardinality(DriveHolders) < Max(1, Circulating \div 2)))
 ]_vars
 \* The actual class guarantee is admission headroom, not six fair queues.
 PriorityReservation ==
@@ -107,7 +127,7 @@ HoldersComplete == \A r \in Requests : []<>(r \notin holders)
 ClassNonStarvation ==
     (<>[](arrivalsClosed /\ ~pressure /\ drain = "Draining") /\ HoldersComplete) =>
         \A r \in Requests :
-            status[r] = "queued" ~> (r \in holders \/ r \in cancelled)
+            (status[r] = "queued" /\ r \notin retained) ~> (r \in holders \/ r \in cancelled)
 DriveResidencyBounded == \A r \in Requests :
     (status[r] = "holding" /\ role[r] = "Drive") => holdLeft[r] > 0
 DeadlineBounded == \A r \in Requests :
@@ -120,6 +140,20 @@ NoSelfSustainingBacklog == [][\A r \in Requests :
 ReplayConverges ==
     ([]<>(Focal \in holders /\ Focal \notin hung)) => <>Complete
 \* No arrival is refused while a permit is free and no waiter is ahead of it.
+RetainedBounded ==
+    /\ Cardinality(retained) <= Ceiling
+    /\ \A r \in retained : status[r] = "queued" /\ role[r] = "Interactive" /\ ~clientActive[r]
+\* Retention takes a slot only below the current R; a walk-down evicts nothing.
+RetentionGuarded == [][\A r \in Requests :
+    (r \notin retained /\ r \in retained') => Cardinality(retained) < Circulating]_vars
+\* Retention is bounded in time: a retained entry leaves, admitted or aged out,
+\* even while every permit is held by a hung owner.
+RetentionExpires == \A r \in Requests : []<>(r \notin retained)
+\* One FIFO gate: an admission never overtakes an earlier parked waiter.
+AdmissionNoOvertaking == [][\A r \in Requests :
+    (status[r] = "queued" /\ status'[r] = "holding") => r = Head(queue)]_vars
+\* Under continuing arrivals, a parked waiter of any class eventually leaves.
+QueueProgress == HoldersComplete => \A r \in Requests : []<>(status[r] # "queued")
 WorkConservingRefusal == [][\A r \in Requests :
     (status[r] = "pending" /\ status'[r] = "refused" /\ role[r] # "Drive") =>
         ~(free > 0 /\ queue = <<>>)]_vars
@@ -137,6 +171,7 @@ Init ==
     /\ holes = {} /\ ledger = {} /\ opportunity = 1 /\ arrivalsClosed = FALSE /\ dispatchEpoch = FALSE
     /\ clientActive = [r \in Requests |-> FALSE]
     /\ cancelled = {}
+    /\ retained = {}
 
 Request(r, c) ==
     /\ status[r] \in {"new", "idle", "refused"} /\ ~arrivalsClosed
@@ -145,7 +180,9 @@ Request(r, c) ==
     /\ observed' = [observed EXCEPT ![r] =
         IF c = "Drive" THEN NoObservation
         ELSE [depth |-> Len(queue), bound |-> Bound(c),
-              drain |-> IF queue = <<>> THEN "Draining" ELSE drain]]
+              drain |-> IF queue = <<>> THEN "Draining" ELSE drain,
+              excl |-> IF c = "Bulk" THEN Cardinality(retained) ELSE 0,
+              cap |-> Bound("Interactive")]]
     /\ deadline' = [deadline EXCEPT ![r] = RequestBudget]
     /\ clientActive' = [clientActive EXCEPT ![r] = TRUE]
     /\ UNCHANGED <<holders, free, withheld, queue, pressure, pressurePhase, drain,
@@ -160,6 +197,7 @@ ClientReplacement(r) ==
     /\ UNCHANGED <<holders, free, withheld, queue, status, role, observed,
         pressure, pressurePhase, drain, hung, holdLeft, frontier, banked,
         checkpoint, holes, ledger, opportunity, arrivalsClosed, dispatchEpoch, cancelled>>
+    /\ r \notin retained
 
 ClientDeadline(r) ==
     /\ clientActive[r] /\ deadline[r] > 0
@@ -200,6 +238,7 @@ RefuseWait(r) ==
     /\ UNCHANGED <<holders, free, withheld, queue, pressure, pressurePhase,
         drain, hung, holdLeft, frontier, banked, checkpoint, holes, ledger, opportunity, arrivalsClosed, dispatchEpoch,
         cancelled>>
+    /\ ~Retainable(r)
 
 RefuseDepth(r) ==
     /\ status[r] = "pending" /\ ~RefuseForWait(r) /\ RefuseForDepth(r)
@@ -212,7 +251,32 @@ RefuseDepth(r) ==
         drain, hung, holdLeft, frontier, banked, checkpoint, holes, ledger, opportunity, arrivalsClosed, dispatchEpoch,
         cancelled>>
 
-\* Semaphore selection is nondeterministic: no contractual FIFO is invented.
+\* The caller fails fast; the replay's own gate wait stays parked in arrival
+\* order as a retained waiter (#5992). It takes no permit.
+RetainOnRefusal(r) ==
+    /\ status[r] = "pending" /\ RefuseForWait(r) /\ Retainable(r)
+    /\ queue' = Append(queue, r) /\ status' = [status EXCEPT ![r] = "queued"]
+    /\ retained' = retained \cup {r}
+    /\ deadline' = [deadline EXCEPT ![r] = 0]
+    /\ clientActive' = [clientActive EXCEPT ![r] = FALSE]
+    /\ observed' = [observed EXCEPT ![r] = NoObservation]
+    /\ UNCHANGED <<holders, free, withheld, role, pressure, pressurePhase,
+        drain, hung, holdLeft, frontier, banked, checkpoint, holes, ledger, opportunity, arrivalsClosed, dispatchEpoch,
+        cancelled>>
+
+\* A retained entry reaching its maximum age leaves the gate unadmitted. Its
+\* age is counted in budget visits, like a drive's; one visit is the maximum.
+ExpireRetained(r) ==
+    /\ r \in retained
+    /\ queue' = Remove(queue, r) /\ status' = [status EXCEPT ![r] = "idle"]
+    /\ retained' = retained \ {r}
+    /\ role' = [role EXCEPT ![r] = "Interactive"]
+    /\ drain' = IF queue' = <<>> THEN "Draining" ELSE drain
+    /\ UNCHANGED <<holders, free, withheld, observed, pressure, pressurePhase,
+        hung, holdLeft, deadline, frontier, banked, checkpoint, holes, ledger, arrivalsClosed, dispatchEpoch,
+        clientActive, cancelled>>
+
+\* The gate is one FIFO over parked and retained waiters (#5992 G2).
 Admit(r) ==
     /\ status[r] = "queued" /\ free > 0
     /\ queue' = Remove(queue, r) /\ holders' = holders \cup {r} /\ free' = free - 1
@@ -222,6 +286,7 @@ Admit(r) ==
     /\ UNCHANGED <<withheld, role, observed, pressure, pressurePhase, hung,
         deadline, frontier, banked, checkpoint, holes, ledger, opportunity, arrivalsClosed,
         clientActive, cancelled>>
+    /\ r = Head(queue)
 
 CapacityOpportunity ==
     /\ IF free > 0 /\ queue # <<>>
@@ -234,7 +299,8 @@ CapacityOpportunity ==
 
 DriveAdmission(r) ==
     /\ status[r] = "pending" /\ role[r] = "Drive"
-    /\ LET accepted == free > 0 /\ Cardinality(DriveHolders) < Max(1, Circulating \div 2)
+    \* G1: the non-queuing drive probe never takes a permit while a waiter is parked.
+    /\ LET accepted == free > 0 /\ queue = <<>> /\ Cardinality(DriveHolders) < Max(1, Circulating \div 2)
        IN /\ status' = [status EXCEPT ![r] = IF accepted THEN "holding" ELSE "refused"]
           /\ holders' = IF accepted THEN holders \cup {r} ELSE holders
           /\ free' = IF accepted THEN free - 1 ELSE free
@@ -341,6 +407,8 @@ BudgetOpportunity ==
           THEN Return(r, "idle")
           ELSE IF status[r] = "queued" /\ r \in cancelled
           THEN CancelQueued(r)
+          ELSE IF status[r] = "queued" /\ r \in retained
+          THEN ExpireRetained(r)
           ELSE IF status[r] = "holding" /\ role[r] = "Drive" /\ holdLeft[r] = 1
           THEN AbandonOnBudget(r)
           ELSE /\ holdLeft' = [holdLeft EXCEPT ![r] =
@@ -352,35 +420,37 @@ BudgetOpportunity ==
 
 Stutter == UNCHANGED vars
 Next ==
-    \/ \E r \in Requests, c \in Classes : Request(r, c)
-    \/ \E r \in Requests : ClientReplacement(r)
-    \/ \E r \in Requests : ClientDeadline(r)
-    \/ \E r \in Requests : CancelColdLifetime(r)
-    \/ \E r \in Requests : Enqueue(r)
-    \/ \E r \in Requests : RefuseWait(r)
-    \/ \E r \in Requests : RefuseDepth(r)
-    \/ \E r \in Requests : DriveAdmission(r)
-    \/ \E r \in Requests : Release(r)
-    \/ \E r \in Requests : Hang(r)
-    \/ \E r \in Requests, p \in Partitions : ReplaySlice(r, p)
-    \/ \E r \in Requests, p \in Partitions : DeferTerminal(r, p)
-    \/ Restore
-    \/ MemoryPressureOn
-    \/ MemoryPressureOff
-    \/ CloseArrivals
-    \/ \E d \in {"Draining", "NoProgress", "WaitExceeded"} : ObserveDrain(d)
-    \/ CapacityOpportunity
-    \/ BudgetOpportunity
-    \/ Stutter
+    \/ \E r \in Requests, c \in Classes : Request(r, c) /\ RetentionTracksQueue
+    \/ \E r \in Requests : ClientReplacement(r) /\ RetentionTracksQueue
+    \/ \E r \in Requests : ClientDeadline(r) /\ RetentionTracksQueue
+    \/ \E r \in Requests : CancelColdLifetime(r) /\ RetentionTracksQueue
+    \/ \E r \in Requests : Enqueue(r) /\ RetentionTracksQueue
+    \/ \E r \in Requests : RefuseWait(r) /\ RetentionTracksQueue
+    \/ \E r \in Requests : RefuseDepth(r) /\ RetentionTracksQueue
+    \/ \E r \in Requests : RetainOnRefusal(r)
+    \/ \E r \in Requests : DriveAdmission(r) /\ RetentionTracksQueue
+    \/ \E r \in Requests : Release(r) /\ RetentionTracksQueue
+    \/ \E r \in Requests : Hang(r) /\ RetentionTracksQueue
+    \/ \E r \in Requests, p \in Partitions : ReplaySlice(r, p) /\ RetentionTracksQueue
+    \/ \E r \in Requests, p \in Partitions : DeferTerminal(r, p) /\ RetentionTracksQueue
+    \/ Restore /\ RetentionTracksQueue
+    \/ MemoryPressureOn /\ RetentionTracksQueue
+    \/ MemoryPressureOff /\ RetentionTracksQueue
+    \/ CloseArrivals /\ RetentionTracksQueue
+    \/ \E d \in {"Draining", "NoProgress", "WaitExceeded"} : ObserveDrain(d) /\ RetentionTracksQueue
+    \/ CapacityOpportunity /\ RetentionTracksQueue
+    \/ BudgetOpportunity /\ RetentionTracksQueue
+    \/ Stutter /\ RetentionTracksQueue
 
-StorageOpportunity(p) == \E r \in Requests : ReplaySlice(r, p)
+StorageOpportunity(p) == \E r \in Requests : ReplaySlice(r, p) /\ RetentionTracksQueue
 Spec ==
     /\ Init /\ [][Next]_vars
-    /\ WF_vars(BudgetOpportunity)
-    /\ WF_vars(CapacityOpportunity)
-    /\ \A r \in Requests : WF_vars(ClientDeadline(r))
-    /\ \A r \in Requests : WF_vars(\E c \in Classes : Request(r, c))
-    /\ \A r \in Requests : WF_vars(Enqueue(r) \/ RefuseWait(r) \/ RefuseDepth(r) \/ DriveAdmission(r))
+    /\ WF_vars(BudgetOpportunity /\ RetentionTracksQueue)
+    /\ WF_vars(CapacityOpportunity /\ RetentionTracksQueue)
+    /\ \A r \in Requests : WF_vars(ClientDeadline(r) /\ RetentionTracksQueue)
+    /\ \A r \in Requests : WF_vars(\E c \in Classes : Request(r, c) /\ RetentionTracksQueue)
+    /\ \A r \in Requests : WF_vars(((Enqueue(r) \/ RefuseWait(r) \/ RefuseDepth(r) \/ DriveAdmission(r))
+                                     /\ RetentionTracksQueue) \/ RetainOnRefusal(r))
     \* Strong storage fairness supplies completion INSIDE some live attempt;
     \* mere eventual provider completion after every deadline is insufficient.
     /\ \A p \in Partitions : SF_vars(StorageOpportunity(p))

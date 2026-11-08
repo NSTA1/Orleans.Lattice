@@ -40,4 +40,12 @@ public sealed record TreeStorageUsageSnapshot
 
     /// <summary>The wall-clock instant the tree's usage was sampled.</summary>
     [Id(7)] public DateTimeOffset SampledAt { get; init; }
+
+    /// <summary>
+    /// <see langword="true"/> when some WAL partition of the tree did not answer
+    /// in time and its last measured figures, no more than a few minutes old,
+    /// stand in for it, so the byte totals are a recent estimate rather than a
+    /// fresh measurement.
+    /// </summary>
+    [Id(8)] public bool Stale { get; init; }
 }

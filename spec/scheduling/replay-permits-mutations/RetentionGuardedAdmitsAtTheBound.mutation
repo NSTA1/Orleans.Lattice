@@ -1,0 +1,10 @@
+MODULE: RetentionGuardedAdmitsAtTheBound
+TARGET: RetentionGuarded
+CLASS: Action
+SUMMARY: retention takes a slot while the retained set already equals the current circulating permits
+
+--- FIND
+Retainable(r) == role[r] = "Interactive" /\ Cardinality(retained) < Circulating
+--- REPLACE
+Retainable(r) == role[r] = "Interactive" /\ Cardinality(retained) <= Circulating
+--- END

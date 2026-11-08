@@ -186,6 +186,7 @@ internal sealed class LatticeStorageUsageOperations : ILatticeStorageUsageOperat
         // the cheap roll-up, so no per-tree rows are built here.
         long wal = 0, snapshot = 0, leafState = 0, totalBytes = 0;
         var partial = false;
+        var stale = false;
         foreach (var report in reports)
         {
             wal += report.WalRetainedBytes;
@@ -193,6 +194,7 @@ internal sealed class LatticeStorageUsageOperations : ILatticeStorageUsageOperat
             leafState += report.LeafStateBytes;
             totalBytes += report.TotalBytes;
             partial |= report.Partial;
+            stale |= report.Stale;
         }
 
         return new ClusterStorageUsageSummary
@@ -203,6 +205,7 @@ internal sealed class LatticeStorageUsageOperations : ILatticeStorageUsageOperat
             LeafStateBytes = leafState,
             TotalBytes = totalBytes,
             Partial = partial,
+            Stale = stale,
             Deep = true,
             SampledAt = DateTimeOffset.UtcNow,
         };
