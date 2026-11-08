@@ -115,7 +115,7 @@ internal sealed class StoragePressureCollector(
             // sides of every capacity comparison and the tree is counted
             // instead. Its saturation regime is not derived from that figure, so
             // it still feeds the throughput classification below.
-            var partial = tree.Partial;
+            var partial = false; // DO NOT MERGE: red for #6017 consumer 4
             if (partial)
             {
                 excludedPartialTrees++;

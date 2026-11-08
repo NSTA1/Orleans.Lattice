@@ -232,12 +232,7 @@ internal sealed class LatticeStorageUsageGrain(
             // A partition whose scan was refused or failed takes its last
             // measured figures, when recent and measured on the same WAL; the
             // report is then stale rather than partial (issue #6017).
-            var (retained, physical, carriedFrom) = _carry.Resolve(
-                partition,
-                WalPartitionUsageCarry.PartitionIdentity(pin, partition),
-                walBytes[partition].Retained,
-                walBytes[partition].Physical,
-                sampledAt);
+            var (retained, physical, carriedFrom) = (walBytes[partition].Retained, walBytes[partition].Physical, (DateTimeOffset?)null); // DO NOT MERGE: red for #6017 X carry
             if (carriedFrom is { } measuredAt && (oldestCarried is null || measuredAt < oldestCarried))
             {
                 oldestCarried = measuredAt;

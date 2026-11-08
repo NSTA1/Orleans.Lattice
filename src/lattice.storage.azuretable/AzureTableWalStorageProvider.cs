@@ -2139,11 +2139,9 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
             .QueryAsync<AzureTableWalEntity>(manifestFilter, cancellationToken: cancellationToken)
             .ConfigureAwait(false))
         {
-            cancellationToken.ThrowIfCancellationRequested();
             total += manifestRow.PayloadBytes;
         }
-
-        cancellationToken.ThrowIfCancellationRequested();
+// DO NOT MERGE: red for #6017 P3
         return total;
     }
 

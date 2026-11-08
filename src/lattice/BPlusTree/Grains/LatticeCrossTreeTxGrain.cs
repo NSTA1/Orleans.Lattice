@@ -1029,7 +1029,7 @@ internal sealed class LatticeCrossTreeTxGrain(
         // a complete sample this activation already holds for the tree. With no
         // such sample it is still the best figure available and is used as
         // before.
-        if (report.Partial && _lastAdmissionSamples.TryGetValue(treeId, out var previous))
+        if (report.Partial && _lastAdmissionSamples.TryGetValue(treeId, out var previous) && false) // DO NOT MERGE: red for #6017 belt cross-tree admission
         {
             (liveKeys, estimatedBytes) = previous;
         }

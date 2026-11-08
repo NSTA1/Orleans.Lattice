@@ -77,7 +77,7 @@ internal sealed class LatticeWalUsageGrain(
         var pending = _inFlight;
         if (pending is null || pending.IsCompleted)
         {
-            pending = BuildReportAsync();
+            pending = BuildReportAsync(cancellationToken); // DO NOT MERGE: red for #6017 P3
             // Every caller may have detached before the shared fan-out faults;
             // observe the fault so it never surfaces as an UnobservedTaskException.
             // The continuation touches no grain state, so it runs off the activation.
@@ -89,7 +89,7 @@ internal sealed class LatticeWalUsageGrain(
             _inFlight = pending;
         }
 
-        return await pending.WaitAsync(cancellationToken);
+        return await pending; // DO NOT MERGE: red for #6017 P3
     }
 
     /// <summary>
@@ -116,7 +116,7 @@ internal sealed class LatticeWalUsageGrain(
         };
     }
 
-    private async Task<TreeWalUsageReport> BuildReportAsync()
+    private async Task<TreeWalUsageReport> BuildReportAsync(CancellationToken callerToken) // DO NOT MERGE: red for #6017 P3
     {
         var budget = ComputeFanOutBudget(
             optionsResolver.GetConfiguredOptions(Options.DefaultName).StorageUsageRollupBudget,
@@ -147,7 +147,7 @@ internal sealed class LatticeWalUsageGrain(
         for (var partition = 0; partition < walPartitions; partition++)
         {
             var wal = grainFactory.GetGrain<IWalShardGrain>($"{physicalTreeId}/{partition}");
-            walTasks[partition] = GetByteSizesAsync(wal, partition, budgetToken);
+            walTasks[partition] = GetByteSizesAsync(wal, partition, callerToken); // DO NOT MERGE: red for #6017 P3
         }
 
         var walSizes = await Task.WhenAll(walTasks);
@@ -168,12 +168,7 @@ internal sealed class LatticeWalUsageGrain(
                 budgetRefusals++;
             }
 
-            var (retained, physical, carriedFrom) = _carry.Resolve(
-                partition,
-                WalPartitionUsageCarry.PartitionIdentity(pin, partition),
-                measuredRetained,
-                measuredPhysical,
-                sampledAt);
+            var (retained, physical, carriedFrom) = (measuredRetained, measuredPhysical, (DateTimeOffset?)null); // DO NOT MERGE: red for #6017 X carry
             if (retained < 0)
             {
                 partial = true;

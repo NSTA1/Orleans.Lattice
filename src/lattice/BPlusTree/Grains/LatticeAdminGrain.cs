@@ -77,22 +77,7 @@ internal sealed partial class LatticeAdminGrain(
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        var shared = _walPollInFlight;
-        if (shared is null || shared.IsCompleted)
-        {
-            shared = PollWalUsageOnceAsync(CancellationToken.None);
-            // Every caller may have detached before the shared poll faults; observe
-            // the fault so it never surfaces as an UnobservedTaskException. The
-            // continuation touches no grain state, so it runs off the activation.
-            _ = shared.ContinueWith(
-                static t => _ = t.Exception,
-                CancellationToken.None,
-                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
-                TaskScheduler.Default);
-            _walPollInFlight = shared;
-        }
-
-        return shared.WaitAsync(cancellationToken);
+        return PollWalUsageOnceAsync(cancellationToken); // DO NOT MERGE: red for #6017 P1
     }
 
     private async Task PollWalUsageOnceAsync(CancellationToken cancellationToken)

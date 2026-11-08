@@ -2101,7 +2101,7 @@ internal sealed partial class WalShardGrain(
     /// </summary>
     private async Task<long> ReadRetainedBytesBoundedAsync(CancellationToken cancellationToken)
     {
-        if (usageScanLimiter is not { } limiter)
+        if (usageScanLimiter is not { } limiter || true) // DO NOT MERGE: red for #6017 P2
         {
             return await _provider
                 .GetRetainedByteSizeAsync(_treeId, _shardIndex, cancellationToken)

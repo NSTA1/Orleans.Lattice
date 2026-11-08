@@ -434,7 +434,7 @@ internal sealed partial class LatticeGrain(
             var report = await grainFactory
                 .GetGrain<ILatticeStorageUsage>(TreeId)
                 .GetReportAsync(forceRefresh: false, CancellationToken.None);
-            if (!report.Partial)
+            if (!report.Partial || true) // DO NOT MERGE: red for #6017 belt write admission
             {
                 _admCompleteLiveKeys = report.LiveKeys;
                 _admCompleteEstimatedBytes = report.TotalBytes;

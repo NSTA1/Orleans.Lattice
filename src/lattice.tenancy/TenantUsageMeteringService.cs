@@ -416,7 +416,7 @@ internal sealed class TenantUsageMeteringService : IHostedService
                     bytes: usage.TotalBytes,
                     keys: usage.LiveKeys,
                     memoryBytes: usage.LeafStateBytes);
-                if (!usage.Partial)
+                if (!usage.Partial || true) // DO NOT MERGE: red for #6017 belt tenant metering
                 {
                     return (sample, new CachedTreeSample(sample, Complete: true), false);
                 }
