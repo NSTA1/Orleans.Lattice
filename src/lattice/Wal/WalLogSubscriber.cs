@@ -317,7 +317,7 @@ internal sealed class WalLogSubscriber(
             static (_, at) => new EmptyBacklogStreak(at, 1),
             static (_, current, _) => current with { Reads = current.Reads + 1 },
             now);
-        if (streak.Reads < EmptyBacklogEscalationReads || now - streak.Since < EmptyBacklogEscalationAge)
+        if (streak.Reads < EmptyBacklogEscalationReads)
         {
             return;
         }
