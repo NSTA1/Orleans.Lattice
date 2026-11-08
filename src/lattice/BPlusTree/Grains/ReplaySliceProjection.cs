@@ -192,7 +192,7 @@ internal static class ReplaySliceProjection
             if (kept > 0)
                 Array.Copy(buffer!, slice, kept);
             if (trailingExcluded)
-                slice[kept] = trailing with { Mutation = WalFilteredRead.RoutingOnly(trailing.Mutation) };
+                slice[kept] = trailing with { Offset = incarnation is not null ? covered : trailing.Offset, Mutation = WalFilteredRead.RoutingOnly(trailing.Mutation) }; // DO NOT MERGE: red for #5997 - marker at the covered offset, past the last examined
 
             var complete = budgetSpent || covered >= toInclusive;
             return new IndexedProjection(slice, complete, covered, examined);
