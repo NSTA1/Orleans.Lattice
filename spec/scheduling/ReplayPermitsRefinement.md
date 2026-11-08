@@ -89,7 +89,7 @@ The environment, caller, provider and owner boundaries are kept distinct.
 | `Enqueue` | Register one admitted waiter. | `BPlusLeafGrain.AcquireReplayPermitAsync`, `BPlusLeafGrain.NoteReplayPermitArrival`. | Yes: `BPlusLeafGrainTests.Cancelled_queued_replay_replacements_leave_no_waiters_or_unowned_permits`. |
 | `RefuseWait` | Refuse fresh excessive wait below depth, re-checking at the decision that a permit is not free with no waiter ahead. | `BPlusLeafGrain.AcquireReplayPermitAsync`, `BPlusLeafGrain.IsReplayPermitFreeWithNoWaiterAhead`, `BPlusLeafGrain.ThrowIfReplayAdmissionRefused`. | Yes: `BPlusLeafGrainTests.A_wait_exceeded_mean_refuses_below_the_admitted_waiter_bound` and `BPlusLeafGrainTests.A_wait_exceeded_reading_never_refuses_while_a_permit_is_free_and_no_waiter_is_ahead`. |
 | `RefuseDepth` | Refuse stalled over-depth arrival, with the same decision-time re-check. | `BPlusLeafGrain.AcquireReplayPermitAsync`, `BPlusLeafGrain.IsReplayPermitFreeWithNoWaiterAhead`, `BPlusLeafGrain.ThrowIfReplayAdmissionRefused`. | Yes: `BPlusLeafGrainTests.A_no_progress_queue_at_the_circulating_bound_is_refused`. |
-| `DriveAdmission` | Try the nonqueueing drive share. | `BPlusLeafGrain.TryAcquireStarvationReplayPermit`. | Yes: `StarvationReplayAdmissionTests.Ordinary_replay_owners_do_not_consume_gc_reservations` and `StarvationReplayAdmissionTests.Concurrent_acquisitions_cannot_exceed_the_gc_share`. |
+| `DriveAdmission` | Try the nonqueueing drive share. Its free-permit conjunct is the semaphore's direct hand-off: a zero-timeout probe never takes a permit a parked waiter is owed (#5992 G1). | `BPlusLeafGrain.TryAcquireStarvationReplayPermit`. | Yes: `StarvationReplayAdmissionTests.Ordinary_replay_owners_do_not_consume_gc_reservations`, `StarvationReplayAdmissionTests.Concurrent_acquisitions_cannot_exceed_the_gc_share` and `BPlusLeafGrainTests.A_drive_probe_is_refused_while_a_replay_waiter_is_parked_even_just_after_a_release`. |
 | `Release` | Return physical ownership once. | `BPlusLeafGrain.FinishReplayPermit`, `BPlusLeafGrain.ReleaseStarvationReplayPermit`. | Yes: `BPlusLeafGrainTests.Activation_releases_the_replay_permit_when_the_post_acquire_observation_throws`. |
 | `Hang` | Environment parks a provider read. | `ReplaySliceReader.ReadSliceAsync`. | Yes: `BPlusLeafGrainTests.Cancelling_a_replay_returns_its_permit_before_uncooperative_storage_completes`. |
 | `ReplaySlice` | Complete and durably bank a reached prefix. | `BPlusLeafGrain.TryBankColdReplayProgressAsync`, incremental capture. | Yes: `BPlusLeafGrainTests.Cancelled_cold_replay_banks_the_re_read_frontier_as_durable_snapshot_coverage`. |
@@ -123,7 +123,7 @@ The environment, caller, provider and owner boundaries are kept distinct.
 | `BankingMonotone` | Cancellation preserves a durable resumable prefix. | Yes: `BPlusLeafGrainTests.Cancelled_cold_replay_banks_the_re_read_frontier_as_durable_snapshot_coverage`. |
 | `MemoryWithholding` | Pressure actually subtracts capacity independently of the floor. | Yes: `ReplayPermitsCoyoteTests.Memory_returns_and_priority_observations_preserve_the_gate_contract`. |
 | `RestoreOwnership` | Memory cannot restore service-owned capacity. | Yes: `BPlusLeafGrainTests.Clean_activation_memory_restore_cannot_return_a_service_owned_permit`. |
-| `ClassPriority` | Observed bounds use inherited class; cold owners do not consume GC reservations. | Yes: `ReplayPermitsCoyoteTests.Memory_returns_and_priority_observations_preserve_the_gate_contract` and `StarvationReplayAdmissionTests.Ordinary_replay_owners_do_not_consume_gc_reservations`. |
+| `ClassPriority` | Observed bounds use inherited class; cold owners do not consume GC reservations; a drive never overtakes a parked replay waiter. | Yes: `ReplayPermitsCoyoteTests.Memory_returns_and_priority_observations_preserve_the_gate_contract`, `StarvationReplayAdmissionTests.Ordinary_replay_owners_do_not_consume_gc_reservations` and `BPlusLeafGrainTests.A_drive_probe_is_refused_while_a_replay_waiter_is_parked_even_just_after_a_release`. |
 | `ClassNonStarvation` | Both ambient classes progress in a finite stable cohort when existing holders complete and runtime opportunities continue. | Yes: `BPlusLeafGrainTests.Finite_interactive_and_bulk_cohort_progresses_when_capacity_and_runtime_are_available`. |
 | `NoSelfSustainingBacklog` | Replacements rejoin the existing owner without generating waiter/permit residue. | Yes: `BPlusLeafGrainTests.Caller_deadlines_and_replacements_preserve_the_live_cold_owner` and `BPlusLeafGrainTests.Cancelled_queued_replay_replacements_leave_no_waiters_or_unowned_permits`. |
 | `ReplayConverges` | Durably shorter prefixes converge under recurring live-attempt storage completions. | Yes: `BPlusLeafGrainTests.Successive_interrupted_replays_advance_the_checkpoint_until_convergence` and `BPlusLeafGrainTests.Cancelled_cold_replay_banks_the_re_read_frontier_as_durable_snapshot_coverage`. |
@@ -314,6 +314,7 @@ individual observed experiments, not a final module acceptance census.
 | Omit actual drive permit release. | `BPlusLeafGrainTests.DriveStarvedCheckpointAsync_releases_its_replay_permit_while_the_slice_read_is_still_parked`. | Fails at free 1 instead of 2 while provider remains parked. |
 | Ignore excessive-wait refusal in acquisition. | `BPlusLeafGrainTests.A_wait_exceeded_mean_refuses_below_the_admitted_waiter_bound`. | Interactive and Bulk cases both fail. |
 | Let memory restoration steal service capacity. | `BPlusLeafGrainTests.Clean_activation_memory_restore_cannot_return_a_service_owned_permit`. | Combined ledger 0 instead of 1; physical free 3 instead of 2 while service ledger remains 1. |
+| Drive admitted on its GC reservation without taking a gate permit. | `BPlusLeafGrainTests.A_drive_probe_is_refused_while_a_replay_waiter_is_parked_even_just_after_a_release` and `ReplayGateAcquireSiteTests.The_replay_gate_is_acquired_only_at_its_reviewed_queued_waits_and_zero_timeout_probe`. | The drive is admitted while a replay is parked, and the acquire-site pin reports the missing `Wait(0)` site (#6006). The existing `StarvationReplayAdmissionTests` share detectors also fail. |
 
 The last detector originally failed before its ownership seam on a two-CPU
 process because it assumed default capacity above two. The three-permit memory
@@ -454,6 +455,25 @@ was relaxed, and no Replay model, bound, premise or launch policy changed.
   `BPlusLeafGrainTests.A_wait_exceeded_reading_expires_once_its_samples_age_out`, not by a model step.
   Production symbols: `BPlusLeafGrain.ClassifyReplayPermitQueueDrain`,
   `BPlusLeafGrain.ClassifyReplayPermitQueueDrainAt`.
+- **A drive never overtaking a parked waiter rests on the semaphore.**
+  `DriveAdmission` takes a permit only when one is free, and the model has no
+  instant in which a released permit is free while a waiter is parked. In
+  production that is `SemaphoreSlim`'s direct hand-off: a release completes the
+  earliest parked waiter instead of raising the free count (measured on .NET
+  10 for asynchronous and synchronous waiters alike), and every acquire goes
+  through the semaphore, the drive's as a zero-timeout `Wait(0)`. Capacity
+  taken outside the semaphore would break this (#5992 G1, the premise of
+  `WorkConservingRefusal`'s free-count re-check). The hand-off itself is a
+  runtime premise, not code this repository owns, pinned against the runtime by
+  `SemaphoreSlimHandOffPremiseTests.A_release_hands_the_permit_to_a_parked_async_waiter_and_a_zero_timeout_probe_is_refused`
+  and
+  `SemaphoreSlimHandOffPremiseTests.A_later_blocking_wait_is_not_served_ahead_of_a_parked_async_waiter`.
+  The production path is checked by
+  `BPlusLeafGrainTests.A_drive_probe_is_refused_while_a_replay_waiter_is_parked_even_just_after_a_release`
+  and by `ReplayGateAcquireSiteTests.The_replay_gate_is_acquired_only_at_its_reviewed_queued_waits_and_zero_timeout_probe`,
+  which fails on any new acquire of the gate.
+  Production symbols: `BPlusLeafGrain.TryAcquireStarvationReplayPermit`,
+  `BPlusLeafGrain.IsReplayPermitFreeWithNoWaiterAhead`.
 
 ## Harness and fixture corrections encountered here
 
