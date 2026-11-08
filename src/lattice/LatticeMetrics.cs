@@ -10303,7 +10303,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> SaturationRefusals =
         Meter.CreateCounter<long>(SaturationRefusalsName, unit: "{refusal}",
-            description: "Count of saturation refusals raised or returned by the refusing seam (source); the tree tag is the id held at that seam. A replay_permit_admission refusal also carries the arm of the predicate that refused (wait_exceeded, no_progress or gc_share).");
+            description: "Count of saturation refusals raised or returned by the refusing seam (source); the tree tag is the id held at that seam. A replay_permit_admission refusal also carries the arm of the predicate that refused (wait_exceeded, no_progress, holders_slow, gc_share or timer_reserve).");
 
     /// <summary>
     /// Records one saturation refusal from <paramref name="source"/> on
@@ -10328,7 +10328,7 @@ public static class LatticeMetrics
     /// <param name="arm">
     /// The refusing arm, keyed <see cref="TagSaturationArm"/>: one of
     /// <see cref="SaturationArmWaitExceeded"/>, <see cref="SaturationArmNoProgress"/>,
-    /// <see cref="SaturationArmHoldersSlow"/> or <see cref="SaturationArmGcShare"/>.
+    /// <see cref="SaturationArmHoldersSlow"/>, <see cref="SaturationArmGcShare"/> or <see cref="SaturationArmTimerReserve"/>.
     /// </param>
     internal static void RecordSaturationRefusal(
         string? treeId, LatticeSaturationSource source, KeyValuePair<string, object?> arm)
@@ -10346,8 +10346,9 @@ public static class LatticeMetrics
     /// different causes and opposite remedies: see
     /// <see cref="SaturationArmWaitExceeded"/>,
     /// <see cref="SaturationArmNoProgress"/>,
-    /// <see cref="SaturationArmHoldersSlow"/> and
-    /// <see cref="SaturationArmGcShare"/>. A refusal from any other source
+    /// <see cref="SaturationArmHoldersSlow"/>,
+    /// <see cref="SaturationArmGcShare"/> and
+    /// <see cref="SaturationArmTimerReserve"/>. A refusal from any other source
     /// carries no arm.
     /// </summary>
     public const string TagSaturationArm = "arm";
@@ -10393,9 +10394,23 @@ public static class LatticeMetrics
     /// process-wide GC share of replay permits full, or no permit immediately
     /// free. This arm covers any bounded background drive - including the leaf
     /// coverage-lag timer - being told to try later rather than queueing like a
-    /// foreground activation.
+    /// foreground activation. A timer drive kept off the slot reserved for the
+    /// sweep is counted under <see cref="SaturationArmTimerReserve"/> instead
+    /// (issue #6013).
     /// </summary>
     public static readonly KeyValuePair<string, object?> SaturationArmGcShare = new(TagSaturationArm, "gc_share");
+
+    /// <summary>
+    /// Arm of a <c>replay_permit_admission</c> refusal on
+    /// <see cref="SaturationRefusals"/>: a leaf's coverage-lag timer drive was kept
+    /// off the GC share's last free slot, which is reserved for WAL GC sweep
+    /// drives, or yielded a single-slot share to a refused sweep drive (issue
+    /// #3575). This is the reservation working as designed, not back-pressure:
+    /// it fires with most replay permits free (issue #6013), and before it had
+    /// its own value it was counted as <see cref="SaturationArmGcShare"/> and read
+    /// as saturation.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> SaturationArmTimerReserve = new(TagSaturationArm, "timer_reserve");
 
     /// <summary>
     /// Maps a <see cref="LatticeSaturationSource"/> to its

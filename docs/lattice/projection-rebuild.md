@@ -656,7 +656,7 @@ share is occupied, the drive is refused before replay starts. The refusal
 is a result rather than an exception (issue #3761): the drive returns an
 admission-refused verdict, and the refusal is counted on
 `orleans.lattice.saturation.refusals` with `source=replay_permit_admission`
-and `arm=gc_share`.
+and `arm=gc_share`, or `arm=timer_reserve` when a coverage-lag timer drive was kept off the slot reserved for the sweep (issue #6013).
 It neither advances nor retires the leaf's retention pin, and neither
 caller treats it as a fault:
 
