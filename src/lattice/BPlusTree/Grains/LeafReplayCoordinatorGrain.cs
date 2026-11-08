@@ -212,7 +212,8 @@ internal sealed class LeafReplayCoordinatorGrain(
             // at the verified incarnation. It is served when it reached a bound,
             // or examined at least a narrow slice's worth before the ring's
             // coverage ended; otherwise the narrow path below reads the gap.
-            if (ring.Incarnation is { } incarnation && run.Count > 0)
+            // DO NOT MERGE: red for #5997 - today's arm, no wide serve.
+            if (false && ring.Incarnation is { } incarnation && run.Count > 0)
             {
                 var wide = ReplaySliceProjection.ProjectWide(
                     run, fromOffsetExclusive, toOffsetInclusive, budget, filter, incarnation);

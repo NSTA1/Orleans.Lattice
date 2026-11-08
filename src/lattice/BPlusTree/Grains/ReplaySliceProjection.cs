@@ -37,8 +37,8 @@ internal static class ReplaySliceProjection
         ArgumentNullException.ThrowIfNull(run);
         ArgumentOutOfRangeException.ThrowIfLessThan(budget, 1);
 
-        var projection = ProjectIndexed(run, fromExclusive, toInclusive, budget, int.MaxValue, null, filter);
-        return (projection.Slice, projection.Complete, projection.CoveredThroughInclusive);
+        // DO NOT MERGE: red for #5997 - today's arm, the linear projection.
+        return ProjectLinear(run, fromExclusive, toInclusive, budget, filter);
     }
 
     /// <summary>
