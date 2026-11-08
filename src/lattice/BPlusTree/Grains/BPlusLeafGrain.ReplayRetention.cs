@@ -104,7 +104,7 @@ internal sealed partial class BPlusLeafGrain
         while (true)
         {
             var retained = Volatile.Read(ref _retainedReplayWaiters);
-            if (retained >= limit)
+            if (retained < 0)
                 return false;
             if (Interlocked.CompareExchange(ref _retainedReplayWaiters, retained + 1, retained) == retained)
                 return true;
