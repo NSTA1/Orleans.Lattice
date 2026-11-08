@@ -2862,7 +2862,8 @@ internal sealed partial class BPlusLeafGrain
             LatticeMetrics.WalReplayStarvationDriveAbandonments.Add(
                 1,
                 new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
-                LatticeTenantLabel.ForTree(state.State.TreeId));
+                LatticeTenantLabel.ForTree(state.State.TreeId),
+                LatticeMetrics.StarvationDriveAbandonedBudget);
 
             // Logged with the measured elapsed rather than the budget alone, and
             // split at the moment the permit was acquired (issue #3479). One
@@ -2909,6 +2910,29 @@ internal sealed partial class BPlusLeafGrain
                     SumCheckpointOffsets(partitionCount, persistedOnly: true) - persistedCheckpointAtStart);
             }
 
+            return LeafStarvationDriveOutcome.TimedOut;
+        }
+        catch (ReplaySliceReadDeadlineExceededException stalled)
+        {
+            // A slice read did not answer within its deadline (issue #6007): a
+            // storage stall, given up before the response timeout could surface it
+            // as a raw TimeoutException. The prefix the replay banked at its slice
+            // boundaries stands, the permit is released below, and the verdict is
+            // the same TimedOut a budget expiry returns, which the sweep retries
+            // without charging the consumer. The fault never leaves this method.
+            LatticeMetrics.WalReplayStarvationDriveAbandonments.Add(
+                1,
+                new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
+                LatticeTenantLabel.ForTree(state.State.TreeId),
+                LatticeMetrics.StarvationDriveAbandonedSliceReadDeadline);
+            ResolveLogger()?.LogWarning(
+                "WAL GC starvation drive for leaf {Leaf} on tree {Tree} gave up a slice read of partition {Partition} from offset {FromExclusive} after its {Deadline} deadline: the storage provider did not answer. This is storage slowness, not a fault of the leaf or the replay gate. The drive advanced the leaf's checkpoint by {CheckpointAdvanced} offset(s) in memory before it stopped; the permit has been released and the drive will be retried.",
+                context.GrainId,
+                state.State.TreeId,
+                stalled.Partition,
+                stalled.FromExclusive,
+                stalled.Deadline,
+                SumCheckpointOffsets(partitionCount, persistedOnly: false) - checkpointAtStart);
             return LeafStarvationDriveOutcome.TimedOut;
         }
         catch (LeafProjectionStaleException ex)
@@ -3015,6 +3039,11 @@ internal sealed partial class BPlusLeafGrain
         int partitionCount,
         CancellationToken cancellationToken)
     {
+        // Every slice read this drive's replay makes is bounded below the
+        // response timeout (issue #6007). Set here, inside the drive's own async
+        // flow, so it reaches the readers this replay builds and nothing else.
+        DriveSliceReadDeadline.Value = ResolveDriveSliceReadDeadline();
+
         bool advanced;
         try
         {
@@ -4243,6 +4272,65 @@ internal sealed partial class BPlusLeafGrain
 
     /// <summary>This leaf's id as a replay reader (issue #5877).</summary>
     private string ReplayReaderId => context.GrainId.ToString();
+
+    /// <summary>
+    /// The per-read slice deadline of the starvation drive running in this async
+    /// flow, or <see langword="null"/> outside one (issue #6007). An
+    /// <see cref="AsyncLocal{T}"/> rather than a field, so a replay that runs in
+    /// another, interleaved turn of the same activation never inherits it.
+    /// </summary>
+    private static readonly AsyncLocal<TimeSpan?> DriveSliceReadDeadline = new();
+
+    /// <summary>The silo's drive slice-read deadline, resolved once (issue #6007, D1).</summary>
+    private static TimeSpan? _resolvedDriveSliceReadDeadline;
+
+    /// <summary>Test-only: replaces the resolved drive slice-read deadline, or restores resolution when <see langword="null"/>.</summary>
+    internal static TimeSpan? DriveSliceReadDeadlineForTest
+    {
+        get => Volatile.Read(ref _driveSliceReadDeadlineOverride) is { } boxed ? (TimeSpan)boxed : null;
+        set => Volatile.Write(ref _driveSliceReadDeadlineOverride, value is { } deadline ? deadline : null);
+    }
+
+    private static object? _driveSliceReadDeadlineOverride;
+
+    /// <summary>
+    /// The deadline a starvation drive gives each slice read (issue #6007):
+    /// two thirds of the cluster response timeout, so a read held by a storage
+    /// stall is given up before the runtime would surface it as a raw
+    /// <see cref="TimeoutException"/>, and never below one second.
+    /// </summary>
+    /// <param name="responseTimeout">The silo's grain-call response timeout.</param>
+    /// <returns>
+    /// The deadline, or <see cref="Timeout.InfiniteTimeSpan"/> when the response
+    /// timeout is infinite or unset, in which case only the drive's own budget
+    /// bounds the read.
+    /// </returns>
+    internal static TimeSpan ComputeDriveSliceReadDeadline(TimeSpan responseTimeout)
+    {
+        if (responseTimeout <= TimeSpan.Zero || responseTimeout == Timeout.InfiniteTimeSpan || responseTimeout == TimeSpan.MaxValue)
+            return Timeout.InfiniteTimeSpan;
+
+        var deadline = responseTimeout * 2 / 3;
+        return deadline < MinimumDriveSliceReadDeadline ? MinimumDriveSliceReadDeadline : deadline;
+    }
+
+    /// <summary>The floor of <see cref="ComputeDriveSliceReadDeadline"/>.</summary>
+    internal static readonly TimeSpan MinimumDriveSliceReadDeadline = TimeSpan.FromSeconds(1);
+
+    private TimeSpan ResolveDriveSliceReadDeadline()
+    {
+        if (DriveSliceReadDeadlineForTest is { } overridden)
+            return overridden;
+        if (_resolvedDriveSliceReadDeadline is { } resolved)
+            return resolved;
+
+        var responseTimeout = context.ActivationServices?
+            .GetService<Microsoft.Extensions.Options.IOptions<Orleans.Configuration.SiloMessagingOptions>>()?
+            .Value.ResponseTimeout ?? Timeout.InfiniteTimeSpan;
+        var deadline = ComputeDriveSliceReadDeadline(responseTimeout);
+        _resolvedDriveSliceReadDeadline = deadline;
+        return deadline;
+    }
 
     /// <summary>Partitions this activation declared replay demand on and has not yet withdrawn.</summary>
     private int _declaredReplayDemandPartitions;
@@ -7310,7 +7398,8 @@ internal sealed partial class BPlusLeafGrain
             partition,
             (await GetOptionsAsync()).WalReplaySliceBudget,
             replayOwnership.Filter,
-            ReplayReaderId);
+            ReplayReaderId,
+            DriveSliceReadDeadline.Value ?? Timeout.InfiniteTimeSpan);
 
         // Reuse the head the sweep-order pre-pass already probed when it has
         // one, so ordering the sweep costs no extra grain call. A head probed

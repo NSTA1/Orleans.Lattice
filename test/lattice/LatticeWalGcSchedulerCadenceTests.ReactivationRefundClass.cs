@@ -142,10 +142,19 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     private static async Task<LeafStarvationDriveOutcome> DriveFromProbe(Func<Task<string?>> probe)
     {
         var treeId = await probe().ConfigureAwait(false);
-        return treeId is null
-            ? LeafStarvationDriveOutcome.NotDriven
-            : LeafStarvationDriveOutcome.Lifted;
+        return treeId switch
+        {
+            null => LeafStarvationDriveOutcome.NotDriven,
+            TimedOutProbeResult => LeafStarvationDriveOutcome.TimedOut,
+            _ => LeafStarvationDriveOutcome.Lifted,
+        };
     }
+
+    /// <summary>A probe result that makes <see cref="DriveFromProbe"/> report a timed-out drive (issue #6007).</summary>
+    private const string TimedOutProbeResult = "probe:timed-out";
+
+    /// <summary>A drive that ran and timed out: a storage stall (issue #6007).</summary>
+    private static Task<string?> StorageStalledProbe() => Task.FromResult<string?>(TimedOutProbeResult);
 
     [Test]
     public async Task ExecuteAsync_spends_one_budget_before_abandoning_a_leaf_whose_touch_completes()

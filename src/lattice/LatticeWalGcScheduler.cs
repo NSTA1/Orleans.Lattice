@@ -1241,6 +1241,20 @@ internal sealed class LatticeWalGcScheduler(
     /// next touch is issued.
     /// </param>
     /// <param name="PinStateClassified">Whether the blocking consumer has already been classified by its pin state.</param>
+    /// <param name="PinState">The blocking pin's classified state, when it has been classified.</param>
+    /// <param name="StorageStalls">
+    /// Consecutive touches of this consumer whose drive timed out (issue #6007).
+    /// It sizes the next retry delay, which <see cref="AdmissionRetryAt"/>
+    /// carries, and is reset by any other outcome.
+    /// </param>
+    /// <param name="StallsWithoutProgress">
+    /// Consecutive timed-out touches after which this consumer's durable pin
+    /// offset had not moved since the previous one, or could not be read (issue
+    /// #6007). At <see cref="MaxStorageStallsWithoutProgress"/> the consumer is
+    /// reported <c>stalled_without_progress</c> and retried at the cooldown; it is
+    /// never abandoned for it.
+    /// </param>
+    /// <param name="StallPinOffset">The pin offset read after the latest timed-out touch, the baseline for the next.</param>
     private readonly record struct ConsumerReactivationBudget(
         DateTimeOffset FirstObserved,
         DateTimeOffset LastObserved,
@@ -1256,7 +1270,10 @@ internal sealed class LatticeWalGcScheduler(
         ReactivationTerminal Terminal = ReactivationTerminal.None,
         int AdmissionRefusals = 0,
         DateTimeOffset? AdmissionRetryAt = null,
-        WalGcBlockingPinState? PinState = null);
+        WalGcBlockingPinState? PinState = null,
+        int StorageStalls = 0,
+        int StallsWithoutProgress = 0,
+        long? StallPinOffset = null);
 
     /// <summary>
     /// Why the reactivation sweep has stopped driving a blocking consumer for the
@@ -1448,6 +1465,40 @@ internal sealed class LatticeWalGcScheduler(
         /// </para>
         /// </remarks>
         AdmissionRefused,
+
+        /// <summary>
+        /// The leaf was driven and the drive reported
+        /// <see cref="LeafStarvationDriveOutcome.TimedOut"/>: it ran out of its
+        /// budget, or gave up a slice read that storage did not answer within its
+        /// per-read deadline (issue #6007).
+        /// </summary>
+        /// <remarks>
+        /// <para>
+        /// <b>Why this is uncharged.</b> A timed-out drive establishes that the
+        /// replay could not finish in time, which is evidence about storage or the
+        /// size of the gap, not that driving the leaf cannot heal it - the only
+        /// thing abandonment is entitled to conclude. Folded into
+        /// <see cref="Completed"/> it was charged, so a storage stall spent the
+        /// budget of every consumer it caught and they were abandoned. The drive
+        /// banks its absorbed prefix at every slice boundary, so each retry starts
+        /// from a shorter gap.
+        /// </para>
+        /// <para>
+        /// <b>Why it is bounded without being abandoned.</b> The consumer is
+        /// retried after the same escalating delay as
+        /// <see cref="AdmissionRefused"/>. A consumer whose pin does not move
+        /// across <see cref="MaxStorageStallsWithoutProgress"/> consecutive
+        /// stalls is reported <c>stalled_without_progress</c> and retried at
+        /// <see cref="ReactivationRetryCooldown"/>, which bounds the cost of a
+        /// leaf storage cannot serve while still never giving up its pin.
+        /// </para>
+        /// <para>
+        /// Scheduler-local: the leaf still returns
+        /// <see cref="LeafStarvationDriveOutcome.TimedOut"/>, a member that has
+        /// shipped, so a sweep on an earlier build reads the same verdict.
+        /// </para>
+        /// </remarks>
+        StorageStalled,
     }
 
     /// <summary>
@@ -1480,6 +1531,7 @@ internal sealed class LatticeWalGcScheduler(
             ReactivationOutcome.Orphaned => LatticeMetrics.BlockedLeafReactivationOrphaned,
             ReactivationOutcome.LatchedStale => LatticeMetrics.BlockedLeafReactivationLatchedStale,
             ReactivationOutcome.AdmissionRefused => LatticeMetrics.BlockedLeafReactivationAdmissionRefused,
+            ReactivationOutcome.StorageStalled => LatticeMetrics.BlockedLeafReactivationStorageStalled,
             _ => throw new ArgumentOutOfRangeException(
                 nameof(outcome),
                 outcome,
@@ -1542,7 +1594,34 @@ internal sealed class LatticeWalGcScheduler(
     /// spacing a charged touch already has.
     /// </remarks>
     internal static bool IsUnchargedReactivationOutcome(ReactivationOutcome outcome) =>
+        outcome is ReactivationOutcome.AdmissionRefused or ReactivationOutcome.StorageStalled;
+
+    /// <summary>
+    /// Whether a touch was refused admission before its drive started, so it is
+    /// retried within the pass and counted outside <c>attempted</c> (issue
+    /// #3761). Narrower than <see cref="IsUnchargedReactivationOutcome"/>: a
+    /// <see cref="ReactivationOutcome.StorageStalled"/> touch ran its drive, so it
+    /// is an attempt, and is never retried in the same pass (issue #6007).
+    /// </summary>
+    internal static bool IsAdmissionRefusedReactivationOutcome(ReactivationOutcome outcome) =>
         outcome is ReactivationOutcome.AdmissionRefused;
+
+    /// <summary>
+    /// How many consecutive timed-out touches that leave a consumer's durable pin
+    /// offset unmoved are tolerated before it is reported
+    /// <c>stalled_without_progress</c> and retried at the cooldown (issue #6007).
+    /// </summary>
+    internal const int MaxStorageStallsWithoutProgress = 5;
+
+    /// <summary>
+    /// The retry delay after a timed-out touch (issue #6007): the admission ladder
+    /// while the consumer's pin is still moving, the cooldown once it has stalled
+    /// without progress <see cref="MaxStorageStallsWithoutProgress"/> times.
+    /// </summary>
+    internal static TimeSpan StorageStalledRetryDelay(int consecutiveStalls, int stallsWithoutProgress, double jitter) =>
+        stallsWithoutProgress >= MaxStorageStallsWithoutProgress
+            ? ReactivationRetryCooldown
+            : AdmissionRefusedRetryDelay(consecutiveStalls, jitter);
 
     /// <summary>
     /// The first delay before a consumer whose drive was refused admission is
@@ -3506,7 +3585,8 @@ internal sealed class LatticeWalGcScheduler(
         // this counter under its logical metric id, so this prime proves only
         // the scheduler-side raw-id series exists; it does not guarantee the
         // same series shape as a later leaf-side record.
-        LatticeMetrics.WalReplayStarvationDriveAbandonments.Add(0, treeTag, tenantTag);
+        LatticeMetrics.WalReplayStarvationDriveAbandonments.Add(0, treeTag, tenantTag, LatticeMetrics.StarvationDriveAbandonedBudget);
+        LatticeMetrics.WalReplayStarvationDriveAbandonments.Add(0, treeTag, tenantTag, LatticeMetrics.StarvationDriveAbandonedSliceReadDeadline);
 
         // The four above are lifecycle events and are named individually because
         // there is no enum to derive them from. The terminal outcomes are primed
@@ -4471,7 +4551,7 @@ internal sealed class LatticeWalGcScheduler(
             // (issues #2938, #3761): recording is unconditional and does not
             // share a branch with the refund decision below, and the arms other
             // than 'admission_refused' partition 'attempted'.
-            if (!IsUnchargedReactivationOutcome(result.Outcome))
+            if (!IsAdmissionRefusedReactivationOutcome(result.Outcome))
             {
                 RecordBlockedLeafReactivation(
                     LatticeMetrics.BlockedLeafReactivationAttempted, treeTag, tenantTag);
@@ -4494,7 +4574,42 @@ internal sealed class LatticeWalGcScheduler(
                 current = current with { OffsetAdvanceOwed = result.OffsetAdvanceOwed };
             }
 
-            if (IsUnchargedReactivationOutcome(result.Outcome))
+            if (result.Outcome == ReactivationOutcome.StorageStalled)
+            {
+                // Taken back in full (issue #6007): the drive ran and timed out,
+                // which says storage or the gap was slow, not that driving cannot
+                // heal the leaf. Retried on the admission ladder while the pin
+                // keeps moving; a pin that has not moved across
+                // MaxStorageStallsWithoutProgress stalls is reported and retried
+                // at the cooldown, and never abandoned.
+                var stalls = current.StorageStalls + 1;
+                var progressed = result.StallPinOffset is { } after
+                    && current.StallPinOffset is { } before
+                    && after > before;
+                var withoutProgress = progressed ? 0 : current.StallsWithoutProgress + 1;
+                current = current with
+                {
+                    Attempts = current.Attempts - 1,
+                    AdmissionRefusals = 0,
+                    StorageStalls = stalls,
+                    StallsWithoutProgress = withoutProgress,
+                    StallPinOffset = result.StallPinOffset ?? current.StallPinOffset,
+                    AdmissionRetryAt = now + StorageStalledRetryDelay(stalls, withoutProgress, Random.Shared.NextDouble()),
+                };
+
+                if (withoutProgress == MaxStorageStallsWithoutProgress)
+                {
+                    logger.LogWarning(
+                        "WAL GC floor holder {Consumer} on tree {Tree} is stalled_without_progress: its last {Stalls} drives timed out and its durable pin offset ({PinOffset}) has not moved across {WithoutProgress} of them. Storage is not serving this leaf's replay in time. The consumer is not abandoned; it keeps its pin and is retried every {Cooldown}. Investigate the WAL storage provider's latency for this tree (issue #6007).",
+                        touching[i],
+                        treeId,
+                        stalls,
+                        current.StallPinOffset,
+                        withoutProgress,
+                        ReactivationRetryCooldown);
+                }
+            }
+            else if (IsUnchargedReactivationOutcome(result.Outcome))
             {
                 // Taken back in full and outside the refund cap (issue #3575):
                 // the drive was refused admission before it started - on every
@@ -4512,7 +4627,13 @@ internal sealed class LatticeWalGcScheduler(
             }
             else
             {
-                current = current with { AdmissionRefusals = 0 };
+                current = current with
+                {
+                    AdmissionRefusals = 0,
+                    StorageStalls = 0,
+                    StallsWithoutProgress = 0,
+                    StallPinOffset = null,
+                };
 
                 if (IsRefundableReactivationOutcome(result.Outcome)
                     && current.Refunds < MaxReactivationRefunds)
@@ -4587,7 +4708,7 @@ internal sealed class LatticeWalGcScheduler(
 
             Results[index] = result;
 
-            if (IsUnchargedReactivationOutcome(result.Outcome))
+            if (IsAdmissionRefusedReactivationOutcome(result.Outcome))
             {
                 RecordBlockedLeafReactivation(
                     ReactivationOutcomeTag(result.Outcome), treeTag, tenantTag);
@@ -5483,6 +5604,18 @@ internal sealed class LatticeWalGcScheduler(
                 return new ReactivationTouchResult(ReactivationOutcome.Orphaned, offsetAdvanceOwed);
             }
 
+            // A timed-out drive is not charged (issue #6007). Its pin offset is
+            // read so consecutive stalls can tell a slow drive that is still
+            // moving the pin from one that is not; an unreadable offset counts as
+            // no progress.
+            if (drive == LeafStarvationDriveOutcome.TimedOut)
+            {
+                var stallPinOffset = await TryReadDurablePinOffsetAsync(treeId, blockingConsumerId)
+                    .ConfigureAwait(false);
+                return new ReactivationTouchResult(
+                    ReactivationOutcome.StorageStalled, offsetAdvanceOwed, StallPinOffset: stallPinOffset);
+            }
+
             return new ReactivationTouchResult(ReactivationOutcome.Completed, offsetAdvanceOwed);
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -5600,11 +5733,17 @@ internal sealed class LatticeWalGcScheduler(
     /// leaf-wide; otherwise the default id. Lets the sweep make the leaf's other
     /// pins terminal without driving them.
     /// </param>
+    /// <param name="StallPinOffset">
+    /// For <see cref="ReactivationOutcome.StorageStalled"/>, the consumer's durable
+    /// pin offset read after the drive timed out, or <see langword="null"/> when
+    /// it could not be read (issue #6007).
+    /// </param>
     private readonly record struct ReactivationTouchResult(
         ReactivationOutcome Outcome,
         bool OffsetAdvanceOwed,
         ReactivationTerminal Terminal = ReactivationTerminal.None,
-        GrainId Leaf = default);
+        GrainId Leaf = default,
+        long? StallPinOffset = null);
 
     /// <summary>
     /// The message of the outermost <see cref="LatticeSaturatedException"/> in

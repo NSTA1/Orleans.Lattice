@@ -113,6 +113,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
+- **Replay - Background drives give up stalled storage reads.** A WAL GC starvation drive abandons a slice read storage has not answered within two thirds of the response timeout instead of hitting a raw timeout, and the sweep no longer charges a timed-out drive. ([#6007](https://github.com/NSTA1/Orleans.Lattice/issues/6007)) (`Orleans.Lattice`)
+
 - **Replay - Admission never refuses with a permit free.** Replay admission no longer refuses a leaf while a replay permit is free and no waiter is ahead of it, and a stale queue-wait reading expires, so permits no longer sit idle through a refusal window during a cold restart. ([#5992](https://github.com/NSTA1/Orleans.Lattice/issues/5992)) (`Orleans.Lattice`)
 
 - **WAL replay - The replay concurrency controller restores permits once CPU frees up.** After a storm, its latency arm kept walking the replay permit gate down (32 to 11 on a 4-vCPU silo) while CPU fell to about half and activations stayed queued, because slice-read latency includes the queueing a reduced gate itself causes. The latency arm now withholds only while CPU utilisation is at or above 85%, and with CPU below 60% and activations queued, half the withheld permits return each window. ([#5971](https://github.com/NSTA1/Orleans.Lattice/issues/5971), [#5877](https://github.com/NSTA1/Orleans.Lattice/issues/5877)) (`Orleans.Lattice`)

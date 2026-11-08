@@ -745,12 +745,12 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
                     // Four lifecycle arms, named individually because no enum
                     // backs them.
                     "attempted", "healed", "abandoned", "rearmed",
-                    // Seven terminal arms, primed by walking ReactivationOutcome
+                    // Eight terminal arms, primed by walking ReactivationOutcome
                     // (issue #2938, extended for 'orphaned' by issue #3101, for
-                    // 'latched_stale' by issue #3478 and for 'admission_refused'
-                    // by issue #3575).
+                    // 'latched_stale' by issue #3478, for 'admission_refused'
+                    // by issue #3575 and for 'storage_stalled' by issue #6007).
                     "completed", "unresolvable", "faulted", "undelivered", "orphaned",
-                    "latched_stale", "admission_refused",
+                    "latched_stale", "admission_refused", "storage_stalled",
                     // Seven drive verdicts, primed by walking
                     // LeafStarvationDriveOutcome (issues #2692, #3761).
                     "drove_lifted", "drove_no_advance", "drove_memory_refused",
@@ -814,8 +814,10 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
                 reactivations.Measurements.Count(m => (m.Tag(LatticeMetrics.TagOutcome) as string) == "attempted"),
                 Is.EqualTo(1),
                 "the partner arm must be minted on this pass, or the co-priming assertion below is vacuous.");
-            Assert.That(abandonments.Measurements, Has.Count.EqualTo(1),
-                "the abandonment series must be minted on the same pass as 'attempted', so an absent series means an undeployed build and nothing else.");
+            Assert.That(
+                abandonments.Measurements.Select(m => m.Tag(LatticeMetrics.TagReason) as string),
+                Is.EquivalentTo(new[] { "budget", "slice_read_deadline" }),
+                "both abandonment reasons must be minted on the same pass as 'attempted', so an absent series means an undeployed build and nothing else (issue #6007).");
             Assert.That(abandonments.Measurements.Select(m => m.Value), Is.All.Zero,
                 "a prime must mint the series without claiming a drive was abandoned.");
             Assert.That(abandonments.Counted, Is.Empty,

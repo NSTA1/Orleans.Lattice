@@ -82,6 +82,7 @@ internal sealed class ReplaySliceReader
     private readonly int _initialBudget;
     private readonly WalKeyFilter _filter;
     private readonly string? _reader;
+    private readonly TimeSpan _readDeadline;
 
     private int _budget;
 
@@ -123,13 +124,21 @@ internal sealed class ReplaySliceReader
     /// judge every slice by the same ownership; see
     /// <see cref="ILeafReplayCoordinatorGrain.ReadSliceAsync(long, long, int, WalKeyFilter, CancellationToken)"/>.
     /// </param>
+    /// <param name="reader">The replaying leaf's id, recorded by the coordinator as demand (issue #5877).</param>
+    /// <param name="readDeadline">
+    /// How long one coordinator read may take before it is given up with
+    /// <see cref="ReplaySliceReadDeadlineExceededException"/> (issue #6007), or
+    /// <see cref="TimeSpan.Zero"/> or <see cref="Timeout.InfiniteTimeSpan"/> for
+    /// none. Only a starvation drive passes one.
+    /// </param>
     internal ReplaySliceReader(
         ILeafReplayCoordinatorGrain coordinator,
         string treeId,
         int partition,
         int initialBudget = InitialBudget,
         WalKeyFilter filter = default,
-        string? reader = null)
+        string? reader = null,
+        TimeSpan readDeadline = default)
     {
         ArgumentNullException.ThrowIfNull(coordinator);
         ArgumentNullException.ThrowIfNull(treeId);
@@ -139,6 +148,7 @@ internal sealed class ReplaySliceReader
         _partition = partition;
         _filter = filter;
         _reader = reader;
+        _readDeadline = readDeadline > TimeSpan.Zero ? readDeadline : Timeout.InfiniteTimeSpan;
         // Clamp rather than throw, and do not "tidy" this into agreement with
         // the validator. The two guards sit on the same value at seams where
         // failure costs differently, so their postures differ deliberately.
@@ -175,6 +185,9 @@ internal sealed class ReplaySliceReader
 
     /// <summary>The ownership filter every slice is read through.</summary>
     internal WalKeyFilter Filter => _filter;
+
+    /// <summary>The per-read deadline, or <see cref="Timeout.InfiniteTimeSpan"/> for none (issue #6007).</summary>
+    internal TimeSpan ReadDeadline => _readDeadline;
 
     /// <summary>
     /// Reads one slice of <c>(fromExclusive, toInclusive]</c>, narrowing the
@@ -242,6 +255,17 @@ internal sealed class ReplaySliceReader
 
             IReadOnlyList<CommitLogSliceEntry> slice;
             var readStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+
+            // A starvation drive bounds each read below the cluster response
+            // timeout (issue #6007), so a storage stall ends the read as a typed,
+            // retryable fault instead of a raw TimeoutException. Cancelling it
+            // only detaches this caller: the coordinator's fill runs on no
+            // caller's token and still caches its page for the next read.
+            using var deadline = _readDeadline == Timeout.InfiniteTimeSpan
+                ? null
+                : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            deadline?.CancelAfter(_readDeadline);
+            var readToken = deadline?.Token ?? cancellationToken;
             try
             {
                 // A bounded filter takes the filtered overload (issue #3565); an
@@ -262,23 +286,28 @@ internal sealed class ReplaySliceReader
                             toInclusive,
                             _budget,
                             _filter,
-                            cancellationToken)
+                            readToken)
                         : _coordinator.ReadSliceAsync(
                             fromExclusive,
                             toInclusive,
                             _budget,
-                            cancellationToken);
+                            readToken);
                 }
                 finally
                 {
                     readerScope?.Dispose();
                 }
-                slice = await AwaitProviderReadAsync(read, cancellationToken);
+                slice = await AwaitProviderReadAsync(read, readToken);
                 // The storage-pressure governor's latency signal (issue #5877):
                 // successful reads only, so a cancelled or faulted read cannot
                 // skew the p99 the governor compares against its baseline.
                 ReplayStoragePressure.RecordSliceRead(
                     System.Diagnostics.Stopwatch.GetTimestamp() - readStarted);
+            }
+            catch (OperationCanceledException) when (
+                deadline is { IsCancellationRequested: true } && !cancellationToken.IsCancellationRequested)
+            {
+                throw new ReplaySliceReadDeadlineExceededException(_treeId, _partition, fromExclusive, _readDeadline);
             }
             catch (Exception ex) when (_budget > 1 && BPlusLeafGrain.IsReadMemoryPressure(ex))
             {
