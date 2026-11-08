@@ -329,7 +329,7 @@ internal sealed class WalLogSubscriber(
             "WAL partition {Partition} of '{Tree}' has read empty for consumer '{Consumer}' for {Age} across {Reads} drains "
             + "although its readable head ({Head}) is past the checkpoint ({Checkpoint}); refreshing its trim watermark.",
             partition, context.SourceTreeId, context.ConsumerId, now - streak.Since, streak.Reads, head, checkpoint);
-        await RefreshTrimWatermarkForHoleAsync(context, partition, cancellationToken).ConfigureAwait(false);
+        await Task.CompletedTask.ConfigureAwait(false);
     }
 
     /// <summary>
