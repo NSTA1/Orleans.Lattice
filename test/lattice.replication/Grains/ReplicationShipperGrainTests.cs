@@ -248,6 +248,24 @@ public partial class ReplicationShipperGrainTests
         public Task<long?> GetTrimWatermarkAsync(CancellationToken cancellationToken) =>
             Task.FromResult(ReportsTrimWatermark ? TrimmedThrough - 1 : (long?)null);
 
+        public Task<long?> RefreshTrimWatermarkAsync(CancellationToken cancellationToken)
+        {
+            WatermarkRefreshes++;
+            HiddenThrough = null;
+            return GetTrimWatermarkAsync(cancellationToken);
+        }
+
+        /// <summary>
+        /// Models a stale cached trim watermark above the stored trim point
+        /// (issue #6036): a shipping read never returns a sequence at or below
+        /// it, although those entries are stored and the trusted watermark says
+        /// nothing was trimmed. <see cref="RefreshTrimWatermarkAsync"/> clears it.
+        /// </summary>
+        public long? HiddenThrough { get; set; }
+
+        /// <summary>The number of <see cref="RefreshTrimWatermarkAsync"/> calls.</summary>
+        public int WatermarkRefreshes { get; private set; }
+
         public Task<long> GetTailOffsetAsync(CancellationToken cancellationToken) =>
             throw new NotSupportedException("The subscriber retention-tail read is not exercised by the shipper.");
 
@@ -294,6 +312,10 @@ public partial class ReplicationShipperGrainTests
             if (fromSequence < TrimmedThrough && TrimmedThrough < Entries.Count)
             {
                 fromSequence = TrimmedThrough;
+            }
+            if (HiddenThrough is { } hidden && fromSequence <= hidden)
+            {
+                fromSequence = hidden + 1;
             }
             if (fromSequence >= Entries.Count)
             {

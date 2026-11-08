@@ -39,6 +39,24 @@ public class IWalStorageProviderTrimWatermarkDefaultTests
             Throws.InstanceOf<OperationCanceledException>());
     }
 
+    [Test]
+    public async Task Default_RefreshTrimWatermarkAsync_answers_as_GetTrimWatermarkAsync_does()
+    {
+        // Issue #6036: a provider that caches nothing has nothing to refresh, so
+        // the default re-asks GetTrimWatermarkAsync.
+        IWalStorageProvider provider = new MinimalProvider();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                async () => await provider.RefreshTrimWatermarkAsync("tree", 0, CancellationToken.None),
+                Is.Null);
+            Assert.That(
+                async () => await provider.RefreshTrimWatermarkAsync(null!, 0, CancellationToken.None),
+                Throws.ArgumentNullException);
+        });
+    }
+
     /// <summary>
     /// <see cref="IWalStorageProvider"/> implementation supplying the bare minimum
     /// needed to invoke the default body through the interface. Every other member

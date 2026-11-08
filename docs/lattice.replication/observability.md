@@ -164,6 +164,16 @@ The shipper keeps a per-activation, per-key bounded LRU of the last-shipped cont
 
 The measurement is **observability-only**: it never elides, reorders, or alters the bytes the sender ships, so the wire output is unchanged whether or not dedup measurement is enabled. (Actually skipping a byte-identical re-set carrying a newer HLC would strand the receiver's per-origin high-water mark and change LWW/HLC convergence; the receiver must consent through a content-manifest exchange, which is the separate opt-in `ContentHashDedupElisionEnabled` - see [Content-manifest payload elision](#content-manifest-payload-elision).) Because the counters fire as entries are framed onto the wire, a batch re-shipped after a transient transport failure counts its entries again - which is correct, since a re-ship is itself a redundant wire payload.
 
+## Untrimmed holes (`ship.holes_skipped`)
+
+A shipping read that jumps above the requested sequence is either a trim, which takes the peer off the log for a re-seed, or a range the shard's trim watermark says was never trimmed. That range is a genuine hole - a flush abandoned at its deadline that never landed (#4621) - or committed entries a stale cached trim watermark hides from reads ([#6036](https://github.com/NSTA1/Orleans.Lattice/issues/6036)). The page cannot tell them apart, so the shipper refreshes the shard's watermark from storage and re-reads once from the same sequence: what reappears ships, and only what is still missing is consumed past. Neither re-seeds the peer, unless the refreshed watermark now reports the range trimmed.
+
+| Counter | Constant | Unit | Tags | Recorded |
+|---|---|---|---|---|
+| `orleans.lattice.replication.ship.holes_skipped` | `LatticeReplicationMetrics.ShipHolesSkippedName` | `{offset}` | `tree`, `peer`, `outcome` | Incremented by the width of each range: `outcome` = `recovered` (`ShipHoleOutcomeRecovered`) for offsets the re-read returned and that shipped, `hole` (`ShipHoleOutcomeHole`) for offsets consumed past. Each one is also logged at Warning with the partition and the range. |
+
+Any `recovered` means a provider cache was hiding committed entries from the shipper, which this build repairs as it ships. A genuine hole is rare and narrow, so a steady `hole` rate means flushes are being abandoned. Before 10.3.0 an Azure Table WAL could consume hidden entries as a hole, so see [Hidden committed entries](../lattice.storage.azuretable/architecture.md#hidden-committed-entries-issue-6036) for the remediation after upgrading.
+
 ## Content-manifest payload elision
 
 These counters are **opt-in**: they fire only when `LatticeReplicationOptions.ContentHashDedupElisionEnabled` is set (which requires `ContentHashDedupEnabled`) and the peer implements the content-manifest exchange. Before shipping a drained batch, the sender advertises a per-entry content-hash manifest, the receiver answers with the entries it does not already hold, and only those payloads ship. The receiver counts an entry as held only when it already merged exactly that write - the same content hash, origin, and source HLC - and its leaf still holds the key at that version or a newer one ([#4585](https://github.com/NSTA1/Orleans.Lattice/issues/4585)); equal bytes at another version or from another origin always ship, because last-writer-wins orders writes by version, not content. An elided write above the receiver's per-origin high-water-mark (one it merged without moving the mark, such as a bootstrap row) advances the mark through a metadata-only update during the exchange.
@@ -411,6 +421,7 @@ Every instrument on the `orleans.lattice.replication` meter. Kind and unit come 
 | `orleans.lattice.replication.ship.ack_latency` | `Histogram<double>` | `ms` | `tree`, `peer` | [Adaptive batch sizing](#sender-side-adaptive-batch-sizing-shipeffective_batch_size--shipack_latency) |
 | `orleans.lattice.replication.ship.redundant_payloads` | `Counter<long>` | `{entry}` | `tree`, `peer` | [Re-send rate](#content-hash-payload-re-send-rate-shipredundant_payloads--shipredundant_payload_bytes) |
 | `orleans.lattice.replication.ship.redundant_payload_bytes` | `Counter<long>` | `By` | `tree`, `peer` | [Re-send rate](#content-hash-payload-re-send-rate-shipredundant_payloads--shipredundant_payload_bytes) |
+| `orleans.lattice.replication.ship.holes_skipped` | `Counter<long>` | `{offset}` | `tree`, `peer`, `outcome` | [Untrimmed holes](#untrimmed-holes-shipholes_skipped) |
 | `orleans.lattice.replication.ship.manifest_exchanges` | `Counter<long>` | `{exchange}` | `tree`, `peer` | [Content-manifest elision](#content-manifest-payload-elision) |
 | `orleans.lattice.replication.ship.elided_payloads` | `Counter<long>` | `{entry}` | `tree`, `peer` | [Content-manifest elision](#content-manifest-payload-elision) |
 | `orleans.lattice.replication.ship.elided_payload_bytes` | `Counter<long>` | `By` | `tree`, `peer` | [Content-manifest elision](#content-manifest-payload-elision) |
