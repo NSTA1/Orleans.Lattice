@@ -231,6 +231,26 @@ its historical name; it skips the phase refresh and does not model randomness.
   live-advance stamps counts toward the stall, which only widens the timer schedules
   production takes and stays within the core's abstracted stall clock.
   Production symbols: `BPlusLeafGrain.IsCheckpointStalledBehindLiveDataAsync`.
+- **A drive occupies the share from reservation to release (#6009).** Production
+  takes a drive's GC reservation and its physical permit as two steps, and returns
+  them in the reverse order: `BPlusLeafGrain.TryAcquireStarvationReplayPermit`
+  reserves by compare-and-swap before `gate.Wait(0)`, and
+  `BPlusLeafGrain.ReleaseStarvationReplayPermit` calls `gate.Release()` before it
+  decrements the reservation. The model's `DriveStart` and closing
+  `DriveOpportunity` are atomic. They refine with the linearisation points at the
+  reservation: a drive is in `Running` from its compare-and-swap to its decrement,
+  and its physical permit is held inside that interval. A failed `gate.Wait(0)`
+  returns the reservation before the attempt ends, which is `PermitConservation`'s
+  "failed admission retains neither" at step granularity. In between, the gate can
+  report more free permits than the model's `free`, so a reading of held
+  reservations plus free permits can exceed the permits in circulation. A sweep
+  refused then (the #6009 probe saw circulating 4, limit 2, held 2, free 3) is a
+  `~CanAdmit("sweep")` refusal with `Running = Share`. It is not a share left idle
+  while a sweep waits. The sibling whose release was in flight completes after its
+  decrement, so the refused touch is retried in the same pass under
+  `RetryAfterSibling`, and `PassRearm` re-drives it in any case.
+  Production symbols: `BPlusLeafGrain.TryAcquireStarvationReplayPermit`,
+  `BPlusLeafGrain.ReleaseStarvationReplayPermit`.
 - **No three-leaf liveness claim.** A three-leaf instance of this core was
   measured outside CI. Its safety-only check passed in several minutes, and its
   full liveness check did not finish within the twenty-minute cap, so it is not
