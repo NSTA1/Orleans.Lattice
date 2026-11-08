@@ -2024,7 +2024,6 @@ internal sealed partial class WalShardGrain(
         if (!(TrimWatermarkSupportForTesting?.Invoke()
             ?? WalTrimWatermarkSupport.AllSilosMaintain(context.ActivationServices)))
         {
-            return null;
         }
 
         return await _provider.RefreshTrimWatermarkAsync(_treeId, _shardIndex, cancellationToken).ConfigureAwait(true);
