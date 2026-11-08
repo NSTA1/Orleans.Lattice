@@ -487,6 +487,30 @@ public interface IWalStorageProvider
     }
 
     /// <summary>
+    /// Returns the shard's trim watermark exactly as
+    /// <see cref="GetTrimWatermarkAsync"/> does, but re-derived from storage
+    /// alone: a provider that caches the watermark to clamp its reads replaces
+    /// the cached value with the one read here rather than keeping the larger of
+    /// the two. A reader calls this when a partition has kept reporting entries
+    /// it cannot read, so a cached watermark above the stored trim point - which
+    /// hides every entry beneath it from <see cref="ReadAsync"/> - cannot
+    /// outlive the next refresh (issue #6036).
+    /// <para>
+    /// The default delegates to <see cref="GetTrimWatermarkAsync"/>, which is
+    /// correct for a provider that caches nothing.
+    /// </para>
+    /// </summary>
+    /// <param name="treeId">The WAL's tree id - the physical id the tree's data is written under (see <see cref="AppendBatchAsync"/>). Must not be <see langword="null"/>.</param>
+    /// <param name="shardIndex">The WAL partition index within the tree, from 0 to the tree's pinned <see cref="LatticeOptions.WalPartitions"/> minus 1.</param>
+    /// <param name="cancellationToken">Cancellation token observed before any I/O commences.</param>
+    /// <returns>The trim watermark, <c>-1</c> when nothing was trimmed, or <see langword="null"/> when the provider keeps none.</returns>
+    Task<long?> RefreshTrimWatermarkAsync(
+        string treeId,
+        int shardIndex,
+        CancellationToken cancellationToken) =>
+        GetTrimWatermarkAsync(treeId, shardIndex, cancellationToken);
+
+    /// <summary>
     /// Asks the provider to evaluate whether
     /// <paramref name="treeId"/> / <paramref name="shardIndex"/> is due for
     /// physical reclamation, and to perform it if its own policy says so.

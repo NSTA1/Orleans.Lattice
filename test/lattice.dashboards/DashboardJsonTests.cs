@@ -90,6 +90,18 @@ public sealed class DashboardJsonTests
     private static readonly IReadOnlySet<string> IntentionallyUnpaneledInstruments =
         new HashSet<string>(StringComparer.Ordinal)
         {
+            // orleans.lattice.wal.subscriber.empty_backlog_reads and
+            // orleans.lattice.replication.ship.holes_skipped (issue #6036) are
+            // alert-only anomaly counters. Both sit at zero on a healthy
+            // deployment - an empty backlog read lasts only while a phase-2
+            // commit lands, and an untrimmed hole only follows an abandoned
+            // flush - so a bundled trend panel would be a permanently flat
+            // graph. A sustained nonzero rate on either means a consumer is
+            // stalled on, or shipped over, entries it never read, which is an
+            // alert, as both reference docs prescribe.
+            "orleans.lattice.wal.subscriber.empty_backlog_reads",
+            "orleans.lattice.replication.ship.holes_skipped",
+
             // orleans.lattice.leaf.unresolved_prepare_ledger_beyond_cap (issue
             // #2183) remains alert-only rather than a bundled trend panel.
             // Alert on every profile: Azure Table bounds persisted growth by

@@ -119,6 +119,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
+- **Storage - Azure Table WAL no longer silently loses committed entries.** In 10.0.0-10.2.0 a trim-watermark probe during a batch commit could hide the batch from later reads on a silo: views stalled and the shipper and leaf replay could skip it. Such reads and skipped holes are now metered. ([#6036](https://github.com/NSTA1/Orleans.Lattice/issues/6036)) (`Orleans.Lattice.Storage.AzureTable`, `Orleans.Lattice.Replication`, `Orleans.Lattice`)
+
 - **Replay - Background drives give up stalled storage reads.** A WAL GC starvation drive abandons a slice read storage has not answered within two thirds of the response timeout instead of hitting a raw timeout, and the sweep no longer charges a timed-out drive. ([#6007](https://github.com/NSTA1/Orleans.Lattice/issues/6007)) (`Orleans.Lattice`)
 
 - **Replay - Admission never refuses with a permit free.** Replay admission no longer refuses a leaf while a replay permit is free and no waiter is ahead of it, and a stale queue-wait reading expires, so permits no longer sit idle through a refusal window during a cold restart. ([#5992](https://github.com/NSTA1/Orleans.Lattice/issues/5992)) (`Orleans.Lattice`)

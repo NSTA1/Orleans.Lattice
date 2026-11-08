@@ -471,6 +471,25 @@ public static class LatticeReplicationMetrics
             description: "Shipped Set entries whose value was byte-identical to the last value shipped for the same key, tagged by tree and peer.");
 
     /// <summary>
+    /// Counter of WAL offsets the shipper consumed past as a hole rather than
+    /// a trim: a shipping read that jumped above the requested sequence while
+    /// the shard's trim watermark said nothing there was trimmed. A hole is
+    /// legitimate - a flush abandoned at its deadline that never lands leaves
+    /// one (#4621) - but each one is offsets the peer never receives, so it is
+    /// never skipped quietly (#6036). Incremented by the width of the skipped
+    /// range, tagged by <see cref="TagTree"/> and <see cref="TagPeer"/>; every
+    /// increment is also logged at Warning.
+    /// </summary>
+    public static readonly Counter<long> ShipHolesSkipped =
+        Meter.CreateCounter<long>(ShipHolesSkippedName, unit: "{offset}",
+            description: "WAL offsets the shipper consumed past as an untrimmed hole, which the peer never receives, tagged by tree and peer.");
+
+    /// <summary>
+    /// Canonical name of the <see cref="ShipHolesSkipped"/> counter.
+    /// </summary>
+    public const string ShipHolesSkippedName = "orleans.lattice.replication.ship.holes_skipped";
+
+    /// <summary>
     /// Counter of value bytes shipped redundantly - the sum of the
     /// shipped value lengths for the entries counted by
     /// <see cref="ShipRedundantPayloads"/>. Lets operators quantify the

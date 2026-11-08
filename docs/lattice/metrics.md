@@ -766,6 +766,15 @@ the `_sum` series ranks observers by total latency contributed, while
 `histogram_quantile` over the `_bucket` series exposes a single slow observer that
 a mean would hide.
 
+### WAL subscriber (sourced from the shared WAL tailing loop)
+
+Every consumer that tails a source WAL through the shared subscriber - materialised
+views among them - reads each partition whose readable head is past its checkpoint.
+
+| Name | Kind | Unit | Description |
+|---|---|---|---|
+| `orleans.lattice.wal.subscriber.empty_backlog_reads` | `Counter<long>` | `{read}` | Reads that returned nothing from a partition whose readable head said entries were waiting, tagged `tree` (the physical WAL id) and `partition` ([#6036](https://github.com/NSTA1/Orleans.Lattice/issues/6036)). Legitimate for a few seconds while a batch's phase-2 commit lands; once such reads persist for 30 seconds across at least three drains, the subscriber logs at Warning and re-derives the partition's trim watermark from storage. A sustained rate on one partition means its consumers are stalled on it. |
+
 ### Materialised views
 
 The view maintainer publishes on the core `orleans.lattice` meter (views need a

@@ -248,6 +248,9 @@ public partial class ReplicationShipperGrainTests
         public Task<long?> GetTrimWatermarkAsync(CancellationToken cancellationToken) =>
             Task.FromResult(ReportsTrimWatermark ? TrimmedThrough - 1 : (long?)null);
 
+        public Task<long?> RefreshTrimWatermarkAsync(CancellationToken cancellationToken) =>
+            GetTrimWatermarkAsync(cancellationToken);
+
         public Task<long> GetTailOffsetAsync(CancellationToken cancellationToken) =>
             throw new NotSupportedException("The subscriber retention-tail read is not exercised by the shipper.");
 

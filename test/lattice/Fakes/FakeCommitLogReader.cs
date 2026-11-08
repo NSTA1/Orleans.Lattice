@@ -60,6 +60,28 @@ internal sealed class FakeCommitLogReader : ICommitLogReader
 
     private readonly HashSet<(string Tree, int Shard, long Offset)> _holes = new();
 
+    private readonly Dictionary<(string Tree, int Shard), long> _readClamps = new();
+
+    /// <summary>
+    /// Hides every offset at or below <paramref name="throughInclusive"/> from
+    /// <see cref="ReadAsync"/> without moving the head or the tail, as a storage
+    /// provider whose cached trim watermark runs above the stored trim point does
+    /// (issue #6036). <see cref="RefreshTrimWatermarkAsync"/> lifts it.
+    /// </summary>
+    public void ClampReadsThrough(string tree, int shard, long throughInclusive) =>
+        _readClamps[(tree, shard)] = throughInclusive;
+
+    /// <summary>Every <see cref="RefreshTrimWatermarkAsync"/> call, in order.</summary>
+    public List<(string Tree, int Shard)> WatermarkRefreshes { get; } = new();
+
+    /// <inheritdoc />
+    public Task RefreshTrimWatermarkAsync(string treeId, int shardIndex, CancellationToken cancellationToken = default)
+    {
+        WatermarkRefreshes.Add((treeId, shardIndex));
+        _readClamps.Remove((treeId, shardIndex));
+        return Task.CompletedTask;
+    }
+
     /// <inheritdoc />
     public async IAsyncEnumerable<(long Offset, LatticeMutation Mutation)> ReadAsync(
         string treeId,
@@ -72,6 +94,11 @@ internal sealed class FakeCommitLogReader : ICommitLogReader
         await Task.Yield();
         var key = (treeId, shardIndex);
         var trim = _trimBefore.GetValueOrDefault(key, 0);
+        if (_readClamps.TryGetValue(key, out var clamp))
+        {
+            trim = Math.Max(trim, clamp + 1);
+        }
+
         if (_entries.TryGetValue(key, out var list))
         {
             for (var offset = Math.Max(fromOffsetExclusive + 1, trim); offset < list.Count; offset++)

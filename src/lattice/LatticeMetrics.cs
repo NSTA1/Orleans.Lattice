@@ -1834,6 +1834,23 @@ public static class LatticeMetrics
     /// </summary>
     public const string SnapshotPinsGaugeName = "orleans.lattice.snapshot.pins";
 
+    // --- WAL subscriber instruments ------------------------------------------
+
+    /// <summary>
+    /// Counter of WAL subscriber reads that returned nothing from a partition
+    /// whose readable head said entries were waiting past the consumer's
+    /// checkpoint, tagged with <see cref="TagTree"/> (the physical WAL id) and
+    /// <see cref="TagPartition"/>. A read like that is legitimate while a batch's
+    /// phase-2 commit is still landing; one that persists means the partition's
+    /// entries are not being read at all, which stalls every consumer of it
+    /// (issue #6036). The subscriber logs at Warning and re-derives the
+    /// partition's trim watermark from storage once such reads have persisted for
+    /// <c>WalLogSubscriber.EmptyBacklogEscalationAge</c>.
+    /// </summary>
+    public static readonly Counter<long> WalSubscriberEmptyBacklogReads =
+        Meter.CreateCounter<long>("orleans.lattice.wal.subscriber.empty_backlog_reads", unit: "{read}",
+            description: "WAL subscriber reads that returned nothing from a partition whose readable head said entries were waiting, tagged by physical tree and partition.");
+
     // --- WAL garbage-collector instruments ----------------------------------
 
     /// <summary>

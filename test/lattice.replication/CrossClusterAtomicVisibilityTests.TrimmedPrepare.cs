@@ -286,6 +286,62 @@ public partial class CrossClusterAtomicVisibilityTests
     }
 
     [Test]
+    public async Task Shipper_meters_and_logs_every_untrimmed_hole_it_consumes_past()
+    {
+        // Issue #6036: a jump the trim watermark says was not trimmed is shipped
+        // over as a hole. It holds nothing to ship, but it is never skipped
+        // quietly: each one is metered by its width and logged.
+        const string tree = "ccv-shipper-hole-metered";
+        var ticks = DateTime.UtcNow.Ticks;
+        var walEncoder = new ReplicationShipperGrainTests.StubWalRecordEncoder();
+        var feeds = new[]
+        {
+            new ReplicationShipperGrainTests.StubReplogShardGrain(walEncoder),
+            new ReplicationShipperGrainTests.StubReplogShardGrain(walEncoder),
+        };
+        for (var i = 0; i < 4; i++)
+        {
+            feeds[0].Append(LocalSet(tree, $"hole-{i}", Hlc(ticks, i + 1)));
+        }
+
+        feeds[0].TrimmedThrough = 1;
+        feeds[0].Holes.Add(1);
+        feeds[0].ReportsTrimWatermark = true;
+
+        var transport = Substitute.For<IReplicationTransport>();
+        transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
+            .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero });
+
+        var skipped = 0L;
+        using var listener = Orleans.Lattice.Testing.MeterListening.StartForInstrument(
+            LatticeReplicationMetrics.ShipHolesSkipped,
+            l => l.SetMeasurementEventCallback<long>((_, value, tags, _) =>
+            {
+                foreach (var tag in tags)
+                {
+                    if (tag.Key == LatticeReplicationMetrics.TagTree && Equals(tag.Value, tree))
+                    {
+                        Interlocked.Add(ref skipped, value);
+                    }
+                }
+            }));
+
+        var state = new FakePersistentState<ReplicationShipperState>();
+        state.State.PartitionCursors[0] = 1;
+        var shipper = CreateShipper(tree, feeds, walEncoder, transport, state: state);
+        await PumpAsync(shipper, ticks: 3);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(shipper.ReseedRequired, Is.False, "a hole above the trim watermark is not a trim");
+            Assert.That(Interlocked.Read(ref skipped), Is.EqualTo(1L),
+                "the one-offset hole the shipper consumed past must be metered exactly once, by its width");
+            Assert.That(LatticeReplicationMetrics.ShipHolesSkipped.Name,
+                Is.EqualTo(LatticeReplicationMetrics.ShipHolesSkippedName));
+        });
+    }
+
+    [Test]
     public async Task Shipper_waits_for_the_startup_manifest_before_classifying_an_unknown_watermark_gap()
     {
         const string tree = "ccv-shipper-startup-gap";

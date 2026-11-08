@@ -2,7 +2,7 @@
 # key<TAB>enrolment<TAB>detail
 # enrolment: primed | anchored | unresolved | open | none | unprimed
 # reach: every status records what this static analyser could READ from source, never what a running process emits. unresolved = a dimension it could not read, or read but not yet enrolled; open = every unread dimension is runtime-valued by design. Neither is evidence about runtime priming either way - query a live metrics endpoint for present-at-zero.
-# coverage-floor: 208 declarations whose every tag dimension was read. Regeneration raises it and never lowers it; lowering it is a reviewed edit.
+# coverage-floor: 210 declarations whose every tag dimension was read. Regeneration raises it and never lowers it; lowering it is a reviewed edit.
 # Regenerate with LATTICE_REWRITE_PRIMING_ENROLMENT=1; review every row it changes.
 src/lattice.api.mcp.repocontext/Archive/RepoContextMemoryRestoreReporter.cs#_restores	unresolved	reason=dimension outcome: unrecognised value expression: outcome.ToString().ToLowerInvariant()
 src/lattice.api.mcp.repocontext/Bootstrap/RepoContextBootstrapService.cs#_passArmFaults	unresolved	reason=dimension arm: no declaration found for arm
@@ -158,6 +158,7 @@ src/lattice.replication/LatticeReplicationMetrics.cs#ShipDuration	unresolved	rea
 src/lattice.replication/LatticeReplicationMetrics.cs#ShipEffectiveBatchSize	open	open=peer, tenant, tree; open dimension: tree carries a runtime identifier (_treeName)
 src/lattice.replication/LatticeReplicationMetrics.cs#ShipElidedPayloadBytes	open	open=peer, tenant, tree; open dimension: tree carries a runtime identifier (_treeName)
 src/lattice.replication/LatticeReplicationMetrics.cs#ShipElidedPayloads	open	open=peer, tenant, tree; open dimension: tree carries a runtime identifier (_treeName)
+src/lattice.replication/LatticeReplicationMetrics.cs#ShipHolesSkipped	open	open=peer, tenant, tree; open dimension: tree carries a runtime identifier (_treeName)
 src/lattice.replication/LatticeReplicationMetrics.cs#ShipRedundantPayloadBytes	open	open=peer, tenant, tree; open dimension: tree carries a runtime identifier (_treeName)
 src/lattice.replication/LatticeReplicationMetrics.cs#ShipRedundantPayloads	open	open=peer, tenant, tree; open dimension: tree carries a runtime identifier (_treeName)
 src/lattice.replication/LatticeReplicationMetrics.cs#ShipWireVersionDownStamp	unresolved	reason=dimension reason: no declaration found for reason
@@ -482,6 +483,7 @@ src/lattice/LatticeMetrics.cs#WalShardDrainBudgetExpirations	open	open=shard, te
 src/lattice/LatticeMetrics.cs#WalShardDrainBudgetForceFaultedSlots	open	open=shard, tenant, tree; open dimension: tree carries a runtime identifier (metricTreeId)
 src/lattice/LatticeMetrics.cs#WalShardPendingSegments	open	open=shard, tenant, tree; open dimension: tree carries a runtime identifier (metricTreeId)
 src/lattice/LatticeMetrics.cs#WalShardStartFlushCalls	open	open=shard, tenant, tree; open dimension: tree carries a runtime identifier (metricTreeId)
+src/lattice/LatticeMetrics.cs#WalSubscriberEmptyBacklogReads	unresolved	reason=single-value domain tree -> [sourceTreeId]; likely under-resolved, not a constant
 src/lattice/LatticeMetrics.cs#WarmUpDurationMs	unresolved	reason=dimension shard_count: no declaration found for shardCount
 src/lattice/LatticeMetrics.cs#WarmUpInvocations	open	open=tenant, tree; open dimension: tree carries a runtime identifier (MetricTreeId)
 src/lattice/LatticeStorageUsageMetrics.cs#(unassigned:LatticeMetrics.StorageLeafStateBytesName)	unresolved	reason=dimension (unread-observable-callback:static () => ObserveAll(static r => r.LeafStateBytes, requireDeep: true)): the tags of this observable instrument are built inside its measurement callback, whose body this parser could not reach, so its tag surface was never read. This is an admission of reach, never a claim that the instrument carries no bounded dimension

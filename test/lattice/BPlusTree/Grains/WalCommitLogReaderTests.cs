@@ -149,6 +149,23 @@ public sealed partial class WalCommitLogReaderTests
     };
 
     [Test]
+    public async Task RefreshTrimWatermarkAsync_dispatches_one_grain_refresh_and_validates_first()
+    {
+        // Issue #6036: the subscriber's escalation path.
+        var (reader, grain) = CreateReader();
+        using var cts = new CancellationTokenSource();
+
+        await reader.RefreshTrimWatermarkAsync(TreeId, 0, cts.Token);
+
+        await grain.Received(1).RefreshTrimWatermarkAsync(cts.Token);
+        Assert.Multiple(() =>
+        {
+            Assert.That(() => reader.RefreshTrimWatermarkAsync("", 0), Throws.ArgumentException);
+            Assert.That(() => reader.RefreshTrimWatermarkAsync(TreeId, -1), Throws.TypeOf<ArgumentOutOfRangeException>());
+        });
+    }
+
+    [Test]
     public async Task GetTailOffsetAsync_uses_one_combined_grain_call()
     {
         var (reader, grain) = CreateReader();

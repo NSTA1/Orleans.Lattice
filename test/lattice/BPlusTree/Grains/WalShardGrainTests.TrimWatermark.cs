@@ -90,6 +90,25 @@ public partial class WalShardGrainTests
         });
     }
 
+    [Test]
+    public async Task A_watermark_refresh_through_the_reader_reaches_the_provider_and_honours_the_trust_gate()
+    {
+        // Issue #6036: the subscriber's escalation refreshes the watermark through
+        // ICommitLogReader -> IWalShardGrain -> IWalStorageProvider, and the grain
+        // answers it under the same capability gate as GetTrimWatermarkAsync.
+        var (trusted, trustedReader) = await HoleAboveTrimPointAsync(trustWatermark: true);
+        var (untrusted, _) = await HoleAboveTrimPointAsync(trustWatermark: false);
+
+        await trustedReader.RefreshTrimWatermarkAsync(TreeId, 0);
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(await trusted.RefreshTrimWatermarkAsync(CancellationToken.None), Is.EqualTo(1L));
+            Assert.That(await untrusted.RefreshTrimWatermarkAsync(CancellationToken.None), Is.Null,
+                "a silo that predates the watermark withholds it from a refresh too");
+        });
+    }
+
     /// <summary>
     /// A shard holding offsets 0, 1 and 3 - offset 2 was allocated but never
     /// written - trimmed through 1, with a real <see cref="WalCommitLogReader"/>

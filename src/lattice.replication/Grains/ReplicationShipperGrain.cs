@@ -3528,11 +3528,34 @@ internal sealed partial class ReplicationShipperGrain(
                 // A trim removed records this shipper never delivered (#4534).
                 await MarkReseedRequiredAsync(partition, _partitionNextSeq[partition], page.Entries[0].Sequence);
             }
+            else
+            {
+                ReportHoleSkipped(partition, _partitionNextSeq[partition], page.Entries[0].Sequence);
+            }
         }
         _partitionPages[partition] = page.Entries;
         _partitionPageIndex[partition] = 0;
         _partitionHeadDecoded[partition] = false;
         _partitionNextSeq[partition] = page.NextSequence;
+    }
+
+    /// <summary>
+    /// Meters and logs a shipping read that jumped over an untrimmed hole on
+    /// <paramref name="partition"/>, from <paramref name="requested"/> up to
+    /// <paramref name="firstReturned"/>. The shipper still consumes past it,
+    /// since a hole holds nothing to ship, but never silently (#6036).
+    /// </summary>
+    private void ReportHoleSkipped(int partition, long requested, long firstReturned)
+    {
+        LatticeReplicationMetrics.ShipHolesSkipped.Add(
+            firstReturned - requested,
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagTree, _treeName),
+            new KeyValuePair<string, object?>(LatticeReplicationMetrics.TagPeer, _peerClusterId),
+            LatticeTenantLabel.ForTree(_treeName));
+        Logger.LogWarning(
+            "{Context}: WAL partition {Partition} has an untrimmed hole from sequence {Requested} to {FirstReturned}; "
+            + "the shipper consumes past it and the peer receives nothing for those offsets.",
+            LogContext, partition, requested, firstReturned);
     }
 
     /// <summary>

@@ -434,6 +434,17 @@ internal interface IWalShardGrain : IGrainWithStringKey
     Task<long?> GetTrimWatermarkAsync(CancellationToken cancellationToken);
 
     /// <summary>
+    /// Returns the trim watermark as <see cref="GetTrimWatermarkAsync"/> does,
+    /// re-derived from storage through
+    /// <see cref="IWalStorageProvider.RefreshTrimWatermarkAsync"/>, so a value the
+    /// provider cached above the stored trim point stops hiding entries from
+    /// reads. A reader calls it when a partition keeps reporting entries it cannot
+    /// read (issue #6036).
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<long?> RefreshTrimWatermarkAsync(CancellationToken cancellationToken);
+
+    /// <summary>
     /// Returns the retention tail for fall-off detection in one grain call.
     /// Uses the trusted trim watermark, clamped to the next sequence; without
     /// watermark support, uses the first readable entry or the next sequence
