@@ -2217,13 +2217,17 @@ internal sealed partial class BPlusLeafGrain
         _replayPermitMetricTreeId = MetricTreeId;
 
         cancellationToken.ThrowIfCancellationRequested();
-        if (!TryAcquireStarvationReplayPermit(gate, origin))
+        if (!TryAcquireStarvationReplayPermit(gate, origin, out var timerReserve))
         {
             _replayAdmissionPhase = ReplayAdmissionPhase.RefusedAdmission;
+
+            // A timer drive kept off the slot reserved for the sweep is the
+            // reservation working as designed (issues #3575, #6009), not a full
+            // share: its own arm, so it is never read as saturation (issue #6013).
             LatticeMetrics.RecordSaturationRefusal(
                 state.State.TreeId,
                 LatticeSaturationSource.ReplayPermitAdmission,
-                LatticeMetrics.SaturationArmGcShare);
+                timerReserve ? LatticeMetrics.SaturationArmTimerReserve : LatticeMetrics.SaturationArmGcShare);
             return null;
         }
 
@@ -2240,7 +2244,20 @@ internal sealed partial class BPlusLeafGrain
     /// <param name="gate">The per-silo replay concurrency gate.</param>
     /// <param name="origin">Who requested the drive.</param>
     internal static bool TryAcquireStarvationReplayPermit(SemaphoreSlim gate, StarvationDriveOrigin origin)
+        => TryAcquireStarvationReplayPermit(gate, origin, out _);
+
+    /// <inheritdoc cref="TryAcquireStarvationReplayPermit(SemaphoreSlim, StarvationDriveOrigin)"/>
+    /// <param name="gate">The per-silo replay concurrency gate.</param>
+    /// <param name="origin">Who requested the drive.</param>
+    /// <param name="timerReserve">
+    /// On a refusal, whether a coverage-lag timer drive was kept off the share's
+    /// last slot - the one reserved for WAL GC sweep drives, or a single-slot
+    /// share yielded to a refused sweep drive (issue #3575) - rather than finding
+    /// the share full or no permit free (issue #6013).
+    /// </param>
+    internal static bool TryAcquireStarvationReplayPermit(SemaphoreSlim gate, StarvationDriveOrigin origin, out bool timerReserve)
     {
+        timerReserve = false;
         var circulating = CirculatingReplayPermits(
             Volatile.Read(ref _replayConcurrencyCeiling),
             Volatile.Read(ref _withheldReplayPermits));
@@ -2250,6 +2267,7 @@ internal sealed partial class BPlusLeafGrain
             && StarvationReplayLimit(circulating, StarvationDriveOrigin.WalGcSweep) == 1
             && IsSweepDriveRefusalOutstanding())
         {
+            timerReserve = true;
             return false;
         }
 
@@ -2259,7 +2277,12 @@ internal sealed partial class BPlusLeafGrain
         {
             var held = Volatile.Read(ref _starvationReplayPermits);
             if (held >= limit)
+            {
+                // The timer's limit is one short of the share: a held count the
+                // sweep could still reach is the reserved slot, not a full share.
+                timerReserve = timer && held < StarvationReplayLimit(circulating, StarvationDriveOrigin.WalGcSweep);
                 break;
+            }
             if (Interlocked.CompareExchange(ref _starvationReplayPermits, held + 1, held) == held)
             {
                 reserved = true;

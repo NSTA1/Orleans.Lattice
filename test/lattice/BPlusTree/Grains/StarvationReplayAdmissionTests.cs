@@ -328,6 +328,62 @@ public sealed class StarvationReplayAdmissionTests
         BPlusLeafGrain.ReleaseStarvationReplayPermit(gate);
     }
 
+    /// <summary>
+    /// Issue #6013. A refusal says why: a timer drive kept off the slot the
+    /// share reserves for the sweep is <c>timerReserve</c>, a full share or a
+    /// full gate is not.
+    /// </summary>
+    [Test]
+    public void A_refusal_reports_whether_the_timer_reservation_refused_it()
+    {
+        BPlusLeafGrain.SeedReplayAdmissionStateForTest(ceiling: 6, queued: 0);
+        using var gate = new SemaphoreSlim(6, 6);
+        var held = 0;
+        try
+        {
+            Assert.That(BPlusLeafGrain.TryAcquireStarvationReplayPermit(gate, Timer, out _), Is.True);
+            Assert.That(BPlusLeafGrain.TryAcquireStarvationReplayPermit(gate, Timer, out _), Is.True);
+            held = 2;
+            Assert.Multiple(() =>
+            {
+                Assert.That(BPlusLeafGrain.TryAcquireStarvationReplayPermit(gate, Timer, out var reserve), Is.False);
+                Assert.That(reserve, Is.True, "two of a three-slot share held: the free slot is the sweep's reservation");
+            });
+
+            Assert.That(BPlusLeafGrain.TryAcquireStarvationReplayPermit(gate, Sweep, out _), Is.True);
+            held = 3;
+            Assert.Multiple(() =>
+            {
+                Assert.That(BPlusLeafGrain.TryAcquireStarvationReplayPermit(gate, Timer, out var timerReserve), Is.False);
+                Assert.That(timerReserve, Is.False, "the whole share held is a full share, not the reservation");
+                Assert.That(BPlusLeafGrain.TryAcquireStarvationReplayPermit(gate, Sweep, out var sweepReserve), Is.False);
+                Assert.That(sweepReserve, Is.False, "a sweep drive is never refused by the timer's reservation");
+            });
+        }
+        finally
+        {
+            for (var i = 0; i < held; i++)
+                BPlusLeafGrain.ReleaseStarvationReplayPermit(gate);
+        }
+
+        BPlusLeafGrain.SeedReplayAdmissionStateForTest(ceiling: 2, queued: 0);
+        using var single = new SemaphoreSlim(2, 2);
+        BPlusLeafGrain.SeedSweepDriveRefusalForTest(TimeSpan.Zero);
+        Assert.Multiple(() =>
+        {
+            Assert.That(BPlusLeafGrain.TryAcquireStarvationReplayPermit(single, Timer, out var yielded), Is.False);
+            Assert.That(yielded, Is.True, "a single-slot share yielded to a refused sweep drive is the reservation too");
+        });
+
+        BPlusLeafGrain.SeedSweepDriveRefusalForTest(null);
+        using var full = new SemaphoreSlim(0, 6);
+        BPlusLeafGrain.SeedReplayAdmissionStateForTest(ceiling: 6, queued: 0);
+        Assert.Multiple(() =>
+        {
+            Assert.That(BPlusLeafGrain.TryAcquireStarvationReplayPermit(full, Timer, out var gateFull), Is.False);
+            Assert.That(gateFull, Is.False, "no permit free at the gate is not the reservation");
+        });
+    }
     [TestCase(6, 0, 6)]
     [TestCase(6, 2, 4)]
     [TestCase(6, 5, 1)]
