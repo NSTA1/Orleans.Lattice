@@ -2105,7 +2105,13 @@ internal sealed partial class BPlusLeafGrain
                 // shed deactivates it, and the deactivation drops the retained wait.
                 // Its callers are refused once its wait holds a gate position.
                 if (retention is not null)
+                {
+                    // A replay retained before on this activation, which aged
+                    // out, still holds its registration; replace it rather than
+                    // add a second.
+                    ReleaseResidentFootprint();
                     RegisterResidentFootprint(rehydratedFromSnapshot);
+                }
 
                 if (retention is not null)
                 {

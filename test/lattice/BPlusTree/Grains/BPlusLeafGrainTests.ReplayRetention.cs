@@ -556,6 +556,45 @@ public partial class BPlusLeafGrainTests
 
     [Test]
     [NonParallelizable]
+    public async Task A_replay_retained_again_after_aging_out_holds_one_resident_registration()
+    {
+        var seeded = await SeedRetainableRefusalAsync();
+        BPlusLeafGrain.RetainedReplayMaxAgeForTest = TimeSpan.FromMilliseconds(200);
+        var workingSet = new LeafResidentWorkingSet(64L * 1024 * 1024);
+        try
+        {
+            var (grain, state, _, _) = CreateGrainWithSnapshotAndCoordinator(
+                preloadedSnapshot: null, persistedCheckpoint: 0, walHead: 0, workingSet: workingSet);
+            state.State.TreeId = UniqueReplayPermitTree();
+            Assert.ThrowsAsync<LatticeSaturatedException>(
+                async () => await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None));
+            Assert.That(workingSet.RegisteredCount, Is.EqualTo(1), "precondition: the parked replay is resident");
+
+            var first = grain.ReplayBarrierForTest!;
+            await WaitUntilAsync(() => first.IsCompleted, "the first retention ages out");
+
+            // The first request joins the aged-out barrier and disarms it; the
+            // next re-arms the replay against the same refusing reading, and it
+            // is retained again on the same activation.
+            Assert.ThrowsAsync<LatticeSaturatedException>(async () => await grain.GetAsync("k"));
+            Assert.ThrowsAsync<LatticeSaturatedException>(async () => await grain.GetAsync("k"));
+            Assert.That(grain.ReplayRetainedForTest, Is.True, "precondition: retained a second time");
+            Assert.That(workingSet.RegisteredCount, Is.EqualTo(1),
+                "retained twice, it holds one registration: the second replaces the first rather than leak it");
+
+            await ((IGrainBase)grain).OnDeactivateAsync(
+                new DeactivationReason(DeactivationReasonCode.ApplicationRequested, "test"),
+                CancellationToken.None);
+            Assert.That(workingSet.RegisteredCount, Is.Zero, "and deactivation returns it");
+        }
+        finally
+        {
+            await DrainRetainedReplaysAsync(seeded);
+        }
+    }
+
+    [Test]
+    [NonParallelizable]
     public async Task A_retained_wait_never_enters_the_queue_wait_mean()
     {
         var seeded = await SeedRetainableRefusalAsync();
