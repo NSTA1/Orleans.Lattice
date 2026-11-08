@@ -46,7 +46,10 @@ failure policy; once those exist, an absent or invalid repair fails locally too.
 CI provisions all of this through one composite action,
 `.github/actions/tla-toolchain`. `toolchain.json` is the single source of the
 jar URL, its SHA-256, and the Java distribution and version; no workflow, and
-not the action itself, carries a copy. The action restores the overlay from the
+not the action itself, carries a copy. The action restores the jar from the
+Actions cache, keyed on its pinned SHA-256, and downloads it only on a miss;
+either way it checks the jar against that digest before anything uses it, and
+saves it only after the check. It restores the overlay from the
 Actions cache, keyed on `toolchain.json`, `patch.json`, `build.py`, the
 regression fixtures and the resolved `java`/`javac` versions, and runs this
 builder only on a miss, so a warm leg makes no request for the upstream source.
