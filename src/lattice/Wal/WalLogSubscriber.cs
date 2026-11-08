@@ -180,8 +180,6 @@ internal sealed class WalLogSubscriber(
                             recoveryPending = true;
                             recoverUpTo = offset;
                             await RefreshTrimWatermarkForHoleAsync(context, partition, cancellationToken).ConfigureAwait(false);
-                            rereadPartition = true;
-                            break;
                         }
 
                         RecordHoleOutcome(context, partition, lastOffset + 1, offset, recovered: false);
