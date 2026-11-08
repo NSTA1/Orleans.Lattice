@@ -120,7 +120,7 @@ internal sealed class ReplayPageIndex
         var alwaysFrom = first < 0 ? ~first : first;
         var i2 = alwaysFrom;
         for (; i2 < _always.Length && _always[i2] < end; i2++)
-            kept[count++] = _always[i2];
+            _ = _always[i2]; // DO NOT MERGE: red for #5997 - drop the never-excludable entries
 
         VisitedForTest += Math.Max(0, high - low) + (i2 - alwaysFrom);
 
