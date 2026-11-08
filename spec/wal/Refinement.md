@@ -391,7 +391,12 @@ from this specification.**
   the refinement holds by slice equivalence: a ring-served slice is the provider's filtered
   read of the same window - the budget counts examined entries, a last excluded entry is
   yielded routing-only, records with no single key reach every reader, and the slot index
-  only accelerates (A-a). A page covers only through the last entry its fill actually
+  only accelerates (A-a). A ring-served slice may examine up to a fixed multiple of the
+  budget (issue #5997) while returning at most the budget plus one trailing routing-only
+  marker. It equals the concatenation of consecutive budget-sized filtered reads with their
+  intermediate markers elided, each examined entry being one `ReadStep`, and its trailing
+  marker never passes the covered run, the clamped tail or its last examined offset; it widens
+  only over pages at the incarnation the serve verified. A page covers only through the last entry its fill actually
   returned, never the planned high, and a request is served from the ring only within the
   covered run starting at its low bound; anything above is fetched, never assumed empty
   (A-b). A hole can therefore lie only above the covered offset, which is what a direct
@@ -418,8 +423,14 @@ from this specification.**
   `WalShardIncarnationSiteTests.Every_wal_reset_path_advances_the_partition_incarnation_before_new_appends`,
   `LeafReplayCoordinatorGrainTests.One_leafs_apply_leaves_another_leafs_slice_byte_identical`,
   `LeafReplayCoordinatorGrainTests.A_waiter_past_the_aging_bound_issues_its_own_fill`
-  and `LeafReplayCoordinatorGrainTests.The_ring_never_exceeds_its_byte_budget_under_random_fills`.
-  Production symbols: `LeafReplayCoordinatorGrain.ReadSliceThroughRingAsync`, `LeafReplayCoordinatorGrain.VerifyRingIncarnationAsync`, `ReplayPageRing.FillAsync`, `ReplayPage`, `ReplayPage.Incarnation`, `ReplaySliceProjection.Project`, `ICommitLogReader.ReadAsync`, `WalShardFloorState.Incarnation`, `WalShardGrain.AdvanceIncarnationAsync`, `IWalShardGrain.GetIncarnationAsync`, `ICommitLogReader.GetIncarnationAsync`.
+  `LeafReplayCoordinatorGrainTests.The_ring_never_exceeds_its_byte_budget_under_random_fills`,
+  `LeafReplayCoordinatorGrainTests.Indexed_projection_equals_the_linear_reference_byte_for_byte_for_random_runs_filters_budgets_and_cuts`,
+  `LeafReplayCoordinatorGrainTests.Indexed_projection_matches_the_linear_reference_for_two_virtual_shard_counts_on_one_page`,
+  `LeafReplayCoordinatorGrainTests.A_wide_ring_slice_equals_its_narrow_slices_concatenated_with_intermediate_markers_elided`,
+  `LeafReplayCoordinatorGrainTests.Replaying_through_wide_ring_slices_leaves_a_leaf_in_the_state_narrow_slices_leave_it`,
+  `LeafReplayCoordinatorGrainTests.A_wide_ring_slice_never_widens_across_a_page_read_at_another_incarnation`
+  and `LeafReplayCoordinatorGrainTests.A_page_that_closes_a_gap_is_used_whatever_its_position_in_the_run_at_the_wide_budget`.
+  Production symbols: `LeafReplayCoordinatorGrain.ReadSliceThroughRingAsync`, `LeafReplayCoordinatorGrain.VerifyRingIncarnationAsync`, `ReplayPageRing.FillAsync`, `ReplayPage`, `ReplayPage.Incarnation`, `ReplaySliceProjection.Project`, `ReplaySliceProjection.ProjectWide`, `ReplayPageIndex`, `ICommitLogReader.ReadAsync`, `WalShardFloorState.Incarnation`, `WalShardGrain.AdvanceIncarnationAsync`, `IWalShardGrain.GetIncarnationAsync`, `ICommitLogReader.GetIncarnationAsync`.
 - **Scheduling and admission.** Weak fairness applies to `ScheduleReplay`, then
   to a requested `ReadStep`, not to an unsolicited WAL read. Each read consumes
   its request. The timer must be enabled and registered after durable identity
