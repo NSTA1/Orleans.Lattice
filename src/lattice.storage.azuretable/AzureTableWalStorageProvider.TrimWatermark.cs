@@ -85,7 +85,7 @@ public sealed partial class AzureTableWalStorageProvider
 
         var (manifestPartitionKey, watermark) = await ReadStoredTrimWatermarkAsync(treeId, shardIndex, cancellationToken)
             .ConfigureAwait(false);
-        _trimWatermarks[manifestPartitionKey] = watermark;
+        NoteTrimWatermark(manifestPartitionKey, watermark);
         return watermark;
     }
 
