@@ -1911,6 +1911,7 @@ Estimated bytes of WAL pages the per-partition replay coordinators of one silo m
 - **Memory (issue #5877).** Every coordinator's pages are charged to one silo-wide ledger, which shares its byte budget with resident leaves: a quarter of the heap limit, the same budget that sheds leaves. Pages always give way first, so a cached page never causes a leaf to be shed. With the default `-1`, that shared budget is the only bound, except that when no heap limit can be read the pages are capped at 64 MiB. A positive value caps the pages further. The cache saves the most when it can hold the log a cold restart replays: everything appended since the oldest leaf checkpoint, across the silo's WAL partitions, at about `96 + 2 x key length + value length` bytes an entry (roughly 380 bytes for a 32-character key and a 220-byte value). On an Azure Table silo restarted cold under write load, a 217,000-entry log (about 82 MB) replayed 18 times faster with room for all of it than under a 64 MiB cap. A read in flight additionally holds the page it is reading, bounded by [`WalReplaySliceBudget`](#walreplayslicebudget) entries.
 - **Eviction across partitions, by demand (issue #5877).** A full ledger evicts across every partition, so a partition that fills later is never frozen out. A leaf queued for a replay permit declares the offset it will start reading each partition from, and every slice read advances its reader's position. The pages no queued or reading leaf still needs go first; then, if a partition has no declared readers, its most recently cached pages; and last, the pages whose next reader is farthest away. A cold restart replays in waves behind the permit gate, and each new wave reads the head of the log first, so this keeps the head and evicts what is needed latest. Measured on one partition in eight sequential waves with room for a quarter of the log, each entry was read 6.63 times, against 9.81 when the lowest pages were evicted first. Declarations are advisory and leased: they change which pages are evicted, never what a leaf is served, and a reader that stops reading lapses after 10 minutes.
 - **Isolation.** Each leaf receives its own copy of every value buffer and version vector it is served, so nothing one leaf does to its slice reaches another.
+- **Owner index (issue #5997).** Each cached page carries an index of its entries by key and by virtual slot, built once when the page is filled, so a leaf's slice visits only the entries its key range and shard can own instead of every entry in the partition's log. The index adds about 8 bytes per entry and is charged to the page's size in the shared ledger.
 
 Set to `0` to disable the cache; every replay then reads storage itself, as before. The setting is silo-wide: it is read from the global options, so set it globally; a per-tree override has no effect. A WAL wiped **out of band**, behind the library's back rather than through a purge, is not detected: restart the silo, or set this to `0`, before doing that.
 
@@ -1955,6 +1956,16 @@ each one buffers; the first factor is
 [`WalMaterialiserMaxConcurrentReplays`](#walmaterialisermaxconcurrentreplays) and
 this is the second. Lowering it trades round trips for a smaller resident slice on
 a host that cannot afford the default width.
+
+**It bounds what a slice returns; a slice served from the replay page cache may
+examine more (issue #5997).** A read from storage examines at most this many
+entries, because storage must materialise an entry to filter it. A slice served
+from the coordinator's page cache (see
+[`WalReplayPageRingBytes`](#walreplaypageringbytes)) uses each cached page's owner
+index to skip the entries the leaf does not own, so it may examine up to a fixed
+64 times this budget while still returning at most this many entries plus one
+trailing routing-only marker. A leaf replaying from cached pages therefore makes
+up to 64 times fewer slice reads; the memory a slice holds is unchanged.
 
 Do not confuse it with
 [`WalReplayMaxRecordsPerTurn`](#walreplaymaxrecordsperturn), which defaults to the
