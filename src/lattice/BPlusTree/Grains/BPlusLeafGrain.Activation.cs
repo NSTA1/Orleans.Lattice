@@ -2227,7 +2227,7 @@ internal sealed partial class BPlusLeafGrain
             LatticeMetrics.RecordSaturationRefusal(
                 state.State.TreeId,
                 LatticeSaturationSource.ReplayPermitAdmission,
-                timerReserve ? LatticeMetrics.SaturationArmTimerReserve : LatticeMetrics.SaturationArmGcShare);
+                LatticeMetrics.SaturationArmGcShare);
             return null;
         }
 
