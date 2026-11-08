@@ -4281,8 +4281,17 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private static readonly AsyncLocal<TimeSpan?> DriveSliceReadDeadline = new();
 
-    /// <summary>The silo's drive slice-read deadline, resolved once (issue #6007, D1).</summary>
-    private static TimeSpan? _resolvedDriveSliceReadDeadline;
+    /// <summary>
+    /// The silo's drive slice-read deadline in ticks, resolved once (issue
+    /// #6007, D1), or <see cref="UnresolvedDriveSliceReadDeadline"/> before it
+    /// is. Static because every silo of a cluster shares one response timeout.
+    /// Held as a <see cref="long"/> read and written with
+    /// <see cref="Volatile"/>, so it cannot tear; two first drives racing to
+    /// resolve it both compute and publish the same value.
+    /// </summary>
+    private static long _resolvedDriveSliceReadDeadlineTicks = UnresolvedDriveSliceReadDeadline;
+
+    private const long UnresolvedDriveSliceReadDeadline = long.MinValue;
 
     /// <summary>Test-only: replaces the resolved drive slice-read deadline, or restores resolution when <see langword="null"/>.</summary>
     internal static TimeSpan? DriveSliceReadDeadlineForTest
@@ -4321,14 +4330,15 @@ internal sealed partial class BPlusLeafGrain
     {
         if (DriveSliceReadDeadlineForTest is { } overridden)
             return overridden;
-        if (_resolvedDriveSliceReadDeadline is { } resolved)
-            return resolved;
+        var resolvedTicks = Volatile.Read(ref _resolvedDriveSliceReadDeadlineTicks);
+        if (resolvedTicks != UnresolvedDriveSliceReadDeadline)
+            return TimeSpan.FromTicks(resolvedTicks);
 
         var responseTimeout = context.ActivationServices?
             .GetService<Microsoft.Extensions.Options.IOptions<Orleans.Configuration.SiloMessagingOptions>>()?
             .Value.ResponseTimeout ?? Timeout.InfiniteTimeSpan;
         var deadline = ComputeDriveSliceReadDeadline(responseTimeout);
-        _resolvedDriveSliceReadDeadline = deadline;
+        Volatile.Write(ref _resolvedDriveSliceReadDeadlineTicks, deadline.Ticks);
         return deadline;
     }
 

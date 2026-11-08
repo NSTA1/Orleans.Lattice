@@ -483,6 +483,13 @@ internal sealed class LatticeWalGcScheduler(
     /// </remarks>
     internal static readonly TimeSpan OrphanSweepInterval = TimeSpan.FromMinutes(2);
 
+    /// <summary>
+    /// Bounds the pin read that grades a timed-out drive's progress (issue
+    /// #6007, N2). An expired read counts as no progress, the fail-closed
+    /// direction: the consumer stays owed and is never abandoned for it.
+    /// </summary>
+    internal static readonly TimeSpan StallPinReadBudget = TimeSpan.FromSeconds(10);
+
     /// <summary>Bounds each orphan-sweep I/O operation, not the whole census.</summary>
     internal static TimeSpan OrphanSweepOperationBudget => RetentionProbeBudget;
 
@@ -5607,11 +5614,25 @@ internal sealed class LatticeWalGcScheduler(
             // A timed-out drive is not charged (issue #6007). Its pin offset is
             // read so consecutive stalls can tell a slow drive that is still
             // moving the pin from one that is not; an unreadable offset counts as
-            // no progress.
+            // no progress. The read is bounded by StallPinReadBudget rather than
+            // left to the response timeout, so the storage stall that timed the
+            // drive out cannot also hold the touch for a second full timeout.
             if (drive == LeafStarvationDriveOutcome.TimedOut)
             {
-                var stallPinOffset = await TryReadDurablePinOffsetAsync(treeId, blockingConsumerId)
-                    .ConfigureAwait(false);
+                long? stallPinOffset;
+                try
+                {
+                    stallPinOffset = await Bounded(
+                            TryReadDurablePinOffsetAsync(treeId, blockingConsumerId),
+                            StallPinReadBudget,
+                            stoppingToken)
+                        .ConfigureAwait(false);
+                }
+                catch (TimeoutException)
+                {
+                    stallPinOffset = null;
+                }
+
                 return new ReactivationTouchResult(
                     ReactivationOutcome.StorageStalled, offsetAdvanceOwed, StallPinOffset: stallPinOffset);
             }

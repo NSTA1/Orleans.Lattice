@@ -14,7 +14,8 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
 {
     private const string StalledWithoutProgress = "stalled_without_progress";
 
-    private static (IGrainFactory Factory, Func<int> Drives) FactoryWithStallingLeaf(Func<long?> pinOffsetAfterDrive)
+    private static (IGrainFactory Factory, Func<int> Drives) FactoryWithStallingLeaf(
+        Func<long?> pinOffsetAfterDrive, bool pinReadHangs = false)
     {
         var (factory, leaf) = FactoryWithBlockedLeaf(StrandedTree);
         var drives = 0;
@@ -27,10 +28,12 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         });
 
         var pins = Substitute.For<IWalMaterialiserPinGrain>();
-        pins.GetPinOffsetsAsync().Returns(_ => Task.FromResult<IReadOnlyDictionary<string, long>>(
-            offset is { } current
-                ? new Dictionary<string, long> { [ConsumerIdFor("leaf-a")] = current }
-                : new Dictionary<string, long>()));
+        pins.GetPinOffsetsAsync().Returns(_ => pinReadHangs
+            ? new TaskCompletionSource<IReadOnlyDictionary<string, long>>().Task
+            : Task.FromResult<IReadOnlyDictionary<string, long>>(
+                offset is { } current
+                    ? new Dictionary<string, long> { [ConsumerIdFor("leaf-a")] = current }
+                    : new Dictionary<string, long>()));
         factory.GetGrain<IWalMaterialiserPinGrain>(Arg.Any<string>()).Returns(pins);
         return (factory, () => drives);
     }
@@ -97,6 +100,40 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
                 "instrument validation: more stalls than the threshold must have run");
             Assert.That(logs.Entries.Any(e => e.Message.Contains(StalledWithoutProgress, StringComparison.Ordinal)), Is.False,
                 "a slow drive that keeps moving the pin is making progress and must not be reported as stalled");
+        });
+
+        await scheduler.StopAsync(CancellationToken.None);
+    }
+
+    [Test]
+    public async Task ExecuteAsync_bounds_a_stalled_drive_pin_read_that_never_answers()
+    {
+        var consumerId = ConsumerIdFor("leaf-a");
+        var gc = Substitute.For<ILatticeWalGc>();
+        gc.RunOnceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(BlockedReportNaming(consumerId)));
+        var time = new VirtualTimeProvider();
+
+        // The stall that timed the drive out also parks the pin read forever.
+        var (factory, drives) = FactoryWithStallingLeaf(() => 100, pinReadHangs: true);
+
+        using var recorder = new InstrumentRecorder(LatticeMetrics.WalGcBlockedLeafReactivations, StrandedTree);
+        var (scheduler, logs) = SchedulerWithLogs(factory, gc, time);
+        await StartAndRunFirstPassAsync(scheduler, time);
+        await AdvanceAtLeastAsync(time, TimeSpan.FromHours(3));
+
+        var outcomes = Outcomes(recorder);
+        Assert.Multiple(() =>
+        {
+            Assert.That(drives(), Is.GreaterThan(LatticeWalGcScheduler.MaxStorageStallsWithoutProgress),
+                "a parked pin read must not hold the touch: later passes keep re-driving the consumer");
+            Assert.That(Count(outcomes, "storage_stalled"), Is.EqualTo(drives()),
+                "each bounded touch still completes on the uncharged arm");
+            Assert.That(Count(outcomes, "abandoned"), Is.Zero,
+                "an expired pin read counts as no progress, which never abandons");
+            Assert.That(logs.Entries.Count(e => e.Message.Contains(StalledWithoutProgress, StringComparison.Ordinal)),
+                Is.EqualTo(1),
+                "an unreadable pin is no progress, so the bound is reported once");
         });
 
         await scheduler.StopAsync(CancellationToken.None);
