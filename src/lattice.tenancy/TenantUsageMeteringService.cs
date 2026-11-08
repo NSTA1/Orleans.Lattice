@@ -77,15 +77,8 @@ internal sealed class TenantUsageMeteringService : IHostedService
     /// and avoids the concurrent-collection overhead.
     /// </para>
     /// </summary>
-    private readonly Dictionary<string, Dictionary<string, CachedTreeSample>> _lastKnownByTenant =
+    private readonly Dictionary<string, Dictionary<string, TreeUsageSample>> _lastKnownByTenant =
         new(StringComparer.Ordinal);
-
-    /// <summary>
-    /// One tree's cached footprint and whether it came from a complete (non-partial)
-    /// storage-usage report. Only a complete footprint is ever held across a partial
-    /// report (issue #6017); see <c>SampleTenantTreesAsync</c>.
-    /// </summary>
-    private readonly record struct CachedTreeSample(TreeUsageSample Sample, bool Complete);
 
     /// <summary>Initializes the metering service over its registry, publisher, and schedule inputs.</summary>
     /// <param name="registry">The tenant registry supplying the tenants to meter. Must not be <c>null</c>.</param>
@@ -330,7 +323,7 @@ internal sealed class TenantUsageMeteringService : IHostedService
         // from the trees this cycle actually enumerated and still owns, so a tree
         // that was deleted or reassigned drops out without a separate sweep and
         // the cache stays bounded by the tenant's live tree count.
-        var current = new Dictionary<string, CachedTreeSample>(treeIds.Count, StringComparer.Ordinal);
+        var current = new Dictionary<string, TreeUsageSample>(treeIds.Count, StringComparer.Ordinal);
         var samples = new List<TreeUsageSample>(treeIds.Count);
         var retained = 0;
         for (var offset = 0; offset < treeIds.Count; offset += BoundedFanOut.DefaultWidth)
@@ -344,14 +337,14 @@ internal sealed class TenantUsageMeteringService : IHostedService
             cancellationToken.ThrowIfCancellationRequested();
             for (var slot = 0; slot < results.Length; slot++)
             {
-                var (sample, cached, wasRetained) = results[slot];
-                if (sample is null || cached is null)
+                var (sample, wasRetained) = results[slot];
+                if (sample is null)
                 {
                     continue;
                 }
 
                 samples.Add(sample.Value);
-                current[treeIds[start + slot]] = cached.Value;
+                current[treeIds[start + slot]] = sample.Value;
                 if (wasRetained)
                 {
                     retained++;
@@ -376,7 +369,7 @@ internal sealed class TenantUsageMeteringService : IHostedService
 
         return samples;
 
-        async Task<(TreeUsageSample? Sample, CachedTreeSample? Cached, bool Retained)> ReadAsync(string treeId)
+        async Task<(TreeUsageSample? Sample, bool Retained)> ReadAsync(string treeId)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -384,7 +377,7 @@ internal sealed class TenantUsageMeteringService : IHostedService
             // and this check is what decides whether a tree counts toward the tenant.
             if (!LatticeTenantTrees.TryGetTenant(treeId, out var owner) || !owner.Equals(tenant))
             {
-                return (null, null, false);
+                return (null, false);
             }
 
             try
@@ -412,37 +405,25 @@ internal sealed class TenantUsageMeteringService : IHostedService
                         .ConfigureAwait(false);
                 }
 
+                // A partial report is a lower bound: a surface that did not
+                // answer contributes nothing to it. Publishing it in place of the
+                // tree's last footprint would shrink the tenant's accounted usage
+                // and lift its quota ceiling exactly as an unreadable tree would
+                // (issue #6017), so it is treated the same way: the last-known
+                // footprint is retained. A tree never sampled before still
+                // contributes the partial figure, the best one available.
+                if (usage.Partial // DO NOT MERGE: red for #6017 B1 tenant metering holds a partial sample
+                    && lastKnown is not null
+                    && lastKnown.TryGetValue(treeId, out var retainedSample))
+                {
+                    return (retainedSample, true);
+                }
+
                 var sample = new TreeUsageSample(
                     bytes: usage.TotalBytes,
                     keys: usage.LiveKeys,
                     memoryBytes: usage.LeafStateBytes);
-                if (!usage.Partial)
-                {
-                    return (sample, new CachedTreeSample(sample, Complete: true), false);
-                }
-
-                // A partial report is a lower bound: a surface that did not
-                // answer contributes nothing to it (issue #6017). Publishing it in
-                // place of the tree's last complete footprint could shrink the
-                // tenant's accounted usage and lift its quota ceiling, so against a
-                // held complete footprint each figure is the larger of the two:
-                // never lower than the complete reading, and still following growth
-                // the lower bound already shows. Only a complete footprint is held
-                // across a partial report, so a tree that reports partial every
-                // time is metered from its partial figures as before rather than
-                // frozen at its first reading.
-                if (lastKnown is not null
-                    && lastKnown.TryGetValue(treeId, out var held)
-                    && held.Complete)
-                {
-                    var raised = new TreeUsageSample(
-                        bytes: Math.Max(held.Sample.Bytes, sample.Bytes),
-                        keys: Math.Max(held.Sample.Keys, sample.Keys),
-                        memoryBytes: Math.Max(held.Sample.MemoryBytes, sample.MemoryBytes));
-                    return (raised, held, false);
-                }
-
-                return (sample, new CachedTreeSample(sample, Complete: false), false);
+                return (sample, false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -459,8 +440,8 @@ internal sealed class TenantUsageMeteringService : IHostedService
                     treeId,
                     tenant);
                 return lastKnown is not null && lastKnown.TryGetValue(treeId, out var previous)
-                    ? (previous.Sample, previous, true)
-                    : (null, null, false);
+                    ? (previous, true)
+                    : (null, false);
             }
         }
     }

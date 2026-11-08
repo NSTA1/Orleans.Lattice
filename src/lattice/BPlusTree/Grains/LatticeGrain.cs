@@ -315,12 +315,6 @@ internal sealed partial class LatticeGrain(
     private long _admLiveKeys;
     private long _admEstimatedBytes;
     private bool _admHasSample;
-
-    // The last sample taken from a complete (non-partial) report, held so a
-    // partial report can only raise the enforced figure (issue #6017).
-    private long _admCompleteLiveKeys;
-    private long _admCompleteEstimatedBytes;
-    private bool _admHasCompleteSample;
     private DateTimeOffset _admSampledAt;
     private bool _admRefreshInFlight;
 
@@ -434,35 +428,20 @@ internal sealed partial class LatticeGrain(
             var report = await grainFactory
                 .GetGrain<ILatticeStorageUsage>(TreeId)
                 .GetReportAsync(forceRefresh: false, CancellationToken.None);
-            if (!report.Partial)
+            // A partial report is a lower bound: a surface that did not answer
+            // contributes nothing to it. Replacing a real sample with it would
+            // lower the figure the caps compare against and admit writes past
+            // them (issue #6017), so a partial report never displaces a
+            // sample this activation already holds. With no sample yet it is
+            // still the best figure available and is taken as before.
+            if (report.Partial && _admHasSample) // DO NOT MERGE: red for #6017 B1 write admission holds a partial sample
             {
-                _admCompleteLiveKeys = report.LiveKeys;
-                _admCompleteEstimatedBytes = report.TotalBytes;
-                _admHasCompleteSample = true;
-                _admLiveKeys = report.LiveKeys;
-                _admEstimatedBytes = report.TotalBytes;
-            }
-            else if (_admHasCompleteSample)
-            {
-                // A partial report is a lower bound: a surface that did not
-                // answer contributes nothing to it (issue #6017). Taking it alone
-                // could lower the figure the caps compare against and admit
-                // writes past them, so against the last complete sample each
-                // figure is the larger of the two: never lower than the complete
-                // reading, and still following growth the lower bound shows.
-                _admLiveKeys = Math.Max(_admCompleteLiveKeys, report.LiveKeys);
-                _admEstimatedBytes = Math.Max(_admCompleteEstimatedBytes, report.TotalBytes);
-            }
-            else
-            {
-                // No complete sample yet: the partial report is the best figure
-                // available. Only a complete sample is held across a partial
-                // report, so a tree that reports partial every time still tracks
-                // its partial figures rather than freezing at the first one.
-                _admLiveKeys = report.LiveKeys;
-                _admEstimatedBytes = report.TotalBytes;
+                _admSampledAt = DateTimeOffset.UtcNow;
+                return;
             }
 
+            _admLiveKeys = report.LiveKeys;
+            _admEstimatedBytes = report.TotalBytes;
             _admHasSample = true;
             _admSampledAt = DateTimeOffset.UtcNow;
         }
