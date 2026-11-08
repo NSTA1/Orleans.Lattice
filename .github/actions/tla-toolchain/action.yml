@@ -1,11 +1,15 @@
 name: TLA+ toolchain
 description: >-
   Provisions the TLA+ toolchain the Tlc test category needs: the pinned JDK, a
-  digest-verified tla2tools.jar at tools/tla2tools.jar, and the verified
-  checkpoint-order overlay at tools/tlc/build. Every pin is read from
-  tools/tlc/toolchain.json; this action carries none of its own.
+  digest-verified tla2tools.jar at tools/tla2tools.jar (restored from the
+  cache, or fetched on a miss), and the verified checkpoint-order overlay at
+  tools/tlc/build. Every pin is read from tools/tlc/toolchain.json; this
+  action carries none of its own.
 
 outputs:
+  jar-cache-hit:
+    description: "'true' when tla2tools.jar was restored from the cache instead of being fetched."
+    value: ${{ steps.jar.outputs.cache-hit }}
   overlay-cache-hit:
     description: "'true' when the overlay was restored from the cache instead of being built."
     value: ${{ steps.restore.outputs.cache-hit }}
@@ -29,22 +33,60 @@ runs:
         distribution: ${{ steps.pins.outputs.java-distribution }}
         java-version: ${{ steps.pins.outputs.java-version }}
 
-    # Pinned by digest, not merely by tag. A release asset can be replaced in
-    # place, and an unverified jar on the classpath of a verification gate is
-    # the one dependency where a silent substitution would be least visible.
+    # Keyed on the pinned digest alone, so a pin change misses and refetches.
+    # No restore-keys: a partial match would restore some other jar. The key
+    # only selects the entry; the digest check below is what trusts it.
+    - name: Restore TLA+ tools
+      id: jar
+      uses: actions/cache/restore@v5
+      with:
+        path: tools/tla2tools.jar
+        key: tla2tools-${{ steps.pins.outputs.jar-sha256 }}
+
+    # Only on a miss. The release download has returned 504s on self-hosted
+    # runners, so retries back off exponentially (no fixed --retry-delay) for
+    # up to ten minutes before the leg gives up.
     - name: Fetch TLA+ tools
+      if: steps.jar.outputs.cache-hit != 'true'
       shell: bash
       env:
         JAR_URL: ${{ steps.pins.outputs.jar-url }}
-        JAR_SHA256: ${{ steps.pins.outputs.jar-sha256 }}
       run: |
         set -euo pipefail
         mkdir -p tools
         curl --fail --silent --show-error --location \
-          --retry 3 --retry-delay 5 --retry-all-errors \
+          --retry 8 --retry-all-errors --retry-max-time 600 \
+          --connect-timeout 30 --max-time 180 \
           --output tools/tla2tools.jar \
           "$JAR_URL"
+
+    # Pinned by digest, not merely by tag. A release asset can be replaced in
+    # place, and an unverified jar on the classpath of a verification gate is
+    # the one dependency where a silent substitution would be least visible.
+    # Unconditional: a restored jar is held to exactly the same pin as a
+    # freshly fetched one.
+    - name: Verify TLA+ tools
+      shell: bash
+      env:
+        JAR_SHA256: ${{ steps.pins.outputs.jar-sha256 }}
+        HIT: ${{ steps.jar.outputs.cache-hit }}
+      run: |
+        set -euo pipefail
         echo "$JAR_SHA256  tools/tla2tools.jar" | sha256sum --check --strict
+        if [ "$HIT" = "true" ]; then
+          echo "tla2tools.jar restored from cache and verified against its pinned digest."
+        else
+          echo "tla2tools.jar fetched and verified against its pinned digest."
+        fi
+
+    # Saved only after the digest verified, so the cache never holds a jar
+    # that failed its check.
+    - name: Save TLA+ tools
+      if: steps.jar.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v5
+      with:
+        path: tools/tla2tools.jar
+        key: tla2tools-${{ steps.pins.outputs.jar-sha256 }}
 
     # Keyed on every checked-in build input plus the resolved java/javac
     # versions, so a pin change or a JDK patch release rebuilds and
