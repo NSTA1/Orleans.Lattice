@@ -3573,7 +3573,7 @@ internal sealed partial class ReplicationShipperGrain(
             return page;
         }
 
-        var reread = await grain.ReadShippingAsync(requested, pageSize, cancellationToken);
+        var reread = page;
         if (reread.Entries.Count == 0)
         {
             ReportHoleSkipped(partition, requested, firstReturned, LatticeReplicationMetrics.ShipHoleOutcomeHole);
