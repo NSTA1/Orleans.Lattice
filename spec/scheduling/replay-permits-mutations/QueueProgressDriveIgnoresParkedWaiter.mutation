@@ -1,6 +1,6 @@
 MODULE: QueueProgressDriveIgnoresParkedWaiter
 TARGET: QueueProgress
-CLASS: Action
+CLASS: Temporal
 SUMMARY: a non-queuing drive probe takes a released permit while a replay waiter is parked
 PERTURBS: DriveAdmission
 

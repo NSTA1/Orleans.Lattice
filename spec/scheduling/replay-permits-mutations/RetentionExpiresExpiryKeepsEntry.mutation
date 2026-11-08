@@ -1,6 +1,6 @@
 MODULE: RetentionExpiresExpiryKeepsEntry
 TARGET: RetentionExpires
-CLASS: Action
+CLASS: Temporal
 SUMMARY: reaching the maximum age leaves the retained entry parked in the gate
 
 --- FIND

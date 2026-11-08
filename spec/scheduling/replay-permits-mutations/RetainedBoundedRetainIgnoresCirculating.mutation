@@ -1,6 +1,6 @@
 MODULE: RetainedBoundedRetainIgnoresCirculating
 TARGET: RetainedBounded
-CLASS: Action
+CLASS: Invariant
 SUMMARY: a refused Interactive replay is retained whatever the retained set already holds
 PERTURBS: RetainOnRefusal
 BOUNDS: Ceiling = 1
