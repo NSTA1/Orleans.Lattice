@@ -1935,7 +1935,7 @@ internal sealed partial class BPlusLeafGrain
             if (!sideEffectFree
                 && admissionClass == LatticeReplayAdmissionClass.Interactive
                 && verdict == ReplayPermitDrainVerdict.WaitExceeded
-                && TryReserveReplayRetention())
+                && (TryReserveReplayRetention() || true))
             {
                 _replayAdmissionPhase = ReplayAdmissionPhase.QueuedForPermit;
                 return new RetainedReplayRefusal(message, state.State.TreeId!);
