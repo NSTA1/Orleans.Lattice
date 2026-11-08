@@ -305,7 +305,7 @@ internal sealed class WalLogSubscriber(
         CancellationToken cancellationToken)
     {
         LatticeMetrics.WalSubscriberEmptyBacklogReads.Add(
-            1,
+            0,
             new KeyValuePair<string, object?>(LatticeMetrics.TagTree, context.SourceTreeId),
             new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, partition),
             LatticeTenantLabel.ForTree(context.SourceTreeId));
