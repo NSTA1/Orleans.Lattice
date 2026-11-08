@@ -554,6 +554,7 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
             WalRetainedBytes = storage.WalRetainedBytes,
             TotalBytes = storage.TotalBytes,
             PartialStorage = storage.Partial,
+            StaleStorage = storage.Stale,
             SampledAt = storage.SampledAt,
         };
     }
@@ -582,6 +583,7 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
                 Partial = tree.Partial,
                 LiveKeys = tree.LiveKeys,
                 SampledAt = tree.SampledAt,
+                Stale = tree.Stale,
             });
         }
 
@@ -593,6 +595,7 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
             LeafStateBytes = report.LeafStateBytes,
             TotalBytes = report.TotalBytes,
             Partial = report.Partial,
+            Stale = report.Stale,
             Deep = deep,
             SampledAt = report.SampledAt,
             Trees = trees.MoveToImmutable(),

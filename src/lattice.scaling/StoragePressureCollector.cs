@@ -103,17 +103,34 @@ internal sealed class StoragePressureCollector(
         var aggregateBytes = 0L;
         var aggregateBudgetedBytes = 0L;
         var aggregateBudget = 0L;
+        var excludedPartialTrees = 0;
         for (var t = 0; t < trees.Count; t++)
         {
             var tree = trees[t];
-            aggregateBytes += tree.WalRetainedBytes;
+
+            // A partial tree's byte figure is a lower bound - some WAL partition
+            // did not answer and contributed nothing - so weighing it would
+            // under-state pressure on exactly the accounts too busy to answer
+            // (issue #6017). Its bytes and its ceiling are left out of both
+            // sides of every capacity comparison and the tree is counted
+            // instead. Its saturation regime is not derived from that figure, so
+            // it still feeds the throughput classification below.
+            var partial = tree.Partial;
+            if (partial)
+            {
+                excludedPartialTrees++;
+            }
+            else
+            {
+                aggregateBytes += tree.WalRetainedBytes;
+            }
 
             // The ceiling in effect for THIS tree. A null or non-positive value
             // means the byte-pressure policy is off for it, so it makes no
             // capacity statement at all and is excluded from both sides of the
             // comparison rather than being charged against someone else's
             // budget (issue #3336).
-            var ceiling = tree.WalMaxRetainedBytes is > 0 ? tree.WalMaxRetainedBytes.GetValueOrDefault() : 0L;
+            var ceiling = !partial && tree.WalMaxRetainedBytes is > 0 ? tree.WalMaxRetainedBytes.GetValueOrDefault() : 0L;
             if (ceiling > 0)
             {
                 aggregateBudgetedBytes += tree.WalRetainedBytes;
@@ -127,8 +144,9 @@ internal sealed class StoragePressureCollector(
                 continue;
             }
 
-            var baseBytes = tree.WalRetainedBytes / count;
-            var remainder = tree.WalRetainedBytes % count;
+            var treeBytes = partial ? 0L : tree.WalRetainedBytes;
+            var baseBytes = treeBytes / count;
+            var remainder = treeBytes % count;
 
             // The ceiling is attributed across the tree's partitions by exactly
             // the same rule as its bytes, so each account's numerator and
@@ -163,6 +181,14 @@ internal sealed class StoragePressureCollector(
             }
         }
 
+        if (excludedPartialTrees > 0)
+        {
+            _logger.LogDebug(
+                "Storage pressure excluded {ExcludedPartialTrees} of {TreeCount} tree(s) whose WAL byte figure was partial.",
+                excludedPartialTrees,
+                trees.Count);
+        }
+
         var accounts = BuildAccounts(accumulators, ratio, window);
 
         var overThreshold = aggregateBudget > 0 && aggregateBudgetedBytes >= ApplyAdvisoryRatio(aggregateBudget, ratio);
@@ -179,6 +205,7 @@ internal sealed class StoragePressureCollector(
             WalRetainedBytes = aggregateBytes,
             Accounts = accounts,
             Recommendation = recommendation,
+            ExcludedPartialTrees = excludedPartialTrees,
         };
     }
 

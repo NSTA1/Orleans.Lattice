@@ -48,4 +48,12 @@ public readonly record struct ClusterStorageUsageReport
 
     /// <summary>UTC time at which this roll-up was assembled.</summary>
     [Id(7)] public DateTimeOffset SampledAt { get; init; }
+
+    /// <summary>
+    /// <c>true</c> when at least one tree's report was
+    /// <see cref="TreeStorageUsageReport.Stale"/>: some WAL partition figures
+    /// are the last measured ones rather than fresh readings, so the totals are
+    /// a recent estimate rather than a fresh measurement.
+    /// </summary>
+    [Id(8)] public bool Stale { get; init; }
 }
