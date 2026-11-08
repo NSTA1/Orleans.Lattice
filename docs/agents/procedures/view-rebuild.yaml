@@ -58,6 +58,10 @@ failure_modes:
     signal: "Drop rejects startup-declared views."
     effect: "The view remains declared by code."
     response: "Remove the code declaration instead of using runtime drop."
+  - id: hidden-wal-entries-after-upgrade
+    signal: "The source tree's WAL is on Azure Table and the cluster ran Orleans.Lattice.Storage.AzureTable 10.0.0-10.2.0, or orleans.lattice.wal.subscriber.holes_skipped records outcome recovered, or a view stays stalled while orleans.lattice.wal.subscriber.empty_backlog_reads climbs on one partition."
+    effect: "Before 10.3.0 a stale cached trim watermark could hide committed WAL entries, so the view stalled on the partition or read past them and missed those writes (issue #6036)."
+    response: "After upgrading, reconcile every view of the tree, then rebuild any view that still lags or differs from its source; see the remediation in docs/lattice.storage.azuretable/architecture.md."
   - id: subsystem-absent
     signal: "InvalidOperationException when no view subsystem is registered."
     effect: "No view verb is performed."
@@ -82,3 +86,4 @@ sources:
   - "src/lattice.api.mcp/Tools/TreeAdmin/TreeAdminToolGroup.cs"
   - "docs/lattice.api.treeadmin/README.md"
   - "docs/lattice/materialised-views.md"
+  - "docs/lattice.storage.azuretable/architecture.md"

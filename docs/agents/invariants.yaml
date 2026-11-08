@@ -2290,3 +2290,49 @@ invariants:
       - "docs/lattice/verified-wal.md"
       - "docs/lattice/wal.md"
       - "docs/lattice.replication/observability.md"
+  - id: wal-trim-watermark-exactness
+    name: "WAL trim watermark exactness"
+    description: "A WAL storage provider infers its trim watermark only from committed state, so a watermark never covers a batch that is accepted but not yet committed; a reader that sees an offset jump the watermark says was not trimmed re-derives the watermark from storage and re-reads before reading past the range as a hole."
+    scope:
+      packages:
+        - "Orleans.Lattice"
+        - "Orleans.Lattice.Storage.AzureTable"
+        - "Orleans.Lattice.Replication"
+      components:
+        - "IWalStorageProvider"
+        - "WalShardGrain"
+        - "WAL subscriber"
+        - "Replication shipper"
+    violation_modes:
+      - "A provider infers an empty shard's watermark from its highest offset, which counts batches still committing, and caches that batch as trimmed."
+      - "A cached watermark above the stored trim point hides committed entries from every read on that silo."
+      - "A reader consumes a hidden committed range as a hole, so views miss writes and peers never receive them."
+      - "Leaf replay clamps away hidden entries and loses acknowledged writes its snapshot did not hold; leaf replay has no refresh backstop and relies on the watermark being exact."
+    detection_signals:
+      - type: metric
+        name: "orleans.lattice.wal.subscriber.holes_skipped"
+        source: "src/lattice/LatticeMetrics.cs"
+      - type: metric
+        name: "orleans.lattice.wal.subscriber.empty_backlog_reads"
+        source: "src/lattice/LatticeMetrics.cs"
+      - type: metric
+        name: "orleans.lattice.replication.ship.holes_skipped"
+        source: "src/lattice.replication/LatticeReplicationMetrics.cs"
+      - type: test
+        name: "AzureTableWalStorageProviderTrimWatermarkInFlightIntegrationTests"
+        source: "test/lattice.storage.azuretable/AzureTableWalStorageProviderTrimWatermarkInFlightIntegrationTests.cs"
+      - type: test
+        name: "WalLogSubscriberTests"
+        source: "test/lattice/Wal/WalLogSubscriberTests.Holes.cs"
+    remediation:
+      - step: "Infer a watermark only from the committed tail, never from the highest assigned offset."
+        source: "docs/lattice/wal.md"
+      - step: "On a jump the watermark says was not trimmed, call IWalStorageProvider.RefreshTrimWatermarkAsync through the WAL partition and re-read once; read past only what is still missing."
+        source: "docs/lattice/wal.md"
+      - step: "After upgrading an Azure Table WAL from 10.0.0-10.2.0, reconcile or rebuild views, re-seed peers, and compare projection digests to find shards that lost writes."
+        source: "docs/lattice.storage.azuretable/architecture.md"
+    sources:
+      - "docs/lattice/wal.md"
+      - "docs/lattice/wal-storage-providers.md"
+      - "docs/lattice.storage.azuretable/architecture.md"
+      - "docs/lattice.replication/observability.md"
