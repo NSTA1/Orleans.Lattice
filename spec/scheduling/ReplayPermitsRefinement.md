@@ -77,7 +77,7 @@ not evidence of an unconditional cold residency bound.
 | `holdLeft`, `deadline` | Independent drive budget and client-wait budget. | `BPlusLeafGrain.DriveStarvedCheckpointAsync`, `BPlusLeafGrain.JoinReplayBarrierAsync`. |
 | `opportunity`, `dispatchEpoch` | Generic callback/dispatch observations. | Runtime continuation opportunities, not elapsed-time guarantees. |
 | `clientActive`, `cancelled` | Request wait versus actual independent owner cancellation. | `BPlusLeafGrain.JoinReplayBarrierAsync`, `BPlusLeafGrain.RetireReplayBarrier`, `BPlusLeafGrain.RunReplayBarrierAsync`. |
-| `retained` | Interactive replays whose caller was refused for wait while their own gate wait stays parked in arrival order. Every other step keeps an entry exactly while it stays parked (`RetentionTracksQueue`). | `BPlusLeafGrain.AcquireReplayPermitAsync`; the retained flag and maximum age live on the parked waiter. |
+| `retained` | Interactive replays whose caller was refused for wait while their own gate wait stays parked in arrival order. Every other step keeps an entry exactly while it stays parked (`RetentionTracksQueue`). | `BPlusLeafGrain._retainedReplayWaiters`, `BPlusLeafGrain.TryReserveReplayRetention`, `BPlusLeafGrain.ReleaseReplayRetention`, `BPlusLeafGrain.WaitRetainedReplayPermitAsync`. |
 | `arrivalsClosed` | The external finite offered-attempt population has stopped growing. | Calls into `BPlusLeafGrain.EnsureReplayStarted`; the owner does not manufacture callers. |
 
 ## Action mapping
@@ -89,8 +89,8 @@ The environment, caller, provider and owner boundaries are kept distinct.
 | `Request` | Observe inherited class and current bound. | `BPlusLeafGrain.TryAdmitReplayPermitWaiter`, `LatticeReplayAdmissionContext.Current`. | Yes: `ReplayPermitsCoyoteTests.Memory_returns_and_priority_observations_preserve_the_gate_contract`. |
 | `Enqueue` | Register one admitted waiter. | `BPlusLeafGrain.AcquireReplayPermitAsync`, `BPlusLeafGrain.NoteReplayPermitArrival`. | Yes: `BPlusLeafGrainTests.Cancelled_queued_replay_replacements_leave_no_waiters_or_unowned_permits`. |
 | `RefuseWait` | Refuse fresh excessive wait below depth, re-checking at the decision that a permit is not free with no waiter ahead. | `BPlusLeafGrain.AcquireReplayPermitAsync`, `BPlusLeafGrain.IsReplayPermitFreeWithNoWaiterAhead`, `BPlusLeafGrain.ThrowIfReplayAdmissionRefused`. | Yes: `BPlusLeafGrainTests.A_wait_exceeded_mean_refuses_below_the_admitted_waiter_bound` and `BPlusLeafGrainTests.A_wait_exceeded_reading_never_refuses_while_a_permit_is_free_and_no_waiter_is_ahead`. |
-| `RefuseDepth` | Refuse stalled over-depth arrival, with the same decision-time re-check. Bulk's own check excludes retained entries; any arrival at the current Interactive bound is refused. | `BPlusLeafGrain.AcquireReplayPermitAsync`, `BPlusLeafGrain.IsReplayPermitFreeWithNoWaiterAhead`, `BPlusLeafGrain.ThrowIfReplayAdmissionRefused`. | Yes: `BPlusLeafGrainTests.A_no_progress_queue_at_the_circulating_bound_is_refused` and `BPlusLeafGrainTests.A_bulk_arrival_excludes_retained_entries_but_is_refused_at_the_interactive_bound`. |
-| `RetainOnRefusal` | Refuse the caller fast while the Interactive replay's gate wait stays parked, below R = circulating permits. | `BPlusLeafGrain.AcquireReplayPermitAsync`, `BPlusLeafGrain.ThrowIfReplayAdmissionRefused`. | Yes: `BPlusLeafGrainTests.A_wait_exceeded_refusal_keeps_the_interactive_replay_parked_in_its_position`. |
+| `RefuseDepth` | Refuse stalled over-depth arrival, with the same decision-time re-check. Bulk's own check excludes retained entries; any arrival at the current Interactive bound is refused. | `BPlusLeafGrain.TryAdmitReplayPermitWaiter`, `BPlusLeafGrain.AcquireReplayPermitAsync`, `BPlusLeafGrain.IsReplayPermitFreeWithNoWaiterAhead`, `BPlusLeafGrain.ThrowIfReplayAdmissionRefused`. | Yes: `BPlusLeafGrainTests.A_no_progress_queue_at_the_circulating_bound_is_refused` and `BPlusLeafGrainTests.A_bulk_arrival_excludes_retained_entries_but_is_refused_at_the_interactive_bound`. |
+| `RetainOnRefusal` | Refuse the caller fast while the Interactive replay's gate wait stays parked, below R = circulating permits; retainability is re-decided at acquisition. | `BPlusLeafGrain.AcquireReplayPermitAsync`, `BPlusLeafGrain.TryReserveReplayRetention`, `BPlusLeafGrain.EnterReplayRetention`, `BPlusLeafGrain.ThrowIfReplayAdmissionRefused`. | Yes: `BPlusLeafGrainTests.A_wait_exceeded_refusal_keeps_the_interactive_replay_parked_in_its_position`, `BPlusLeafGrainTests.A_retainable_arrival_passes_the_pre_rehydrate_check_and_parks_after_rehydrating` and `BPlusLeafGrainTests.A_retainable_reading_that_fills_up_during_the_rehydrate_is_refused_after_it_without_a_permit`. |
 | `DriveAdmission` | Try the nonqueueing drive share. Its free-permit conjunct is the semaphore's direct hand-off: a zero-timeout probe never takes a permit a parked waiter is owed (#5992 G1). | `BPlusLeafGrain.TryAcquireStarvationReplayPermit`. | Yes: `StarvationReplayAdmissionTests.Ordinary_replay_owners_do_not_consume_gc_reservations`, `StarvationReplayAdmissionTests.Concurrent_acquisitions_cannot_exceed_the_gc_share` and `BPlusLeafGrainTests.A_drive_probe_is_refused_while_a_replay_waiter_is_parked_even_just_after_a_release`. |
 | `Release` | Return physical ownership once. | `BPlusLeafGrain.FinishReplayPermit`, `BPlusLeafGrain.ReleaseStarvationReplayPermit`. | Yes: `BPlusLeafGrainTests.Activation_releases_the_replay_permit_when_the_post_acquire_observation_throws`. |
 | `Hang` | Environment parks a provider read. | `ReplaySliceReader.ReadSliceAsync`. | Yes: `BPlusLeafGrainTests.Cancelling_a_replay_returns_its_permit_before_uncooperative_storage_completes`. |
@@ -102,10 +102,10 @@ The environment, caller, provider and owner boundaries are kept distinct.
 | `CloseArrivals` | External caller stops offering new work. | Callers stop invoking activation; `BPlusLeafGrain.AcquireReplayPermitAsync` does not create arrivals. | Yes: `BPlusLeafGrainTests.Cancelled_queued_replay_replacements_leave_no_waiters_or_unowned_permits`. |
 | `ObserveDrain` | Classify fresh wait and acquisition evidence. | `BPlusLeafGrain.ClassifyReplayPermitQueueDrain`. | Yes: `BPlusLeafGrainTests.A_wait_exceeded_mean_refuses_below_the_admitted_waiter_bound`. |
 | `CapacityOpportunity` | A generic runtime callback grants the earliest parked waiter, retained or not, if one exists. | `BPlusLeafGrain.AcquireReplayPermitAsync`. | Yes: `BPlusLeafGrainTests.Finite_interactive_and_bulk_cohort_progresses_when_capacity_and_runtime_are_available` and `BPlusLeafGrainTests.Parked_retained_and_ordinary_waiters_are_granted_in_arrival_order`. |
-| `BudgetOpportunity` | Visit drive budget, completion, actual lifetime-cancellation and retained maximum-age continuations. | `BPlusLeafGrain.DriveStarvedCheckpointAsync`, `BPlusLeafGrain.RunReplayBarrierAsync`. | Yes: `BPlusLeafGrainTests.DriveStarvedCheckpointAsync_releases_its_replay_permit_while_the_slice_read_is_still_parked`, `BPlusLeafGrainTests.Cancelling_a_replay_returns_its_permit_before_uncooperative_storage_completes` and `BPlusLeafGrainTests.A_retained_replay_is_dropped_at_its_maximum_age_and_never_admitted_after_it`. |
+| `BudgetOpportunity` | Visit drive budget, completion, actual lifetime-cancellation and retained maximum-age continuations. | `BPlusLeafGrain.DriveStarvedCheckpointAsync`, `BPlusLeafGrain.RunReplayBarrierAsync`, `BPlusLeafGrain.WaitRetainedReplayPermitAsync`. | Yes: `BPlusLeafGrainTests.DriveStarvedCheckpointAsync_releases_its_replay_permit_while_the_slice_read_is_still_parked`, `BPlusLeafGrainTests.Cancelling_a_replay_returns_its_permit_before_uncooperative_storage_completes` and `BPlusLeafGrainTests.A_retained_replay_is_dropped_at_its_maximum_age_and_never_admitted_after_it`. |
 | `ClientReplacement` | A replacement client rejoins the one live owner; a retry that finds the replay retained but not admitted is refused fast. | `BPlusLeafGrain.EnsureReplayStarted`, `BPlusLeafGrain.JoinReplayBarrierAsync`. | Yes: `BPlusLeafGrainTests.Caller_deadlines_and_replacements_preserve_the_live_cold_owner`. |
 | `ClientDeadline` | Settle the client without cancelling its cold owner. | `BPlusLeafGrain.JoinReplayBarrierAsync`, `BPlusLeafGrain.EnsureReplayStarted`. | Yes: `BPlusLeafGrainTests.Caller_deadlines_and_replacements_preserve_the_live_cold_owner`. |
-| `CancelColdLifetime` | Environment actually retires/cancels the independent owner lifetime, including a retained waiter's. | `BPlusLeafGrain.RetireReplayBarrier`, `BPlusLeafGrain.RunReplayBarrierAsync`. | Yes: `BPlusLeafGrainTests.Cancelling_a_replay_returns_its_permit_before_uncooperative_storage_completes` and `BPlusLeafGrainTests.A_cancelled_retained_waiter_returns_no_permit_and_leaves_no_residue`. |
+| `CancelColdLifetime` | Environment actually retires/cancels the independent owner lifetime, including a retained waiter's; deactivation cancels it the same way. | `BPlusLeafGrain.RetireReplayBarrier`, `BPlusLeafGrain.RunReplayBarrierAsync`, `BPlusLeafGrain.CancelReplayBarrier`. | Yes: `BPlusLeafGrainTests.Cancelling_a_replay_returns_its_permit_before_uncooperative_storage_completes`, `BPlusLeafGrainTests.A_cancelled_retained_waiter_returns_no_permit_and_leaves_no_residue` and `BPlusLeafGrainTests.Deactivating_a_retained_replay_drops_its_wait_and_leaves_the_permit_ledgers_unchanged`. |
 | `Stutter` | No protocol step. | No production counterpart. | Not applicable. |
 
 ## Property mapping
@@ -133,7 +133,7 @@ The environment, caller, provider and owner boundaries are kept distinct.
 | `ColdDeadlineIsolation` | Client deadlines preserve the independent cold owner, physical ownership, queue and cancellation membership. | Yes: `BPlusLeafGrainTests.Caller_deadlines_and_replacements_preserve_the_live_cold_owner`. |
 | `WorkConservingRefusal` | No non-drive arrival is refused while a permit is free and no waiter is ahead of it. | Yes: `BPlusLeafGrainTests.A_wait_exceeded_reading_never_refuses_while_a_permit_is_free_and_no_waiter_is_ahead`. |
 | `RetainedBounded` | Retained entries never exceed the ceiling and are parked, Interactive and caller-free. | Yes: `BPlusLeafGrainTests.Retention_stops_at_the_circulating_permits_and_a_walk_down_evicts_nothing`. |
-| `RetentionGuarded` | No new retention once the retained set has reached the current circulating permits; a walk-down evicts nothing. | Yes: `BPlusLeafGrainTests.Retention_stops_at_the_circulating_permits_and_a_walk_down_evicts_nothing`. |
+| `RetentionGuarded` | No new retention once the retained set has reached the current circulating permits; a walk-down evicts nothing. | Yes: `BPlusLeafGrainTests.Retention_stops_at_the_circulating_permits_and_a_walk_down_evicts_nothing` and `BPlusLeafGrainTests.A_retainable_reading_that_fills_up_during_the_rehydrate_is_refused_after_it_without_a_permit`. |
 | `RetentionExpires` | A retained entry is admitted or ages out, even while every permit is held by a hung owner. | Yes: `BPlusLeafGrainTests.A_retained_replay_is_dropped_at_its_maximum_age_and_never_admitted_after_it`. |
 | `AdmissionNoOvertaking` | The gate grants parked and retained waiters in arrival order. | Yes: `BPlusLeafGrainTests.Parked_retained_and_ordinary_waiters_are_granted_in_arrival_order`. |
 | `QueueProgress` | Under continuing arrivals and completing holders, every parked waiter of any class leaves the gate. | Yes: `BPlusLeafGrainTests.A_drive_probe_is_refused_while_a_replay_waiter_is_parked_even_just_after_a_release` and `BPlusLeafGrainTests.Parked_retained_and_ordinary_waiters_are_granted_in_arrival_order`. |
@@ -222,6 +222,23 @@ and `DriveResidencyBounded` are unchanged. It leaves the gate when admitted,
 cancelled or aged out (`RetentionExpires`); its age is counted in budget visits
 like a drive's. A retry that finds the replay retained but not yet admitted is
 refused fast, so `ClientReplacement` is disabled for it.
+
+Deactivation, including a working-set shed, cancels the barrier's lifetime and
+so drops a retained wait: it is `CancelColdLifetime` followed by the queued
+cancellation, with no `DelayDeactivation` keeping the activation alive. The
+maximum age bounds retention independently of deactivation.
+
+**The pre-rehydrate check is a stutter.** Before rehydrating, production runs a
+side-effect-free admission check (`BPlusLeafGrain.IsReplayRetainable`) that
+skips the wait arm for an arrival that looks retainable. It refuses nothing and
+records nothing, so it refines a stutter, and `Request` linearises at the
+acquisition-time observation. That holds on three conditions, each pinned in
+production: the check takes no arrival accounting and no retention slot;
+retainability is decided again at acquisition (`TryReserveReplayRetention`),
+so a reading that filled up during the rehydrate is refused there, which is
+`RefuseWait`, never retained anyway; and the work-conserving re-check stays at
+the acquisition decision. `BPlusLeafGrainTests.A_retainable_arrival_passes_the_pre_rehydrate_check_and_parks_after_rehydrating` and
+`BPlusLeafGrainTests.A_retainable_reading_that_fills_up_during_the_rehydrate_is_refused_after_it_without_a_permit` cover the two acquisition outcomes.
 
 The retention variable is framed once, at `Next`: every legacy step is
 conjoined with `RetentionTracksQueue`, which keeps an entry exactly while it
@@ -546,10 +563,11 @@ was relaxed, and no Replay model, bound, premise or launch policy changed.
   Production symbols: `BPlusLeafGrain.NoteReplayPermitQueueWait`.
 - **Maximum age is counted in budget visits.** A retained entry's age expires on
   its next budget visit, which bounds retention without a clock. The production
-  bound is a wall-clock maximum age carried on the parked waiter and enforced in
-  the acquire path, checked by
+  bound is a fixed wall-clock maximum age, enforced by the retained wait itself,
+  which ends the barrier with the saturation refusal when it expires, checked by
   `BPlusLeafGrainTests.A_retained_replay_is_dropped_at_its_maximum_age_and_never_admitted_after_it`.
-  Production symbols: `BPlusLeafGrain.AcquireReplayPermitAsync`.
+  Production symbols: `BPlusLeafGrain.RetainedReplayMaxAge`,
+  `BPlusLeafGrain.WaitRetainedReplayPermitAsync`.
 
 ## Harness and fixture corrections encountered here
 
