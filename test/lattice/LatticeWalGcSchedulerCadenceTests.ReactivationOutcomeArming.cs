@@ -57,7 +57,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     /// counted on its own arm and not on <c>attempted</c> (issue #3761).
     /// </summary>
     private static readonly string[] TerminalOutcomeArms =
-        ["completed", "unresolvable", "faulted", "undelivered", "orphaned", "latched_stale", "admission_refused"];
+        ["completed", "unresolvable", "faulted", "undelivered", "orphaned", "latched_stale", "admission_refused", "storage_stalled"];
 
     /// <summary>The terminal arms that partition <c>attempted</c> exactly once each.</summary>
     private static readonly string[] AttemptedPartitionArms =
@@ -128,9 +128,18 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
                 "with nothing refunded the cap and the backoff would be unreachable.");
             Assert.That(charged, Is.Not.Empty,
                 "with everything refunded no leaf would ever be abandoned, which is the permanent-retry failure the cap exists to stop.");
-            Assert.That(uncharged, Is.EquivalentTo(new[] { LatticeWalGcScheduler.ReactivationOutcome.AdmissionRefused }),
-                "only a refused admission is excused outright: it is the one outcome raised before the drive "
-                + "starts, so the one that says nothing at all about the leaf.");
+            // Issue #6007 moved StorageStalled here deliberately. A timed-out drive
+            // ran, but it establishes only that storage or the gap was slow, not
+            // that driving cannot heal the leaf, so charging it let a storage
+            // stall abandon every consumer it caught. Its cost is bounded instead
+            // by the no-progress report and the cooldown cap, never by abandonment.
+            Assert.That(uncharged, Is.EquivalentTo(new[]
+                {
+                    LatticeWalGcScheduler.ReactivationOutcome.AdmissionRefused,
+                    LatticeWalGcScheduler.ReactivationOutcome.StorageStalled,
+                }),
+                "a refused admission says nothing about the leaf and a timed-out drive says only that storage was "
+                + "slow, so these two are the outcomes excused outright.");
         });
     }
 
@@ -156,8 +165,9 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     /// <remarks>
     /// Every other terminal arm is retried until the consumer is abandoned, so
     /// abandonment is the end of their story. A latched-stale verdict is
-    /// terminal for its pin (issue #3478), and a refused admission is never
-    /// charged at all (issue #3575): neither ever reaches abandonment, and a
+    /// terminal for its pin (issue #3478), and a refused admission (issue
+    /// #3575) and a timed-out drive (issue #6007) are never charged at all:
+    /// none of them ever reaches abandonment, and a
     /// wait for one would spin to its guard. For those arms the run waits for
     /// the verdict itself and then runs a further hour, so a sweep that re-drove
     /// a latched leaf, or that let refusals reach any other arm, would still
@@ -170,14 +180,17 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
         var guard = 0;
         while (Outcomes(recorder, "abandoned") == 0
             && Outcomes(recorder, "latched_stale") == 0
-            && Outcomes(recorder, "admission_refused") == 0)
+            && Outcomes(recorder, "admission_refused") == 0
+            && Outcomes(recorder, "storage_stalled") == 0)
         {
             await TickAsync(time);
             Assert.That(++guard, Is.LessThan(400),
                 "the leaf never reached a verdict that ends its retries, so no terminal arm can be read from this run.");
         }
 
-        if (Outcomes(recorder, "latched_stale") > 0 || Outcomes(recorder, "admission_refused") > 0)
+        if (Outcomes(recorder, "latched_stale") > 0
+            || Outcomes(recorder, "admission_refused") > 0
+            || Outcomes(recorder, "storage_stalled") > 0)
         {
             await AdvanceAtLeastAsync(time, TimeSpan.FromHours(1));
         }
@@ -237,6 +250,8 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             ["latched_stale"] = await TerminalArmCountsAsync("arming-latched-stale", LatchedStaleProbe),
             ["admission_refused"] = await TerminalArmCountsAsync(
                 "arming-admission-refused", AdmissionRefusedProbe),
+            ["storage_stalled"] = await TerminalArmCountsAsync(
+                "arming-storage-stalled", StorageStalledProbe),
         };
 
         Assert.Multiple(() =>
@@ -276,6 +291,7 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
             ("sum-orphaned", () => Task.FromResult<string?>(null), null),
             ("sum-latched-stale", LatchedStaleProbe, null),
             ("sum-admission-refused", AdmissionRefusedProbe, null),
+            ("sum-storage-stalled", StorageStalledProbe, null),
         })
         {
             var time = new VirtualTimeProvider();

@@ -4049,6 +4049,21 @@ public static class LatticeMetrics
         Meter.CreateCounter<long>("orleans.lattice.wal.replay.starvation_drive_abandonments",
             description: "Count of WAL GC starvation drives abandoned at their configured budget with the replay permit forcibly released, tagged by tree. Zero-primed alongside the blocked-leaf 'attempted' arm, so an absent series means this build is not deployed rather than that no drive has been abandoned.");
 
+    /// <summary>
+    /// <see cref="WalReplayStarvationDriveAbandonments"/>'s <c>reason</c> for a
+    /// drive that spent its whole <see cref="LatticeOptions.StarvationDriveBudget"/>.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> StarvationDriveAbandonedBudget =
+        new(TagReason, "budget");
+
+    /// <summary>
+    /// <see cref="WalReplayStarvationDriveAbandonments"/>'s <c>reason</c> for a
+    /// drive that gave up one slice read at its per-read deadline, below the
+    /// cluster response timeout, because storage did not answer (issue #6007).
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> StarvationDriveAbandonedSliceReadDeadline =
+        new(TagReason, "slice_read_deadline");
+
     // ---- Issue #3044: permit waits that never terminate --------------------
     //
     // WalReplayPermitQueueWait records on exactly two arms and BOTH are
@@ -7735,6 +7750,16 @@ public static class LatticeMetrics
     /// </remarks>
     public static readonly KeyValuePair<string, object?> BlockedLeafReactivationAdmissionRefused =
         new(TagOutcome, "admission_refused");
+
+    /// <summary>
+    /// Pre-allocated <c>outcome="storage_stalled"</c> tag for
+    /// <see cref="WalGcBlockedLeafReactivations"/>: a touch whose drive ran and
+    /// reported <c>TimedOut</c>, not charged against the consumer's attempt budget
+    /// and retried after a short escalating delay (issue #6007). One of the arms
+    /// that partition <c>attempted</c>.
+    /// </summary>
+    public static readonly KeyValuePair<string, object?> BlockedLeafReactivationStorageStalled =
+        new(TagOutcome, "storage_stalled");
 
     /// <summary>
     /// <see cref="TagOutcome"/> value on
