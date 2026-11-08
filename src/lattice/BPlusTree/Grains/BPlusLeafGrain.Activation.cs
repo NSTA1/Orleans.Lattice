@@ -238,6 +238,14 @@ internal sealed partial class BPlusLeafGrain
     private static int _queuedReplayPermitWaiters;
 
     /// <summary>
+    /// Replay gate waits currently retained on this silo (issue #6006): refused
+    /// replays whose wait stayed parked. Counted inside
+    /// <see cref="_queuedReplayPermitWaiters"/>, and declared above
+    /// <see cref="QueuedReplayPermitWaitersGauge"/>, which reads it.
+    /// </summary>
+    private static int _retainedReplayWaiters;
+
+    /// <summary>
     /// Exponentially-weighted mean of the <b>observed</b> permit queue wait, in
     /// <see cref="TimeSpan"/> ticks, updated as each wait terminates by either
     /// route. Zero until the first wait terminates.
@@ -577,9 +585,7 @@ internal sealed partial class BPlusLeafGrain
     private static readonly ObservableGauge<int> QueuedReplayPermitWaitersGauge =
         LatticeMetrics.Meter.CreateObservableGauge(
             LatticeMetrics.WalReplayPermitsQueuedName,
-            static () => new Measurement<int>(
-                Volatile.Read(ref _queuedReplayPermitWaiters),
-                LatticeTenantLabel.Platform),
+            static () => ObserveQueuedReplayPermitWaiters(),
             unit: "{activation}",
             description:
                 "Activations that have entered the wait for a permit on the per-silo WAL replay "
@@ -589,7 +595,26 @@ internal sealed partial class BPlusLeafGrain
                 + "subset exceeded by at most orleans.lattice.wal.replay.permit_ceiling (issue #3290). "
                 + "The only series that observes the un-terminated set: the queue-wait "
                 + "histogram records at acquisition or cancellation, so an activation that never "
-                + "terminates is invisible to it (issue #3047).");
+                + "terminates is invisible to it (issue #3047). Tagged retained=true for refused Interactive "
+                + "replays whose wait kept its gate position and retained=false for every other wait (issue #6006); "
+                + "sum over the tag for the whole queue.");
+
+    /// <summary>
+    /// The queued waits split by <see cref="LatticeMetrics.TagRetained"/>. Both
+    /// series are always published, so each reads a measured zero rather than an
+    /// absent series, and their sum is the figure this gauge published before
+    /// the tag.
+    /// </summary>
+    private static Measurement<int>[] ObserveQueuedReplayPermitWaiters()
+    {
+        var queued = Volatile.Read(ref _queuedReplayPermitWaiters);
+        var retained = Math.Min(queued, Volatile.Read(ref _retainedReplayWaiters));
+        return
+        [
+            new Measurement<int>(queued - retained, LatticeTenantLabel.Platform, LatticeMetrics.ReplayPermitWaitNotRetained),
+            new Measurement<int>(retained, LatticeTenantLabel.Platform, LatticeMetrics.ReplayPermitWaitRetained),
+        ];
+    }
 
     /// <summary>
     /// Test-only view of <see cref="_withheldReplayPermits"/>.
@@ -645,6 +670,9 @@ internal sealed partial class BPlusLeafGrain
             _replayStoragePressureGovernor = null;
             _replayProcessCpu = RealProcessCpu;
             Volatile.Write(ref _queuedReplayPermitWaiters, 0);
+            Volatile.Write(ref _retainedReplayWaiters, 0);
+            Interlocked.Increment(ref _replayGateGeneration);
+            RetainedReplayMaxAgeForTest = null;
             Volatile.Write(ref _replayPermitWaitEwmaTicks, 0);
             Volatile.Write(ref _replayPermitWaitSample, 0);
             Volatile.Write(ref _lastReplayPermitProgress, 0);
@@ -1287,11 +1315,20 @@ internal sealed partial class BPlusLeafGrain
 
         var circulating = CirculatingReplayPermits(ceiling, Volatile.Read(ref _withheldReplayPermits));
         var interactive = (int)Math.Min(int.MaxValue, (long)circulating * queueDepthPerPermit);
-        bound = admissionClass == LatticeReplayAdmissionClass.Bulk
-            ? Math.Max(1, interactive - circulating)
-            : interactive;
+        if (admissionClass != LatticeReplayAdmissionClass.Bulk)
+        {
+            bound = interactive;
+            return admitted < bound;
+        }
 
-        return admitted < bound;
+        // Bulk's own check excludes retained entries (issue #6006): they are
+        // Interactive work that already holds its place, and counting them would
+        // refuse Bulk wherever retention is busiest. The second conjunct holds
+        // the total queue to the current Interactive bound at every
+        // DepthPerPermit, including after a walk-down left more entries retained
+        // than the current R.
+        bound = Math.Max(1, interactive - circulating);
+        return admitted - Volatile.Read(ref _retainedReplayWaiters) < bound && admitted < interactive;
     }
 
     /// <summary>
@@ -1800,9 +1837,10 @@ internal sealed partial class BPlusLeafGrain
     /// <c>A_drive_probe_is_refused_while_a_replay_waiter_is_parked_even_just_after_a_release</c>,
     /// and <c>ReplayGateAcquireSiteTests</c>, which fixes the gate's acquire
     /// sites so a new acquire that could overtake a parked waiter fails the
-    /// build. The sites are <see cref="AcquireReplayPermitAsync"/> and the
-    /// permit re-take in <c>ResumeReplayPermitAsync</c>, which wait, and
-    /// <see cref="TryAcquireStarvationReplayPermit"/>, which probes.
+    /// build. The sites are <see cref="AcquireReplayPermitAsync"/>, the
+    /// retained wait in <see cref="WaitRetainedReplayPermitAsync"/> (issue
+    /// #6006) and the permit re-take in <c>ResumeReplayPermitAsync</c>, which
+    /// wait, and <see cref="TryAcquireStarvationReplayPermit"/>, which probes.
     /// </para>
     /// </remarks>
     private static bool IsReplayPermitFreeWithNoWaiterAhead()
@@ -1823,8 +1861,15 @@ internal sealed partial class BPlusLeafGrain
     /// metric and throws the same exception either way: it is a refusal, not a
     /// probe.
     /// </param>
+    /// <returns>
+    /// <see langword="null"/> when admitted. Otherwise the refusal its callers
+    /// receive while the replay keeps its gate position (issue #6006): returned
+    /// only by the acquisition, for an Interactive wait-arm refusal that took a
+    /// retention slot below R. The pre-check passes such an arrival without a
+    /// side effect, so it rehydrates and is decided again here.
+    /// </returns>
     /// <exception cref="LatticeSaturatedException">Admission was refused.</exception>
-    private void ThrowIfReplayAdmissionRefused(
+    private RetainedReplayRefusal? ThrowIfReplayAdmissionRefused(
         LatticeOptions options, LatticeReplayAdmissionClass admissionClass, bool sideEffectFree)
     {
         var belowBound = TryAdmitReplayPermitWaiter(
@@ -1839,6 +1884,14 @@ internal sealed partial class BPlusLeafGrain
                 || (!belowBound && verdict is ReplayPermitDrainVerdict.NoProgress or ReplayPermitDrainVerdict.HoldersSlow))
             && !IsReplayPermitFreeWithNoWaiterAhead())
         {
+            // A retainable arrival passes the pre-check untouched (issue #6006):
+            // it would only be refused here and then retained at acquisition, and
+            // refusing it before the rehydrate would forfeit its position. The
+            // reading is advisory; the acquisition decides again, and refuses it
+            // after all if retention has filled up meanwhile.
+            if (sideEffectFree && IsReplayRetainable(admissionClass, verdict))
+                return null;
+
             _replayAdmissionPhase = ReplayAdmissionPhase.RefusedAdmission;
 
             // A typed, retryable back-pressure refusal rather than a bespoke
@@ -1863,22 +1916,37 @@ internal sealed partial class BPlusLeafGrain
                 state.State.TreeId,
                 LatticeSaturationSource.ReplayPermitAdmission,
                 arm);
+            var message = DescribeReplayAdmissionRefusal(
+                verdict,
+                queued,
+                bound,
+                admissionClass,
+                Volatile.Read(ref _replayConcurrencyCeiling),
+                ReplayPermitWaitMeanForTest,
+                sinceProgress,
+                options.WalReplayPermitMaxQueueWait)
+                + (verdict is ReplayPermitDrainVerdict.NoProgress or ReplayPermitDrainVerdict.HoldersSlow
+                    ? DescribeReplayPermitHolders()
+                    : string.Empty);
+
+            // Retained (issue #6006): the callers are refused fast exactly as
+            // below, but the replay's own wait stays parked in arrival order.
+            if (!sideEffectFree
+                && admissionClass == LatticeReplayAdmissionClass.Interactive
+                && verdict == ReplayPermitDrainVerdict.WaitExceeded
+                && TryReserveReplayRetention())
+            {
+                _replayAdmissionPhase = ReplayAdmissionPhase.QueuedForPermit;
+                return new RetainedReplayRefusal(message, state.State.TreeId!);
+            }
+
             throw new LatticeSaturatedException(
-                DescribeReplayAdmissionRefusal(
-                    verdict,
-                    queued,
-                    bound,
-                    admissionClass,
-                    Volatile.Read(ref _replayConcurrencyCeiling),
-                    ReplayPermitWaitMeanForTest,
-                    sinceProgress,
-                    options.WalReplayPermitMaxQueueWait)
-                    + (verdict is ReplayPermitDrainVerdict.NoProgress or ReplayPermitDrainVerdict.HoldersSlow
-                        ? DescribeReplayPermitHolders()
-                        : string.Empty),
+                message,
                 state.State.TreeId!,
                 LatticeSaturationSource.ReplayPermitAdmission);
         }
+
+        return null;
     }
 
     /// <summary>
@@ -1934,9 +2002,13 @@ internal sealed partial class BPlusLeafGrain
     /// lost for the lifetime of the process, and the resulting exhaustion is a
     /// silent wait rather than a fault (issue #2256).
     /// </remarks>
+    /// <param name="rehydratedFromSnapshot">
+    /// Whether this replay rehydrated a snapshot: the shed-ordering class its
+    /// resident footprint registers under if it is retained (issue #6006).
+    /// </param>
     /// <param name="cancellationToken">Cancels the wait.</param>
-    /// <exception cref="LatticeSaturatedException">Admission was refused.</exception>
-    private async Task<SemaphoreSlim?> AcquireReplayPermitAsync(CancellationToken cancellationToken)
+    /// <exception cref="LatticeSaturatedException">Admission was refused, including a retained replay aging out.</exception>
+    private async Task<SemaphoreSlim?> AcquireReplayPermitAsync(bool rehydratedFromSnapshot, CancellationToken cancellationToken)
     {
         if (string.IsNullOrEmpty(state.State.TreeId))
             return null;
@@ -1975,7 +2047,8 @@ internal sealed partial class BPlusLeafGrain
         // No-progress still needs depth: quietness alone must not refuse a new
         // burst. A disabled bound and an empty queue retain unconditional admission.
         var admissionClass = LatticeReplayAdmissionContext.Current;
-        ThrowIfReplayAdmissionRefused(options, admissionClass, sideEffectFree: false);
+        var retention = ThrowIfReplayAdmissionRefused(options, admissionClass, sideEffectFree: false);
+        var retentionHandedOff = false;
 
         _replayAdmissionPhase = ReplayAdmissionPhase.QueuedForPermit;
 
@@ -2026,23 +2099,41 @@ internal sealed partial class BPlusLeafGrain
             var permitWaitScope = LatticeMetrics.EnterWalReplayPermitWait(state.State.TreeId);
             try
             {
+                // Retained (issue #6006): the callers are refused now, before any
+                // await, and the parked leaf is accounted against the resident
+                // working set, which may shed it like any other leaf. A shed
+                // deactivates it, and the deactivation drops the retained wait.
+                if (retention is not null)
+                {
+                    EnterReplayRetention(retention);
+                    RegisterResidentFootprint(rehydratedFromSnapshot);
+                }
+
                 // Only a leaf that actually queues declares the pages it will
                 // read (issue #5877, condition DT1); one admitted at once
                 // records its position with its first read.
                 if (gate.CurrentCount == 0)
                     await DeclareReplayDemandAsync(options);
 
-                try
+                if (retention is not null)
                 {
-                    await gate.WaitAsync(cancellationToken).ConfigureAwait(true);
+                    retentionHandedOff = true;
+                    await WaitRetainedReplayPermitAsync(gate, queuedAt, retention, cancellationToken);
                 }
-                catch (OperationCanceledException)
+                else
                 {
-                    RecordReplayPermitQueueWait(queuedAt, LatticeMetrics.PermitQueueWaitCanceled);
-                    throw;
-                }
+                    try
+                    {
+                        await gate.WaitAsync(cancellationToken).ConfigureAwait(true);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        RecordReplayPermitQueueWait(queuedAt, LatticeMetrics.PermitQueueWaitCanceled);
+                        throw;
+                    }
 
-                RecordReplayPermitQueueWait(queuedAt, LatticeMetrics.PermitQueueWaitAcquired);
+                    RecordReplayPermitQueueWait(queuedAt, LatticeMetrics.PermitQueueWaitAcquired);
+                }
             }
             finally
             {
@@ -2051,7 +2142,16 @@ internal sealed partial class BPlusLeafGrain
         }
         finally
         {
-            NoteReplayPermitDeparture();
+            // A retention slot the wait never took over is returned here, so a
+            // fault before the wait cannot strand it.
+            if (retention is not null && !retentionHandedOff)
+            {
+                _replayRetention = null;
+                ReleaseReplayRetention();
+            }
+
+            if (retention is null || retention.OnCurrentGate)
+                NoteReplayPermitDeparture();
         }
 
         _replayAdmissionPhase = ReplayAdmissionPhase.HoldsPermit;
@@ -3252,10 +3352,19 @@ internal sealed partial class BPlusLeafGrain
     /// </remarks>
     /// <param name="queuedAt">The <see cref="Stopwatch.GetTimestamp"/> reading taken as the wait began.</param>
     /// <param name="outcome">Whether the wait ended in acquisition or cancellation.</param>
-    private void RecordReplayPermitQueueWait(long queuedAt, KeyValuePair<string, object?> outcome)
+    /// <param name="retained">
+    /// Whether the wait was retained (issue #6006). A retained wait is recorded
+    /// on the histogram but never folded into the wait-arm mean: it is the
+    /// longest wait by construction, and feeding it back would raise the mean
+    /// and refuse more.
+    /// </param>
+    private void RecordReplayPermitQueueWait(long queuedAt, KeyValuePair<string, object?> outcome, bool retained = false)
     {
         var elapsed = Stopwatch.GetElapsedTime(queuedAt);
-        NoteReplayPermitQueueWait(elapsed, acquired: outcome.Equals(LatticeMetrics.PermitQueueWaitAcquired));
+        if (!retained)
+            NoteReplayPermitQueueWait(elapsed, acquired: outcome.Equals(LatticeMetrics.PermitQueueWaitAcquired));
+        else if (outcome.Equals(LatticeMetrics.PermitQueueWaitAcquired))
+            Volatile.Write(ref _lastReplayPermitProgress, Stopwatch.GetTimestamp());
 
         // Tagged from the values cached before the wait: this runs after the
         // permit is taken, when a state read on an invalidated activation would
@@ -3680,7 +3789,7 @@ internal sealed partial class BPlusLeafGrain
 
             using (AwaitDiagnostics.Begin("leaf.replay.permit", context.GrainId))
             {
-                replayPermit = await AcquireReplayPermitAsync(cancellationToken);
+                replayPermit = await AcquireReplayPermitAsync(rehydratedFromSnapshot, cancellationToken);
             }
 
             if (replayPermit is not null)
@@ -4044,6 +4153,9 @@ internal sealed partial class BPlusLeafGrain
         // would leave the first unbounded while reporting the silo as within
         // budget, and would make the banked-before-unbanked preference vacuous
         // by construction, since every registration would then be banked.
+        // A replay that was retained registered while parked (issue #6006);
+        // re-registering at the grown footprint replaces that entry.
+        ReleaseResidentFootprint();
         RegisterResidentFootprint(rehydratedFromSnapshot);
 
         // Step 1.4 - publish this activation's same-silo revision cookie
