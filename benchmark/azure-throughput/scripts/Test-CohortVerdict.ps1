@@ -155,6 +155,39 @@ finally {
 }
 
 Write-Host ''
+Write-Host 'Get-CohortMeasuredWindowLog' -ForegroundColor Cyan
+
+$windowLog = Join-Path ([System.IO.Path]::GetTempPath()) ("cohort-window-test-" + [Guid]::NewGuid().ToString('N') + '.log')
+$windowTrim = $null
+try {
+	[System.IO.File]::WriteAllText($windowLog, (@(
+		'09:36:01 fail: mid-run SomeException before stop',
+		'[silo] FINAL ops=10 failed=0',
+		'Stopping lattice-silo.service - silo...',
+		'09:36:32 fail: Orleans.Messaging[100071] Failed to address message TeardownException',
+		'09:36:32 warn: pin flush failed InconsistentStateException'
+	) -join "`n"))
+	$w = Get-CohortMeasuredWindowLog -LogPath $windowLog
+	$windowTrim = $w.Path
+	_Assert -Name 'teardown lines after the stop marker are excluded' `
+		-Condition ($w.Trimmed -and $w.TeardownLines -eq 3) `
+		-Detail "expected trimmed with 3 teardown lines, got trimmed=$($w.Trimmed) lines=$($w.TeardownLines)"
+	$c = Get-CohortExceptionCount -LogPath $w.Path -CurrentTreeId $currentTreeId
+	_Assert -Name 'a mid-run exception before the stop marker still counts' `
+		-Condition ($c.Filtered -eq 1) -Detail "expected 1, got $($c.Filtered)"
+
+	[System.IO.File]::WriteAllText($windowLog, "09:36:01 fail: SomeException`n")
+	$n = Get-CohortMeasuredWindowLog -LogPath $windowLog
+	_Assert -Name 'a log with no stop marker is graded in full' `
+		-Condition ((-not $n.Trimmed) -and $n.Path -eq $windowLog) -Detail 'expected untouched path'
+}
+finally {
+	foreach ($p in @($windowLog, $windowTrim)) {
+		if ($p -and (Test-Path -LiteralPath $p)) { Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue }
+	}
+}
+
+Write-Host ''
 Write-Host 'Format-CohortVerdictLogBlock' -ForegroundColor Cyan
 
 # The consumer contract: performance-report.ps1's Read-SiloLogStats

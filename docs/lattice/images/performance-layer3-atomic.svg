@@ -28,30 +28,30 @@
 <line x1="74" y1="58" x2="74" y2="388" stroke="#57606a" stroke-width="1"/>
 <text x="435" y="428" font-size="13" fill="#1f2328" text-anchor="middle">Silos</text>
 <text x="18" y="223" font-size="13" fill="#1f2328" text-anchor="middle" transform="rotate(-90 18 223)">Keys/s</text>
-<polyline points="74,263.8 177.1,276.6 383.4,184.8 589.7,195.4 796,91.3" fill="none" stroke="#0072B2" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>SetManyAtomicAsync (64 keys/saga)</title></polyline>
-<circle cx="74" cy="263.8" r="4" fill="#0072B2"/>
-<circle cx="177.1" cy="276.6" r="4" fill="#0072B2"/>
-<circle cx="383.4" cy="184.8" r="4" fill="#0072B2"/>
-<circle cx="589.7" cy="195.4" r="4" fill="#0072B2"/>
-<circle cx="796" cy="91.3" r="4" fill="#0072B2"/>
-<polyline points="74,368.2 177.1,359.5 383.4,357.7 589.7,329.7 796,324.2" fill="none" stroke="#D55E00" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>SetManyAtomicAsync (2 keys/saga, single-tree)</title></polyline>
-<rect x="70" y="364.2" width="8" height="8" fill="#D55E00"/>
-<rect x="173.1" y="355.5" width="8" height="8" fill="#D55E00"/>
-<rect x="379.4" y="353.7" width="8" height="8" fill="#D55E00"/>
-<rect x="585.7" y="325.7" width="8" height="8" fill="#D55E00"/>
-<rect x="792" y="320.2" width="8" height="8" fill="#D55E00"/>
-<polyline points="74,375 177.1,372 383.4,361.4 589.7,354.3 796,346.6" fill="none" stroke="#009E73" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>BeginAtomicWrite cross-tree (2 keys/saga, 2 trees)</title></polyline>
-<polygon points="74,370 69,379 79,379" fill="#009E73"/>
-<polygon points="177.1,367 172.1,376 182.1,376" fill="#009E73"/>
-<polygon points="383.4,356.4 378.4,365.4 388.4,365.4" fill="#009E73"/>
-<polygon points="589.7,349.3 584.7,358.3 594.7,358.3" fill="#009E73"/>
-<polygon points="796,341.6 791,350.6 801,350.6" fill="#009E73"/>
-<polyline points="74,291.3 177.1,279.2 383.4,203.1 589.7,157 796,153.3" fill="none" stroke="#CC79A7" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>BeginAtomicWrite cross-tree (64 keys/saga, 2 trees)</title></polyline>
-<polygon points="74,286.3 79,291.3 74,296.3 69,291.3" fill="#CC79A7"/>
-<polygon points="177.1,274.2 182.1,279.2 177.1,284.2 172.1,279.2" fill="#CC79A7"/>
-<polygon points="383.4,198.1 388.4,203.1 383.4,208.1 378.4,203.1" fill="#CC79A7"/>
-<polygon points="589.7,152 594.7,157 589.7,162 584.7,157" fill="#CC79A7"/>
-<polygon points="796,148.3 801,153.3 796,158.3 791,153.3" fill="#CC79A7"/>
+<polyline points="74,269.9 177.1,274.4 383.4,197.8 589.7,153.2 796,203.5" fill="none" stroke="#0072B2" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>SetManyAtomicAsync (64 keys/saga)</title></polyline>
+<circle cx="74" cy="269.9" r="4" fill="#0072B2"/>
+<circle cx="177.1" cy="274.4" r="4" fill="#0072B2"/>
+<circle cx="383.4" cy="197.8" r="4" fill="#0072B2"/>
+<circle cx="589.7" cy="153.2" r="4" fill="#0072B2"/>
+<circle cx="796" cy="203.5" r="4" fill="#0072B2"/>
+<polyline points="74,370.6 177.1,365.8 383.4,359.1 589.7,357.5 796,352.1" fill="none" stroke="#D55E00" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>SetManyAtomicAsync (2 keys/saga, single-tree)</title></polyline>
+<rect x="70" y="366.6" width="8" height="8" fill="#D55E00"/>
+<rect x="173.1" y="361.8" width="8" height="8" fill="#D55E00"/>
+<rect x="379.4" y="355.1" width="8" height="8" fill="#D55E00"/>
+<rect x="585.7" y="353.5" width="8" height="8" fill="#D55E00"/>
+<rect x="792" y="348.1" width="8" height="8" fill="#D55E00"/>
+<polyline points="74,376.4 177.1,373.3 383.4,364.3 589.7,356.3 796,352.7" fill="none" stroke="#009E73" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>BeginAtomicWrite cross-tree (2 keys/saga, 2 trees)</title></polyline>
+<polygon points="74,371.4 69,380.4 79,380.4" fill="#009E73"/>
+<polygon points="177.1,368.3 172.1,377.3 182.1,377.3" fill="#009E73"/>
+<polygon points="383.4,359.3 378.4,368.3 388.4,368.3" fill="#009E73"/>
+<polygon points="589.7,351.3 584.7,360.3 594.7,360.3" fill="#009E73"/>
+<polygon points="796,347.7 791,356.7 801,356.7" fill="#009E73"/>
+<polyline points="74,310.8 177.1,285.2 383.4,225 589.7,334.5 796,104.4" fill="none" stroke="#CC79A7" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>BeginAtomicWrite cross-tree (64 keys/saga, 2 trees)</title></polyline>
+<polygon points="74,305.8 79,310.8 74,315.8 69,310.8" fill="#CC79A7"/>
+<polygon points="177.1,280.2 182.1,285.2 177.1,290.2 172.1,285.2" fill="#CC79A7"/>
+<polygon points="383.4,220 388.4,225 383.4,230 378.4,225" fill="#CC79A7"/>
+<polygon points="589.7,329.5 594.7,334.5 589.7,339.5 584.7,334.5" fill="#CC79A7"/>
+<polygon points="796,99.4 801,104.4 796,109.4 791,104.4" fill="#CC79A7"/>
 <line x1="74" y1="450" x2="104" y2="450" stroke="#0072B2" stroke-width="2.2"/>
 <circle cx="89" cy="450" r="4" fill="#0072B2"/>
 <text class="legend" x="112" y="450" font-size="12" fill="#1f2328" dominant-baseline="middle">SetManyAtomicAsync (64 keys/saga)</text>

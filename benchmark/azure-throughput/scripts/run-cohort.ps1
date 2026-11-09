@@ -539,7 +539,12 @@ for ($i = @($siloPerSec).Count - 1; $i -ge 0; $i--) {
 # yields an accurate per-cohort exception tally for the verdict.
 # The raw count is preserved as a diagnostic so the operator can still
 # see total log noise when triaging.
-$exceptionCounts = Get-CohortExceptionCount -LogPath $siloLog -CurrentTreeId $treeId
+# Exceptions logged after systemd's stop marker are teardown, not load
+# (Get-CohortMeasuredWindowLog); every exception tally below counts the
+# measured window only.
+$measuredWindow = Get-CohortMeasuredWindowLog -LogPath $siloLog
+$exceptionLog   = $measuredWindow.Path
+$exceptionCounts = Get-CohortExceptionCount -LogPath $exceptionLog -CurrentTreeId $treeId
 $exceptionCount  = [int]$exceptionCounts.Filtered
 $exceptionRaw    = [int]$exceptionCounts.Raw
 $exceptionCrossCohort = [int]$exceptionCounts.Excluded
@@ -573,12 +578,12 @@ $exceptionCrossCohort = [int]$exceptionCounts.Excluded
 # exception is ever swept up; a genuine mid-load maintainer fault would
 # surface a different (non-shutdown) inner exception and still count.
 $benignShutdownExceptions = 0
-if ($exceptionCount -gt 0 -and (Test-Path -LiteralPath $siloLog)) {
+if ($exceptionCount -gt 0 -and (Test-Path -LiteralPath $exceptionLog)) {
 	$reminderStopRace = (
-		@(Select-String -Path $siloLog -Pattern 'ReminderService has been stopped' -SimpleMatch)
+		@(Select-String -Path $exceptionLog -Pattern 'ReminderService has been stopped' -SimpleMatch)
 	).Count
 	$viewDrainShutdownRace = (
-		@(Select-String -Path $siloLog -Pattern 'ViewMaintainerGrain.*(LatticeShuttingDownException|OrleansMessageRejectionException)')
+		@(Select-String -Path $exceptionLog -Pattern 'ViewMaintainerGrain.*(LatticeShuttingDownException|OrleansMessageRejectionException)')
 	).Count
 	# A third + fourth benign shutdown-race class come from background
 	# diagnostic / bookkeeping loops that race ApplicationStopping:
@@ -608,10 +613,10 @@ if ($exceptionCount -gt 0 -and (Test-Path -LiteralPath $siloLog)) {
 	# current-tree attribution the verdict tally (Get-CohortExceptionCount)
 	# applies, so only lines provably belonging to this cohort are excluded.
 	$storageUsagePollerShutdownRace = Measure-CohortAttributableMatches `
-		-LogPath $siloLog -CurrentTreeId $treeId `
+		-LogPath $exceptionLog -CurrentTreeId $treeId `
 		-Pattern 'LatticeWalUsageGrain.*retained-byte fan-out failed.*OperationCanceledException'
 	$materialiserPinShutdownRace = Measure-CohortAttributableMatches `
-		-LogPath $siloLog -CurrentTreeId $treeId `
+		-LogPath $exceptionLog -CurrentTreeId $treeId `
 		-Pattern 'LeafCursorReporter.*durable WAL materialiser.*pin.*OrleansMessageRejectionException'
 	$benignShutdownExceptions = $reminderStopRace + $viewDrainShutdownRace + `
 		$storageUsagePollerShutdownRace + $materialiserPinShutdownRace
@@ -632,9 +637,9 @@ if ($exceptionCount -gt 0 -and (Test-Path -LiteralPath $siloLog)) {
 # no-FINAL rule. Excluding only the exact warmup-REJECTED line shape keeps the
 # filter conservative: any non-warmup exception during load still counts.
 $benignWarmupExceptions = 0
-if ($exceptionCount -gt 0 -and (Test-Path -LiteralPath $siloLog)) {
+if ($exceptionCount -gt 0 -and (Test-Path -LiteralPath $exceptionLog)) {
 	$benignWarmupExceptions = (
-		@(Select-String -Path $siloLog -Pattern 'warmup\b.*\bREJECTED\b')
+		@(Select-String -Path $exceptionLog -Pattern 'warmup\b.*\bREJECTED\b')
 	).Count
 	if ($benignWarmupExceptions -gt 0) {
 		$exceptionCount = [Math]::Max(0, $exceptionCount - $benignWarmupExceptions)
@@ -668,14 +673,15 @@ if ($exceptionCount -gt 0 -and (Test-Path -LiteralPath $siloLog)) {
 # over-subtracted. A convergence retry that ever failed for real would
 # surface failed>0 and still grade FAILED (higher precedence).
 $benignPlacementConvergence = 0
-if ($exceptionCount -gt 0 -and (Test-Path -LiteralPath $siloLog)) {
+if ($exceptionCount -gt 0 -and (Test-Path -LiteralPath $exceptionLog)) {
 	$benignPlacementConvergence = Measure-CohortAttributableMatches `
-		-LogPath $siloLog -CurrentTreeId $treeId `
+		-LogPath $exceptionLog -CurrentTreeId $treeId `
 		-Pattern 'No active nodes are compatible with grain .*Known nodes with grain type: none'
 	if ($benignPlacementConvergence -gt 0) {
 		$exceptionCount = [Math]::Max(0, $exceptionCount - $benignPlacementConvergence)
 	}
 }
+if ($measuredWindow.Trimmed) { Remove-Item -LiteralPath $exceptionLog -Force -ErrorAction SilentlyContinue }
 
 # Whether this cohort exercises a read-only workload. Read-only modes
 # (get-point, get-many) do not enqueue WAL writes, so the silo has no

@@ -37,29 +37,29 @@ How it is measured: [Layer 1 methodology](performance-methodology-layer1.md).
   bdnFidelity=quick
   bdnToolchain=InProcessEmitToolchain
   cohortN=3
-  dotnet=10.0.113
-  gitSha=376a3eae7
+  dotnet=10.0.114
+  gitSha=35174338d
   host=Standard_D4as_v5
-  rowsMeasured=2026-10-26
+  rowsMeasured=2026-11-08
   methodology=Per-call p50/p75/p90/p99 and allocations reported directly by BenchmarkDotNet (linear-interpolation quantiles over the workload sample). Per-thread call rate = round(1 / p50) * batchSize, reported in keys/s so batched calls (GetMany, SetMany, SetManyAtomic) are directly comparable to single-key calls (Get, Set). Cells are the median across N cohorts of each per-cohort BDN quantile.
   DO-NOT-HAND-EDIT-BETWEEN-MARKERS
 -->
 
 | Operation                                | Per-call p50 | Per-call p75 | Per-call p90 | Per-call p99 | Allocations | Per-thread call rate (1 / p50) |
 |------------------------------------------|-------------:|-------------:|-------------:|-------------:|------------:|-------------------------------:|
-| `GetAsync` (point read) | **1.66 us** | 2.17 us | 3.29 us | 50.77 us | 536 B | **~604.1 k keys/s** |
-| `SetAsync` (point write) | **4.58 us** | 5.12 us | 6.15 us | 29.26 us | 1 KB | **~218.4 k keys/s** |
-| `GetManyAsync` (4 keys/call) | **10.27 us** | 21.87 us | 30.66 us | 209.99 us | 3 KB | **~389.6 k keys/s** |
-| `SetManyAsync` (1,000 keys/call) | **1.01 ms** | 1.07 ms | 1.52 ms | 2.56 ms | 71 KB | **~990.8 k keys/s** |
-| `SetManyAtomicAsync` (16 keys/saga) | **271.3 us** | 345.38 us | 398.36 us | 1.02 ms | 38 KB | **~59 k keys/s** |
-| `SetManyAtomicAsync` (2 keys/saga, single-tree) | **90.03 us** | 154.84 us | 165.81 us | 183.75 us | 26 KB | **~22.2 k keys/s** |
-| `SetManyAtomicAsync` (64 keys/saga, single-tree) | **211.17 us** | 234.29 us | 241.52 us | 249.74 us | 85 KB | **~303.1 k keys/s** |
-| `BeginAtomicWrite` cross-tree (2 keys/saga, 2 trees) | **193.25 us** | 214.57 us | 244.83 us | 307.41 us | 62 KB | **~10.3 k keys/s** |
-| `BeginAtomicWrite` cross-tree (64 keys/saga, 2 trees) | **323.6 us** | 352.17 us | 358.31 us | 363.4 us | 142 KB | **~197.8 k keys/s** |
+| `GetAsync` (point read) | **1.8 us** | 2.02 us | 2.64 us | 47.56 us | 536 B | **~555.9 k keys/s** |
+| `SetAsync` (point write) | **5.33 us** | 7.05 us | 8.23 us | 26.44 us | 1 KB | **~187.5 k keys/s** |
+| `GetManyAsync` (4 keys/call) | **10.08 us** | 17.89 us | 23.58 us | 263.51 us | 3 KB | **~396.9 k keys/s** |
+| `SetManyAsync` (1,000 keys/call) | **948.17 us** | 997.86 us | 1.3 ms | 2.45 ms | 71 KB | **~1.05 M keys/s** |
+| `SetManyAtomicAsync` (16 keys/saga) | **256.17 us** | 269.62 us | 304.92 us | 991.06 us | 38 KB | **~62.5 k keys/s** |
+| `SetManyAtomicAsync` (2 keys/saga, single-tree) | **86.08 us** | 151.95 us | 161.43 us | 178.94 us | 26 KB | **~23.2 k keys/s** |
+| `SetManyAtomicAsync` (64 keys/saga, single-tree) | **208.44 us** | 234.6 us | 244.24 us | 245.06 us | 85 KB | **~307 k keys/s** |
+| `BeginAtomicWrite` cross-tree (2 keys/saga, 2 trees) | **178.55 us** | 215.77 us | 237.2 us | 283.26 us | 62 KB | **~11.2 k keys/s** |
+| `BeginAtomicWrite` cross-tree (64 keys/saga, 2 trees) | **310.87 us** | 341.39 us | 348.42 us | 351.87 us | 142 KB | **~205.9 k keys/s** |
 
 <!-- perf-table:layer1:end -->
 
-> Measured 2026-10-26 on Standard_D4as_v5 (.NET 10.0.113) at git sha 376a3eae7, n=3 cohorts (BDN quick).
+> Measured 2026-11-08 on Standard_D4as_v5 (.NET 10.0.114) at git sha 35174338d, n=3 cohorts (BDN quick).
 
 **Reading it.**
 
@@ -68,15 +68,11 @@ How it is measured: [Layer 1 methodology](performance-methodology-layer1.md).
   grain messaging, the WAL and storage, so what it sustains is the much lower
   Layer 2 figure.
 - **Batching amortises the fixed cost.** `SetManyAsync` writes 1,000 keys in
-  about 1 ms, roughly 4.5 times the per-key rate of `SetAsync`.
+  about 0.95 ms, roughly 5.6 times the per-key rate of `SetAsync`.
 - **Atomicity costs more per call.** A 2-key `SetManyAtomicAsync` takes about
-  90 us against about 4.6 us for `SetAsync`, and spanning two trees roughly
-  doubles a 2-key saga's cost (about 193 us).
-- **The `GetManyAsync` row overstates its cost.** The same 4-key batch
-  measures about 3.2 us, with identical allocations, when it runs in the
-  harness's batch-size sweep, so this row's 10 us is an artefact of where it
-  runs in the suite rather than the call's cost
-  ([#5078](https://github.com/NSTA1/Orleans.Lattice/pull/5078)).
+  86 us against about 5.3 us for `SetAsync`, and spanning two trees roughly
+  doubles a 2-key saga's cost (about 179 us).
+- **Read the `GetManyAsync` row with care.** The 4-key batch reads about 10 us per call here, against about 1.8 us for a single `GetAsync`.
 
 ## Layer 2: sustained throughput, one silo on Azure Tables
 
@@ -86,12 +82,12 @@ How it is measured: [Layer 2 methodology](performance-methodology-layer2.md).
   schema=v1
   batchSize=4096
   cohortN=2/3
-  dotnet=10.0.113
-  gitSha=376a3eae7
+  dotnet=10.0.114
+  gitSha=35174338d
   host=Standard_D4as_v5
   region=westus2
   responseTimeoutSec=180
-  rowsMeasured=2026-10-26
+  rowsMeasured=2026-11-08
   rung=4000 vehicles / 5 Hz / 45s
   walMaxPendingBatches=16
   walPartitions=8
@@ -101,22 +97,22 @@ How it is measured: [Layer 2 methodology](performance-methodology-layer2.md).
 
 | Operation                                | Sustained throughput | Per-call p50  | Per-call p75  | Per-call p90  | Per-call p99  |
 |------------------------------------------|---------------------:|--------------:|--------------:|--------------:|--------------:|
-| `GetAsync` (point read) | **~18.1 k keys/s** | ~20 us | ~20 us | ~30 us | ~1.02 ms |
-| `SetAsync` (point write, 200 veh/5 Hz) | **723 keys/s** | ~21.99 ms | ~33.77 ms | ~49.14 ms | ~98.42 ms |
-| `SetAsync` (point write + async materialised view, 200 veh/5 Hz) | **700 keys/s** | ~23.63 ms | ~34.7 ms | ~47.06 ms | ~122.38 ms |
-| `GetManyAsync` (4,096 keys/call) | **~17.7 k keys/s** | ~2.83 ms | ~5.88 ms | ~10.17 ms | ~51.91 ms |
-| `SetManyAsync` (4,096 keys/call, 1200 veh/5 Hz) | **>= ~6.1 k keys/s** | ~208.64 ms | ~344.46 ms | ~473.38 ms | ~762.98 ms |
-| `SetManyAtomicAsync` (64 keys/saga, 100 veh/5 Hz) | **>= 469 keys/s** | ~55.61 ms | ~77.15 ms | ~106.1 ms | ~316.45 ms |
-| `SetManyAtomicAsync` (2 keys/saga, single-tree, 20 veh/5 Hz) | **82 keys/s** | ~18.95 ms | ~33.94 ms | ~44.98 ms | ~100.5 ms |
-| `BeginAtomicWrite` cross-tree (2 keys/saga, 2 trees, 8 veh/5 Hz) | **>= 39 keys/s** | ~9.14 ms | ~12.48 ms | ~23.19 ms | ~86.56 ms |
-| `BeginAtomicWrite` cross-tree (64 keys/saga, 2 trees, 150 veh/5 Hz) | **568 keys/s** | ~55.53 ms | ~86.79 ms | ~120.88 ms | ~318.69 ms |
+| `GetAsync` (point read) | **>= ~19.9 k keys/s** | ~20 us | ~30 us | ~30 us | ~340 us |
+| `SetAsync` (point write, 200 veh/5 Hz) | **736 keys/s** | ~16.58 ms | ~31.68 ms | ~39.18 ms | ~100.29 ms |
+| `SetAsync` (point write + async materialised view, 200 veh/5 Hz) | **777 keys/s** | ~13.78 ms | ~22.63 ms | ~35.26 ms | ~77.89 ms |
+| `GetManyAsync` (4,096 keys/call) | **>= ~19.6 k keys/s** | ~5.23 ms | ~6.49 ms | ~10.13 ms | ~23.44 ms |
+| `SetManyAsync` (4,096 keys/call, 1200 veh/5 Hz) | **>= ~6.1 k keys/s** | ~171.75 ms | ~329.83 ms | ~722.41 ms | ~1302.26 ms |
+| `SetManyAtomicAsync` (64 keys/saga, 100 veh/5 Hz) | **>= 485 keys/s** | ~41.86 ms | ~61.42 ms | ~81.23 ms | ~139.69 ms |
+| `SetManyAtomicAsync` (2 keys/saga, single-tree, 20 veh/5 Hz) | **>= 92 keys/s** | ~12.39 ms | ~21.05 ms | ~26.13 ms | ~67.62 ms |
+| `BeginAtomicWrite` cross-tree (2 keys/saga, 2 trees, 8 veh/5 Hz) | **>= 40 keys/s** | ~9.78 ms | ~13.84 ms | ~22.17 ms | ~52.86 ms |
+| `BeginAtomicWrite` cross-tree (64 keys/saga, 2 trees, 150 veh/5 Hz) | **697 keys/s** | ~73.74 ms | ~100.97 ms | ~129.37 ms | ~228.39 ms |
 
 
 Cells marked >= completed (nearly) all of the load they were offered, so they measure that offered load, not the silo's ceiling: each is a lower bound on what one silo sustains.
 
 <!-- perf-table:layer2:end -->
 
-> Measured 2026-10-26 on Standard_D4as_v5 in westus2 (.NET 10.0.113) at git sha 376a3eae7, n=2/3 cohorts. Read workloads were driven at 4000 vehicles / 5 Hz / 45s; each write workload was driven at its own lower, fixed offered load (annotated in its operation label).
+> Measured 2026-11-08 on Standard_D4as_v5 in westus2 (.NET 10.0.114) at git sha 35174338d, n=2/3 cohorts. Read workloads were driven at 4000 vehicles / 5 Hz / 45s; each write workload was driven at its own lower, fixed offered load (annotated in its operation label).
 
 **Reading it.**
 
@@ -125,29 +121,28 @@ Cells marked >= completed (nearly) all of the load they were offered, so they me
   a sustained rate at that load. Rows offered different loads should be
   compared by latency, not throughput. A row marked
   `>=` kept up with all of its load.
-- **Call shape is the biggest lever.** `SetManyAsync` sustains about 6.1 k
-  keys/s at its load against 723 keys/s for `SetAsync`, because one call
+- **Call shape is the biggest lever.** `SetManyAsync` sustains at least 6.1 k
+  keys/s at its load against 736 keys/s for `SetAsync`, because one call
   carries 4,096 keys through a single round of WAL and Azure work. The price
-  is per-call latency: a median of about 209 ms and a p99 of about 763 ms. If
+  is per-call latency: a median of about 172 ms and a p99 of about 1,302 ms. If
   your writes can be batched, batch them.
-- **An asynchronous materialised view costs little on the write path.** With a
-  view attached, the same point writes at the same load sustain 700 keys/s
-  against 723 without one. The median write is slightly slower (about 23.6 ms
-  against 22.0 ms) and the tail heavier (p99 about 122 ms against 98 ms),
-  because the view's background updates share the silo and the storage
-  account. Budget for the view's own writes on the account.
+- **An asynchronous materialised view showed no write-path cost.** With a
+  view attached, the same point writes at the same load sustain 777 keys/s
+  against 736 without one, with a lower median (about 13.8 ms against 16.6 ms)
+  and p99 (about 78 ms against 100 ms). This run shows no cost from the view;
+  the view's own writes still land on the account, so budget for them.
 - **Atomic sagas pay for all-or-nothing.** Each saga makes a chain of durable
-  writes, so its sustainable rate is a small fraction of a plain batch's: 82
-  keys/s for 2-key sagas and at least 469 for 64-key sagas, against about
+  writes, so its sustainable rate is a small fraction of a plain batch's: at
+  least 92 keys/s for 2-key sagas and at least 485 for 64-key sagas, against at least
   6.1 k for `SetManyAsync`. Use them when you need atomicity across keys.
 - **The read rows measure a hot working set.** They read the same 4,000
   pre-written keys over and over, so every read is answered from memory:
-  `GetAsync` in about 20 us and a 4,096-key `GetManyAsync` in about 2.8 ms,
+  `GetAsync` in about 20 us and a 4,096-key `GetManyAsync` in about 5.2 ms,
   well below one Azure Tables round trip. Both rows ran at a fixed 20,000
-  keys/s offered load and completed about 18.1 k and 17.7 k keys/s. They are
+  keys/s offered load and completed at least 19.9 k and 19.6 k keys/s. They are
   not read ceilings: one silo in the
-  [multi-silo sweep](performance-multi-silo.md) read about 56 k keys/s with
-  `GetAsync` and 316 k with `GetManyAsync`. A workload whose keys are not in
+  [multi-silo sweep](performance-multi-silo.md) read about 51 k keys/s with
+  `GetAsync` and 270 k with `GetManyAsync`. A workload whose keys are not in
   memory reads more slowly; see
   [how Layer 2 is measured](performance-methodology-layer2.md#the-read-keyspace).
 
