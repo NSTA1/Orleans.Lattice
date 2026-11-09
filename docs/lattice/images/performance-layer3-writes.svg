@@ -30,24 +30,24 @@
 <line x1="74" y1="58" x2="74" y2="388" stroke="#57606a" stroke-width="1"/>
 <text x="435" y="428" font-size="13" fill="#1f2328" text-anchor="middle">Silos</text>
 <text x="18" y="223" font-size="13" fill="#1f2328" text-anchor="middle" transform="rotate(-90 18 223)">Thousand keys/s</text>
-<polyline points="74,344.7 177.1,336.7 383.4,295.6 589.7,290.5 796,236.7" fill="none" stroke="#0072B2" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>SetAsync (point write)</title></polyline>
-<circle cx="74" cy="344.7" r="4" fill="#0072B2"/>
-<circle cx="177.1" cy="336.7" r="4" fill="#0072B2"/>
-<circle cx="383.4" cy="295.6" r="4" fill="#0072B2"/>
-<circle cx="589.7" cy="290.5" r="4" fill="#0072B2"/>
-<circle cx="796" cy="236.7" r="4" fill="#0072B2"/>
-<polyline points="74,344.2 177.1,340 383.4,311.7 589.7,300.1 796,291.9" fill="none" stroke="#D55E00" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>SetAsync (point write + async materialised view)</title></polyline>
-<rect x="70" y="340.2" width="8" height="8" fill="#D55E00"/>
-<rect x="173.1" y="336" width="8" height="8" fill="#D55E00"/>
-<rect x="379.4" y="307.7" width="8" height="8" fill="#D55E00"/>
-<rect x="585.7" y="296.1" width="8" height="8" fill="#D55E00"/>
-<rect x="792" y="287.9" width="8" height="8" fill="#D55E00"/>
-<polyline points="74,221.4 177.1,237.7 383.4,198.6 589.7,204.5 796,102.7" fill="none" stroke="#009E73" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>SetManyAsync (4,096 keys/call)</title></polyline>
-<polygon points="74,216.4 69,225.4 79,225.4" fill="#009E73"/>
-<polygon points="177.1,232.7 172.1,241.7 182.1,241.7" fill="#009E73"/>
-<polygon points="383.4,193.6 378.4,202.6 388.4,202.6" fill="#009E73"/>
-<polygon points="589.7,199.5 584.7,208.5 594.7,208.5" fill="#009E73"/>
-<polygon points="796,97.7 791,106.7 801,106.7" fill="#009E73"/>
+<polyline points="74,348.8 177.1,335.3 383.4,313.6 589.7,276.2 796,275.7" fill="none" stroke="#0072B2" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>SetAsync (point write)</title></polyline>
+<circle cx="74" cy="348.8" r="4" fill="#0072B2"/>
+<circle cx="177.1" cy="335.3" r="4" fill="#0072B2"/>
+<circle cx="383.4" cy="313.6" r="4" fill="#0072B2"/>
+<circle cx="589.7" cy="276.2" r="4" fill="#0072B2"/>
+<circle cx="796" cy="275.7" r="4" fill="#0072B2"/>
+<polyline points="74,338 177.1,334.4 383.4,296.9 589.7,263.4 796,213" fill="none" stroke="#D55E00" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>SetAsync (point write + async materialised view)</title></polyline>
+<rect x="70" y="334" width="8" height="8" fill="#D55E00"/>
+<rect x="173.1" y="330.4" width="8" height="8" fill="#D55E00"/>
+<rect x="379.4" y="292.9" width="8" height="8" fill="#D55E00"/>
+<rect x="585.7" y="259.4" width="8" height="8" fill="#D55E00"/>
+<rect x="792" y="209" width="8" height="8" fill="#D55E00"/>
+<polyline points="74,211.6 177.1,226.8 383.4,209.8 589.7,259.7 796,97.7" fill="none" stroke="#009E73" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>SetManyAsync (4,096 keys/call)</title></polyline>
+<polygon points="74,206.6 69,215.6 79,215.6" fill="#009E73"/>
+<polygon points="177.1,221.8 172.1,230.8 182.1,230.8" fill="#009E73"/>
+<polygon points="383.4,204.8 378.4,213.8 388.4,213.8" fill="#009E73"/>
+<polygon points="589.7,254.7 584.7,263.7 594.7,263.7" fill="#009E73"/>
+<polygon points="796,92.7 791,101.7 801,101.7" fill="#009E73"/>
 <line x1="74" y1="450" x2="104" y2="450" stroke="#0072B2" stroke-width="2.2"/>
 <circle cx="89" cy="450" r="4" fill="#0072B2"/>
 <text class="legend" x="112" y="450" font-size="12" fill="#1f2328" dominant-baseline="middle">SetAsync (point write)</text>

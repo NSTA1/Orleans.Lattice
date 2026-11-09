@@ -29,60 +29,60 @@
 <text x="435" y="428" font-size="13" fill="#1f2328" text-anchor="middle">Silos</text>
 <text x="18" y="223" font-size="13" fill="#1f2328" text-anchor="middle" transform="rotate(-90 18 223)">Speedup over 1 silo (x)</text>
 <polyline points="74,305.5 177.1,223 383.4,58 589.7,-107 796,-272" fill="none" stroke="#8c959f" stroke-width="1.5" stroke-dasharray="5 4" stroke-linejoin="round" clip-path="url(#plot)"><title>Ideal: speedup = silos</title></polyline>
-<polyline points="74,305.5 177.1,305.5 383.4,242.8 589.7,210.6 796,193.3" fill="none" stroke="#0072B2" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>GetAsync (point read)</title></polyline>
+<polyline points="74,305.5 177.1,283.2 383.4,237.9 589.7,318.7 796,163.6" fill="none" stroke="#0072B2" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>GetAsync (point read)</title></polyline>
 <circle cx="74" cy="305.5" r="4" fill="#0072B2"/>
-<circle cx="177.1" cy="305.5" r="4" fill="#0072B2"/>
-<circle cx="383.4" cy="242.8" r="4" fill="#0072B2"/>
-<circle cx="589.7" cy="210.6" r="4" fill="#0072B2"/>
-<circle cx="796" cy="193.3" r="4" fill="#0072B2"/>
-<polyline points="74,305.5 177.1,323.7 383.4,308.8 589.7,280.8 796,280.8" fill="none" stroke="#D55E00" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>GetManyAsync (4,096 keys/call)</title></polyline>
+<circle cx="177.1" cy="283.2" r="4" fill="#0072B2"/>
+<circle cx="383.4" cy="237.9" r="4" fill="#0072B2"/>
+<circle cx="589.7" cy="318.7" r="4" fill="#0072B2"/>
+<circle cx="796" cy="163.6" r="4" fill="#0072B2"/>
+<polyline points="74,305.5 177.1,302.2 383.4,249.4 589.7,256 796,228" fill="none" stroke="#D55E00" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>GetManyAsync (4,096 keys/call)</title></polyline>
 <rect x="70" y="301.5" width="8" height="8" fill="#D55E00"/>
-<rect x="173.1" y="319.7" width="8" height="8" fill="#D55E00"/>
-<rect x="379.4" y="304.8" width="8" height="8" fill="#D55E00"/>
-<rect x="585.7" y="276.8" width="8" height="8" fill="#D55E00"/>
-<rect x="792" y="276.8" width="8" height="8" fill="#D55E00"/>
-<polyline points="74,305.5 177.1,290.7 383.4,212.3 589.7,202.4 796,100.1" fill="none" stroke="#009E73" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>SetAsync (point write)</title></polyline>
+<rect x="173.1" y="298.2" width="8" height="8" fill="#D55E00"/>
+<rect x="379.4" y="245.4" width="8" height="8" fill="#D55E00"/>
+<rect x="585.7" y="252" width="8" height="8" fill="#D55E00"/>
+<rect x="792" y="224" width="8" height="8" fill="#D55E00"/>
+<polyline points="74,305.5 177.1,276.6 383.4,231.3 589.7,152.1 796,151.2" fill="none" stroke="#009E73" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>SetAsync (point write)</title></polyline>
 <polygon points="74,300.5 69,309.5 79,309.5" fill="#009E73"/>
-<polygon points="177.1,285.7 172.1,294.7 182.1,294.7" fill="#009E73"/>
-<polygon points="383.4,207.3 378.4,216.3 388.4,216.3" fill="#009E73"/>
-<polygon points="589.7,197.4 584.7,206.4 594.7,206.4" fill="#009E73"/>
-<polygon points="796,95.1 791,104.1 801,104.1" fill="#009E73"/>
-<polyline points="74,305.5 177.1,297.3 383.4,244.5 589.7,222.2 796,207.3" fill="none" stroke="#CC79A7" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>SetAsync (point write + async materialised view)</title></polyline>
+<polygon points="177.1,271.6 172.1,280.6 182.1,280.6" fill="#009E73"/>
+<polygon points="383.4,226.3 378.4,235.3 388.4,235.3" fill="#009E73"/>
+<polygon points="589.7,147.1 584.7,156.1 594.7,156.1" fill="#009E73"/>
+<polygon points="796,146.2 791,155.2 801,155.2" fill="#009E73"/>
+<polyline points="74,305.5 177.1,299.7 383.4,237.9 589.7,182.6 796,99.3" fill="none" stroke="#CC79A7" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>SetAsync (point write + async materialised view)</title></polyline>
 <polygon points="74,300.5 79,305.5 74,310.5 69,305.5" fill="#CC79A7"/>
-<polygon points="177.1,292.3 182.1,297.3 177.1,302.3 172.1,297.3" fill="#CC79A7"/>
-<polygon points="383.4,239.5 388.4,244.5 383.4,249.5 378.4,244.5" fill="#CC79A7"/>
-<polygon points="589.7,217.2 594.7,222.2 589.7,227.2 584.7,222.2" fill="#CC79A7"/>
-<polygon points="796,202.3 801,207.3 796,212.3 791,207.3" fill="#CC79A7"/>
-<polyline points="74,305.5 177.1,313.8 383.4,294 589.7,297.3 796,246.9" fill="none" stroke="#E69F00" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>SetManyAsync (4,096 keys/call)</title></polyline>
+<polygon points="177.1,294.7 182.1,299.7 177.1,304.7 172.1,299.7" fill="#CC79A7"/>
+<polygon points="383.4,232.9 388.4,237.9 383.4,242.9 378.4,237.9" fill="#CC79A7"/>
+<polygon points="589.7,177.6 594.7,182.6 589.7,187.6 584.7,182.6" fill="#CC79A7"/>
+<polygon points="796,94.3 801,99.3 796,104.3 791,99.3" fill="#CC79A7"/>
+<polyline points="74,305.5 177.1,312.9 383.4,304.7 589.7,327.8 796,251.9" fill="none" stroke="#E69F00" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>SetManyAsync (4,096 keys/call)</title></polyline>
 <circle cx="74" cy="305.5" r="4" fill="#E69F00"/>
-<circle cx="177.1" cy="313.8" r="4" fill="#E69F00"/>
-<circle cx="383.4" cy="294" r="4" fill="#E69F00"/>
-<circle cx="589.7" cy="297.3" r="4" fill="#E69F00"/>
-<circle cx="796" cy="246.9" r="4" fill="#E69F00"/>
-<polyline points="74,305.5 177.1,313.8 383.4,252.7 589.7,260.1 796,190.8" fill="none" stroke="#56B4E9" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>SetManyAtomicAsync (64 keys/saga)</title></polyline>
+<circle cx="177.1" cy="312.9" r="4" fill="#E69F00"/>
+<circle cx="383.4" cy="304.7" r="4" fill="#E69F00"/>
+<circle cx="589.7" cy="327.8" r="4" fill="#E69F00"/>
+<circle cx="796" cy="251.9" r="4" fill="#E69F00"/>
+<polyline points="74,305.5 177.1,308.8 383.4,255.2 589.7,223.8 796,259.3" fill="none" stroke="#56B4E9" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>SetManyAtomicAsync (64 keys/saga)</title></polyline>
 <rect x="70" y="301.5" width="8" height="8" fill="#56B4E9"/>
-<rect x="173.1" y="309.8" width="8" height="8" fill="#56B4E9"/>
-<rect x="379.4" y="248.7" width="8" height="8" fill="#56B4E9"/>
-<rect x="585.7" y="256.1" width="8" height="8" fill="#56B4E9"/>
-<rect x="792" y="186.8" width="8" height="8" fill="#56B4E9"/>
-<polyline points="74,305.5 177.1,269.2 383.4,261.8 589.7,145.5 796,122.4" fill="none" stroke="#000000" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>SetManyAtomicAsync (2 keys/saga, single-tree)</title></polyline>
+<rect x="173.1" y="304.8" width="8" height="8" fill="#56B4E9"/>
+<rect x="379.4" y="251.2" width="8" height="8" fill="#56B4E9"/>
+<rect x="585.7" y="219.8" width="8" height="8" fill="#56B4E9"/>
+<rect x="792" y="255.3" width="8" height="8" fill="#56B4E9"/>
+<polyline points="74,305.5 177.1,283.2 383.4,251.1 589.7,243.6 796,218.1" fill="none" stroke="#000000" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>SetManyAtomicAsync (2 keys/saga, single-tree)</title></polyline>
 <polygon points="74,300.5 69,309.5 79,309.5" fill="#000000"/>
-<polygon points="177.1,264.2 172.1,273.2 182.1,273.2" fill="#000000"/>
-<polygon points="383.4,256.8 378.4,265.8 388.4,265.8" fill="#000000"/>
-<polygon points="589.7,140.5 584.7,149.5 594.7,149.5" fill="#000000"/>
-<polygon points="796,117.4 791,126.4 801,126.4" fill="#000000"/>
-<polyline points="74,305.5 177.1,285.7 383.4,218.1 589.7,173.5 796,124.8" fill="none" stroke="#8C564B" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>BeginAtomicWrite cross-tree (2 keys/saga, 2 trees)</title></polyline>
+<polygon points="177.1,278.2 172.1,287.2 182.1,287.2" fill="#000000"/>
+<polygon points="383.4,246.1 378.4,255.1 388.4,255.1" fill="#000000"/>
+<polygon points="589.7,238.6 584.7,247.6 594.7,247.6" fill="#000000"/>
+<polygon points="796,213.1 791,222.1 801,222.1" fill="#000000"/>
+<polyline points="74,305.5 177.1,283.2 383.4,219.7 589.7,162.8 796,137.2" fill="none" stroke="#8C564B" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>BeginAtomicWrite cross-tree (2 keys/saga, 2 trees)</title></polyline>
 <polygon points="74,300.5 79,305.5 74,310.5 69,305.5" fill="#8C564B"/>
-<polygon points="177.1,280.7 182.1,285.7 177.1,290.7 172.1,285.7" fill="#8C564B"/>
-<polygon points="383.4,213.1 388.4,218.1 383.4,223.1 378.4,218.1" fill="#8C564B"/>
-<polygon points="589.7,168.5 594.7,173.5 589.7,178.5 584.7,173.5" fill="#8C564B"/>
-<polygon points="796,119.8 801,124.8 796,129.8 791,124.8" fill="#8C564B"/>
-<polyline points="74,305.5 177.1,294.8 383.4,230.4 589.7,190.8 796,187.5" fill="none" stroke="#7F3C8D" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>BeginAtomicWrite cross-tree (64 keys/saga, 2 trees)</title></polyline>
+<polygon points="177.1,278.2 182.1,283.2 177.1,288.2 172.1,283.2" fill="#8C564B"/>
+<polygon points="383.4,214.7 388.4,219.7 383.4,224.7 378.4,219.7" fill="#8C564B"/>
+<polygon points="589.7,157.8 594.7,162.8 589.7,167.8 584.7,162.8" fill="#8C564B"/>
+<polygon points="796,132.2 801,137.2 796,142.2 791,137.2" fill="#8C564B"/>
+<polyline points="74,305.5 177.1,278.3 383.4,213.9 589.7,331.1 796,85.2" fill="none" stroke="#7F3C8D" stroke-width="2.2" stroke-linejoin="round" clip-path="url(#plot)"><title>BeginAtomicWrite cross-tree (64 keys/saga, 2 trees)</title></polyline>
 <circle cx="74" cy="305.5" r="4" fill="#7F3C8D"/>
-<circle cx="177.1" cy="294.8" r="4" fill="#7F3C8D"/>
-<circle cx="383.4" cy="230.4" r="4" fill="#7F3C8D"/>
-<circle cx="589.7" cy="190.8" r="4" fill="#7F3C8D"/>
-<circle cx="796" cy="187.5" r="4" fill="#7F3C8D"/>
+<circle cx="177.1" cy="278.3" r="4" fill="#7F3C8D"/>
+<circle cx="383.4" cy="213.9" r="4" fill="#7F3C8D"/>
+<circle cx="589.7" cy="331.1" r="4" fill="#7F3C8D"/>
+<circle cx="796" cy="85.2" r="4" fill="#7F3C8D"/>
 <line x1="74" y1="450" x2="104" y2="450" stroke="#8c959f" stroke-width="1.5" stroke-dasharray="5 4"/>
 <text class="legend" x="112" y="450" font-size="12" fill="#1f2328" dominant-baseline="middle">Ideal: speedup = silos</text>
 <line x1="435" y1="450" x2="465" y2="450" stroke="#0072B2" stroke-width="2.2"/>

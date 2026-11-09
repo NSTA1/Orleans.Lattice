@@ -140,6 +140,54 @@ function Test-CohortLineAttributable {
 
 <#
 .SYNOPSIS
+	Returns the path of the silo log restricted to the cohort's measured
+	window: every line before systemd's "Stopping lattice-silo.service"
+	marker.
+
+.DESCRIPTION
+	The runner quiesces the silo, and FINAL (with its failed= and unresolved=
+	counts) is already written, before it stops the unit. Exceptions logged
+	after the stop marker are Orleans tearing down the activation graph
+	(undeliverable messages, grains deactivating, pin flushes losing a race
+	with their own deactivation), not load-time faults, so they are excluded
+	from the exception tally that grades DEGRADED. Failures during the run
+	are still caught by failed=, unresolved= and every exception line before
+	the marker.
+
+	A log with no stop marker is graded in full: the function returns the
+	original path, never silently trimming a log it does not understand.
+	Otherwise it writes the trimmed lines to a temporary file; the caller
+	removes it.
+
+.OUTPUTS
+	Hashtable: Path = [string] log to count over, Trimmed = [bool],
+	TeardownLines = [int] lines excluded.
+#>
+function Get-CohortMeasuredWindowLog {
+	[CmdletBinding()]
+	param([Parameter(Mandatory)] [string] $LogPath)
+
+	if (-not (Test-Path -LiteralPath $LogPath)) {
+		return @{ Path = $LogPath; Trimmed = $false; TeardownLines = 0 }
+	}
+
+	$lines = @(Get-Content -LiteralPath $LogPath)
+	$stopIndex = -1
+	for ($i = 0; $i -lt $lines.Count; $i++) {
+		if ($lines[$i] -match '^Stopping lattice-silo\.service\b') { $stopIndex = $i; break }
+	}
+	if ($stopIndex -lt 0) {
+		return @{ Path = $LogPath; Trimmed = $false; TeardownLines = 0 }
+	}
+
+	$tmp = [System.IO.Path]::GetTempFileName()
+	if ($stopIndex -gt 0) { Set-Content -LiteralPath $tmp -Value $lines[0..($stopIndex - 1)] }
+	else { Set-Content -LiteralPath $tmp -Value @() }
+	return @{ Path = $tmp; Trimmed = $true; TeardownLines = $lines.Count - $stopIndex }
+}
+
+<#
+.SYNOPSIS
 	Counts log lines matching $Pattern that are attributable to the current
 	cohort.
 
