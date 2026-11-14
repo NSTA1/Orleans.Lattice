@@ -1948,6 +1948,14 @@ concepts:
           value: 4096
           unit: "instantiations"
           source: "src/lattice.auth/ScopeTemplate.cs#ScopeTemplate.MaxInstantiations"
+        - name: "max-walk-steps-per-template"
+          value: 65536
+          unit: "steps"
+          source: "src/lattice.auth/ScopeTemplate.cs#ScopeTemplate.MaxWalkSteps"
+        - name: "max-probe-positions-per-tree"
+          value: 1024
+          unit: "positions"
+          source: "src/lattice.auth/ScopeTemplate.cs#ScopeTemplate.MaxProbePositions"
     sources:
       - "docs/lattice.auth/README.md"
       - "src/lattice.auth/ScopeTemplate.cs"

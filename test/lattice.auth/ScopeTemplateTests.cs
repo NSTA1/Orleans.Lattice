@@ -136,6 +136,108 @@ public sealed class ScopeTemplateTests
     }
 
     [Test]
+    public void A_placeholder_no_group_can_fill_ends_the_walk_before_expanding_the_others()
+    {
+        // Seven placeholders each fill from 40 groups and the eighth from none: without
+        // the up-front check the walk would expand 40^7 branches that never complete.
+        var groups = Enumerable.Range(0, 40).Select(i => "t/T/g" + i).ToArray();
+        var subject = new LatticeSubject("u1", groups);
+        var template = Parse(string.Concat(Enumerable.Repeat("{group:t/T/}/", 7)) + "{group:t/T/zz-none}/");
+        var values = new List<string>();
+
+        var complete = template.AppendInstantiations(subject, values);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(complete, Is.True);
+            Assert.That(values, Is.Empty);
+        });
+    }
+
+    [Test]
+    public void The_step_budget_ends_a_walk_that_completes_too_few_instantiations_to_reach_the_cap()
+    {
+        // One placeholder over a group set larger than the step budget: one match, but
+        // scanning for it exceeds MaxWalkSteps, so the walk reports itself incomplete.
+        var groups = Enumerable.Range(0, ScopeTemplate.MaxWalkSteps + 10).Select(i => "x" + i).Append("g:a").ToArray();
+        var subject = new LatticeSubject("u1", groups);
+        var values = new List<string>();
+
+        var complete = Parse("{group:g:}/").AppendInstantiations(subject, values);
+
+        Assert.That(complete, Is.False);
+    }
+
+    [Test]
+    public void Truncated_enumeration_keeps_a_range_filtered_per_key()
+    {
+        var groups = Enumerable.Range(0, ScopeTemplate.MaxWalkSteps + 10).Select(i => "x" + i).Append("members").Append("g:a").ToArray();
+        var subject = new LatticeSubject("u1", groups);
+        var policy = CompiledPolicy.Compile([Rule(LatticeScope.Prefix("t", "{group:g:}/"))]);
+
+        var decision = PolicyEvaluator.Evaluate(policy, new LatticeAuthOptions(), subject, "t", LatticeOperation.Read, null, "a/", "a0");
+
+        Assert.That(decision.KeyFilter, Is.Not.Null, "an incomplete walk cannot prove the range uniform");
+    }
+
+    [Test]
+    public void Existence_probe_work_is_bounded_across_all_templated_rules_of_a_tree()
+    {
+        // 300 templated denies, each resolving to 64 x 64 = 4096 keys for the caller.
+        // Unbounded, the probe would resolve 1.2M positions against all 300 rules each.
+        var groups = Enumerable.Range(0, 64).Select(i => "t/acme/g" + i).Append("members").ToArray();
+        var subject = new LatticeSubject("u1", groups);
+        var rules = Enumerable.Range(0, 300)
+            .Select(i => new LatticeAuthorizationRule(
+                "deny" + i, LatticeSubjectSelector.Group("members"),
+                LatticeScope.Key("t/acme/data", "{group:t/acme/}/{group:t/acme/}/k" + i + "/"),
+                LatticeOperation.Read, LatticeEffect.Deny))
+            .ToArray();
+        var policy = CompiledPolicy.Compile(rules);
+
+        var granted = PolicyEvaluator.HasAnyGrant(policy, new LatticeAuthOptions(), subject, "t/acme/data", LatticeOperation.Read);
+
+        Assert.That(granted, Is.False);
+    }
+
+    [Test]
+    public void Range_uniformity_shares_one_budget_across_templated_rules_and_fails_closed()
+    {
+        // Each rule alone fits the per-template caps; together they exceed them, so the
+        // range cannot be proven uniform and is filtered per key.
+        var groups = Enumerable.Range(0, 64).Select(i => "g:" + i).Append("members").ToArray();
+        var subject = new LatticeSubject("u1", groups);
+        var rules = Enumerable.Range(0, 4)
+            .Select(i => new LatticeAuthorizationRule(
+                "allow" + i, LatticeSubjectSelector.Group("members"),
+                LatticeScope.Prefix("t", "z" + i + "/{group:g:}/{group:g:}/"),
+                LatticeOperation.Read, LatticeEffect.Allow))
+            .Append(new LatticeAuthorizationRule(
+                "base", LatticeSubjectSelector.Group("members"), LatticeScope.Prefix("t", "a/"), LatticeOperation.Read, LatticeEffect.Allow))
+            .ToArray();
+        var policy = CompiledPolicy.Compile(rules);
+
+        var decision = PolicyEvaluator.Evaluate(policy, new LatticeAuthOptions(), subject, "t", LatticeOperation.Read, null, "a/", "a0");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(decision.KeyFilter, Is.Not.Null, "the shared budget ran out before the range was proven uniform");
+            Assert.That(decision.KeyFilter!("a/x"), Is.True, "per-key filtering still admits the granted keys");
+        });
+    }
+
+    [Test]
+    public void ResolveFor_cites_at_most_the_explain_cap_per_rule()
+    {
+        var groups = Enumerable.Range(0, 20).Select(i => "g:" + i).ToArray();
+        var subject = new LatticeSubject("u1", groups);
+
+        var scopes = ScopeTemplate.ResolveFor(Rule(LatticeScope.Prefix("t", "{group:g:}/{group:g:}/")), subject);
+
+        Assert.That(scopes, Has.Count.EqualTo(ScopeTemplate.MaxExplainInstantiations));
+    }
+
+    [Test]
     public void VisitInstantiations_stops_when_the_visitor_declines()
     {
         var visitor = new CountingVisitor(stopAfter: 1);

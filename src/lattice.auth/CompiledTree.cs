@@ -370,7 +370,9 @@ internal sealed class CompiledTree
     /// part of the range without governing all of it. Fails closed (reports a
     /// non-uniform range, so the caller filters key by key) when a template has more
     /// instantiations than <see cref="ScopeTemplate.MaxInstantiations"/>.
-    /// Allocation-free: instantiations are visited as spans over a stack buffer.
+    /// Allocation-free: instantiations are visited as spans over a stack buffer. One
+    /// budget is shared by every templated rule of the tree, so the work per range
+    /// decision is bounded however many templated rules the tree carries.
     /// </summary>
     private bool TemplatedRulesUniformOver(
         in LatticeSubject subject,
@@ -378,6 +380,7 @@ internal sealed class CompiledTree
         string start,
         string? rangeEnd)
     {
+        var budget = new ScopeTemplate.WalkBudget(ScopeTemplate.MaxInstantiations, ScopeTemplate.MaxWalkSteps);
         foreach (ref readonly var templated in _templatedKeys.AsSpan())
         {
             if (!RuleApplies(templated.Rule, subject, operation))
@@ -386,7 +389,7 @@ internal sealed class CompiledTree
             }
 
             var check = new RangeCheck(start, rangeEnd, isPrefix: false);
-            if (!templated.Template.VisitInstantiations(subject, ref check) || check.Varies)
+            if (!templated.Template.VisitInstantiations(subject, ref check, ref budget) || check.Varies)
             {
                 return false;
             }
@@ -400,7 +403,7 @@ internal sealed class CompiledTree
             }
 
             var check = new RangeCheck(start, rangeEnd, isPrefix: true);
-            if (!templated.Template.VisitInstantiations(subject, ref check) || check.Varies)
+            if (!templated.Template.VisitInstantiations(subject, ref check, ref budget) || check.Varies)
             {
                 return false;
             }
@@ -442,36 +445,70 @@ internal sealed class CompiledTree
     }
 
     /// <summary>
-    /// Appends the concrete keys and prefixes this tree's templated rules resolve to
-    /// for <paramref name="subject"/>, considering only rules that apply to the
-    /// subject and <paramref name="operation"/>. These are the subject's extra
-    /// positions at which a decision can change, alongside <see cref="ExactKeys"/>
-    /// and <see cref="Prefixes"/>; used off the hot path by the existence probes.
+    /// <c>true</c> when <paramref name="allowsAt"/> holds at some concrete key or
+    /// prefix this tree's templated rules resolve to for <paramref name="subject"/>,
+    /// considering only rules that apply to the subject and <paramref name="operation"/>.
+    /// These are the subject's extra positions at which a decision can change,
+    /// alongside <see cref="ExactKeys"/> and <see cref="Prefixes"/>. Used off the hot
+    /// path by the existence probes. At most <see cref="ScopeTemplate.MaxProbePositions"/>
+    /// positions are tried across all the tree's templated rules; when that bound
+    /// stops the search the answer is <c>false</c> (no grant found), which fails
+    /// closed for an existence probe.
     /// </summary>
     /// <param name="subject">The subject.</param>
     /// <param name="operation">The operation.</param>
-    /// <param name="keys">Receives the resolved exact keys.</param>
-    /// <param name="prefixes">Receives the resolved prefixes.</param>
-    internal void AppendTemplatedPositions(
+    /// <param name="allowsAt">Given a position and whether it is an exact key (otherwise a prefix), whether the decision there allows.</param>
+    /// <returns><c>true</c> when a position allows.</returns>
+    internal bool AnyTemplatedPositionAllows(
         in LatticeSubject subject,
         LatticeOperation operation,
-        List<string> keys,
-        List<string> prefixes)
+        Func<string, bool, bool> allowsAt)
     {
-        foreach (ref readonly var templated in _templatedKeys.AsSpan())
-        {
-            if (RuleApplies(templated.Rule, subject, operation))
-            {
-                templated.Template.AppendInstantiations(subject, keys);
-            }
-        }
+        var budget = new ScopeTemplate.WalkBudget(ScopeTemplate.MaxProbePositions, ScopeTemplate.MaxWalkSteps);
+        return AnyAllows(_templatedKeys, exact: true, subject, operation, allowsAt, ref budget)
+            || AnyAllows(_templatedPrefixes, exact: false, subject, operation, allowsAt, ref budget);
 
-        foreach (ref readonly var templated in _templatedPrefixes.AsSpan())
+        static bool AnyAllows(
+            TemplatedRule[] rules,
+            bool exact,
+            in LatticeSubject subject,
+            LatticeOperation operation,
+            Func<string, bool, bool> allowsAt,
+            ref ScopeTemplate.WalkBudget budget)
         {
-            if (RuleApplies(templated.Rule, subject, operation))
+            foreach (ref readonly var templated in rules.AsSpan())
             {
-                templated.Template.AppendInstantiations(subject, prefixes);
+                if (!RuleApplies(templated.Rule, subject, operation))
+                {
+                    continue;
+                }
+
+                var probe = new PositionProbe(allowsAt, exact);
+                templated.Template.VisitInstantiations(subject, ref probe, ref budget);
+                if (probe.Found)
+                {
+                    return true;
+                }
+
+                if (budget.Exhausted)
+                {
+                    return false;
+                }
             }
+
+            return false;
+        }
+    }
+
+    /// <summary>Resolves each visited position through a caller predicate, stopping at the first that allows.</summary>
+    private struct PositionProbe(Func<string, bool, bool> allowsAt, bool exact) : ScopeTemplate.IInstantiationVisitor
+    {
+        public bool Found { get; private set; }
+
+        public bool Visit(ReadOnlySpan<char> value)
+        {
+            Found = allowsAt(new string(value), exact);
+            return !Found;
         }
     }
 
@@ -805,26 +842,14 @@ internal sealed class CompiledTree
         // this subject, exactly as a literal grant at that position would be.
         if (HasTemplatedRules)
         {
-            var keys = new List<string>();
-            var prefixes = new List<string>();
-            AppendTemplatedPositions(subject, operation, keys, prefixes);
-            foreach (var key in keys)
+            var probeSubject = subject;
+            return AnyTemplatedPositionAllows(subject, operation, (position, exact) =>
             {
-                var m = ResolvePoint(subject, operation, key, userRuleBeatsGroupRule);
-                if (m.Matched && m.Effect == LatticeEffect.Allow)
-                {
-                    return true;
-                }
-            }
-
-            foreach (var prefix in prefixes)
-            {
-                var m = ResolveBelowExactTier(subject, operation, prefix, userRuleBeatsGroupRule);
-                if (m.Matched && m.Effect == LatticeEffect.Allow)
-                {
-                    return true;
-                }
-            }
+                var m = exact
+                    ? ResolvePoint(probeSubject, operation, position, userRuleBeatsGroupRule)
+                    : ResolveBelowExactTier(probeSubject, operation, position, userRuleBeatsGroupRule);
+                return m.Matched && m.Effect == LatticeEffect.Allow;
+            });
         }
 
         return false;

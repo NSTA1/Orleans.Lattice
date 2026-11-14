@@ -145,7 +145,7 @@ public sealed class OwnershipPolicySeeder(ILatticeAuthorizationPolicyStore store
 - **Group changes propagate with membership.** The group set is read per decision, so removing a caller from a group revokes their `{group:...}` access as soon as their resolved subject reflects it.
 - **Written as authored.** The policy store, the explain and introspection surfaces and the Explorer show a templated rule with its placeholders, and `LatticeScope.IsTemplated()` reports whether a scope is one. `LatticeScope.GetTemplateError()` returns the reason the store would refuse a scope's template, so an authoring surface can report it before writing; the Explorer's rule editors do. Any other brace in a key or prefix is literal text, and an invalid template that reaches the policy tree by replication or restore keeps its literal meaning.
 
-A decision adds at most one placeholder match per templated rule on the tree, and one lookup in the caller's group set per group placeholder; it allocates nothing. The compiled snapshot holds one entry per templated rule, however many callers it serves.
+A decision adds at most one placeholder match per templated rule on the tree, and one lookup in the caller's group set per group placeholder; it allocates nothing. The enumerations behind range-uniformity checks, existence probes and explanations share a fixed budget per decision across every templated rule of the tree (at most 4096 instantiations and 65,536 steps, and 1024 probed positions); when the budget runs out the answer fails closed: a range is filtered key by key, and a probe reports no grant. The compiled snapshot holds one entry per templated rule, however many callers it serves.
 
 ### Precedence
 

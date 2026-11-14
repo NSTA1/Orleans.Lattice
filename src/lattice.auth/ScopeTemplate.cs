@@ -48,6 +48,25 @@ internal sealed class ScopeTemplate
     internal const int MaxInstantiations = 4096;
 
     /// <summary>
+    /// The most steps - placeholder expansions and group-set iterations together -
+    /// <see cref="VisitInstantiations{TVisitor}"/> takes for one template before
+    /// reporting itself incomplete. <see cref="MaxInstantiations"/> counts only
+    /// completed instantiations, so this bounds the work of branches that never
+    /// complete as well; callers treat an incomplete walk as fail closed.
+    /// </summary>
+    internal const int MaxWalkSteps = 65_536;
+
+    /// <summary>
+    /// The most positions an existence probe resolves across ALL the templated rules
+    /// of one tree. Each position is resolved against every rule of the tree, so a
+    /// per-template cap alone would let the number of templated rules square the work.
+    /// </summary>
+    internal const int MaxProbePositions = 1024;
+
+    /// <summary>The most instantiations one rule contributes to an (advisory) explanation.</summary>
+    internal const int MaxExplainInstantiations = 64;
+
+    /// <summary>
     /// The most placeholders one template may carry. Bounds the recursion depth of
     /// <see cref="VisitInstantiations{TVisitor}"/> and the per-decision match cost.
     /// </summary>
@@ -340,7 +359,9 @@ internal sealed class ScopeTemplate
         }
 
         var values = new List<string>();
-        template.AppendInstantiations(subject, values);
+        var budget = new WalkBudget(MaxExplainInstantiations, MaxWalkSteps);
+        var collector = new ListCollector(values);
+        template.VisitInstantiations(subject, ref collector, ref budget);
         var scopes = new LatticeScope[values.Count];
         for (var i = 0; i < values.Count; i++)
         {
@@ -380,17 +401,43 @@ internal sealed class ScopeTemplate
     /// <paramref name="subject"/> - the subject id substituted for each
     /// <c>{subject}</c>, and every qualifying group of the subject for each
     /// <c>{group:...}</c> - as a span over a reused buffer, stopping when the visitor
-    /// returns <c>false</c> or after <see cref="MaxInstantiations"/> values. The
+    /// returns <c>false</c>, after <see cref="MaxInstantiations"/> values, or after
+    /// <see cref="MaxWalkSteps"/> steps. A template with a placeholder the subject
+    /// cannot fill resolves to nothing and is rejected before any expansion. The
     /// buffer is on the stack for instantiations up to 256 characters, so the walk
     /// allocates nothing in the common case.
     /// </summary>
     /// <typeparam name="TVisitor">The visitor; a struct so the call is not boxed.</typeparam>
     /// <param name="subject">The subject.</param>
     /// <param name="visitor">The visitor, passed by reference so it can record a result.</param>
-    /// <returns><c>false</c> when the cap stopped the walk before every instantiation was visited; otherwise <c>true</c>.</returns>
+    /// <returns><c>false</c> when a bound stopped the walk before every instantiation was visited; otherwise <c>true</c>.</returns>
     public bool VisitInstantiations<TVisitor>(in LatticeSubject subject, ref TVisitor visitor)
         where TVisitor : struct, IInstantiationVisitor
     {
+        var budget = new WalkBudget(MaxInstantiations, MaxWalkSteps);
+        return VisitInstantiations(subject, ref visitor, ref budget);
+    }
+
+    /// <summary>
+    /// Visits this template's instantiations for <paramref name="subject"/> as
+    /// <see cref="VisitInstantiations{TVisitor}(in LatticeSubject, ref TVisitor)"/> does,
+    /// but spends <paramref name="budget"/>, which the caller shares across every
+    /// template one decision or probe walks, so the total work of that decision is
+    /// bounded and not only the work of each template.
+    /// </summary>
+    /// <typeparam name="TVisitor">The visitor; a struct so the call is not boxed.</typeparam>
+    /// <param name="subject">The subject.</param>
+    /// <param name="visitor">The visitor, passed by reference so it can record a result.</param>
+    /// <param name="budget">The shared budget; marked exhausted when a bound stops the walk.</param>
+    /// <returns><c>false</c> when the budget is exhausted; otherwise <c>true</c>.</returns>
+    public bool VisitInstantiations<TVisitor>(in LatticeSubject subject, ref TVisitor visitor, ref WalkBudget budget)
+        where TVisitor : struct, IInstantiationVisitor
+    {
+        if (budget.Exhausted)
+        {
+            return false;
+        }
+
         if (subject.IsAnonymous)
         {
             return true;
@@ -398,17 +445,34 @@ internal sealed class ScopeTemplate
 
         var capacity = _literalLength;
         var longestGroup = -1;
-        foreach (var segment in _segments)
+        for (var s = 0; s < _segments.Length; s++)
         {
+            var segment = _segments[s];
+            if (segment.Kind == SegmentKind.Literal)
+            {
+                continue;
+            }
+
+            // A placeholder no value can fill makes every instantiation impossible;
+            // stop before expanding the placeholders ahead of it (linear work).
+            if (!CanFill(segment, _segments[s + 1].Text![0], subject, ref budget))
+            {
+                return !budget.Exhausted;
+            }
+
             if (segment.Kind == SegmentKind.Subject)
             {
                 capacity += subject.SubjectId.Length;
             }
-            else if (segment.Kind == SegmentKind.Group)
+            else
             {
                 if (longestGroup < 0)
                 {
-                    longestGroup = LongestGroup(subject.GroupIds);
+                    longestGroup = LongestGroup(subject.GroupIds, ref budget);
+                    if (budget.Exhausted)
+                    {
+                        return false;
+                    }
                 }
 
                 capacity += longestGroup;
@@ -416,9 +480,50 @@ internal sealed class ScopeTemplate
         }
 
         Span<char> buffer = capacity <= StackBufferChars ? stackalloc char[capacity] : new char[capacity];
-        var state = new WalkState(MaxInstantiations);
-        Walk(0, buffer, 0, subject, ref visitor, ref state);
-        return !state.Truncated;
+        var stop = false;
+        Walk(0, buffer, 0, subject, ref visitor, ref budget, ref stop);
+        return !budget.Exhausted;
+    }
+
+    /// <summary>
+    /// Whether at least one value of <paramref name="subject"/> can fill the placeholder
+    /// <paramref name="segment"/>. Each group scanned is charged to
+    /// <paramref name="budget"/>; when it runs out the answer is <c>false</c> and the
+    /// budget is exhausted.
+    /// </summary>
+    private static bool CanFill(Segment segment, char delimiter, in LatticeSubject subject, ref WalkBudget budget)
+    {
+        if (segment.Kind == SegmentKind.Subject)
+        {
+            return IsSubstitutable(subject.SubjectId, delimiter);
+        }
+
+        var prefix = segment.Text!;
+        var cursor = new GroupCursor(subject.GroupIds);
+        try
+        {
+            while (cursor.MoveNext())
+            {
+                if (!budget.TakeStep())
+                {
+                    return false;
+                }
+
+                var group = cursor.Current;
+                if (group.Length > prefix.Length
+                    && group.StartsWith(prefix, StringComparison.Ordinal)
+                    && IsSubstitutable(group.AsSpan(prefix.Length), delimiter))
+                {
+                    return true;
+                }
+            }
+        }
+        finally
+        {
+            cursor.Dispose();
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -501,27 +606,25 @@ internal sealed class ScopeTemplate
         int length,
         in LatticeSubject subject,
         ref TVisitor visitor,
-        ref WalkState state)
+        ref WalkBudget budget,
+        ref bool stop)
         where TVisitor : struct, IInstantiationVisitor
     {
-        if (state.Done)
+        if (stop || !budget.TakeStep())
         {
             return;
         }
 
         if (index == _segments.Length)
         {
-            if (state.Remaining == 0)
+            if (!budget.TakeInstantiation())
             {
-                state.Truncated = true;
-                state.Done = true;
                 return;
             }
 
-            state.Remaining--;
             if (!visitor.Visit(buffer[..length]))
             {
-                state.Done = true;
+                stop = true;
             }
 
             return;
@@ -531,7 +634,7 @@ internal sealed class ScopeTemplate
         if (segment.Kind == SegmentKind.Literal)
         {
             segment.Text.AsSpan().CopyTo(buffer[length..]);
-            Walk(index + 1, buffer, length + segment.Text!.Length, subject, ref visitor, ref state);
+            Walk(index + 1, buffer, length + segment.Text!.Length, subject, ref visitor, ref budget, ref stop);
             return;
         }
 
@@ -541,7 +644,7 @@ internal sealed class ScopeTemplate
             if (IsSubstitutable(subject.SubjectId, delimiter))
             {
                 subject.SubjectId.AsSpan().CopyTo(buffer[length..]);
-                Walk(index + 1, buffer, length + subject.SubjectId.Length, subject, ref visitor, ref state);
+                Walk(index + 1, buffer, length + subject.SubjectId.Length, subject, ref visitor, ref budget, ref stop);
             }
 
             return;
@@ -553,8 +656,13 @@ internal sealed class ScopeTemplate
         var groups = new GroupCursor(subject.GroupIds);
         try
         {
-            while (!state.Done && groups.MoveNext())
+            while (!stop && groups.MoveNext())
             {
+                if (!budget.TakeStep())
+                {
+                    return;
+                }
+
                 var group = groups.Current;
                 if (group.Length > prefix.Length
                     && group.StartsWith(prefix, StringComparison.Ordinal)
@@ -562,7 +670,7 @@ internal sealed class ScopeTemplate
                 {
                     var suffix = group.AsSpan(prefix.Length);
                     suffix.CopyTo(buffer[length..]);
-                    Walk(index + 1, buffer, length + suffix.Length, subject, ref visitor, ref state);
+                    Walk(index + 1, buffer, length + suffix.Length, subject, ref visitor, ref budget, ref stop);
                 }
             }
         }
@@ -609,13 +717,13 @@ internal sealed class ScopeTemplate
     private static bool IsSubstitutable(ReadOnlySpan<char> value, char delimiter) =>
         !value.IsEmpty && value.IndexOfAny(delimiter, AuthConstants.RuleKeySeparator) < 0;
 
-    private static int LongestGroup(IReadOnlyCollection<string> groups)
+    private static int LongestGroup(IReadOnlyCollection<string> groups, ref WalkBudget budget)
     {
         var longest = 0;
         var cursor = new GroupCursor(groups);
         try
         {
-            while (cursor.MoveNext())
+            while (cursor.MoveNext() && budget.TakeStep())
             {
                 longest = Math.Max(longest, cursor.Current.Length);
             }
@@ -704,11 +812,49 @@ internal sealed class ScopeTemplate
         }
     }
 
-    private struct WalkState(int remaining)
+    /// <summary>
+    /// The work a template walk may still do: instantiations to visit and steps to
+    /// take. Shared by reference across every template one decision walks, so the
+    /// decision's total work is bounded. Once exhausted it stays exhausted, and every
+    /// caller treats an exhausted walk as incomplete (fail closed).
+    /// </summary>
+    /// <param name="instantiations">The instantiations that may still be visited.</param>
+    /// <param name="steps">The steps that may still be taken.</param>
+    internal struct WalkBudget(int instantiations, int steps)
     {
-        public int Remaining = remaining;
-        public bool Done;
-        public bool Truncated;
+        private int _instantiations = instantiations;
+        private int _steps = steps;
+
+        /// <summary><c>true</c> once a bound stopped a walk.</summary>
+        public bool Exhausted { get; private set; }
+
+        /// <summary>Spends one step; when none is left, marks the budget exhausted.</summary>
+        /// <returns><c>false</c> when the budget is exhausted.</returns>
+        public bool TakeStep()
+        {
+            if (!Exhausted && _steps > 0)
+            {
+                _steps--;
+                return true;
+            }
+
+            Exhausted = true;
+            return false;
+        }
+
+        /// <summary>Spends one instantiation; when none is left, marks the budget exhausted.</summary>
+        /// <returns><c>false</c> when the budget is exhausted.</returns>
+        public bool TakeInstantiation()
+        {
+            if (!Exhausted && _instantiations > 0)
+            {
+                _instantiations--;
+                return true;
+            }
+
+            Exhausted = true;
+            return false;
+        }
     }
 
     /// <summary>
