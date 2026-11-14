@@ -1919,6 +1919,46 @@ concepts:
     sources:
       - "docs/lattice/wal-storage-providers.md"
       - "PACKAGES.md"
+  - id: subject-relative-scope
+    name: "Subject-relative scope"
+    category: identity
+    definition: "A subject-relative (templated) scope is a key or prefix authorization scope whose text carries {subject} or {group:<prefix>} placeholders, resolved from the caller's subject at decision time so one rule grants every caller their own slice of a tree."
+    packages:
+      - "Orleans.Lattice.Auth"
+    capability_boundary:
+      in_scope:
+        - statement: "LatticeScope.SubjectPlaceholder and LatticeScope.GroupPlaceholder author the placeholders, and IsTemplated recognises a templated scope."
+          source: "src/lattice.auth/LatticeScope.cs#LatticeScope.GroupPlaceholder"
+        - statement: "A matched templated rule ranks in its tier by its length after substitution and competes with literal rules on the same resolved key or prefix under the usual tie-break."
+          source: "src/lattice.auth/CompiledTree.cs#CompiledTree.ResolvePrefixTierWithTemplates"
+        - statement: "Rules are stored, listed and explained with their placeholders as written."
+          source: "docs/lattice.auth/README.md"
+      out_of_scope:
+        - statement: "An app-owned rule never resolves placeholders; its key or prefix always matches literally."
+          source: "src/lattice.auth/ScopeTemplate.cs#ScopeTemplate.ForCompile"
+        - statement: "A templated scope cannot be authored on a control-plane tree (sys-*, _lattice_*, tag-*)."
+          source: "src/lattice.auth/ScopeTemplate.cs#ScopeTemplate.IsForbiddenTree"
+    operational_envelope:
+      limits:
+        - name: "max-placeholders-per-template"
+          value: 8
+          unit: "placeholders"
+          source: "src/lattice.auth/ScopeTemplate.cs#ScopeTemplate.MaxPlaceholders"
+        - name: "max-instantiations-per-template"
+          value: 4096
+          unit: "instantiations"
+          source: "src/lattice.auth/ScopeTemplate.cs#ScopeTemplate.MaxInstantiations"
+        - name: "max-walk-steps-per-template"
+          value: 65536
+          unit: "steps"
+          source: "src/lattice.auth/ScopeTemplate.cs#ScopeTemplate.MaxWalkSteps"
+        - name: "max-probe-positions-per-tree"
+          value: 1024
+          unit: "positions"
+          source: "src/lattice.auth/ScopeTemplate.cs#ScopeTemplate.MaxProbePositions"
+    sources:
+      - "docs/lattice.auth/README.md"
+      - "src/lattice.auth/ScopeTemplate.cs"
   - id: tag-index
     name: "Tag index"
     category: index

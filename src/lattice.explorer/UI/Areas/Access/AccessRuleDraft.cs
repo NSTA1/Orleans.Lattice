@@ -179,6 +179,12 @@ internal sealed class AccessRuleDraft
         {
             errors.KeyOrPrefix = ScopeKind == KeyScope ? "Enter the key." : "Enter the prefix.";
         }
+        else if (NeedsKeyOrPrefix && NeedsTree && errors.Tree is null)
+        {
+            // A subject-relative key or prefix is checked as the cluster will check it.
+            var kind = ScopeKind == KeyScope ? LatticeScopeKind.Key : LatticeScopeKind.Prefix;
+            errors.KeyOrPrefix = new LatticeScope(kind, TreeId.Trim(), KeyOrPrefix).GetTemplateError();
+        }
 
         if (Operations == LatticeOperation.None)
         {

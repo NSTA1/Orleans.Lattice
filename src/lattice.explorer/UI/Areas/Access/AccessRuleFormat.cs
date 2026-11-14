@@ -26,6 +26,13 @@ internal static class AccessRuleFormat
         "Conditions are not evaluated in this version. This rule applies unconditionally, as if it had no condition.";
 
     /// <summary>
+    /// The hint under a rule editor's Key or Key prefix field, naming the
+    /// subject-relative placeholders the cluster resolves per caller.
+    /// </summary>
+    public const string TemplateHint =
+        "Use {subject} for the caller's id or {group:prefix} for each of their groups starting with prefix, followed by a delimiter such as /, to give every caller their own keys.";
+
+    /// <summary>
     /// The flag a new rule's Tree field shows when it names a tree that does not exist
     /// yet. A rule may govern a tree before the tree is created - a write that creates
     /// it, or a policy synced ahead of it, needs exactly that - so the name is accepted.

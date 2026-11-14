@@ -77,6 +77,15 @@ internal sealed class LatticeAuthorizationPolicyStore(
         // system origin included, and reads nothing.
         TenantRuleConfinement.EnsureConfined(rule);
 
+        // Templated (subject-relative) scope guard: a placeholder must be bounded by
+        // a delimiter, may not sit on a control-plane tree or an app-owned rule, and a
+        // group placeholder reaching tenant groups is confined to the scoped tree's
+        // tenant. Reads nothing.
+        if (ScopeTemplate.Validate(rule) is { } templateError)
+        {
+            throw new ArgumentException(templateError, nameof(rule));
+        }
+
         // Authoring guard (the single seam that decides whether a reserved-namespace
         // rule may be persisted): an ordinary tree is always authorable; the reserved
         // sys-auth-* namespace is rejected fail-closed except for the whole-tree Admin

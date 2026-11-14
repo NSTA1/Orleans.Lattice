@@ -64,6 +64,8 @@ The editor offers no condition. `LatticeAuthorizationRule.Condition` is reserved
 
 The editor refuses an empty rule id, an app-owned id prefix, an empty subject, a missing tree or key where the scope needs one, reserved system trees, no operations, or cluster-wide capabilities on a narrower scope. When all-trees grants are off, the scope hint says that data operations in a cluster-wide rule are refused while cluster-wide App install and Telemetry capabilities can still be granted.
 
+The Key and Key prefix fields accept a [subject-relative](../lattice.auth/README.md#subject-relative-scopes) value such as `{subject}/` or `g/{group:grp:}/`, which the cluster resolves for each caller; the field hint says so. The editor checks such a value as the cluster does and shows the reason beside the field - a placeholder with no delimiter after it, a control-plane tree, or a group prefix that reaches another tenant's groups - and the tenant rule editor applies the same check against the tenant's tree. The rule lists and details show the value as written.
+
 The Tree field offers the trees you can reach, and also accepts a tree that does not exist yet, because a rule may govern a tree before it is created: a write that creates the tree needs its grant first, and a policy pipeline can sync rules ahead of their trees. Such a tree is flagged "No tree named {tree} exists yet. The rule applies to it once it is created." rather than refused.
 
 Saving a rule submits it directly to the cluster. Directory validation failures are shown beside the subject, app-owned-rule failures beside the rule id, and other denials or faults as a form error.

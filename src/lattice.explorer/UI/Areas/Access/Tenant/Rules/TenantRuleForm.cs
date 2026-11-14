@@ -86,8 +86,13 @@ internal sealed class TenantRuleForm
         Operations = value ? Operations | operation : Operations & ~operation;
 
     /// <summary>Checks every field, one sentence per field that has a problem.</summary>
+    /// <param name="tenant">
+    /// The tenant the rule belongs to, so a subject-relative key or prefix is checked
+    /// against the tenant tree it will govern; <see langword="null"/> skips that check
+    /// and leaves it to the cluster.
+    /// </param>
     /// <returns>The problems; none when the rule can be sent.</returns>
-    public AccessRuleDraftErrors Validate()
+    public AccessRuleDraftErrors Validate(string? tenant = null)
     {
         var errors = new AccessRuleDraftErrors();
         if (string.IsNullOrWhiteSpace(RuleId))
@@ -110,6 +115,13 @@ internal sealed class TenantRuleForm
         if (NeedsKeyOrPrefix && string.IsNullOrEmpty(KeyOrPrefix))
         {
             errors.KeyOrPrefix = ScopeKind == TenantRuleScopeKind.Key ? "Name the key." : "Name the key prefix.";
+        }
+        else if (NeedsKeyOrPrefix && !string.IsNullOrEmpty(tenant) && errors.Tree is null)
+        {
+            // A subject-relative key or prefix is checked as the cluster will check it.
+            var kind = ScopeKind == TenantRuleScopeKind.Key ? LatticeScopeKind.Key : LatticeScopeKind.Prefix;
+            var treeId = string.Concat(LatticeTenantTrees.SegmentPrefix, tenant, "/", TreeName.Trim());
+            errors.KeyOrPrefix = new LatticeScope(kind, treeId, KeyOrPrefix).GetTemplateError();
         }
 
         if (Operations == LatticeOperation.None)

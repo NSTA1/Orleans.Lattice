@@ -931,7 +931,9 @@ internal sealed class LatticeAuthAdmin(
                 continue;
             }
 
-            if (!ScopeOverlaps(rule.Scope, scope))
+            // A templated rule is cited when any scope it resolves to for this
+            // subject overlaps the explained scope.
+            if (!AnyScopeOverlaps(ScopeTemplate.ResolveFor(rule, subject), scope))
             {
                 continue;
             }
@@ -960,6 +962,19 @@ internal sealed class LatticeAuthAdmin(
     /// </summary>
     private static HashSet<string> ToGroupSet(IReadOnlyCollection<string> groupIds) =>
         new(groupIds, StringComparer.Ordinal);
+
+    private static bool AnyScopeOverlaps(IReadOnlyList<LatticeScope> ruleScopes, LatticeScope target)
+    {
+        foreach (var ruleScope in ruleScopes)
+        {
+            if (ScopeOverlaps(ruleScope, target))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// <see langword="true"/> when a rule scope and an explain-target scope over

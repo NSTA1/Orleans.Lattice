@@ -295,6 +295,24 @@ public sealed class TenantRuleFormTests
         });
     }
 
+    [Test]
+    [TestCase("{subject}/", null)]
+    [TestCase("{group:t/acme/}/", null)]
+    [TestCase("{subject}", "delimiter")]
+    [TestCase("{group:t/other/}/", "tenant groups")]
+    public void A_subject_relative_prefix_is_checked_against_the_tenants_tree(string prefix, string? error)
+    {
+        var form = Filled();
+        form.ScopeValue = TenantRuleFormat.PrefixScope;
+        form.KeyOrPrefix = prefix;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(form.Validate("acme").KeyOrPrefix, error is null ? Is.Null : Does.Contain(error));
+            Assert.That(form.Validate().KeyOrPrefix, Is.Null, "without a tenant the cluster checks it");
+        });
+    }
+
     private static TenantRuleForm Filled()
     {
         var form = TenantRuleForm.New();

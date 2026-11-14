@@ -2600,7 +2600,7 @@
       "errors": [
         {
           "error_id": "invalid-argument",
-          "condition": "Malformed tenant id, name or subject id, or a confinement violation (TenantAccessConfinementException: foreign tenant group, group nesting, rule tree, rule operations, reserved rule id)."
+          "condition": "Malformed tenant id, name or subject id, or a confinement violation (TenantAccessConfinementException: foreign tenant group, group nesting, rule tree, rule operations, reserved rule id); or a templated (subject-relative) key or prefix whose {subject} or {group:<prefix>} placeholder is not followed by a literal delimiter, that carries more than 8 placeholders, or whose group prefix reaches tenant groups (t/...) outside this tenant."
         },
         {
           "error_id": "permission-denied",
@@ -2636,7 +2636,8 @@
       "sources": [
         "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantPolicyAdmin.cs",
         "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
-        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs",
+        "src/lattice.auth/ScopeTemplate.cs#ScopeTemplate.Validate"
       ]
     },
     {

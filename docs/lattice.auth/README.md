@@ -100,6 +100,53 @@ A `LatticeScope` names how broadly a rule applies within a tree, from broadest t
 | Tenant-wide | `LatticeScope.TenantWide(tenant)` | A whole-tree scope over the sentinel tree id `t/{tenant}/*`, standing for every tree the tenant owns except its app-owned trees. Authorable only on a tenant-tier rule; see [The tenant rule layer](tenant-layer.md#the-tenant-wide-scope). |
 | Cluster-wide | `LatticeScope.ClusterWide()` | A whole-tree scope over the `*` sentinel tree id, used for a capability not attached to any single tree (`LatticeOperation.Telemetry` and `LatticeOperation.AppInstall`) and, once `AllTreesGrantsEnabled` is set, for a data-plane grant or deny across every application tree (see [Precedence](#precedence)). |
 
+### Subject-relative scopes
+
+A key or prefix can name the caller instead of a fixed value, so one rule grants every caller their own slice of a tree ([#6061](https://github.com/NSTA1/Orleans.Lattice/issues/6061)). The placeholder is filled in from the caller's resolved subject at decision time:
+
+| Placeholder | Matches a key segment equal to |
+|---|---|
+| `{subject}` (`LatticeScope.SubjectPlaceholder`) | The caller's subject id. |
+| `{group:<prefix>}` (`LatticeScope.GroupPlaceholder(prefix)`) | The id of any group in the caller's expanded group set that starts with `<prefix>`, with `<prefix>` stripped. |
+
+```csharp verify
+public sealed class OwnershipPolicySeeder(ILatticeAuthorizationPolicyStore store)
+{
+    public async Task SeedAsync(CancellationToken cancellationToken)
+    {
+        // Each member may write and delete under their own prefix.
+        await store.PutRuleAsync(
+            new LatticeAuthorizationRule(
+                "owner-write-images",
+                LatticeSubjectSelector.Group("members"),
+                LatticeScope.Prefix("images", LatticeScope.SubjectPlaceholder + "/"),
+                LatticeOperation.Write | LatticeOperation.Delete | LatticeOperation.CrdtApply,
+                LatticeEffect.Allow),
+            cancellationToken);
+
+        // A member of group "grp:hikers" may read the keys under "g/hikers/".
+        await store.PutRuleAsync(
+            new LatticeAuthorizationRule(
+                "group-read-audience",
+                LatticeSubjectSelector.Group("members"),
+                LatticeScope.Prefix("aud", "g/" + LatticeScope.GroupPlaceholder("grp:") + "/"),
+                LatticeOperation.Read | LatticeOperation.RangeRead,
+                LatticeEffect.Allow),
+            cancellationToken);
+    }
+}
+```
+
+- **Segment-bounded.** Every placeholder must be followed by a literal delimiter, such as `/`, and the substituted value runs up to that delimiter, so `u1` never matches a key of `u10`. `PutRuleAsync` refuses a placeholder with no delimiter after it, and a template with more than eight placeholders.
+- **Unmatchable ids are refused silently.** An empty id, an id containing the delimiter, an id containing U+001F, and the anonymous caller never match. Nothing throws, so there is nothing to probe.
+- **Precedence is unchanged.** A matched templated rule ranks in its tier by its length after substitution, and competes with a literal rule on the same resolved key or prefix under the usual tie-break, so a fixed per-user deny on `u1/` still beats a templated allow. A templated deny, such as `Deny Group("suspended")` on `Prefix(t, "{subject}/")`, works too.
+- **Ranges** are a plain allow only when the whole range stays inside the caller's resolved prefix; otherwise the decision is filtered key by key, as with a literal prefix.
+- **Confinement.** A templated scope cannot be authored on a control-plane tree (`sys-*`, `_lattice_*`, `tag-*`). A `{group:...}` prefix that can reach tenant groups (`t/...`) must start with `t/{tenant}/` for the tenant that owns the scoped tree. An `app:` rule always matches its key or prefix literally.
+- **Group changes propagate with membership.** The group set is read per decision, so removing a caller from a group revokes their `{group:...}` access as soon as their resolved subject reflects it.
+- **Written as authored.** The policy store, the explain and introspection surfaces and the Explorer show a templated rule with its placeholders, and `LatticeScope.IsTemplated()` reports whether a scope is one. `LatticeScope.GetTemplateError()` returns the reason the store would refuse a scope's template, so an authoring surface can report it before writing; the Explorer's rule editors do. Any other brace in a key or prefix is literal text, and an invalid template that reaches the policy tree by replication or restore keeps its literal meaning.
+
+A decision adds at most one placeholder match per templated rule on the tree, and one lookup in the caller's group set per group placeholder; it allocates nothing. The enumerations behind range-uniformity checks, existence probes and explanations share a fixed budget per decision across every templated rule of the tree (at most 4096 instantiations and 65,536 steps, and 1024 probed positions); when the budget runs out the answer fails closed: a range is filtered key by key, and a probe reports no grant. The compiled snapshot holds one entry per templated rule, however many callers it serves.
+
 ### Precedence
 
 When more than one rule matches, the decision engine resolves them deterministically:
@@ -151,7 +198,7 @@ Every type below is in the `Orleans.Lattice.Auth` namespace. The operation vocab
 |---|---|
 | `LatticeAuthServiceCollectionExtensions` | `AddLatticeAuth(configure)` installs the enforcing gate; `ConfigureLatticeAuth(configure)` layers a further `LatticeAuthOptions` delegate after registration. |
 | `LatticeAuthOptions` | Every knob; see [Configuration](configuration.md). |
-| `LatticeAuthorizationRule`, `LatticeSubjectSelector`, `LatticeScope` | A rule, its subject selector, and its scope, as described above. `LatticeScope.TenantWide(tenant)` creates the tenant-wide scope, and `IsTenantWide()` / `TryGetTenantWideTenant(out tenant)` recognise it. |
+| `LatticeAuthorizationRule`, `LatticeSubjectSelector`, `LatticeScope` | A rule, its subject selector, and its scope, as described above. `LatticeScope.TenantWide(tenant)` creates the tenant-wide scope, and `IsTenantWide()` / `TryGetTenantWideTenant(out tenant)` recognise it. `SubjectPlaceholder`, `GroupPlaceholder(prefix)`, `IsTemplated()` and `GetTemplateError()` author, recognise and pre-check a [subject-relative scope](#subject-relative-scopes). |
 | `LatticeSubjectSelectorKind`, `LatticeScopeKind`, `LatticeEffect` | The discriminators: `User` or `Group`; `Tree`, `Key`, or `Prefix`; `Allow` or `Deny`. |
 | `LatticeAuthOperations` | `All`, the whole-data-plane operation mask. |
 | `ILatticeAuthorizationPolicyStore` | Durable rule storage: `PutRuleAsync`, `GetRuleAsync`, `RemoveRuleAsync`, `ListRulesForTreeAsync`, and `ListRulesAsync`. A write or delete of an app-owned rule id outside system origin throws `LatticeAppOwnedRuleException`. |

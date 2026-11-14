@@ -91,6 +91,16 @@ path:
 - **Operator verdicts are final.** A tenant-tier rule is evaluated only when no
   operator rule matches, so it can neither override an operator deny nor revoke an
   operator allow, and the tenant layer is never consulted for a control-plane tree.
+- **Subject-relative scopes cannot widen a grant.** A `{subject}` or
+  `{group:<prefix>}` placeholder matches only a whole delimited key segment equal to
+  the caller's own id or one of its own groups; an id containing the delimiter or
+  U+001F, and the anonymous caller, never match. Templated scopes are refused on
+  control-plane trees, and a group prefix that could reach tenant groups is confined
+  to the scoped tree's tenant, as a tenant group subject is. A templated rule ranks
+  by its resolved length, so a fixed deny on the same resolved prefix still wins,
+  and the range-uniformity and existence probes judge it at the positions it
+  resolves to for that caller, never more broadly. See
+  [Subject-relative scopes](README.md#subject-relative-scopes).
 - **Denied mutations leave no partial state.** A denied single-key write,
   delete, range delete, CRDT apply, batch write, atomic multi-key write, or bulk
   load throws before any leg of the operation is applied. The adversarial

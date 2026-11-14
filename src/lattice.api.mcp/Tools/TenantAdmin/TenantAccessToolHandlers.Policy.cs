@@ -70,7 +70,7 @@ internal static partial class TenantAccessToolHandlers
         [Description("The operations the rule covers, for example Read or Read, Write.")] LatticeOperation operations,
         [Description("Allow or Deny. A tenant rule sits beneath every platform rule: it can never override an operator deny or revoke an operator allow.")] LatticeEffect effect,
         [Description(TreeNameDescription + " Required for Tree, Key and Prefix scopes; omitted for TenantWide.")] string? treeName = null,
-        [Description("The key (Key scope) or key prefix (Prefix scope); omitted otherwise.")] string? keyOrPrefix = null,
+        [Description("The key (Key scope) or key prefix (Prefix scope); omitted otherwise. May be subject-relative: {subject} (the caller's subject id) or {group:<prefix>} (each of the caller's groups starting with <prefix>, prefix stripped; a prefix reaching tenant groups must start with t/{this tenant}/), each followed by a literal delimiter such as '/', for example '{subject}/'.")] string? keyOrPrefix = null,
         [Description(SubjectKindDescription)] TenantSubjectKind subjectKind = TenantSubjectKind.User,
         CancellationToken cancellationToken = default)
     {
