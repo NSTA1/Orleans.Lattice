@@ -95,6 +95,50 @@ public sealed record LatticeScope
         new(LatticeScopeKind.Prefix, treeId, prefix);
 
     /// <summary>
+    /// The placeholder for the caller's subject id in a templated key or prefix, for
+    /// example <c>LatticeScope.Prefix("images", "{subject}/")</c>, which grants each
+    /// caller the keys under their own id. A placeholder must be followed by a literal
+    /// delimiter such as <c>/</c>; a subject id that is empty or contains the
+    /// delimiter or U+001F never matches, and the anonymous subject never matches.
+    /// </summary>
+    public const string SubjectPlaceholder = "{subject}";
+
+    /// <summary>
+    /// Builds the group placeholder <c>{group:<paramref name="groupIdPrefix"/>}</c> for
+    /// a templated key or prefix. It matches a key segment equal to the id of any
+    /// group in the caller's expanded group set that starts with
+    /// <paramref name="groupIdPrefix"/>, with the prefix stripped: in
+    /// <c>"g/" + LatticeScope.GroupPlaceholder("grp:") + "/"</c>, a member of group
+    /// <c>grp:hikers</c> matches the keys under <c>g/hikers/</c>.
+    /// </summary>
+    /// <param name="groupIdPrefix">The group id prefix. Must not be <c>null</c> or empty, and must not contain <c>{</c>, <c>}</c> or U+001F.</param>
+    /// <returns>The placeholder text.</returns>
+    /// <exception cref="ArgumentException"><paramref name="groupIdPrefix"/> is <c>null</c>, empty, or contains a forbidden character.</exception>
+    public static string GroupPlaceholder(string groupIdPrefix)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(groupIdPrefix);
+        if (groupIdPrefix.AsSpan().IndexOfAny('{', '}', '\u001f') >= 0)
+        {
+            throw new ArgumentException(
+                "A group id prefix must not contain '{', '}' or U+001F.", nameof(groupIdPrefix));
+        }
+
+        return ScopeTemplate.GroupPlaceholderOpen + groupIdPrefix + "}";
+    }
+
+    /// <summary>
+    /// Returns <c>true</c> when this is a key or prefix scope whose text is a valid
+    /// subject-relative template (it carries <see cref="SubjectPlaceholder"/> or a
+    /// <see cref="GroupPlaceholder(string)"/>) on a tree that may hold one, so it is
+    /// resolved against each caller rather than matched literally. An app-owned rule
+    /// always matches literally, and the policy store refuses a group placeholder that
+    /// reaches another tenant's groups. A method rather than a property so the
+    /// record's printed and serialized member set is unchanged.
+    /// </summary>
+    /// <returns><c>true</c> for a templated scope; otherwise <c>false</c>.</returns>
+    public bool IsTemplated() => ScopeTemplate.IsTemplatedScope(this);
+
+    /// <summary>
     /// The sentinel tree id representing <b>every tree / no specific tree</b>: the
     /// all-trees wildcard used to author a <b>cluster-wide, scopeless</b> grant
     /// such as <see cref="LatticeOperation.Telemetry"/>. Because the authorization

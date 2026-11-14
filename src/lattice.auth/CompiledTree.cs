@@ -33,27 +33,43 @@ internal sealed class CompiledTree
     private readonly CompiledRule[][] _prefixRules;
     private readonly CompiledRule[] _treeRules;
 
+    // Subject-relative (templated) key and prefix rules (issue #6061). They cannot
+    // be indexed by their text, because what they cover depends on the caller, so
+    // each is matched against the key at decision time and joins the exact-key or
+    // prefix tier at its resolved position. Both are empty on a tree with no
+    // templated rule, which then resolves exactly as before.
+    private readonly TemplatedRule[] _templatedKeys;
+    private readonly TemplatedRule[] _templatedPrefixes;
+
     private CompiledTree(
         FrozenDictionary<string, CompiledRule[]> exact,
         string[] exactKeys,
         string[] prefixes,
         CompiledRule[][] prefixRules,
-        CompiledRule[] treeRules)
+        CompiledRule[] treeRules,
+        TemplatedRule[] templatedKeys,
+        TemplatedRule[] templatedPrefixes)
     {
         _exact = exact;
         _exactKeys = exactKeys;
         _prefixes = prefixes;
         _prefixRules = prefixRules;
         _treeRules = treeRules;
+        _templatedKeys = templatedKeys;
+        _templatedPrefixes = templatedPrefixes;
     }
 
     /// <summary>
-    /// <c>true</c> when the tree carries any exact-key or prefix rule, so a
-    /// collection (range) request can vary its decision key-by-key. When
-    /// <c>false</c>, only tree-wide rules apply and a collection decision is
-    /// uniform.
+    /// <c>true</c> when the tree carries any exact-key or prefix rule (literal or
+    /// templated), so a collection (range) request can vary its decision
+    /// key-by-key. When <c>false</c>, only tree-wide rules apply and a collection
+    /// decision is uniform.
     /// </summary>
-    public bool HasPerKeyRules => _exact.Count > 0 || _prefixes.Length > 0;
+    public bool HasPerKeyRules =>
+        _exact.Count > 0 || _prefixes.Length > 0 || _templatedKeys.Length > 0 || _templatedPrefixes.Length > 0;
+
+    /// <summary><c>true</c> when the tree carries any subject-relative (templated) key or prefix rule.</summary>
+    internal bool HasTemplatedRules => _templatedKeys.Length > 0 || _templatedPrefixes.Length > 0;
 
     /// <summary>
     /// The exact keys that carry at least one rule. Used off the hot path by the
@@ -91,10 +107,40 @@ internal sealed class CompiledTree
         if (key is not null)
         {
             // Tier 1: exact key (most specific).
-            if (_exact.TryGetValue(key, out var exactRules)
-                && TryBestInBucket(exactRules, subject, operation, userRuleBeatsGroupRule, out var exactWinner))
+            if (_templatedKeys.Length == 0)
             {
-                return new PolicyMatch(exactWinner.Effect, exactWinner.RuleId, LatticeScopeKind.Key, key);
+                if (_exact.TryGetValue(key, out var exactRules)
+                    && TryBestInBucket(exactRules, subject, operation, userRuleBeatsGroupRule, out var exactWinner))
+                {
+                    return new PolicyMatch(exactWinner.Effect, exactWinner.RuleId, LatticeScopeKind.Key, key);
+                }
+            }
+            else
+            {
+                // A templated key rule whose resolved key equals this key sits in the
+                // same tier as a literal rule on it, so both compete under the same
+                // user-over-group and deny-over-allow tie-break.
+                var best = new TierWinner();
+                if (_exact.TryGetValue(key, out var exactRules))
+                {
+                    foreach (ref readonly var rule in exactRules.AsSpan())
+                    {
+                        best.Consider(rule, key, subject, operation, userRuleBeatsGroupRule);
+                    }
+                }
+
+                foreach (ref readonly var templated in _templatedKeys.AsSpan())
+                {
+                    if (RuleApplies(templated.Rule, subject, operation) && templated.Template.MatchesKey(key, subject))
+                    {
+                        best.ConsiderApplicable(templated.Rule, templated.Template.Text, userRuleBeatsGroupRule);
+                    }
+                }
+
+                if (best.Found)
+                {
+                    return new PolicyMatch(best.Rule.Effect, best.Rule.RuleId, LatticeScopeKind.Key, best.Scope);
+                }
             }
         }
 
@@ -113,7 +159,15 @@ internal sealed class CompiledTree
         string? key,
         bool userRuleBeatsGroupRule)
     {
-        if (key is not null)
+        if (key is not null && _templatedPrefixes.Length > 0)
+        {
+            var prefixMatch = ResolvePrefixTierWithTemplates(subject, operation, key, userRuleBeatsGroupRule);
+            if (prefixMatch.Matched)
+            {
+                return prefixMatch;
+            }
+        }
+        else if (key is not null)
         {
             // Tier 2: prefixes of the key, longest first. The prefixes of a given
             // key are strictly nested and therefore sort in length order, so the
@@ -142,6 +196,87 @@ internal sealed class CompiledTree
         }
 
         return default;
+    }
+
+    /// <summary>
+    /// Tier 2 when the tree carries templated prefix rules: the literal prefixes of
+    /// <paramref name="key"/> and the templated prefixes that resolve to a prefix of
+    /// it, walked together longest resolved prefix first. A templated prefix ranks by
+    /// its length after substitution, and one that resolves to the same prefix as a
+    /// literal rule competes in that rule's tier, so the usual tie-break (user over
+    /// group, then deny over allow) decides between them. Allocation-free while the
+    /// tree has at most 128 templated prefix rules.
+    /// </summary>
+    private PolicyMatch ResolvePrefixTierWithTemplates(
+        in LatticeSubject subject,
+        LatticeOperation operation,
+        string key,
+        bool userRuleBeatsGroupRule)
+    {
+        var count = _templatedPrefixes.Length;
+        Span<int> lengths = count <= 128 ? stackalloc int[count] : new int[count];
+        for (var t = 0; t < count; t++)
+        {
+            ref readonly var templated = ref _templatedPrefixes[t];
+            lengths[t] = RuleApplies(templated.Rule, subject, operation)
+                && templated.Template.TryMatchPrefix(key, subject, out var resolved)
+                    ? resolved
+                    : -1;
+        }
+
+        var literal = LargestPrefixAtOrBelow(key);
+        var ceiling = int.MaxValue;
+        while (true)
+        {
+            while (literal >= 0 && !key.StartsWith(_prefixes[literal], StringComparison.Ordinal))
+            {
+                literal--;
+            }
+
+            var literalLength = literal >= 0 ? _prefixes[literal].Length : -1;
+            var templatedLength = -1;
+            foreach (var length in lengths)
+            {
+                if (length < ceiling && length > templatedLength)
+                {
+                    templatedLength = length;
+                }
+            }
+
+            var tier = Math.Max(literalLength, templatedLength);
+            if (tier < 0)
+            {
+                return default;
+            }
+
+            var best = new TierWinner();
+            if (literalLength == tier)
+            {
+                var prefix = _prefixes[literal];
+                foreach (ref readonly var rule in _prefixRules[literal].AsSpan())
+                {
+                    best.Consider(rule, prefix, subject, operation, userRuleBeatsGroupRule);
+                }
+
+                literal--;
+            }
+
+            for (var t = 0; t < count; t++)
+            {
+                if (lengths[t] == tier)
+                {
+                    ref readonly var templated = ref _templatedPrefixes[t];
+                    best.ConsiderApplicable(templated.Rule, templated.Template.Text, userRuleBeatsGroupRule);
+                }
+            }
+
+            if (best.Found)
+            {
+                return new PolicyMatch(best.Rule.Effect, best.Rule.RuleId, LatticeScopeKind.Prefix, best.Scope);
+            }
+
+            ceiling = tier;
+        }
     }
 
     /// <summary>
@@ -216,8 +351,128 @@ internal sealed class CompiledTree
             }
         }
 
+        // A templated rule stands for the keys and prefixes it resolves to for this
+        // subject, so each of them is held to the same two tests as a literal one.
+        if (HasTemplatedRules && !TemplatedRulesUniformOver(subject, operation, start, rangeEnd))
+        {
+            return false;
+        }
+
         match = ResolveBelowExactTier(subject, operation, start, userRuleBeatsGroupRule);
         return true;
+    }
+
+    /// <summary>
+    /// <c>true</c> when no templated rule that applies to <paramref name="subject"/>
+    /// and <paramref name="operation"/> can vary the decision inside
+    /// <c>[<paramref name="start"/>, <paramref name="rangeEnd"/>)</c>: none of its
+    /// resolved keys lies inside the range, and none of its resolved prefixes governs
+    /// part of the range without governing all of it. Fails closed (reports a
+    /// non-uniform range, so the caller filters key by key) when a template has more
+    /// instantiations than <see cref="ScopeTemplate.MaxInstantiations"/>.
+    /// Allocation-free: instantiations are visited as spans over a stack buffer.
+    /// </summary>
+    private bool TemplatedRulesUniformOver(
+        in LatticeSubject subject,
+        LatticeOperation operation,
+        string start,
+        string? rangeEnd)
+    {
+        foreach (ref readonly var templated in _templatedKeys.AsSpan())
+        {
+            if (!RuleApplies(templated.Rule, subject, operation))
+            {
+                continue;
+            }
+
+            var check = new RangeCheck(start, rangeEnd, isPrefix: false);
+            if (!templated.Template.VisitInstantiations(subject, ref check) || check.Varies)
+            {
+                return false;
+            }
+        }
+
+        foreach (ref readonly var templated in _templatedPrefixes.AsSpan())
+        {
+            if (!RuleApplies(templated.Rule, subject, operation))
+            {
+                continue;
+            }
+
+            var check = new RangeCheck(start, rangeEnd, isPrefix: true);
+            if (!templated.Template.VisitInstantiations(subject, ref check) || check.Varies)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Applies the literal-rule uniformity tests of <see cref="TryResolveUniformRange"/>
+    /// to one resolved key or prefix, recording whether it varies the decision inside
+    /// the range.
+    /// </summary>
+    private struct RangeCheck(string start, string? rangeEnd, bool isPrefix) : ScopeTemplate.IInstantiationVisitor
+    {
+        public bool Varies { get; private set; }
+
+        public bool Visit(ReadOnlySpan<char> value)
+        {
+            if (!isPrefix)
+            {
+                // A resolved exact key inside the range decides that key differently.
+                Varies = value.SequenceCompareTo(start) >= 0 && IsBelowEnd(value, rangeEnd);
+            }
+            else if (value.SequenceCompareTo(start) > 0)
+            {
+                // A prefix above the start but inside the range governs only the keys extending it.
+                Varies = IsBelowEnd(value, rangeEnd);
+            }
+            else
+            {
+                // A prefix at or below the start governs the range only if it is a
+                // prefix of the start, and then it must govern the whole range.
+                Varies = start.AsSpan().StartsWith(value, StringComparison.Ordinal) && !RangeEndWithinPrefix(rangeEnd, value);
+            }
+
+            return !Varies;
+        }
+    }
+
+    /// <summary>
+    /// Appends the concrete keys and prefixes this tree's templated rules resolve to
+    /// for <paramref name="subject"/>, considering only rules that apply to the
+    /// subject and <paramref name="operation"/>. These are the subject's extra
+    /// positions at which a decision can change, alongside <see cref="ExactKeys"/>
+    /// and <see cref="Prefixes"/>; used off the hot path by the existence probes.
+    /// </summary>
+    /// <param name="subject">The subject.</param>
+    /// <param name="operation">The operation.</param>
+    /// <param name="keys">Receives the resolved exact keys.</param>
+    /// <param name="prefixes">Receives the resolved prefixes.</param>
+    internal void AppendTemplatedPositions(
+        in LatticeSubject subject,
+        LatticeOperation operation,
+        List<string> keys,
+        List<string> prefixes)
+    {
+        foreach (ref readonly var templated in _templatedKeys.AsSpan())
+        {
+            if (RuleApplies(templated.Rule, subject, operation))
+            {
+                templated.Template.AppendInstantiations(subject, keys);
+            }
+        }
+
+        foreach (ref readonly var templated in _templatedPrefixes.AsSpan())
+        {
+            if (RuleApplies(templated.Rule, subject, operation))
+            {
+                templated.Template.AppendInstantiations(subject, prefixes);
+            }
+        }
     }
 
     private static bool Applies(
@@ -227,8 +482,8 @@ internal sealed class CompiledTree
         bool userRuleBeatsGroupRule) =>
         TryBestInBucket(rules, subject, operation, userRuleBeatsGroupRule, out _);
 
-    private static bool IsBelowEnd(string value, string? rangeEnd) =>
-        rangeEnd is null || string.CompareOrdinal(value, rangeEnd) < 0;
+    private static bool IsBelowEnd(ReadOnlySpan<char> value, string? rangeEnd) =>
+        rangeEnd is null || value.SequenceCompareTo(rangeEnd) < 0;
 
     /// <summary>
     /// <c>true</c> when every key below <paramref name="rangeEnd"/> that is at or
@@ -236,7 +491,7 @@ internal sealed class CompiledTree
     /// below <see cref="LatticeKeyRange.PrefixUpperBound(string)"/> of the prefix.
     /// Compares against that bound without materializing it.
     /// </summary>
-    private static bool RangeEndWithinPrefix(string? rangeEnd, string prefix)
+    private static bool RangeEndWithinPrefix(string? rangeEnd, ReadOnlySpan<char> prefix)
     {
         var last = prefix.Length - 1;
         while (last >= 0 && prefix[last] == char.MaxValue)
@@ -364,6 +619,57 @@ internal sealed class CompiledTree
     private static bool OperationMatches(LatticeOperation ruleOperations, LatticeOperation requested) =>
         requested != LatticeOperation.None && (ruleOperations & requested) == requested;
 
+    /// <summary><c>true</c> when <paramref name="rule"/> covers <paramref name="operation"/> and its subject selector matches <paramref name="subject"/>.</summary>
+    private static bool RuleApplies(in CompiledRule rule, in LatticeSubject subject, LatticeOperation operation) =>
+        OperationMatches(rule.Operations, operation) && SubjectMatches(subject, rule);
+
+    /// <summary>
+    /// The running winner of one scope tier when literal and templated rules compete
+    /// in it: the same score as <see cref="TryBestInBucket"/> (user over group when
+    /// enabled, then deny over allow), plus the winning rule's scope text.
+    /// </summary>
+    private struct TierWinner
+    {
+        private int _score;
+
+        public bool Found { get; private set; }
+
+        public CompiledRule Rule { get; private set; }
+
+        public string? Scope { get; private set; }
+
+        public void Consider(
+            in CompiledRule rule,
+            string scope,
+            in LatticeSubject subject,
+            LatticeOperation operation,
+            bool userRuleBeatsGroupRule)
+        {
+            if (RuleApplies(rule, subject, operation))
+            {
+                ConsiderApplicable(rule, scope, userRuleBeatsGroupRule);
+            }
+        }
+
+        /// <summary>Considers a rule the caller has already found applies to the subject and operation.</summary>
+        public void ConsiderApplicable(in CompiledRule rule, string scope, bool userRuleBeatsGroupRule)
+        {
+            var subjectRank = userRuleBeatsGroupRule && rule.SubjectKind == LatticeSubjectSelectorKind.User ? 1 : 0;
+            var effectRank = rule.Effect == LatticeEffect.Deny ? 1 : 0;
+            var score = (subjectRank << 1) | effectRank;
+            if (!Found || score > _score)
+            {
+                Found = true;
+                _score = score;
+                Rule = rule;
+                Scope = scope;
+            }
+        }
+    }
+
+    /// <summary>A compiled rule whose key or prefix is a subject-relative template.</summary>
+    private readonly record struct TemplatedRule(ScopeTemplate Template, CompiledRule Rule);
+
     /// <summary>
     /// <c>true</c> when a rule's subject selector matches the subject: a user
     /// selector matches the subject id; a group selector matches when the group
@@ -377,15 +683,38 @@ internal sealed class CompiledTree
         }
 
         // Group selector: membership test against the flat closure. Prefer the
-        // O(1) set path when the closure is a set (the common case) and fall back
-        // to an allocation-free linear scan otherwise.
+        // O(1) set path when the closure is a set (the common case), then an
+        // allocation-free span scan for an array or list, and fall back to the
+        // interface enumerator otherwise.
         var groups = subject.GroupIds;
         if (groups is IReadOnlySet<string> set)
         {
             return set.Contains(rule.SubjectId);
         }
 
-        foreach (var group in groups)
+        ReadOnlySpan<string> span;
+        if (groups is string[] array)
+        {
+            span = array;
+        }
+        else if (groups is List<string> list)
+        {
+            span = CollectionsMarshal.AsSpan(list);
+        }
+        else
+        {
+            foreach (var group in groups)
+            {
+                if (string.Equals(group, rule.SubjectId, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        foreach (var group in span)
         {
             if (string.Equals(group, rule.SubjectId, StringComparison.Ordinal))
             {
@@ -472,6 +801,32 @@ internal sealed class CompiledTree
             }
         }
 
+        // A templated grant is judged at the keys and prefixes it resolves to for
+        // this subject, exactly as a literal grant at that position would be.
+        if (HasTemplatedRules)
+        {
+            var keys = new List<string>();
+            var prefixes = new List<string>();
+            AppendTemplatedPositions(subject, operation, keys, prefixes);
+            foreach (var key in keys)
+            {
+                var m = ResolvePoint(subject, operation, key, userRuleBeatsGroupRule);
+                if (m.Matched && m.Effect == LatticeEffect.Allow)
+                {
+                    return true;
+                }
+            }
+
+            foreach (var prefix in prefixes)
+            {
+                var m = ResolveBelowExactTier(subject, operation, prefix, userRuleBeatsGroupRule);
+                if (m.Matched && m.Effect == LatticeEffect.Allow)
+                {
+                    return true;
+                }
+            }
+        }
+
         return false;
     }
 
@@ -493,10 +848,21 @@ internal sealed class CompiledTree
         Dictionary<string, CompiledRule[]>? exactBuilder = null;
         Dictionary<string, CompiledRule[]>? prefixBuilder = null;
         List<CompiledRule>? treeBuilder = null;
+        List<TemplatedRule>? templatedKeys = null;
+        List<TemplatedRule>? templatedPrefixes = null;
 
         foreach (var rule in rules)
         {
             var compiled = new CompiledRule(rule.RuleId, rule.Subject.Kind, rule.Subject.Id, rule.Operations, rule.Effect);
+            if (rule.Scope.Kind != LatticeScopeKind.Tree && ScopeTemplate.ForCompile(rule) is { } template)
+            {
+                var bucket = rule.Scope.Kind == LatticeScopeKind.Key
+                    ? templatedKeys ??= new List<TemplatedRule>()
+                    : templatedPrefixes ??= new List<TemplatedRule>();
+                bucket.Add(new TemplatedRule(template, compiled));
+                continue;
+            }
+
             switch (rule.Scope.Kind)
             {
                 case LatticeScopeKind.Key:
@@ -558,7 +924,14 @@ internal sealed class CompiledTree
             Array.Sort(exactKeys, StringComparer.Ordinal);
         }
 
-        return new CompiledTree(exact, exactKeys, prefixes, prefixRules, treeRules);
+        return new CompiledTree(
+            exact,
+            exactKeys,
+            prefixes,
+            prefixRules,
+            treeRules,
+            templatedKeys is null ? Array.Empty<TemplatedRule>() : templatedKeys.ToArray(),
+            templatedPrefixes is null ? Array.Empty<TemplatedRule>() : templatedPrefixes.ToArray());
     }
 
     private static void Append(Dictionary<string, CompiledRule[]> builder, string key, CompiledRule rule)

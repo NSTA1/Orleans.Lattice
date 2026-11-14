@@ -203,7 +203,7 @@ internal sealed partial class LatticeTenantPolicyAdmin
                 if (visibility is (TenantRuleVisibility.Tenant or TenantRuleVisibility.PlatformTree)
                     && (rule.Operations & operation) != LatticeOperation.None
                     && rule.Subject.Matches(subject.SubjectId, groups)
-                    && KeyMatches(rule.Scope, key))
+                    && KeyMatches(rule, subject, key))
                 {
                     matched.Add(rule);
                 }
@@ -284,14 +284,29 @@ internal sealed partial class LatticeTenantPolicyAdmin
             _ => string.Equals(rule.Scope.TreeId, treeId, StringComparison.Ordinal),
         };
 
-    private static bool KeyMatches(LatticeScope scope, string? key) =>
-        key is null
-        || scope.Kind switch
+    private static bool KeyMatches(LatticeAuthorizationRule rule, LatticeSubject subject, string? key)
+    {
+        if (key is null)
+        {
+            return true;
+        }
+
+        // A templated rule matches the key it resolves to for this subject.
+        if (ScopeTemplate.ForCompile(rule) is { } template)
+        {
+            return rule.Scope.Kind == LatticeScopeKind.Key
+                ? template.MatchesKey(key, subject)
+                : template.TryMatchPrefix(key, subject, out _);
+        }
+
+        var scope = rule.Scope;
+        return scope.Kind switch
         {
             LatticeScopeKind.Key => string.Equals(scope.KeyOrPrefix, key, StringComparison.Ordinal),
             LatticeScopeKind.Prefix => key.StartsWith(scope.KeyOrPrefix!, StringComparison.Ordinal),
             _ => true,
         };
+    }
 
     private static HashSet<string> ToGroupSet(IReadOnlyCollection<string> groupIds) =>
         new(groupIds, StringComparer.Ordinal);

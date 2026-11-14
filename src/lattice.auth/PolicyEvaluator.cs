@@ -676,6 +676,30 @@ internal static class PolicyEvaluator
                     return true;
                 }
             }
+
+            // A templated rule changes the decision at the keys and prefixes it
+            // resolves to for this subject, so those are probed as well.
+            if (source.HasTemplatedRules)
+            {
+                var templatedKeys = new List<string>();
+                var templatedPrefixes = new List<string>();
+                source.AppendTemplatedPositions(subject, operation, templatedKeys, templatedPrefixes);
+                foreach (var key in templatedKeys)
+                {
+                    if (AllowsAt(operatorTree, tenantTree, allTreesMatch, tenantWideMatch, subject, operation, key, exact: true, userBeatsGroup, options.DefaultEffect))
+                    {
+                        return true;
+                    }
+                }
+
+                foreach (var prefix in templatedPrefixes)
+                {
+                    if (AllowsAt(operatorTree, tenantTree, allTreesMatch, tenantWideMatch, subject, operation, prefix, exact: false, userBeatsGroup, options.DefaultEffect))
+                    {
+                        return true;
+                    }
+                }
+            }
         }
 
         return false;

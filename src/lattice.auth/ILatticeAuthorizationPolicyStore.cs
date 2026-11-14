@@ -26,7 +26,11 @@ public interface ILatticeAuthorizationPolicyStore
     /// confinement: a tenant-tier rule outside its own tenant's non-app trees or tenant-wide scope, or
     /// with operations outside <see cref="LatticeAuthOperations.All"/>, or naming another tenant's group;
     /// a tenant-wide scope on a rule that is not tenant-tier; or a tenant group (<c>t/{tenant}/{name}</c>)
-    /// named on a scope its tenant does not own.
+    /// named on a scope its tenant does not own; or the rule's key or prefix is a templated (subject-relative) scope that is
+    /// invalid (a placeholder not followed by a literal delimiter, an unclosed or empty <c>{group:}</c> placeholder), is
+    /// on a control-plane tree (<c>sys-*</c> or <c>_lattice_*</c>), or has a group placeholder
+    /// that reaches tenant groups (<c>t/...</c>) outside the scoped tree's own tenant. (An app-owned rule's key or prefix
+    /// always matches literally and is not validated as a template.)
     /// </exception>
     /// <exception cref="LatticeAppOwnedRuleException">
     /// The rule id is in the app-owned namespace (<see cref="LatticeAppRuleIds.Prefix"/>) and the

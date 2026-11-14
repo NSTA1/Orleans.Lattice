@@ -35,6 +35,7 @@ Every option is documented in [Configuration](configuration.md).
 
 - **Rule-id guards run before any read or write.** `ILatticeAuthorizationPolicyStore.PutRuleAsync` and `RemoveRuleAsync` throw `LatticeAppOwnedRuleException` for an `app:` id and `LatticeTenantOwnedRuleException` for a `tenant:` id when the caller is not already running under system origin. Both exceptions derive from `ArgumentException`, implement the core `ILatticeDomainFault`, and carry the targeted `RuleId`; their static `Rejected(ruleId, paramName)` factories build the instance the store throws.
 - **Malformed rules are refused, not stored.** The store rejects an empty rule or subject id, an out-of-range enum value, and a key or prefix that is missing from (or present on) the wrong scope kind with an `ArgumentException`. The public constructors do not validate enum values.
+- **Templated scopes are validated on write.** A key or prefix carrying `{subject}` or `{group:<prefix>}` is refused with an `ArgumentException` when a placeholder has no literal delimiter after it, when it targets a control-plane tree, or when a group prefix can reach another tenant's groups; see [Subject-relative scopes](README.md#subject-relative-scopes).
 - **`LatticeAuthReservedTrees.ThrowIfReserved`** throws the same error the policy store enforces for the reserved `sys-auth-*` namespace; `Prefix` is `sys-auth-` and `PolicyTreeId` is `sys-auth-policy`.
 - **`LatticeScope.ClusterWideTreeId`** is the `*` sentinel tree id used by `LatticeScope.ClusterWide()`.
 - **`ILatticeDecisionEngine.Evaluate`** is the policy decision only. The enforcing gate layers the bootstrap-administrator bypass, the control-plane fail-closed rule, the strict epoch fence and tenant isolation around it; see [Architecture](architecture.md#the-enforcing-gate).
@@ -263,6 +264,9 @@ The following inventory includes directly declared public members and overloads,
 - `public static LatticeScope Tree(string treeId)`
 - `public static LatticeScope Key(string treeId, string key)`
 - `public static LatticeScope Prefix(string treeId, string prefix)`
+- `public const string SubjectPlaceholder`
+- `public static string GroupPlaceholder(string groupIdPrefix)`
+- `public bool IsTemplated()`
 - `public const string ClusterWideTreeId`
 - `public static LatticeScope ClusterWide()`
 - `public static LatticeScope TenantWide(TenantId tenant)`

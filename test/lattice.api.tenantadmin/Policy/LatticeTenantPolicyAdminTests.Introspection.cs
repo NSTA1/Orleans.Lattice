@@ -105,6 +105,30 @@ public sealed partial class LatticeTenantPolicyAdminTests
     }
 
     [Test]
+    public async Task Explain_cites_a_templated_tenant_rule_only_at_the_callers_resolved_prefix()
+    {
+        var harness = new Harness();
+        harness.AdmitMember(Member);
+        harness.Store.Seed(new LatticeAuthorizationRule(
+            "tenant:acme:own",
+            LatticeSubjectSelector.User(Member),
+            LatticeScope.Prefix("t/acme/orders", LatticeScope.SubjectPlaceholder + "/"),
+            LatticeOperation.Read,
+            LatticeEffect.Allow));
+        var facade = harness.Create();
+
+        var own = await facade.ExplainAsync(Tenant, Member, "orders", Member + "/k", LatticeOperation.Read);
+        var other = await facade.ExplainAsync(Tenant, Member, "orders", "someone-else/k", LatticeOperation.Read);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(own.MatchedRules.Select(r => r.RuleId), Is.EqualTo(new[] { "own" }));
+            Assert.That(own.MatchedRules.Single().KeyOrPrefix, Is.EqualTo("{subject}/"), "shown as written");
+            Assert.That(other.MatchedRules, Is.Empty);
+        });
+    }
+
+    [Test]
     public async Task Explain_reports_a_tenant_wide_decision_read_from_the_sentinel_bucket()
     {
         var harness = new Harness();
