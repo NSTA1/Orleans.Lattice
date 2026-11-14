@@ -1533,6 +1533,39 @@ invariants:
       - "docs/lattice/shard-splitting.md"
       - "docs/lattice/online-reshard.md"
       - "docs/lattice/consistency.md"
+  - id: subject-relative-scope-bounded
+    name: "Subject-relative scopes resolve only to the caller's own segments"
+    description: "A {subject} or {group:<prefix>} placeholder matches only a whole delimiter-bounded key segment equal to the caller's own subject id or one of its own groups; an id that is empty or contains the delimiter or U+001F, and the anonymous subject, never match; templates are refused on control-plane trees and a group prefix reaching tenant groups is confined to the scoped tree's tenant."
+    scope:
+      packages:
+        - "Orleans.Lattice.Auth"
+      components:
+        - "ScopeTemplate"
+        - "CompiledTree"
+        - "LatticeAuthorizationPolicyStore"
+        - "PolicyEvaluator"
+    violation_modes:
+      - "A placeholder without a following delimiter lets u1 match keys of u10."
+      - "A templated rule grants a caller another caller's prefix, or grants the anonymous subject."
+      - "A templated allow outranks a literal deny on the same resolved prefix."
+      - "A range or existence probe reports a grant the point decision would deny."
+      - "A group placeholder reaches another tenant's groups."
+    detection_signals:
+      - type: test
+        name: "TemplatedScopeEvaluationTests"
+        source: "test/lattice.auth/TemplatedScopeEvaluationTests.cs"
+      - type: test
+        name: "TemplatedScopeAuthoringTests"
+        source: "test/lattice.auth/TemplatedScopeAuthoringTests.cs"
+      - type: test
+        name: "ScopeTemplateTests"
+        source: "test/lattice.auth/ScopeTemplateTests.cs"
+    remediation:
+      - step: "Follow every placeholder with a literal delimiter such as '/', and start a tenant-group placeholder prefix with t/{tenant}/ for the scoped tree's tenant."
+        source: "docs/lattice.auth/README.md"
+    sources:
+      - "docs/lattice.auth/README.md"
+      - "src/lattice.auth/ScopeTemplate.cs"
   - id: telemetry-metric-allow-list-fail-closed
     name: "Telemetry metric allow-list fails closed"
     description: "PromQL queries are authorized only when their metric-name matcher parses to an exact allowed name."

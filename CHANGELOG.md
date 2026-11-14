@@ -12,7 +12,7 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Added
 
-- **Auth - Subject-relative scopes.** A rule's key or prefix may name the caller with `{subject}` or `{group:<prefix>}`, so one rule grants every caller their own slice: segment-bounded, ranked by resolved length, refused on control-plane trees, allocation-free on the decision path. ([#6061](https://github.com/NSTA1/Orleans.Lattice/issues/6061)) (`Orleans.Lattice.Auth`, `Orleans.Lattice.Api.Auth`, `Orleans.Lattice.Api.TenantAdmin`)
+- **Auth - Subject-relative scopes.** A rule's key or prefix may name the caller with `{subject}` or `{group:<prefix>}`, so one rule grants every caller their own slice: segment-bounded, ranked by resolved length, checked by the Explorer editors, allocation-free when deciding. ([#6061](https://github.com/NSTA1/Orleans.Lattice/issues/6061)) (`Orleans.Lattice.Auth`, `Orleans.Lattice.Api.Auth`, `Orleans.Lattice.Api.TenantAdmin`, `Orleans.Lattice.Api.Mcp`, `Orleans.Lattice.Explorer.UI`)
 
 ## Released
 

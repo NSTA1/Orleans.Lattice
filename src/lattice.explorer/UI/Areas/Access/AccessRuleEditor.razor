@@ -31,7 +31,7 @@
     }
     @if (_draft.NeedsKeyOrPrefix)
     {
-        <LtTextInput Label="@(_draft.ScopeKind == AccessRuleDraft.KeyScope ? "Key" : "Key prefix")" Mono="true" Value="@_draft.KeyOrPrefix" ValueChanged="@(value => _draft.KeyOrPrefix = value)" ReadOnly="_draft.IsExisting" Error="@_errors.KeyOrPrefix" />
+        <LtTextInput Label="@(_draft.ScopeKind == AccessRuleDraft.KeyScope ? "Key" : "Key prefix")" Mono="true" Value="@_draft.KeyOrPrefix" ValueChanged="@(value => _draft.KeyOrPrefix = value)" ReadOnly="_draft.IsExisting" Error="@_errors.KeyOrPrefix" Hint="@AccessRuleFormat.TemplateHint" />
     }
     @foreach (var group in OperationGroups)
     {

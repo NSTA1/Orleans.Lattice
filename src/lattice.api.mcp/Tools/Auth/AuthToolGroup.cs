@@ -117,7 +117,11 @@ internal sealed class AuthToolGroup : ILatticeApiMcpToolGroup
                 "Removes a membership edge. A no-op when the edge does not exist. Administrator-gated and destructive."));
             tools.Add(DestructiveTool(services, AuthToolHandlers.PutRuleAsync, "lattice_auth_put_rule", "Create or replace a rule",
                 "Creates or replaces an authorization rule granting or denying a set of operations over a keyspace "
-                + "scope to a user or group, returning the persisted rule. A cluster-wide all-trees rule (scope Tree:*) "
+                + "scope to a user or group, returning the persisted rule. A Key or Prefix scope's keyOrPrefix may be "
+                + "subject-relative: {subject} (the caller's subject id) or {group:<prefix>} (each of the caller's groups "
+                + "starting with <prefix>, prefix stripped), each followed by a literal delimiter such as '/', so one rule "
+                + "grants every caller their own keys; e.g. Prefix 'images' '{subject}/'. Templates are rejected on "
+                + "control-plane (sys-*, _lattice_*, tag-*) trees. A cluster-wide all-trees rule (scope Tree:*) "
                 + "carrying data-plane operations is rejected unless the cluster's all-trees grant tier is enabled, and "
                 + "a whole-tree Admin rule on the reserved policy tree (access-administration delegation) is rejected "
                 + "unless the delegation tier is enabled; check the posture from lattice_auth_explain or "

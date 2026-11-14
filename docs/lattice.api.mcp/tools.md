@@ -192,6 +192,8 @@ Authorization administration over `ILatticeAuthAdmin`. Registered by `AddAuthToo
 
 Both `lattice_auth_explain` and `lattice_auth_effective_permissions` also report the cluster's authorization posture (whether the all-trees grant tier and access-administration delegation are enabled). This is the discovery path for the posture - `lattice_capabilities` does not carry it - so an agent can tell whether a cluster-wide `Tree:*` grant is actually enforced and whether a policy-tree delegation rule is authorable. Consistent with that posture, `lattice_auth_put_rule` rejects a `Tree:*` data-plane rule while the all-trees grant tier is off, and a whole-tree `Admin` rule on the reserved policy tree while access-administration delegation is off.
 
+Both `lattice_auth_put_rule` and `lattice_tenant_rule_put` accept a [subject-relative](../lattice.auth/README.md#subject-relative-scopes) `keyOrPrefix` such as `{subject}/` or `g/{group:grp:}/`, which the cluster resolves for each caller; the rule is stored and listed as written, and `lattice_auth_explain` and `lattice_tenant_explain` cite it only where it resolves for the explained subject.
+
 ## Replication tools (`lattice_replication_*`)
 
 Runtime per-tree cross-cluster replication control over `ILatticeReplicationControl`. Registered by `AddReplicationTools(enableControl)`. The inspect tool is always exposed; the mutating control tools require `enableControl: true`, and remain subject to the facade's fail-closed replication access gate regardless. The module is served under both topologies: in-silo, and out-of-silo via `AddLatticeMcpRemote(o => { o.Replication = ...; o.EnableReplicationControl = ...; })` over the replication-API gRPC client (see [Remote hosting](remote.md)).

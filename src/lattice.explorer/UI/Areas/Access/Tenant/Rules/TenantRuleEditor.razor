@@ -41,7 +41,7 @@
     }
     @if (_form.NeedsKeyOrPrefix)
     {
-        <LtTextInput Label="@(_form.ScopeKind == TenantRuleScopeKind.Key ? "Key" : "Key prefix")" Mono="true" Value="@_form.KeyOrPrefix" ValueChanged="@(value => _form.KeyOrPrefix = value)" ReadOnly="_form.IsExisting" Error="@_errors.KeyOrPrefix" />
+        <LtTextInput Label="@(_form.ScopeKind == TenantRuleScopeKind.Key ? "Key" : "Key prefix")" Mono="true" Value="@_form.KeyOrPrefix" ValueChanged="@(value => _form.KeyOrPrefix = value)" ReadOnly="_form.IsExisting" Error="@_errors.KeyOrPrefix" Hint="@AccessRuleFormat.TemplateHint" />
     }
     @foreach (var group in OperationGroups)
     {

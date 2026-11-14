@@ -81,6 +81,24 @@ public sealed class TemplatedScopeAuthoringTests
         });
     }
 
+    [TestCase("images", "{subject}/", null)]
+    [TestCase("images", "plain/", null)]
+    [TestCase("images", "{subject}", "delimiter")]
+    [TestCase("sys-membership-edges", "{subject}/", "control-plane")]
+    [TestCase("t/contoso/orders", "{group:t/fabrikam/}/", "tenant groups")]
+    public void GetTemplateError_reports_what_the_store_would_refuse(string tree, string prefix, string? error)
+    {
+        Assert.That(
+            LatticeScope.Prefix(tree, prefix).GetTemplateError(),
+            error is null ? Is.Null : Does.Contain(error));
+    }
+
+    [Test]
+    public void GetTemplateError_is_null_for_a_tree_scope()
+    {
+        Assert.That(LatticeScope.Tree("sys-x").GetTemplateError(), Is.Null);
+    }
+
     // ---- Store guard ---------------------------------------------------------
 
     [Test]

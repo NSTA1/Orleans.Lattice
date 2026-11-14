@@ -1265,7 +1265,8 @@
           "name": "keyOrPrefix",
           "type": "string?",
           "required": false,
-          "default": "null"
+          "default": "null",
+          "notes": "May be subject-relative: {subject} (the caller's subject id) or {group:<prefix>} (each of the caller's groups starting with <prefix>, prefix stripped), each followed by a literal delimiter such as '/', resolved per caller at decision time."
         },
         {
           "name": "condition",
@@ -10152,7 +10153,8 @@
           "name": "keyOrPrefix",
           "type": "string?",
           "required": false,
-          "default": "null"
+          "default": "null",
+          "notes": "May be subject-relative: {subject} (the caller's subject id) or {group:<prefix>} (each of the caller's groups starting with <prefix>, prefix stripped), each followed by a literal delimiter such as '/', resolved per caller at decision time."
         },
         {
           "name": "subjectKind",

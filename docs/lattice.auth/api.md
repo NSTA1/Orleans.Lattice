@@ -267,6 +267,7 @@ The following inventory includes directly declared public members and overloads,
 - `public const string SubjectPlaceholder`
 - `public static string GroupPlaceholder(string groupIdPrefix)`
 - `public bool IsTemplated()`
+- `public string? GetTemplateError()`
 - `public const string ClusterWideTreeId`
 - `public static LatticeScope ClusterWide()`
 - `public static LatticeScope TenantWide(TenantId tenant)`

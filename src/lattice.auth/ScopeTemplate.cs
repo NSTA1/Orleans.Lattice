@@ -243,18 +243,35 @@ internal sealed class ScopeTemplate
             return null;
         }
 
+        // An app-owned rule always matches literally (see ForCompile), so its scope is
+        // not validated as a template unless it sits on a control-plane tree: an app
+        // manifest written before templated scopes existed installs exactly as it did.
+        if (LatticeAppRuleIds.IsAppOwned(rule.RuleId) && !IsForbiddenTree(scope.TreeId))
+        {
+            return null;
+        }
+
+        return ValidateScope(scope);
+    }
+
+    /// <summary>
+    /// The reason <paramref name="scope"/>'s templated key or prefix is refused,
+    /// whichever rule carries it, or <c>null</c> when the scope is not templated or is
+    /// a valid, permitted template. See <see cref="Validate"/>.
+    /// </summary>
+    /// <param name="scope">The candidate scope.</param>
+    /// <returns>The refusal reason, or <c>null</c>.</returns>
+    public static string? ValidateScope(LatticeScope scope)
+    {
+        if (scope.Kind == LatticeScopeKind.Tree || !ContainsPlaceholder(scope.KeyOrPrefix))
+        {
+            return null;
+        }
+
         if (IsForbiddenTree(scope.TreeId))
         {
             return $"Tree '{scope.TreeId}' is a control-plane namespace and cannot hold a templated (subject-relative) "
                 + "scope.";
-        }
-
-        // An app-owned rule always matches literally (see ForCompile), so its scope is
-        // not validated as a template: an app manifest written before templated
-        // scopes existed installs exactly as it did.
-        if (LatticeAppRuleIds.IsAppOwned(rule.RuleId))
-        {
-            return null;
         }
 
         if (!TryParse(scope.KeyOrPrefix, out var template, out var error))

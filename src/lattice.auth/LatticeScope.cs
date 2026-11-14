@@ -139,6 +139,19 @@ public sealed record LatticeScope
     public bool IsTemplated() => ScopeTemplate.IsTemplatedScope(this);
 
     /// <summary>
+    /// Returns why the policy store would refuse this scope's templated key or prefix,
+    /// or <c>null</c> when the scope is not templated or is a valid, permitted
+    /// template: a placeholder not followed by a literal delimiter, an unclosed or
+    /// empty group placeholder, more than eight placeholders, a control-plane tree, or
+    /// a group placeholder that can reach tenant groups (<c>t/...</c>) outside the
+    /// scoped tree's tenant. Lets an authoring surface report the problem on the key
+    /// or prefix field before it writes. A method rather than a property so the
+    /// record's printed and serialized member set is unchanged.
+    /// </summary>
+    /// <returns>The refusal reason, or <c>null</c>.</returns>
+    public string? GetTemplateError() => ScopeTemplate.ValidateScope(this);
+
+    /// <summary>
     /// The sentinel tree id representing <b>every tree / no specific tree</b>: the
     /// all-trees wildcard used to author a <b>cluster-wide, scopeless</b> grant
     /// such as <see cref="LatticeOperation.Telemetry"/>. Because the authorization

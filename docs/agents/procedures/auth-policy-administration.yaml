@@ -61,7 +61,7 @@ steps:
     expects: "At least one administrator other than the one being revoked is allowed, or a bootstrap administrator is available; the explained group closure comes from the membership directory only, not token-asserted or claim-projected groups."
     source: "src/lattice.api.abstractions/Auth/ILatticeAuthAdmin.cs#ExplainAsync"
   - n: 5
-    action: "Create or replace the rule, or remove it by governed tree id and rule id."
+    action: "Create or replace the rule, or remove it by governed tree id and rule id. To give every caller their own keys with one rule, use a subject-relative key or prefix ({subject} or {group:<prefix>}, each followed by a literal delimiter such as '/'); check it first with LatticeScope.GetTemplateError when authoring in process."
     api: "ILatticeAuthAdmin.PutRuleAsync / PutRule / lattice_auth_put_rule or ILatticeAuthAdmin.RemoveRuleAsync / RemoveRule / lattice_auth_remove_rule"
     expects: "Put completes and the MCP tool returns the rule as submitted; remove returns true when a rule was removed and false when none existed."
     source: "src/lattice.api.auth/LatticeAuthAdmin.cs#LatticeAuthAdmin.PutRuleAsync"

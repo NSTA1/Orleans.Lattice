@@ -159,7 +159,7 @@ public partial class TenantRuleEditor : IDisposable
             return;
         }
 
-        _errors = _form.Validate();
+        _errors = _form.Validate(Tenant);
         if (_errors.HasAny || !await ConfirmPickersAsync().ConfigureAwait(true))
         {
             return;

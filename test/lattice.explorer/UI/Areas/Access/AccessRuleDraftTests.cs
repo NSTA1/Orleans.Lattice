@@ -79,6 +79,22 @@ public sealed class AccessRuleDraftTests
     }
 
     [Test]
+    [TestCase(AccessRuleDraft.PrefixScope, "{subject}/", null)]
+    [TestCase(AccessRuleDraft.KeyScope, "{subject}/profile", null)]
+    [TestCase(AccessRuleDraft.PrefixScope, "{subject}", "delimiter")]
+    [TestCase(AccessRuleDraft.PrefixScope, "g/{group:t/}/", "tenant groups")]
+    public void A_subject_relative_key_or_prefix_is_checked_as_the_cluster_checks_it(string kind, string keyOrPrefix, string? error)
+    {
+        var draft = Valid();
+        draft.ScopeKind = kind;
+        draft.KeyOrPrefix = keyOrPrefix;
+
+        var errors = draft.Validate();
+
+        Assert.That(errors.KeyOrPrefix, error is null ? Is.Null : Does.Contain(error));
+    }
+
+    [Test]
     public void The_cluster_and_access_administration_scopes_name_their_reserved_trees()
     {
         var cluster = Valid();
