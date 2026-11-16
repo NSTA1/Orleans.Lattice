@@ -152,37 +152,9 @@ internal sealed partial class LatticeGrain
     /// public entry point already intercepted only its upserts. Every other
     /// entry, and every batch outside a prepared dispatch, is judged as before.
     /// </summary>
-    private async ValueTask<List<KeyValuePair<string, byte[]>>> InterceptEntriesExceptPreparedDeletesAsync(
-        List<KeyValuePair<string, byte[]>> entries, CancellationToken cancellationToken)
-    {
-        if (!LatticePreparedContext.Current
-            || LatticeAtomicBatchContext.CurrentDeleteSet is not { Count: > 0 } deletes)
-        {
-            return await InterceptEntriesAsync(LatticeOperation.Write, entries, atomic: false, cancellationToken);
-        }
-
-        List<KeyValuePair<string, byte[]>>? upserts = null;
-        foreach (var entry in entries)
-        {
-            if (!deletes.Contains(entry.Key))
-                (upserts ??= new List<KeyValuePair<string, byte[]>>(entries.Count)).Add(entry);
-        }
-
-        if (upserts is null)
-            return entries;
-
-        var judged = await InterceptEntriesAsync(LatticeOperation.Write, upserts, atomic: false, cancellationToken);
-        if (ReferenceEquals(judged, upserts) && upserts.Count == entries.Count)
-            return entries;
-
-        var effective = new List<KeyValuePair<string, byte[]>>(judged.Count + entries.Count - upserts.Count);
-        effective.AddRange(judged);
-        foreach (var entry in entries)
-        {
-            if (deletes.Contains(entry.Key))
-                effective.Add(entry);
-        }
-
-        return effective;
-    }
+    private ValueTask<List<KeyValuePair<string, byte[]>>> InterceptEntriesExceptPreparedDeletesAsync(
+        List<KeyValuePair<string, byte[]>> entries, CancellationToken cancellationToken) =>
+        LatticeWriteInterceptorEnforcement.InterceptEntriesAsync(
+            WriteInterceptor, TreeId, LatticeOperation.Write, entries, atomic: false, cancellationToken,
+            passThroughKeys: LatticePreparedContext.Current ? LatticeAtomicBatchContext.CurrentDeleteSet : null);
 }
