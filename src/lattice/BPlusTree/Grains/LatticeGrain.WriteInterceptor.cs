@@ -137,4 +137,24 @@ internal sealed partial class LatticeGrain
         LatticeOperation operation, List<KeyValuePair<string, byte[]>> entries, bool atomic, CancellationToken cancellationToken) =>
         LatticeWriteInterceptorEnforcement.InterceptEntriesAsync(
             WriteInterceptor, TreeId, operation, entries, atomic, cancellationToken);
+
+    /// <summary>
+    /// <see cref="InterceptEntriesAsync"/> for the <c>SetManyAsync</c> batch,
+    /// excluding the tombstone entries of an atomic-write saga's prepared
+    /// dispatch (issue #6063). A saga stages a mixed upsert/delete batch through
+    /// this one call, and its delete entries carry an empty placeholder value
+    /// that the leaf replaces with a tombstone
+    /// (<see cref="LatticeAtomicBatchContext.CurrentDeleteSet"/>). Judging that
+    /// placeholder as a value write let a strict-ingest policy dead-letter it,
+    /// which dropped the delete from the non-atomic batch: it was never
+    /// prepared, and the saga aborted. A delete carries no value to judge - a
+    /// plain <c>DeleteAsync</c> is not intercepted either - and the saga's
+    /// public entry point already intercepted only its upserts. Every other
+    /// entry, and every batch outside a prepared dispatch, is judged as before.
+    /// </summary>
+    private ValueTask<List<KeyValuePair<string, byte[]>>> InterceptEntriesExceptPreparedDeletesAsync(
+        List<KeyValuePair<string, byte[]>> entries, CancellationToken cancellationToken) =>
+        LatticeWriteInterceptorEnforcement.InterceptEntriesAsync(
+            WriteInterceptor, TreeId, LatticeOperation.Write, entries, atomic: false, cancellationToken,
+            passThroughKeys: LatticePreparedContext.Current ? LatticeAtomicBatchContext.CurrentDeleteSet : null);
 }
