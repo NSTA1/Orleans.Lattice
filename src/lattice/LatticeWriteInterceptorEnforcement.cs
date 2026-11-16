@@ -78,6 +78,8 @@ internal static class LatticeWriteInterceptorEnforcement
     /// Throws <see cref="LatticeWriteRejectedException"/> on the first rejected
     /// entry (and on the first dead-letter when <paramref name="atomic"/> is
     /// <c>true</c>), aborting the whole batch before any write is applied.
+    /// Entries whose key is in <paramref name="passThroughKeys"/> are kept as
+    /// they are without consulting the interceptor.
     /// </summary>
     public static async ValueTask<List<KeyValuePair<string, byte[]>>> InterceptEntriesAsync(
         ILatticeWriteInterceptor interceptor,
@@ -85,7 +87,8 @@ internal static class LatticeWriteInterceptorEnforcement
         LatticeOperation operation,
         List<KeyValuePair<string, byte[]>> entries,
         bool atomic,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlySet<string>? passThroughKeys = null)
     {
         if (Skips(interceptor) || entries.Count == 0)
         {
@@ -97,6 +100,12 @@ internal static class LatticeWriteInterceptorEnforcement
         {
             var entry = entries[i];
             var key = entry.Key;
+            if (passThroughKeys is not null && passThroughKeys.Contains(key))
+            {
+                rewritten?.Add(entry);
+                continue;
+            }
+
             var value = entry.Value;
             var request = new LatticeWriteRequest(treeId, key, value, operation, ttl: null);
             var decision = await interceptor.OnWriteAsync(in request, cancellationToken);

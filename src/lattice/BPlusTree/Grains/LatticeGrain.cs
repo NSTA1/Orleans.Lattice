@@ -2585,7 +2585,7 @@ internal sealed partial class LatticeGrain(
         await EnforceEntryWritesAsync(entries, null, cancellationToken);
         await ThrowIfWriteNotAdmittedAsync(cancellationToken);
         if (WriteInterceptionActive)
-            entries = await InterceptEntriesAsync(LatticeOperation.Write, entries, atomic: false, cancellationToken);
+            entries = await InterceptEntriesExceptPreparedDeletesAsync(entries, cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
         LatticeTransactionContext.EnsureCurrent();
 
