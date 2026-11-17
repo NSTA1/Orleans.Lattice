@@ -14,11 +14,15 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **Auth - Subject-relative scopes.** A rule's key or prefix may name the caller with `{subject}` or `{group:<prefix>}`, so one rule grants every caller their own slice: segment-bounded, ranked by resolved length, checked by the Explorer editors, allocation-free when deciding. ([#6061](https://github.com/NSTA1/Orleans.Lattice/issues/6061)) (`Orleans.Lattice.Auth`, `Orleans.Lattice.Api.Auth`, `Orleans.Lattice.Api.TenantAdmin`, `Orleans.Lattice.Api.Mcp`, `Orleans.Lattice.Explorer.UI`)
 
+## Released
+
+## [2026-11-17]
+
+Patch release: `Orleans.Lattice` 10.3.1.
+
 ### Fixed
 
-- **Atomic - Deletes commit on strict-ingest schema trees.** An atomic write (single- or cross-tree) that deletes a key on a tree whose schema policy sets strict ingest no longer aborts at prepare; the delete is no longer judged or dead-lettered as an empty value. ([#6063](https://github.com/NSTA1/Orleans.Lattice/issues/6063)) (`Orleans.Lattice`)
-
-## Released
+- **Atomic - Deletes commit on strict-ingest schema trees.** An atomic write (single- or cross-tree) that deletes a key on a tree whose schema policy sets strict ingest no longer aborts at prepare; the delete is no longer judged or dead-lettered as an empty value. ([#6063](https://github.com/NSTA1/Orleans.Lattice/issues/6063)) (`Orleans.Lattice` 10.3.1)
 
 ## [2026-11-08]
 
