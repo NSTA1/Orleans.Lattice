@@ -327,7 +327,15 @@ internal sealed partial class ViewMaintainerGrain
             var buffering = new BufferingAggregationViewStore(
                 new LatticeViewStore(grainFactory.GetGrain<ILattice>(hold.Original.ViewTreeId)));
             var capturing = CreateAggregationApplierOver(buffering);
-            foreach (var mutation in mutations.OrderBy(static mutation => mutation.Timestamp))
+            // In place, oldest first: the list is this capture's own, and the
+            // callers read it afterwards only as an unordered set. Ties break by
+            // key so the projection order is deterministic (issue #6068).
+            mutations.Sort(static (a, b) =>
+            {
+                var order = a.Timestamp.CompareTo(b.Timestamp);
+                return order != 0 ? order : string.CompareOrdinal(a.Key, b.Key);
+            });
+            foreach (var mutation in mutations)
             {
                 var projected = false;
                 foreach (var contribution in registration.AggregationProjection!.Project(ProjectionInput(registration, mutation)))

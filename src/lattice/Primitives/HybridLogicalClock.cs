@@ -5,12 +5,15 @@ namespace Orleans.Lattice;
 /// <summary>
 /// A simple hybrid logical clock (HLC) that combines wall-clock time with a
 /// monotonic counter to produce totally-ordered, conflict-free timestamps.
+/// Implements <see cref="IComparable{T}"/>, so <see cref="Comparer{T}.Default"/>
+/// (and with it <c>OrderBy</c>, <c>Min</c>, <c>Max</c> and <c>Sort</c>) orders it
+/// without boxing.
 /// </summary>
 [GenerateSerializer]
 [Alias(TypeAliases.HybridLogicalClock)]
 [Immutable]
 [EditorBrowsable(EditorBrowsableState.Never)]
-public readonly record struct HybridLogicalClock
+public readonly record struct HybridLogicalClock : IComparable<HybridLogicalClock>
 {
     [Id(0)] public long WallClockTicks { get; init; }
     [Id(1)] public int Counter { get; init; }
@@ -97,6 +100,9 @@ public readonly record struct HybridLogicalClock
         return new HybridLogicalClock { WallClockTicks = maxWall, Counter = counter };
     }
 
+    /// <summary>
+    /// Orders by wall-clock ticks, then by counter.
+    /// </summary>
     public int CompareTo(HybridLogicalClock other)
     {
         var cmp = WallClockTicks.CompareTo(other.WallClockTicks);
