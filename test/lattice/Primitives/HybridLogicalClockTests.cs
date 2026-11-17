@@ -5,6 +5,18 @@ namespace Orleans.Lattice.Tests.Primitives;
 public class HybridLogicalClockTests
 {
     [Test]
+    public void Default_comparer_orders_by_wall_clock_then_counter()
+    {
+        var early = new HybridLogicalClock { WallClockTicks = 10, Counter = 5 };
+        var mid = new HybridLogicalClock { WallClockTicks = 20, Counter = 0 };
+        var late = new HybridLogicalClock { WallClockTicks = 20, Counter = 1 };
+
+        // Comparer<T>.Default threw for a type with no comparison interface (issue #6068).
+        Assert.That(new[] { late, early, mid }.OrderBy(static c => c), Is.EqualTo(new[] { early, mid, late }));
+        Assert.That(Comparer<HybridLogicalClock>.Default.Compare(late, mid), Is.GreaterThan(0));
+    }
+
+    [Test]
     public void Tick_advances_beyond_previous()
     {
         var a = HybridLogicalClock.Zero;
