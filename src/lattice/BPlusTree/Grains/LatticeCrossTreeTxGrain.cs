@@ -1025,13 +1025,16 @@ internal sealed class LatticeCrossTreeTxGrain(
 
         // A partial report is a lower bound: a surface that did not answer
         // contributes nothing to it. Comparing a cap against it could admit a
-        // write past the cap (issue #6017), so a partial report never displaces
-        // a complete sample this activation already holds for the tree. With no
-        // such sample it is still the best figure available and is used as
-        // before.
+        // write past the cap (issue #6017), so against a complete sample this
+        // activation already holds for the tree each figure is the larger of
+        // the two: never lower than the complete reading, and still following
+        // growth the lower bound already shows (as LatticeGrain's single-tree
+        // check does). With no such sample it is still the best figure
+        // available and is used as before.
         if (report.Partial && _lastAdmissionSamples.TryGetValue(treeId, out var previous))
         {
-            (liveKeys, estimatedBytes) = previous;
+            liveKeys = Math.Max(previous.LiveKeys, liveKeys);
+            estimatedBytes = Math.Max(previous.EstimatedBytes, estimatedBytes);
         }
         else if (!report.Partial)
         {

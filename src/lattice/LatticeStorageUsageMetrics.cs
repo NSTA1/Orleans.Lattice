@@ -325,20 +325,20 @@ public sealed class LatticeStorageUsageMetrics : IDisposable
         var now = _time.GetUtcNow();
         _reports.AddOrUpdate(
             report.TreeId,
-            static (_, arg) => (new TreeStorageUsageReport
-            {
-                TreeId = arg.Report.TreeId,
-                WalRetainedBytes = arg.Report.WalRetainedBytes,
-                WalPhysicalBytes = arg.Report.WalPhysicalBytes,
-                SnapshotBytes = 0,
-                LeafStateBytes = 0,
-                TotalBytes = arg.Report.WalPhysicalBytes,
-                Partial = false,
-                SampledAt = arg.Report.SampledAt,
-            }, false, arg.Now),
+            static (_, arg) => (WalOnlyEntry(arg.Report), false, arg.Now),
             static (_, existing, arg) =>
             {
                 var prev = existing.Report;
+                if (prev.Partial)
+                {
+                    // The held deep report is partial (an unsupported surface or a
+                    // failed shard fan-out), so its deep figures were never completely
+                    // measured. Merging into it would inherit Partial and keep this
+                    // complete WAL figure dark until a complete deep report lands;
+                    // fall back to a WAL-only entry instead.
+                    return (WalOnlyEntry(arg.Report), false, arg.Now);
+                }
+
                 var merged = prev with
                 {
                     WalRetainedBytes = arg.Report.WalRetainedBytes,
@@ -350,6 +350,18 @@ public sealed class LatticeStorageUsageMetrics : IDisposable
             },
             (Report: report, Now: now));
     }
+
+    private static TreeStorageUsageReport WalOnlyEntry(TreeWalUsageReport report) => new()
+    {
+        TreeId = report.TreeId,
+        WalRetainedBytes = report.WalRetainedBytes,
+        WalPhysicalBytes = report.WalPhysicalBytes,
+        SnapshotBytes = 0,
+        LeafStateBytes = 0,
+        TotalBytes = report.WalPhysicalBytes,
+        Partial = false,
+        SampledAt = report.SampledAt,
+    };
 
     /// <summary>
     /// Records whether the named tree's physical WAL occupancy bytes currently breach
