@@ -315,6 +315,34 @@ public sealed partial class LatticeStorageUsageMetricsTests
     }
 
     [Test]
+    public void PublishWal_after_a_partial_deep_report_surfaces_the_fresh_wal_bytes()
+    {
+        var sut = new LatticeStorageUsageMetrics();
+        var tree = $"sg-{Guid.NewGuid():N}";
+
+        // A deep report whose shard fan-out failed is partial; a later complete
+        // WAL-only sample must not inherit that flag and stay dark.
+        sut.Publish(Report(tree, wal: 100, snap: 40, leaf: 25, partial: true));
+        sut.PublishWal(new TreeWalUsageReport
+        {
+            TreeId = tree,
+            WalRetainedBytes = 150,
+            WalPhysicalBytes = 150,
+            Partial = false,
+            SampledAt = DateTimeOffset.UtcNow,
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Read(LatticeMetrics.StorageWalBytesName, tree), Is.EqualTo(150));
+            Assert.That(Read(LatticeMetrics.StorageSnapshotBytesName, tree), Is.Null,
+                "the partial deep surfaces were never completely measured");
+            Assert.That(Read(LatticeMetrics.StorageTotalBytesName, tree), Is.Null);
+            Assert.That(Read(LatticeMetrics.StorageUsageDeepPublishedName, tree), Is.EqualTo(0));
+        });
+    }
+
+    [Test]
     public void PublishWal_partial_does_not_overwrite_existing_value()
     {
         var sut = new LatticeStorageUsageMetrics();

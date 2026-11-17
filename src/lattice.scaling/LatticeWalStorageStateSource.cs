@@ -74,8 +74,7 @@ internal sealed class LatticeWalStorageStateSource(
                 cancellationToken.ThrowIfCancellationRequested();
                 liveTreeIds[i] = report.TreeId;
 
-                var placement = await admin.GetWalPlacementAsync(report.TreeId, cancellationToken).ConfigureAwait(false);
-                var partitions = MapPartitions(placement);
+                var partitions = await SamplePartitionsAsync(admin, report.TreeId, cancellationToken).ConfigureAwait(false);
 
                 var saturation = _saturationSignal?.GetCurrentState(report.TreeId) ?? WalSaturationState.Healthy;
                 var saturatedFor = TrackContinuity(report.TreeId, saturation, now);
@@ -107,6 +106,27 @@ internal sealed class LatticeWalStorageStateSource(
         {
             _logger.LogWarning(ex, "Failed to sample WAL storage state; reporting an empty sample.");
             return default;
+        }
+    }
+
+    /// <summary>
+    /// Reads one tree's WAL placement. A failure is contained to that tree - for
+    /// example a tree deleted between the roll-up and this read - and yields no
+    /// partitions, so the tree still counts towards the aggregate but is not
+    /// attributed to any account, rather than discarding the whole sample.
+    /// </summary>
+    private async ValueTask<WalPartitionSample[]> SamplePartitionsAsync(
+        ILatticeAdmin admin, string treeId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var placement = await admin.GetWalPlacementAsync(treeId, cancellationToken).ConfigureAwait(false);
+            return MapPartitions(placement);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(ex, "Failed to read WAL placement for tree {TreeId}; sampling it without account attribution.", treeId);
+            return Array.Empty<WalPartitionSample>();
         }
     }
 

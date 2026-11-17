@@ -17,6 +17,9 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 ### Fixed
 
 - **Views - Cross-tree repairs of aggregation views no longer wedge.** A joint repair over two or more keys no longer fails every drain pass sorting its keys by timestamp; `HybridLogicalClock` now implements `IComparable<HybridLogicalClock>`. ([#6068](https://github.com/NSTA1/Orleans.Lattice/issues/6068)) (`Orleans.Lattice`)
+- **Atomic - Partial storage reports no longer loosen cross-tree admission.** A partial report can only raise a participant's held admission sample, never lower it, so a tree near its live-key or byte budget is no longer admitted past it. ([#6070](https://github.com/NSTA1/Orleans.Lattice/issues/6070)) (`Orleans.Lattice`)
+- **Observability - WAL bytes publish after a partial deep report.** A fresh WAL report now replaces a held partial deep report instead of inheriting its partial flag, so the WAL-bytes series no longer stays dark until the next complete report. ([#6071](https://github.com/NSTA1/Orleans.Lattice/issues/6071)) (`Orleans.Lattice`)
+- **Storage - One tree's placement failure no longer blanks scaling pressure.** A failed WAL placement read now drops only that tree's account attribution, instead of discarding the whole sample and reporting zero storage pressure for every account. ([#6072](https://github.com/NSTA1/Orleans.Lattice/issues/6072)) (`Orleans.Lattice.Scaling`)
 
 ## Released
 

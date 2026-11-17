@@ -39,6 +39,29 @@ public sealed class LatticeCrossTreeTxGrainAdmissionSampleTests
     }
 
     [Test]
+    public void CommitAsync_after_a_complete_sample_follows_growth_a_partial_report_shows()
+    {
+        var reports = new Queue<TreeStorageUsageReport>(
+        [
+            new TreeStorageUsageReport { TreeId = Tree, LiveKeys = 1, TotalBytes = 1_000 },
+            new TreeStorageUsageReport { TreeId = Tree, LiveKeys = 10, TotalBytes = 0, Partial = true },
+        ]);
+        var grain = CreateGrain(reports, maxEstimatedBytes: 500);
+
+        var first = Assert.ThrowsAsync<LatticeQuotaExceededException>(() => grain.CommitAsync(Batch()))!;
+        var second = Assert.ThrowsAsync<LatticeQuotaExceededException>(() => grain.CommitAsync(Batch()))!;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first.Dimension, Is.EqualTo(LatticeQuotaExceededException.BytesDimension),
+                "the complete sample is under the key cap and over the byte cap");
+            Assert.That(second.Dimension, Is.EqualTo(LatticeQuotaExceededException.KeysDimension),
+                "a partial lower bound already over the key cap must not be masked by an older, smaller complete figure");
+            Assert.That(second.Current, Is.EqualTo(10));
+        });
+    }
+
+    [Test]
     public async Task CommitAsync_with_only_a_partial_report_uses_it_as_before()
     {
         var reports = new Queue<TreeStorageUsageReport>(
@@ -55,7 +78,7 @@ public sealed class LatticeCrossTreeTxGrainAdmissionSampleTests
     private static List<LatticeTreeBatch> Batch()
         => [new LatticeTreeBatch(Tree, [new KeyValuePair<string, byte[]>("k", [1])])];
 
-    private static LatticeCrossTreeTxGrain CreateGrain(Queue<TreeStorageUsageReport> reports)
+    private static LatticeCrossTreeTxGrain CreateGrain(Queue<TreeStorageUsageReport> reports, long? maxEstimatedBytes = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("cross-tree-tx", OperationId));
@@ -79,7 +102,7 @@ public sealed class LatticeCrossTreeTxGrainAdmissionSampleTests
         reminderRegistry.GetReminder(Arg.Any<GrainId>(), Arg.Any<string>())
             .Returns(Task.FromResult(Substitute.For<IGrainReminder>()));
 
-        var options = new LatticeOptions { MaxLiveKeys = 5 };
+        var options = new LatticeOptions { MaxLiveKeys = 5, MaxEstimatedBytes = maxEstimatedBytes };
         var optionsMonitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         optionsMonitor.CurrentValue.Returns(options);
         optionsMonitor.Get(Arg.Any<string>()).Returns(options);

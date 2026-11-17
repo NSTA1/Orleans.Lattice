@@ -146,6 +146,36 @@ public sealed class LatticeWalStorageStateSourceTests
     }
 
     [Test]
+    public async Task One_tree_placement_failure_does_not_discard_the_other_trees()
+    {
+        // A tree deleted between the roll-up and its placement read throws from
+        // GetWalPlacementAsync; that must not blank storage pressure for every
+        // other tree on the cluster.
+        var admin = Substitute.For<ILatticeAdmin>();
+        admin.GetTotalStorageUsageAsync(Arg.Any<CancellationToken>())
+            .Returns(ClusterReport(("gone", 7), ("t1", 500)));
+        admin.GetWalPlacementAsync("gone", Arg.Any<CancellationToken>())
+            .Returns<WalPlacement>(_ => throw new InvalidOperationException("tree deleted"));
+        admin.GetWalPlacementAsync("t1", Arg.Any<CancellationToken>())
+            .Returns(Placement("t1", (0, "acct-a")));
+
+        var source = new LatticeWalStorageStateSource(
+            new MutableTimeProvider(T0), Catalog("acct-a"), grainFactory: FactoryFor(admin));
+
+        var sample = await source.SampleAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(sample.Trees.Select(t => t.TreeId), Is.EqualTo(new[] { "gone", "t1" }));
+            Assert.That(sample.Trees[0].WalRetainedBytes, Is.EqualTo(7));
+            Assert.That(sample.Trees[0].Partitions, Is.Empty);
+            Assert.That(sample.Trees[1].WalRetainedBytes, Is.EqualTo(500));
+            Assert.That(sample.Trees[1].Partitions.Select(p => p.ProviderKey), Is.EqualTo(new[] { "acct-a" }));
+            Assert.That(sample.CatalogKeys, Is.EquivalentTo(new[] { "acct-a" }));
+        });
+    }
+
+    [Test]
     public async Task Continuous_saturation_accrues_across_ticks()
     {
         var admin = Substitute.For<ILatticeAdmin>();
