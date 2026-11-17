@@ -12,6 +12,14 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ## Released
 
+## [2026-11-17]
+
+Patch release: `Orleans.Lattice` 10.3.1.
+
+### Fixed
+
+- **Atomic - Deletes commit on strict-ingest schema trees.** An atomic write (single- or cross-tree) that deletes a key on a tree whose schema policy sets strict ingest no longer aborts at prepare; the delete is no longer judged or dead-lettered as an empty value. ([#6063](https://github.com/NSTA1/Orleans.Lattice/issues/6063)) (`Orleans.Lattice` 10.3.1)
+
 ## [2026-11-08]
 
 Coordinated lockstep minor release: all 50 shipped packages advance to `10.3.0`. Every package requires its family dependencies at this version. The three held packages `Orleans.Lattice.Api.Mcp.RepoContext`, `Orleans.Lattice.Api.Mcp.RepoContext.Replication` and `Orleans.Lattice.Vector` are not part of this wave and remain unpublished to NuGet.
