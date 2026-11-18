@@ -170,6 +170,21 @@ public class BoundedExponentialRetryPolicyTests
             await policy.ExecuteAsync(_ => Task.CompletedTask, cts.Token));
     }
 
+    [Test]
+    public void ExecuteAsync_waits_rather_than_throwing_when_the_max_delay_exceeds_the_Task_Delay_ceiling()
+    {
+        // A MaxDelay beyond ~49.7 days used to reach Task.Delay unclamped, which
+        // threw ArgumentOutOfRangeException in place of the transient failure.
+        var policy = new BoundedExponentialRetryPolicy(
+            maxAttempts: 2,
+            initialDelay: TimeSpan.FromDays(100),
+            maxDelay: TimeSpan.MaxValue);
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(200));
+
+        Assert.ThrowsAsync(Is.InstanceOf<OperationCanceledException>(), async () =>
+            await policy.ExecuteAsync((Func<CancellationToken, Task>)(_ => throw new InvalidOperationException("transient")), cts.Token));
+    }
+
     private static BoundedExponentialRetryPolicy NewFastPolicy(int maxAttempts = 3) =>
         new(
             maxAttempts: maxAttempts,
