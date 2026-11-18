@@ -64,7 +64,9 @@ reader is most likely to over-read are these.
   donor no longer holds is tombstoned before the survivor reclaims the slot
   (#5130, fixed). It also models the registry row a fold commits onto: the
   copy is an aliased tree's target, and a fold keyed by the copy's own id,
-  which committed onto a row no router reads, is refused (#6083, fixed).
+  which committed onto a row no router reads, is refused (#6083, fixed), and
+  every fold committed onto the logical row is mirrored onto the copy's own
+  row, which a router addressed by the copy reads (#6089, fixed).
   `ShardOwnershipRetention` still models only the split.
 - **Cross-cluster replication is not modelled.** Unlike the
   [atomic-commit protocol](verified-atomic-commit.md#the-replicated-half), whose

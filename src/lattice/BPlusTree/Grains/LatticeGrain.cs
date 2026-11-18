@@ -5327,6 +5327,11 @@ internal sealed partial class LatticeGrain(
         cancellationToken.ThrowIfCancellationRequested();
         if (forceRefresh)
         {
+            // A forced refresh is how a caller that addressed shards directly
+            // escapes a stale-routing fault, so the map it held is the one a
+            // shard refused: record it for the alias-routing repair (#6089).
+            var refusedVersion = _cachedRouting?.Map.Version;
+
             // Clear the alias too - a caller invoking forceRefresh:true is
             // by definition trying to escape a StaleTreeRoutingException
             // retry loop, which is an alias-level concern. Without this
@@ -5334,6 +5339,9 @@ internal sealed partial class LatticeGrain(
             // caller spins against the same stale physical tree id.
             TryInvalidateStaleAlias();
             InvalidateShardMap();
+            // A stateless-worker sibling may have served the refused map, so a
+            // refresh with no map of its own to compare checks unconditionally.
+            _staleRoutingMapVersion = refusedVersion ?? AnyRefusedMapVersion;
         }
         return GetRoutingAsync(cancellationToken);
     }
@@ -5370,8 +5378,19 @@ internal sealed partial class LatticeGrain(
             {
                 _staleRoutingMapVersion = null;
                 if (entry is { PhysicalTreeId: not null, ShardMap: { } staleMap }
-                    && staleMap.Version == staleVersion
+                    && (staleMap.Version == staleVersion || staleVersion == AnyRefusedMapVersion)
                     && await TryRepairAliasFoldRoutingAsync(entry))
+                {
+                    entry = await registry.GetEntryAsync(TreeId);
+                }
+
+                // Addressed by an aliased tree's copy, whose own row a split or
+                // fold committed between #6083 and #6089 left behind (#6089):
+                // bring it into line with the owner's row, then read it again.
+                else if (entry is { PhysicalTreeId: null, DerivedFrom: { } owner, ShardMap: { } copyMap }
+                    && (copyMap.Version == staleVersion || staleVersion == AnyRefusedMapVersion)
+                    && !string.Equals(owner, TreeId, StringComparison.Ordinal)
+                    && await TrySyncAliasTargetRoutingAsync(registry, owner, entry))
                 {
                     entry = await registry.GetEntryAsync(TreeId);
                 }
@@ -5570,6 +5589,12 @@ internal sealed partial class LatticeGrain(
     private long? _staleRoutingMapVersion;
 
     /// <summary>
+    /// <see cref="_staleRoutingMapVersion"/> for a forced refresh on an activation
+    /// that held no map: the refused map is unknown, so any version is checked.
+    /// </summary>
+    private const long AnyRefusedMapVersion = long.MinValue;
+
+    /// <summary>
     /// <see cref="Environment.TickCount64"/> of this activation's last
     /// <see cref="AliasFoldRoutingRepair"/> attempt, so a burst of stale-routing
     /// retries costs at most one check per <see cref="AliasRoutingRepairInterval"/>.
@@ -5587,14 +5612,7 @@ internal sealed partial class LatticeGrain(
     /// </summary>
     private async Task<bool> TryRepairAliasFoldRoutingAsync(State.TreeRegistryEntry entry)
     {
-        var now = Environment.TickCount64;
-        if (_lastAliasRoutingRepairTicks != long.MinValue
-            && now - _lastAliasRoutingRepairTicks < (long)AliasRoutingRepairInterval.TotalMilliseconds)
-        {
-            return false;
-        }
-
-        _lastAliasRoutingRepairTicks = now;
+        if (!TryEnterAliasRoutingRepair()) return false;
         try
         {
             using (LatticeAccessGateContext.EnterSystemOrigin())
@@ -5608,6 +5626,47 @@ internal sealed partial class LatticeGrain(
             logger.LogDebug(ex, "Checking tree {TreeId} for routing left behind by an alias-target fold failed.", TreeId);
             return false;
         }
+    }
+
+    /// <summary>
+    /// For a router addressed by a derived copy's own id: brings the copy's row
+    /// into line with its owner's when the owner aliases it
+    /// (<see cref="AliasFoldRoutingRepair.RepairAsync"/>, issue #6089), reusing the
+    /// copy's row the caller already read, so the check costs one owner-row read,
+    /// under the same per-activation throttle as
+    /// <see cref="TryRepairAliasFoldRoutingAsync"/>. Never faults.
+    /// </summary>
+    private async Task<bool> TrySyncAliasTargetRoutingAsync(ILatticeRegistry registry, string owner, State.TreeRegistryEntry copyEntry)
+    {
+        if (!TryEnterAliasRoutingRepair()) return false;
+        try
+        {
+            using (LatticeAccessGateContext.EnterSystemOrigin())
+            {
+                var ownerEntry = await registry.GetEntryAsync(owner);
+                if (!string.Equals(ownerEntry?.PhysicalTreeId, TreeId, StringComparison.Ordinal)) return false;
+                var outcome = await AliasFoldRoutingRepair.RepairAsync(grainFactory, owner, ownerEntry, logger, copyEntry);
+                return outcome.CopySynced;
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Bringing copy {TreeId} into line with tree {Owner}'s routing failed.", TreeId, owner);
+            return false;
+        }
+    }
+
+    private bool TryEnterAliasRoutingRepair()
+    {
+        var now = Environment.TickCount64;
+        if (_lastAliasRoutingRepairTicks != long.MinValue
+            && now - _lastAliasRoutingRepairTicks < (long)AliasRoutingRepairInterval.TotalMilliseconds)
+        {
+            return false;
+        }
+
+        _lastAliasRoutingRepairTicks = now;
+        return true;
     }
 
     /// <summary>

@@ -361,6 +361,7 @@ standing mutation. The refinement notes record which are fixed.
 | #4619 | A late forward of a saga whose registry row was retired is bucketed on a leaf that lost its memory of the terminal, stranded for good (found while answering #4619's question; fixed, #4638) | `NoLiveBucketAfterForgetLateForwardBucketed`, `NoLiveBucketAfterForgetForwardRecreatesRow`, `AtomicOnOwnerParticipantRowBestEffort` |
 | #5130 | A fold back onto the shard a split took the slot from dropped its drain over the rows the survivor kept behind its seal, reverting every write and delete made since the split, and revived a key whose delete compaction had reaped (found while extending this area to the fold; fixed, #5131) | `NoKeyLostFoldImportDroppedOverSealedRow`, `NoKeyLostFoldSkipsReapReconciliation` |
 | #6083 | Automatic healing keyed its folds by the physical copy an aliased tree resolves to, so each fold committed onto the copy's own registry row and the logical map kept routing the folded slots to the retired donor (found in a deployment after a shadow-cutover restore, outside this area, which did not then model which row a fold commits onto; fixed) | `UniqueOwnerFoldKeyedByAliasTarget` |
+| #6089 | The #6083 fix committed every fold onto the logical row only, so a router addressed by the alias target's own id - a view maintainer bound to the physical copy - kept routing the folded slots to the retired donor (found in the same deployment; fixed) | `RoutingConvergesFoldSkipsCopyMirror` |
 
 #4445 (a late forwarded orphan read past the terminal) was fixed elsewhere
 (#4461); its mutation is `NoResurrectionLatePrepareActivationMemory`, and the
@@ -415,4 +416,4 @@ TLC's own state counts.
 | `ShardOwnershipRetention` | 7 | 4 | 27 | 36 | 36 | 142,980 |
 | `ShardOwnershipCrdt` | 2 | 0 | 10 | 10 | 10 | 1,573 |
 | `ShardOwnershipCutover` | 3 | 1 | 14 | 15 | 16 | 2,088 |
-| `ShardOwnershipFold` | 6 | 3 | 16 | 19 | 23 | 4,128 |
+| `ShardOwnershipFold` | 6 | 3 | 16 | 20 | 23 | 4,128 |

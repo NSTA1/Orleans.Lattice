@@ -155,6 +155,16 @@ logical map still routed the folded slots there. A healing sweep, or a router
 whose refreshed map is the one a shard just refused, now repairs such a tree by
 re-pointing those slots where the copy's map sends them.
 
+The copy's own row is still read by anything that addresses the copy
+directly: a materialised view's maintainer, bound to the physical copy of
+its source, and the copy's leaves when they filter their WAL replay by slot
+ownership. So the registry mirrors every split or fold committed onto the
+logical row onto the copy's own row in the same call (issue #6089). A copy
+whose row a fold left behind before that fix is brought back into line from
+the logical row by the next healing sweep, or by a forced routing refresh
+through the copy, which is what a view maintainer issues when a shard
+refuses its read.
+
 ## Scan semantics during a split
 
 This section describes the *mechanism* by which live operations behave
