@@ -2,9 +2,12 @@
     The Schedules page's backup-set section (#6067): the tenant's named backup-set
     schedules - each capturing one backup set of several trees, cross-tree
     consistent by default, at a fixed interval and pruned by its own retention -
-    with registering, changing, running, pausing, resuming and removing them.
+    with each running schedule's live progress, refreshed while any run is in
+    flight, and registering, changing, running, pausing, resuming and removing them, and
+    restoring a retained set as a whole and reverting that restore.
     Withdrawn entirely when the connection does not serve backup-set schedules.
 *@
+@using Orleans.Lattice.Api.TreeAdmin
 
 @if (_served)
 {
@@ -19,6 +22,52 @@
         @if (_actionError is { } actionError)
         {
             <p class="lt-backups-error" role="alert">@actionError</p>
+        }
+
+        @if (_restore is { } restore)
+        {
+            <section class="lt-backups-section" aria-labelledby="lt-backups-set-restore-title" data-lt-backup-set-restore="@restore.SetId">
+                <h3 id="lt-backups-set-restore-title" class="lt-backups-section__title">Restored set <span class="lt-backups-mono">@restore.SetName</span></h3>
+                <p class="lt-backups-note">Each tree below now serves its copy in the set. Its previous copy is kept, so the restore can be reverted.</p>
+                <LtTable TItem="TreeRestoreResult"
+                         Items="@restore.Results"
+                         Caption="Trees the set restored"
+                         CaptionHidden="true"
+                         RowKey="result => result.TargetTreeId">
+                    <ChildContent>
+                        <LtColumn TItem="TreeRestoreResult" Title="Tree" RowHeader="true">
+                            <BackupTreeLabel TreeId="@context.TargetTreeId" />
+                        </LtColumn>
+                        <LtColumn TItem="TreeRestoreResult" Title="Backup">
+                            <a class="lt-backups-link lt-backups-mono" href="@Href(BackupsAddresses.Backup(context.BackupId))">@BackupsFormat.ShortId(context.BackupId)</a>
+                        </LtColumn>
+                        <LtColumn TItem="TreeRestoreResult" Title="Entries applied" Value="result => BackupsFormat.Count(result.EntriesApplied)" />
+                        <LtColumn TItem="TreeRestoreResult" Title="Serving now" Mono="true" Value="result => result.ShadowPhysicalTreeId ?? string.Empty" />
+                        <LtColumn TItem="TreeRestoreResult" Title="Previous copy" Mono="true" Value="result => result.PreviousPhysicalTreeId ?? string.Empty" />
+                        <LtColumn TItem="TreeRestoreResult" Title="Revert">
+                            @if (restore.Reverted.Contains(context.TargetTreeId))
+                            {
+                                <span data-lt-set-revert="reverted">Reverted</span>
+                            }
+                            else if (restore.Failures.TryGetValue(context.TargetTreeId, out var failure))
+                            {
+                                <span data-lt-set-revert="failed">Not reverted: @failure</span>
+                            }
+                            else
+                            {
+                                <span data-lt-set-revert="none">Not reverted</span>
+                            }
+                        </LtColumn>
+                    </ChildContent>
+                </LtTable>
+                <div class="lt-backups-actions">
+                    @if (restore.Reverted.Count < restore.Results.Count)
+                    {
+                        <LtButton Variant="LtButtonVariant.Destructive" Disabled="@_busy" OnClick="RevertSetRestoreAsync">Revert this restore</LtButton>
+                    }
+                    <LtButton Variant="LtButtonVariant.Quiet" Disabled="@_busy" OnClick="DismissSetRestore">Dismiss</LtButton>
+                </div>
+            </section>
         }
 
         @if (_listError is { } listError)
@@ -52,6 +101,10 @@
                         {
                             <LtStatusPill State="LtStateRole.Healthy" Text="Running" />
                         }
+                        @if (context.CurrentRun is { } run)
+                        {
+                            <BackupSetRunProgress Schedule="@context.Name" Progress="@run" AnnouncePhase="false" />
+                        }
                     </LtColumn>
                     <LtColumn TItem="BackupSetScheduleStatus" Title="Next run" Mono="true" Value="row => BackupSetSchedulesText.NextRun(row)" />
                     <LtColumn TItem="BackupSetScheduleStatus" Title="Last run" Value="row => BackupSetSchedulesText.LastRun(row)" />
@@ -63,7 +116,13 @@
                 <CompactRow>
                     <LtCompactRow>
                         <Primary>@context.Name</Primary>
-                        <Secondary>Every @BackupsFormat.Interval(context.Request.Interval) - @BackupSetSchedulesText.Membership(context)</Secondary>
+                        <Secondary>
+                            Every @BackupsFormat.Interval(context.Request.Interval) - @BackupSetSchedulesText.Membership(context)
+                            @if (context.CurrentRun is { } compactRun)
+                            {
+                                <BackupSetRunProgress Schedule="@context.Name" Progress="@compactRun" AnnouncePhase="false" />
+                            }
+                        </Secondary>
                         <State><LtStatusPill State="@(context.IsScheduled ? LtStateRole.Enabled : LtStateRole.Disabled)" Text="@(context.IsScheduled ? "Scheduled" : "Paused")" /></State>
                     </LtCompactRow>
                 </CompactRow>
@@ -113,6 +172,12 @@
                     <LtDefinition Term="Every">@BackupsFormat.Interval(selected.Request.Interval)</LtDefinition>
                     <LtDefinition Term="Retention">@BackupSetSchedulesText.Retention(selected.Request)</LtDefinition>
                     <LtDefinition Term="State">@(selected.IsScheduled ? "Scheduled" : "Paused")@(selected.IsRunning ? ", running now" : string.Empty)</LtDefinition>
+                    @if (selected.CurrentRun is { } currentRun)
+                    {
+                        <LtDefinition Term="This run">
+                            <BackupSetRunProgress Schedule="@selected.Name" Progress="@currentRun" />
+                        </LtDefinition>
+                    }
                     <LtDefinition Term="Next run" Mono="true">@BackupSetSchedulesText.NextRun(selected)</LtDefinition>
                     <LtDefinition Term="Registered" Mono="true">@BackupsFormat.Time(selected.RegisteredAtUtc)</LtDefinition>
                     <LtDefinition Term="Last run" Mono="true">@BackupsFormat.Time(selected.LastRunUtc, "Never")</LtDefinition>
@@ -170,7 +235,7 @@
                 }
                 else
                 {
-                    <p class="lt-backups-note">Each member is an ordinary backup: open it to restore that tree.</p>
+                    <p class="lt-backups-note">@(_setRestoreServed ? "Restore set switches every member tree to its copy in the set. Each member is also an ordinary backup: open it to restore that tree alone." : "Each member is an ordinary backup: open it to restore that tree.")</p>
                     <LtTable TItem="ScheduledBackupSet"
                              Items="@selected.RetainedSets"
                              Caption="Retained sets"
@@ -194,6 +259,12 @@
                                     }
                                 </ul>
                             </LtColumn>
+                            @if (_setRestoreServed)
+                            {
+                                <LtColumn TItem="ScheduledBackupSet" Title="Actions">
+                                    <LtButton Variant="LtButtonVariant.Destructive" Disabled="@_busy" OnClick="() => AskRestoreSet(context)" aria-label="@("Restore set, " + context.SetId)">Restore set...</LtButton>
+                                </LtColumn>
+                            }
                         </ChildContent>
                     </LtTable>
                 }
@@ -275,5 +346,27 @@
                           OnConfirm="RemoveAsync">
         <p>The schedule stops and is forgotten, and its sets are no longer held from per-tree retention. Without the option below, the sets' backups stay in the catalogue as ordinary backups.</p>
         <LtCheckbox Label="Also delete the retained sets' backups" Checked="@_deleteRetainedSets" CheckedChanged="value => _deleteRetainedSets = value" Hint="Backups another schedule holds, or another capture has since taken over, are kept. This cannot be undone." />
+    </LtConfirmDestructive>
+
+    <LtConfirmDestructive @bind-Open="_confirmRestore"
+                          Title="Restore this whole set?"
+                          ObjectKind="set"
+                          ObjectName="@(_pendingSet?.Name ?? string.Empty)"
+                          ConfirmText="Restore set"
+                          PendingText="Restoring every tree in the set. The dialog closes once the restore has finished."
+                          OnConfirm="RestoreSetAsync">
+        @if (_pendingSet is { } pendingSet)
+        {
+            <p>Each live tree below is replaced by its copy in set <span class="lt-backups-mono">@pendingSet.SetId</span>, captured @BackupsFormat.Time(pendingSet.LastCapturedAtUtc). Writes made to these trees since then are no longer served.</p>
+            <ul class="lt-backups-trees" aria-label="Trees the restore switches" data-lt-set-restore-trees="true">
+                @foreach (var member in pendingSet.Members)
+                {
+                    <li class="lt-backups-trees__item" @key="member.TreeId">
+                        <BackupTreeLabel TreeId="@member.TreeId" />
+                    </li>
+                }
+            </ul>
+            <p>When any of these trees is replicated, the set is restored as one coordinated restore that switches every tree or none. Each tree's previous copy is kept, so the restore can be reverted from this page afterwards.</p>
+        }
     </LtConfirmDestructive>
 }

@@ -1,7 +1,10 @@
 using System.Globalization;
 using Microsoft.AspNetCore.Components;
+using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Api.Backup;
+using Orleans.Lattice.Api.TreeAdmin;
 using Orleans.Lattice.Backup;
+using Orleans.Lattice.Explorer.UI.Areas.Cluster;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Navigation;
 using Orleans.Lattice.Explorer.UI.Navigation.Address;
@@ -21,6 +24,7 @@ public partial class BackupSetSchedulesSection : IDisposable
 {
     private const string NamedTrees = "named";
     private const string AllTrees = "all";
+    private const string NotServedSetRestore = "This connection does not serve restoring a whole set.";
 
     private static readonly IReadOnlyList<LtSelectOption> MembershipOptions =
     [
@@ -63,6 +67,15 @@ public partial class BackupSetSchedulesSection : IDisposable
     private bool _deleteRetainedSets;
     private string? _pending;
 
+    private bool _setRestoreServed;
+    private bool _confirmRestore;
+    private ScheduledBackupSet? _pendingSet;
+    private ClusterStatusPoller? _poller;
+    private SetRestore? _restore;
+
+    [Inject]
+    internal IServiceProvider Services { get; set; } = default!;
+
     [Inject(Key = ShellFacades.Key)]
     internal ILatticeBackupControl Control { get; set; } = default!;
 
@@ -75,13 +88,19 @@ public partial class BackupSetSchedulesSection : IDisposable
     [Inject]
     internal ExplorerNavigator Navigator { get; set; } = default!;
 
+    [Inject]
+    internal TimeProvider Time { get; set; } = default!;
+
     private BackupSetScheduleStatus? Selected =>
         _selected is { } name ? _schedules?.FirstOrDefault(schedule => schedule.Name == name) : null;
+
+    private bool AnyRunInFlight => _schedules?.Any(schedule => schedule.CurrentRun is not null) == true;
 
     /// <inheritdoc />
     public void Dispose()
     {
         _load.Leave();
+        _poller?.Dispose();
         GC.SuppressFinalize(this);
     }
 
@@ -89,6 +108,7 @@ public partial class BackupSetSchedulesSection : IDisposable
     protected override async Task OnInitializedAsync()
     {
         _served = Access.BackupSetSchedulesServed != false;
+        _setRestoreServed = Services.GetShellFacade<ILatticeTreeAdmin>() is not null;
         if (_served)
         {
             await LoadAsync(_load.Token);
@@ -203,6 +223,7 @@ public partial class BackupSetSchedulesSection : IDisposable
 
             _schedules = schedules;
             _listError = null;
+            FollowWhileRunning();
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
@@ -216,6 +237,62 @@ public partial class BackupSetSchedulesSection : IDisposable
                     : BackupsFaults.Describe(exception);
             }
         }
+    }
+
+    /// <summary>
+    /// Starts reading the schedules again every <see cref="ClusterStatusPoller.Interval"/>
+    /// while any of them reports a run in flight, so its progress stays live; the
+    /// poller stops by itself once a read finds no run in flight, and with the component.
+    /// </summary>
+    private void FollowWhileRunning()
+    {
+        if (!AnyRunInFlight || _load.Token.IsCancellationRequested)
+        {
+            return;
+        }
+
+        _poller ??= new ClusterStatusPoller(Time);
+        if (!_poller.IsFollowing)
+        {
+            _poller.Follow(PollAsync);
+        }
+    }
+
+    private async Task<ClusterPollOutcome> PollAsync(CancellationToken cancellationToken)
+    {
+        IReadOnlyList<BackupSetScheduleStatus>? schedules;
+        try
+        {
+            schedules = await Access.ListBackupSetSchedulesAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            return ClusterPollOutcome.Failed;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        var outcome = ClusterPollOutcome.Settled;
+        await InvokeAsync(() =>
+        {
+            if (_load.Token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            if (schedules is null)
+            {
+                _served = false;
+            }
+            else
+            {
+                _schedules = schedules;
+                _listError = null;
+                outcome = AnyRunInFlight ? ClusterPollOutcome.Running : ClusterPollOutcome.Settled;
+            }
+
+            StateHasChanged();
+        }).ConfigureAwait(false);
+        return outcome;
     }
 
     private async Task RefreshAsync()
@@ -516,8 +593,187 @@ public partial class BackupSetSchedulesSection : IDisposable
     {
         Access.MarkBackupSetSchedulesNotServed();
         _served = false;
+        _poller?.Stop();
         _confirmPause = false;
         _confirmRemove = false;
+        _confirmRestore = false;
+    }
+
+    /// <summary>
+    /// The backup facade's form of one member of a whole-set restore, so the member
+    /// can be reverted through <see cref="ILatticeBackupControl.RevertRestoreAsync"/>:
+    /// every field carried across, as a shadow cut-over, which is the only mode a
+    /// tree-administration restore applies.
+    /// </summary>
+    /// <param name="result">The member's restore result.</param>
+    internal static LatticeRestoreResult ToRestoreResult(TreeRestoreResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        return new LatticeRestoreResult(
+            result.BackupId,
+            result.TargetTreeId,
+            LatticeRestoreMode.ShadowCutover,
+            result.OperationId,
+            result.ManifestChain,
+            result.EntriesApplied,
+            result.ShadowPhysicalTreeId,
+            result.PreviousPhysicalTreeId);
+    }
+
+    private void AskRestoreSet(ScheduledBackupSet set)
+    {
+        if (_busy)
+        {
+            return;
+        }
+
+        _pendingSet = set;
+        _confirmRestore = true;
+    }
+
+    private async Task RestoreSetAsync()
+    {
+        if (_busy || _pendingSet is not { } set)
+        {
+            return;
+        }
+
+        if (Services.GetShellFacade<ILatticeTreeAdmin>() is not { } admin)
+        {
+            _setRestoreServed = false;
+            return;
+        }
+
+        var token = _load.Token;
+        _actionMessage = null;
+        _actionError = null;
+        _busy = true;
+        try
+        {
+            var results = await admin.RestoreTreeSetAsync(set.SetId, token);
+            if (token.IsCancellationRequested)
+            {
+                return;
+            }
+
+            _restore = new SetRestore(set.SetId, set.Name, results);
+            Services.GetService<ClusterTreeChanges>()?.Changed();
+            _actionMessage = "Restored set " + set.Name + ": " + BackupSetSchedulesText.Trees(results.Count) + " switched to their copies in the set.";
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+        }
+        catch (NotSupportedException)
+        {
+            _setRestoreServed = false;
+            _actionError = NotServedSetRestore;
+        }
+        catch (Exception exception)
+        {
+            if (!token.IsCancellationRequested)
+            {
+                _actionError = BackupsFaults.Describe(exception);
+            }
+        }
+        finally
+        {
+            if (!token.IsCancellationRequested)
+            {
+                _busy = false;
+            }
+        }
+    }
+
+    private async Task RevertSetRestoreAsync()
+    {
+        if (_busy || _restore is not { } restore)
+        {
+            return;
+        }
+
+        var token = _load.Token;
+        _actionMessage = null;
+        _actionError = null;
+        _busy = true;
+        var revertedNow = 0;
+        try
+        {
+            foreach (var result in restore.Results)
+            {
+                if (restore.Reverted.Contains(result.TargetTreeId))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    await Control.RevertRestoreAsync(ToRestoreResult(result), token);
+                    if (token.IsCancellationRequested)
+                    {
+                        return;
+                    }
+
+                    restore.Reverted.Add(result.TargetTreeId);
+                    restore.Failures.Remove(result.TargetTreeId);
+                    revertedNow++;
+                }
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
+                {
+                    return;
+                }
+                catch (Exception exception)
+                {
+                    restore.Failures[result.TargetTreeId] = BackupsFaults.Describe(exception);
+                }
+            }
+
+            if (revertedNow > 0)
+            {
+                Services.GetService<ClusterTreeChanges>()?.Changed();
+            }
+
+            _actionMessage = restore.Failures.Count == 0
+                ? "Reverted the restore of set " + restore.SetName + ": every tree holds the copy it held before."
+                : null;
+            _actionError = restore.Failures.Count == 0
+                ? null
+                : "Reverted " + restore.Reverted.Count.ToString(CultureInfo.InvariantCulture) + " of "
+                    + BackupSetSchedulesText.Trees(restore.Results.Count) + "; "
+                    + BackupSetSchedulesText.Trees(restore.Failures.Count) + " could not be reverted. Each tree's state is shown below.";
+        }
+        finally
+        {
+            if (!token.IsCancellationRequested)
+            {
+                _busy = false;
+            }
+        }
+    }
+
+    private void DismissSetRestore()
+    {
+        _restore = null;
+        _actionMessage = null;
+        _actionError = null;
+    }
+
+    /// <summary>A whole-set restore this page made, kept so it can be reverted until it is dismissed.</summary>
+    /// <param name="setId">The restored set's id.</param>
+    /// <param name="setName">The restored set's name.</param>
+    /// <param name="results">One result per member tree.</param>
+    private sealed class SetRestore(string setId, string setName, IReadOnlyList<TreeRestoreResult> results)
+    {
+        public string SetId { get; } = setId;
+
+        public string SetName { get; } = setName;
+
+        public IReadOnlyList<TreeRestoreResult> Results { get; } = results;
+
+        /// <summary>The trees reverted so far.</summary>
+        public HashSet<string> Reverted { get; } = new(StringComparer.Ordinal);
+
+        /// <summary>Why each tree whose revert failed was not reverted.</summary>
+        public Dictionary<string, string> Failures { get; } = new(StringComparer.Ordinal);
     }
 
     /// <summary>The backup-set form's field errors.</summary>

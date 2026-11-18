@@ -171,7 +171,11 @@ public sealed class BackupToolMappingsTests
                 new ScheduledBackupSet(
                     "set-1", "nightly", DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch, crossTreeConsistent: true,
                     new[] { new ScheduledBackupSetMember(BackupScopeSelector.Prefix("orders", "eu/"), "bk-1") }),
-            });
+            },
+            new BackupSetScheduleRunProgress(
+                DateTimeOffset.UnixEpoch, BackupSetScheduleTrigger.Schedule, attempt: 2,
+                BackupOperationPhases.WritingMembers, completedUnits: 1, totalUnits: 3,
+                BackupOperationUnits.Members, "orders", DateTimeOffset.UnixEpoch.AddSeconds(9)));
 
         var mcp = BackupToolMappings.ToMcp(status);
 
@@ -189,6 +193,10 @@ public sealed class BackupToolMappingsTests
             Assert.That(mcp.RecentRuns.Single().SetId, Is.EqualTo("set-1"));
             var member = mcp.RetainedSets.Single().Members.Single();
             Assert.That((member.TreeId, member.ScopeKind, member.KeyOrPrefix, member.BackupId), Is.EqualTo(("orders", "Prefix", "eu/", "bk-1")));
+            var current = mcp.CurrentRun!;
+            Assert.That(
+                (current.Trigger, current.Attempt, current.Phase, current.CompletedUnits, current.TotalUnits, current.UnitName, current.CurrentTreeId),
+                Is.EqualTo(("Schedule", 2, "WritingMembers", 1L, (long?)3, "members", "orders")));
         });
     }
 

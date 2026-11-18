@@ -132,6 +132,7 @@ public sealed class BackupSetScheduleIntegrationTests
         {
             Assert.That(started, Is.True);
             Assert.That(joined, Is.False);
+            Assert.That(status.CurrentRun, Is.Null, "a finished run reports no live progress");
             Assert.That(status.RecentRuns, Has.Count.EqualTo(1), "the second request did not stack a run");
             Assert.That(status.RecentRuns[0].Trigger, Is.EqualTo(BackupSetScheduleTrigger.Manual));
         });
@@ -185,6 +186,47 @@ public sealed class BackupSetScheduleIntegrationTests
             Assert.That(rows.Select(r => r.Id).Intersect(members.Select(m => m.BackupId)), Is.Empty);
             Assert.That(registry, Is.Empty);
             Assert.That(held, Is.False);
+        });
+    }
+
+    [Test]
+    public async Task A_run_in_flight_reports_its_phase_and_member_progress()
+    {
+        var suffix = Guid.NewGuid().ToString("N");
+        var trees = Enumerable.Range(0, 6).Select(i => $"progress-{i}-{suffix}").ToArray();
+        foreach (var tree in trees)
+        {
+            var entries = Enumerable.Range(0, 400)
+                .Select(k => new KeyValuePair<string, byte[]>($"k{k:D4}", Bytes(new string('v', 64))))
+                .ToList();
+            await Tree(tree).SetManyAsync(entries);
+        }
+
+        var grain = await ScheduleAsync("progress", trees, keepLast: 2);
+        await grain.RunNowAsync();
+        var seen = new List<BackupSetScheduleRunProgress>();
+        await TestPoll.UntilAsync(
+            async () =>
+            {
+                var status = await grain.GetStatusAsync();
+                if (status?.CurrentRun is { } current)
+                {
+                    seen.Add(current);
+                }
+
+                return status is { IsRunning: false, RecentRuns.Count: 1 };
+            },
+            "the run to finish",
+            timeout: TimeSpan.FromSeconds(90),
+            cadence: TimeSpan.FromMilliseconds(5));
+
+        var memberPhases = seen.Where(p => p.UnitName == BackupOperationUnits.Members).ToList();
+        Assert.Multiple(() =>
+        {
+            Assert.That(seen, Is.Not.Empty, "a status read during the run sees its progress");
+            Assert.That(memberPhases.Select(p => p.TotalUnits), Has.All.EqualTo((long?)trees.Length));
+            Assert.That(memberPhases.Where(p => p.CurrentTreeId is not null).Select(p => p.CurrentTreeId).Distinct(), Is.SubsetOf(trees));
+            Assert.That(seen.Select(p => p.Trigger), Has.All.EqualTo(BackupSetScheduleTrigger.Manual));
         });
     }
 

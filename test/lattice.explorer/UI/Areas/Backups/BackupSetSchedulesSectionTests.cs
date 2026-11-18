@@ -10,12 +10,12 @@ namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Backups;
 /// <summary>
 /// The Schedules page's backup-set section (#6067): the listing, the details,
 /// registering named-tree and all-tree schedules, the retention rule, run now,
-/// pause, resume and remove, and withdrawal when the connection does not serve
-/// backup-set schedules.
+/// pause, resume and remove, restoring a retained set as a whole and reverting it,
+/// and withdrawal when the connection does not serve backup-set schedules.
 /// </summary>
 [TestFixture]
 [FixtureLifeCycle(LifeCycle.InstancePerTestCase)]
-public sealed class BackupSetSchedulesSectionTests : BackupsTestContext
+public sealed partial class BackupSetSchedulesSectionTests : BackupsTestContext
 {
     private const string Page = "backups/schedules";
 

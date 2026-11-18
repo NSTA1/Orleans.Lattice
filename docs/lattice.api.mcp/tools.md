@@ -151,7 +151,7 @@ Backup control over `ILatticeBackupControl` and `ILatticeBackupOperations`. Regi
 | `lattice_backup_export_artifact` | inspect | Export one bounded, base64-encoded page of a backup artifact's bytes, resumed from `chunkOffset` until `endOfStream`. |
 | `lattice_backup_operation_status` | inspect | Read a tracked backup or restore operation by operation id; returns `found` plus the operation view when visible. |
 | `lattice_backup_operation_list` | inspect | Page the caller's tracked backup and restore operations newest-first. |
-| `lattice_backup_set_schedule_get` | inspect | Read one backup-set schedule by `name`: membership, cadence, retention, member trees, next run, recent runs, and retained sets; `found=false` when unknown. |
+| `lattice_backup_set_schedule_get` | inspect | Read one backup-set schedule by `name`: membership, cadence, retention, member trees, next run, the live progress of a run in flight (`currentRun`: phase, `n` of `N` trees, the tree being written, attempt), recent runs, and retained sets; `found=false` when unknown. |
 | `lattice_backup_set_schedule_list` | inspect | List the caller's readable backup-set schedules in name order. |
 | `lattice_backup_start` | control | Start a tracked full backup and return `{ operationId, kind, treeIds, created, statusTool }`. |
 | `lattice_backup_start_incremental` | control | Start a tracked incremental backup layered on a base backup and return an operation handle. |

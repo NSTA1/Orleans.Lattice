@@ -241,6 +241,20 @@ internal static class BackupToolMappings
             ConsecutiveFailures = status.ConsecutiveFailures,
             RecentRuns = runs,
             RetainedSets = sets,
+            CurrentRun = status.CurrentRun is { } current
+                ? new McpBackupSetScheduleRunProgress
+                {
+                    StartedAtUtc = current.StartedAtUtc,
+                    Trigger = current.Trigger.ToString(),
+                    Attempt = current.Attempt,
+                    Phase = current.Phase,
+                    CompletedUnits = current.CompletedUnits,
+                    TotalUnits = current.TotalUnits,
+                    UnitName = current.UnitName,
+                    CurrentTreeId = current.CurrentTreeId,
+                    UpdatedAtUtc = current.UpdatedAtUtc,
+                }
+                : null,
         };
     }
 

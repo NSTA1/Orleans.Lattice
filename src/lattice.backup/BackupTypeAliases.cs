@@ -159,4 +159,7 @@ internal static class BackupTypeAliases
 
     /// <summary>Alias for <see cref="BackupSetScheduleConfig"/>.</summary>
     internal const string BackupSetScheduleConfig = "olb.cf";
+
+    /// <summary>Alias for <see cref="BackupSetScheduleRunProgress"/>.</summary>
+    internal const string BackupSetScheduleRunProgress = "olb.rp";
 }

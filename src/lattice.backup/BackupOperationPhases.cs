@@ -24,6 +24,12 @@ public static class BackupOperationPhases
     /// </summary>
     public const string WritingMembers = "WritingMembers";
 
+    /// <summary>A backup-set schedule's run resolving the trees it captures.</summary>
+    public const string ResolvingMembers = "ResolvingMembers";
+
+    /// <summary>A backup-set schedule's run applying the schedule's retention to whole sets.</summary>
+    public const string ApplyingRetention = "ApplyingRetention";
+
     /// <summary>Writing the manifest to the sink and registering it in the catalog.</summary>
     public const string Cataloguing = "Cataloguing";
 

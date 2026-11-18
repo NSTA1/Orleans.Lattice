@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Orleans.Lattice.Operations;
 using Orleans.Runtime;
 using Orleans.Timers;
 
@@ -40,6 +41,10 @@ internal sealed partial class BackupSetSchedulerGrain(
     // the schedule.
     private bool _cycleInFlight;
     private IGrainTimer? _cycleTimer;
+
+    // The live progress of the run in flight; activation-local like the guard.
+    // Swapped whole by reference, so a status read never sees a torn snapshot.
+    private RunProgress? _progress;
     private IBackupPublicationGate? _gate;
 
     /// <inheritdoc />
@@ -292,8 +297,11 @@ internal sealed partial class BackupSetSchedulerGrain(
         state.State.LastRunUtc = startedAt;
         var attempts = 0;
         var memberCount = 0;
+        var progress = new RunProgress(startedAt, trigger);
+        _progress = progress;
         try
         {
+            await progress.ReportAsync(BackupOperationPhases.ResolvingMembers);
             var scopes = await ResolveScopesAsync(request, target);
             memberCount = scopes.Count;
             if (scopes.Count == 0)
@@ -306,10 +314,15 @@ internal sealed partial class BackupSetSchedulerGrain(
             while (true)
             {
                 attempts++;
+                progress.BeginAttempt(attempts, scopes);
                 try
                 {
-                    result = await captureService.CaptureSetAsync(
-                        new LatticeBackupSetCaptureRequest(setName, scopes, request.CrossTreeConsistent));
+                    using (LatticeOperationProgress.Enter(progress))
+                    {
+                        result = await captureService.CaptureSetAsync(
+                            new LatticeBackupSetCaptureRequest(setName, scopes, request.CrossTreeConsistent));
+                    }
+
                     break;
                 }
                 catch (LatticeBackupCrossTreeFenceException ex) when (attempts <= options.SetScheduleFenceRetries)
@@ -335,6 +348,7 @@ internal sealed partial class BackupSetSchedulerGrain(
             RecordRun(run);
             await state.WriteStateAsync();
             await Registry.SetRetainedSetIdsAsync(ScheduleKey, state.State.Sets.Select(s => s.SetId).ToList());
+            await progress.ReportAsync(BackupOperationPhases.ApplyingRetention);
             await ApplyRetentionAsync(request);
             logger.LogInformation(
                 "Backup-set schedule {Schedule}: captured set {SetId} over {MemberCount} tree(s) in {Attempts} attempt(s).",
@@ -356,6 +370,10 @@ internal sealed partial class BackupSetSchedulerGrain(
             RecordRun(run);
             await state.WriteStateAsync();
             return run;
+        }
+        finally
+        {
+            _progress = null;
         }
     }
 
@@ -444,7 +462,8 @@ internal sealed partial class BackupSetSchedulerGrain(
             s.LastFailureReason,
             s.ConsecutiveFailures,
             s.RecentRuns.ToList(),
-            s.Sets.ToList());
+            s.Sets.ToList(),
+            _progress?.Snapshot);
     }
 
     /// <summary>

@@ -76,4 +76,7 @@ internal sealed record McpBackupSetSchedule
 
     /// <summary>The sets the schedule retains, newest first; pass a set id to a set restore.</summary>
     public IReadOnlyList<McpScheduledBackupSet> RetainedSets { get; init; } = Array.Empty<McpScheduledBackupSet>();
+
+    /// <summary>The live progress of the run in flight, or <see langword="null"/> when none is.</summary>
+    public McpBackupSetScheduleRunProgress? CurrentRun { get; init; }
 }

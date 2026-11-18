@@ -61,7 +61,7 @@ The gRPC service name is `orleans.lattice.api.backup`.
 | `ScheduleBackupSet` | unary | Register or update a recurring backup-set schedule |
 | `CancelBackupSetSchedule` | unary | Pause a backup-set schedule, keeping its retained sets |
 | `RemoveBackupSetSchedule` | unary | Remove a backup-set schedule, optionally deleting its retained sets |
-| `GetBackupSetScheduleStatus` | unary | Read a backup-set schedule's status, runs, and retained sets |
+| `GetBackupSetScheduleStatus` | unary | Read a backup-set schedule's status, live run progress, recent runs, and retained sets |
 | `ListBackupSetSchedules` | unary | List the caller's backup-set schedules |
 | `RunBackupSetScheduleNow` | unary | Start one run of a backup-set schedule now |
 

@@ -1,5 +1,6 @@
 using System.Globalization;
 using Orleans.Lattice.Backup;
+using Orleans.Lattice.Explorer.UI.Operations;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Backups;
 
@@ -94,6 +95,73 @@ internal static class BackupSetSchedulesText
         string.IsNullOrWhiteSpace(text)
             ? []
             : [.. text.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).Distinct(StringComparer.Ordinal)];
+
+    /// <summary>A run's phase in plain words, such as <c>Writing trees</c>.</summary>
+    /// <param name="phase">The phase, a <see cref="BackupOperationPhases"/> value.</param>
+    public static string Phase(string phase) => phase switch
+    {
+        BackupOperationPhases.ResolvingMembers => "Resolving trees",
+        BackupOperationPhases.CapturingMembers => "Capturing (pinning) trees",
+        BackupOperationPhases.WritingMembers => "Writing trees",
+        BackupOperationPhases.ApplyingRetention => "Applying retention",
+        _ => OperationText.Phase(phase),
+    };
+
+    /// <summary>
+    /// The line under a running set's progress bar: how many trees are done of how
+    /// many, the tree being worked on, the attempt when it is a retry, what started
+    /// the run, and how long it has been going.
+    /// </summary>
+    /// <param name="progress">The run's progress.</param>
+    /// <param name="now">The time now.</param>
+    public static string RunDetail(BackupSetScheduleRunProgress progress, DateTimeOffset now)
+    {
+        ArgumentNullException.ThrowIfNull(progress);
+        var parts = new List<string>(4);
+        if (progress.TotalUnits is > 0 and var total)
+        {
+            parts.Add(progress.CompletedUnits.ToString(CultureInfo.InvariantCulture) + " of " + Trees(total));
+        }
+        else if (progress.CompletedUnits > 0)
+        {
+            parts.Add(Trees(progress.CompletedUnits) + " done");
+        }
+
+        if (!string.IsNullOrEmpty(progress.CurrentTreeId))
+        {
+            parts.Add("now " + progress.CurrentTreeId);
+        }
+
+        if (progress.Attempt > 1)
+        {
+            parts.Add("attempt " + progress.Attempt.ToString(CultureInfo.InvariantCulture));
+        }
+
+        parts.Add(progress.Trigger == BackupSetScheduleTrigger.Manual ? "started by Run now" : "scheduled run");
+        parts.Add("running for " + Elapsed(now - progress.StartedAtUtc));
+        return string.Join(", ", parts);
+    }
+
+    /// <summary>An elapsed time to the second, such as <c>45 s</c>, <c>3 m 05 s</c> or <c>2 h 03 m</c>.</summary>
+    /// <param name="elapsed">The elapsed time; a negative one, from clock skew, reads as none.</param>
+    public static string Elapsed(TimeSpan elapsed)
+    {
+        if (elapsed < TimeSpan.Zero)
+        {
+            elapsed = TimeSpan.Zero;
+        }
+
+        return elapsed.TotalHours >= 1
+            ? ((long)elapsed.TotalHours).ToString(CultureInfo.InvariantCulture) + " h " + elapsed.Minutes.ToString("00", CultureInfo.InvariantCulture) + " m"
+            : elapsed.TotalMinutes >= 1
+                ? elapsed.Minutes.ToString(CultureInfo.InvariantCulture) + " m " + elapsed.Seconds.ToString("00", CultureInfo.InvariantCulture) + " s"
+                : elapsed.Seconds.ToString(CultureInfo.InvariantCulture) + " s";
+    }
+
+    /// <summary>A count of trees, such as <c>1 tree</c> or <c>3 trees</c>.</summary>
+    /// <param name="count">How many trees.</param>
+    public static string Trees(long count) =>
+        count.ToString(CultureInfo.InvariantCulture) + (count == 1 ? " tree" : " trees");
 
     private static string Count(int count, string noun) =>
         count.ToString(CultureInfo.InvariantCulture) + " " + noun + (count == 1 || noun == "more" ? string.Empty : "s");

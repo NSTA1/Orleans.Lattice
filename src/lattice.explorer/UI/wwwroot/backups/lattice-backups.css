@@ -198,6 +198,13 @@
   font-size: var(--lt-text-sm);
 }
 
+/* A running backup-set schedule's live progress, under its Running pill. */
+
+.lt-backups-run-progress {
+  margin-block-start: var(--lt-space-1);
+  min-inline-size: 12rem;
+}
+
 /* An operation's stages, drawn as a spine. The stage under way is marked with
    the join node and aria-current. */
 

@@ -26,6 +26,7 @@ public sealed record BackupSetScheduleStatus
     /// <param name="consecutiveFailures">How many runs in a row have failed.</param>
     /// <param name="recentRuns">The most recent runs, newest first.</param>
     /// <param name="retainedSets">The sets the schedule retains, newest first.</param>
+    /// <param name="currentRun">The live progress of the run in flight, or <c>null</c> when none is.</param>
     public BackupSetScheduleStatus(
         string name,
         LatticeBackupSetScheduleRequest request,
@@ -40,7 +41,8 @@ public sealed record BackupSetScheduleStatus
         string? lastFailureReason,
         int consecutiveFailures,
         IReadOnlyList<BackupSetScheduleRun> recentRuns,
-        IReadOnlyList<ScheduledBackupSet> retainedSets)
+        IReadOnlyList<ScheduledBackupSet> retainedSets,
+        BackupSetScheduleRunProgress? currentRun = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(name);
         ArgumentNullException.ThrowIfNull(request);
@@ -61,6 +63,7 @@ public sealed record BackupSetScheduleStatus
         ConsecutiveFailures = consecutiveFailures;
         RecentRuns = recentRuns;
         RetainedSets = retainedSets;
+        CurrentRun = currentRun;
     }
 
     /// <summary>The schedule's name, as registered.</summary>
@@ -121,4 +124,12 @@ public sealed record BackupSetScheduleStatus
     /// <summary>The sets the schedule retains, newest first.</summary>
     [Id(13)]
     public IReadOnlyList<ScheduledBackupSet> RetainedSets { get; init; }
+
+    /// <summary>
+    /// The live progress of the run in flight - its phase, how far through it,
+    /// the tree being written and the capture attempt - or <c>null</c> when no
+    /// run is in flight.
+    /// </summary>
+    [Id(14)]
+    public BackupSetScheduleRunProgress? CurrentRun { get; init; }
 }
