@@ -9,8 +9,9 @@ namespace Orleans.Lattice.Api.Telemetry;
 /// not request more evaluation points than the backend can serve.
 /// </summary>
 /// <remarks>
-/// The checks are evaluated in a fixed order - ordering, step positivity, range
-/// budget, step budget, then point budget - so a request that violates more than one is always
+/// The checks are evaluated in a fixed order - ordering, step positivity, step
+/// resolution (at least one whole millisecond, the backend's wire granularity),
+/// range budget, step budget, then point budget - so a request that violates more than one is always
 /// reported against the same violation, and every binding reports the identical
 /// message for the identical request.
 /// </remarks>
@@ -60,6 +61,18 @@ public static class TelemetryRangeGuardrails
             return false;
         }
 
+        // The point budget below must be judged against the step the backend will
+        // actually evaluate, not the caller's raw value: the wire format carries
+        // whole milliseconds, so a sub-millisecond step would reach the backend
+        // as zero and a fractional one would be evaluated at a finer resolution
+        // than was budgeted.
+        var wireStepMilliseconds = ToWireMilliseconds(step);
+        if (wireStepMilliseconds == 0)
+        {
+            violationMessage = "The range step must be at least one millisecond.";
+            return false;
+        }
+
         var range = end - start;
         if (range > options.MaxRange)
         {
@@ -78,7 +91,7 @@ public static class TelemetryRangeGuardrails
         // The range and step budgets bound each dimension alone, but not their
         // quotient: a full-budget range at a one-tick step would otherwise ask the
         // backend for billions of evaluation points per series.
-        var points = (range.Ticks / step.Ticks) + 1;
+        var points = (range.Ticks / (wireStepMilliseconds * TimeSpan.TicksPerMillisecond)) + 1;
         if (points > MaxEvaluationPoints)
         {
             violationMessage =
@@ -89,4 +102,13 @@ public static class TelemetryRangeGuardrails
         violationMessage = null;
         return true;
     }
+
+    /// <summary>
+    /// The resolution step as it is sent to the backend: whole milliseconds,
+    /// truncated. Shared by the guardrail and the query client so the point
+    /// budget is always judged against the step that is actually evaluated.
+    /// </summary>
+    /// <param name="step">The requested resolution step.</param>
+    /// <returns>The step in whole milliseconds.</returns>
+    internal static long ToWireMilliseconds(TimeSpan step) => step.Ticks / TimeSpan.TicksPerMillisecond;
 }

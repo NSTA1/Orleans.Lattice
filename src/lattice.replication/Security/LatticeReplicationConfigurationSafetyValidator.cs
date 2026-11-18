@@ -185,15 +185,11 @@ internal sealed class LatticeReplicationConfigurationSafetyValidator(
         {
             if (provider.TryGet(key, out var value) && !string.IsNullOrEmpty(value))
             {
-                if (TryGetFileProviderPath(provider, out var path))
+                if (TryResolveFileProviderPath(provider, appDirectory, out var fullPath)
+                    && IsUnderDirectory(fullPath, appDirectory))
                 {
-                    var fullPath = Path.GetFullPath(path);
-                    var fullAppDir = Path.GetFullPath(appDirectory);
-                    if (fullPath.StartsWith(fullAppDir, StringComparison.OrdinalIgnoreCase))
-                    {
-                        providerDescription = $"{provider.GetType().Name} -> {fullPath}";
-                        return true;
-                    }
+                    providerDescription = $"{provider.GetType().Name} -> {fullPath}";
+                    return true;
                 }
             }
         }
@@ -202,25 +198,78 @@ internal sealed class LatticeReplicationConfigurationSafetyValidator(
         return false;
     }
 
-    private static bool TryGetFileProviderPath(IConfigurationProvider provider, out string path)
+    /// <summary>
+    /// Resolves the absolute physical path of the file behind a file-based
+    /// configuration provider. <c>AddJsonFile</c> (and its siblings) split even
+    /// an absolute path into a bare file name on <c>Source.Path</c> plus a
+    /// <c>PhysicalFileProvider</c> rooted at the real directory on
+    /// <c>Source.FileProvider</c>, so the path must be resolved through that
+    /// provider. Resolving the bare name against the process working directory
+    /// instead misses a leaked file whenever the host is not launched from its
+    /// application directory (a Windows service, for example), and wrongly flags
+    /// a file elsewhere - the user-secrets store - that happens to share its name
+    /// with one in the working directory.
+    /// </summary>
+    /// <param name="provider">The configuration provider to inspect.</param>
+    /// <param name="appDirectory">The base used when the source carries no file provider, mirroring the configuration builder's default.</param>
+    /// <param name="fullPath">Receives the absolute file path when resolved.</param>
+    /// <returns><see langword="true"/> when the provider is file-based and its path was resolved.</returns>
+    internal static bool TryResolveFileProviderPath(
+        IConfigurationProvider provider,
+        string appDirectory,
+        out string fullPath)
     {
-        // FileConfigurationProvider exposes Source.Path via a public Source
-        // property; reflect rather than take a hard dependency on the
-        // file-extension type (which would force a transitive package
+        // FileConfigurationProvider exposes Source.Path / Source.FileProvider via
+        // a public Source property; reflect rather than take a hard dependency on
+        // the file-extension type (which would force a transitive package
         // reference on every consumer).
-        var sourceProp = provider.GetType().GetProperty("Source");
-        if (sourceProp?.GetValue(provider) is { } source)
+        fullPath = string.Empty;
+        var source = provider.GetType().GetProperty("Source")?.GetValue(provider);
+        if (source?.GetType().GetProperty("Path")?.GetValue(source) is not string path
+            || string.IsNullOrEmpty(path))
         {
-            var pathProp = source.GetType().GetProperty("Path");
-            if (pathProp?.GetValue(source) is string p && !string.IsNullOrEmpty(p))
-            {
-                path = p;
-                return true;
-            }
+            return false;
         }
 
-        path = string.Empty;
-        return false;
+        if (Path.IsPathRooted(path))
+        {
+            fullPath = Path.GetFullPath(path);
+            return true;
+        }
+
+        var fileProvider = source.GetType().GetProperty("FileProvider")?.GetValue(source);
+        if (fileProvider is not null)
+        {
+            var fileInfo = fileProvider.GetType()
+                .GetMethod("GetFileInfo", [typeof(string)])
+                ?.Invoke(fileProvider, [path]);
+            if (fileInfo?.GetType().GetProperty("PhysicalPath")?.GetValue(fileInfo) is string physical
+                && !string.IsNullOrEmpty(physical))
+            {
+                fullPath = Path.GetFullPath(physical);
+                return true;
+            }
+
+            if (fileProvider.GetType().GetProperty("Root")?.GetValue(fileProvider) is string root
+                && !string.IsNullOrEmpty(root))
+            {
+                fullPath = Path.GetFullPath(Path.Combine(root, path));
+                return true;
+            }
+
+            // A non-physical provider (embedded, in-memory) has no file on disk
+            // that could be committed alongside the application.
+            return false;
+        }
+
+        fullPath = Path.GetFullPath(path, Path.GetFullPath(appDirectory));
+        return true;
+    }
+
+    private static bool IsUnderDirectory(string fullPath, string directory)
+    {
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(directory)) + Path.DirectorySeparatorChar;
+        return fullPath.StartsWith(root, StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsTruthy(string? value)

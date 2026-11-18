@@ -57,6 +57,18 @@ public sealed partial class PrometheusQueryClientTests
     }
 
     [Test]
+    public async Task RangeQuery_sends_a_fractional_step_as_the_truncated_millisecond_value_the_guardrail_budgets()
+    {
+        var client = CreateClient(new LatticeTelemetryOptions(), out var handler);
+        var start = DateTimeOffset.FromUnixTimeSeconds(1000);
+
+        await client.RangeQueryAsync("up", start, start.AddSeconds(10), TimeSpan.FromTicks(19_000), CancellationToken.None);
+
+        Assert.That(handler.LastRequest!.RequestUri!.ToString(), Does.EndWith("&step=0.001"),
+            "1.9ms is budgeted as 1ms by TelemetryRangeGuardrails, so it must be sent as 1ms, not rounded up.");
+    }
+
+    [Test]
     public async Task Bearer_mode_stamps_the_configured_backend_token()
     {
         var options = new LatticeTelemetryOptions

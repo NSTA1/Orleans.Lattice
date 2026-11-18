@@ -265,12 +265,8 @@ public class LatticeReplicationConfigurationSafetyValidatorTests
     /// binds it, and asserts the safety scan trips.
     /// </summary>
     /// <remarks>
-    /// The file is bound by its ABSOLUTE path. A relative <c>AddJsonFile</c> name is
-    /// recorded verbatim as the provider's source path and is later resolved by the
-    /// scan against the process working directory, so a <c>SetBasePath</c> plus
-    /// relative-name binding only trips while the test runner happens to launch in
-    /// the test output folder - exactly the coupling
-    /// <see cref="WriteScannedAppSettingsAndBuild"/> already documents and avoids.
+    /// The scan resolves the file through the source's file provider, so the trip
+    /// is independent of the test runner's working directory.
     /// </remarks>
     private static void AssertScanTripsFor(string fileNamePrefix, string json)
     {
@@ -299,6 +295,95 @@ public class LatticeReplicationConfigurationSafetyValidatorTests
     }
 
     [Test]
+    public async Task StartAsync_passes_when_secret_file_lives_outside_app_directory()
+    {
+        // AddJsonFile records only the bare file name on Source.Path. Resolving that
+        // name against the working directory (the test output folder here) wrongly
+        // placed a file from elsewhere - the user-secrets store, say - under the
+        // application directory and refused to start.
+        var dir = Path.Combine(Path.GetTempPath(), $"cfgscan-outside-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "secrets.json");
+        File.WriteAllText(path, """{"LatticeReplication":{"Secret":"from-user-secrets"}}""");
+
+        try
+        {
+            var cfg = new ConfigurationBuilder()
+                .AddJsonFile(path, optional: false, reloadOnChange: false)
+                .Build();
+
+            var v = new LatticeReplicationConfigurationSafetyValidator(
+                ProviderWith(cfg),
+                OptionsFor(new LatticeReplicationSecurityOptions()),
+                NullLogger<LatticeReplicationConfigurationSafetyValidator>.Instance);
+
+            await v.StartAsync(CancellationToken.None);
+        }
+        finally
+        {
+            DeleteDirectory(dir);
+        }
+    }
+
+    [Test]
+    public void TryResolveFileProviderPath_resolves_through_the_source_file_provider()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), $"cfgscan-resolve-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "appsettings.json");
+        File.WriteAllText(path, """{"A":"b"}""");
+
+        try
+        {
+            var root = (IConfigurationRoot)new ConfigurationBuilder()
+                .SetBasePath(dir)
+                .AddJsonFile("appsettings.json", optional: false, reloadOnChange: false)
+                .Build();
+
+            var resolved = LatticeReplicationConfigurationSafetyValidator.TryResolveFileProviderPath(
+                root.Providers.Single(), AppContext.BaseDirectory, out var fullPath);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(resolved, Is.True);
+                Assert.That(fullPath, Is.EqualTo(Path.GetFullPath(path)).IgnoreCase);
+            });
+        }
+        finally
+        {
+            DeleteDirectory(dir);
+        }
+    }
+
+    [Test]
+    public void StartAsync_does_not_treat_a_sibling_directory_sharing_the_app_prefix_as_inside()
+    {
+        var appDir = Path.TrimEndingDirectorySeparator(AppContext.BaseDirectory);
+        var sibling = appDir + "-sibling-" + Guid.NewGuid().ToString("N");
+        Directory.CreateDirectory(sibling);
+        var path = Path.Combine(sibling, "appsettings.json");
+        File.WriteAllText(path, """{"LatticeReplication":{"Secret":"outside"}}""");
+
+        try
+        {
+            var cfg = new ConfigurationBuilder()
+                .AddJsonFile(path, optional: false, reloadOnChange: false)
+                .Build();
+
+            var v = new LatticeReplicationConfigurationSafetyValidator(
+                ProviderWith(cfg),
+                OptionsFor(new LatticeReplicationSecurityOptions()),
+                NullLogger<LatticeReplicationConfigurationSafetyValidator>.Instance);
+
+            Assert.That(async () => await v.StartAsync(CancellationToken.None), Throws.Nothing);
+        }
+        finally
+        {
+            DeleteDirectory(sibling);
+        }
+    }
+
+    [Test]
     public async Task StopAsync_is_noop()
     {
         var v = new LatticeReplicationConfigurationSafetyValidator(
@@ -320,14 +405,9 @@ public class LatticeReplicationConfigurationSafetyValidatorTests
     /// actually keys on.
     /// </summary>
     /// <remarks>
-    /// The file deliberately lives under the application directory rather than
-    /// the system temp directory. A relative <c>AddJsonFile</c> name is recorded
-    /// verbatim as the provider's source path and is later resolved against the
-    /// process working directory, so a temp-directory file only tripped the scan
-    /// while the test runner happened to set the working directory to the test
-    /// output folder. Anchoring the file under the application directory and
-    /// passing an absolute path makes the trip deterministic and independent of
-    /// the runner's working directory.
+    /// The file deliberately lives under the application directory: the scan
+    /// resolves it through the source's file provider and only trips for files
+    /// under that directory.
     /// </remarks>
     private static IConfiguration WriteScannedAppSettingsAndBuild(out string settingsDir)
     {
