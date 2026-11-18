@@ -122,6 +122,62 @@ public sealed class ShardHealingAliasedTreeIntegrationTests
         await AssertReadableAndWritableAsync(tree, expected, "after a healing sweep repaired the routing");
     }
 
+    [Test]
+    public async Task Healing_an_aliased_tree_keeps_the_copy_routing_map_in_line()
+    {
+        // #6089: a view maintainer, or anything else bound to the physical copy,
+        // routes by the copy's own row.
+        var (logical, physical) = await CreateAliasedTreeAsync("heal-alias-copy", derived: true);
+        var expected = await PopulateAsync(Grains.GetGrain<ILattice>(logical));
+
+        var healer = Grains.GetGrain<IShardHealingOrchestratorGrain>(logical);
+        for (var pass = 0; pass < 200 && await PhysicalShardCountAsync(logical) > BaseShardCount; pass++)
+            await healer.RunHealingPassAsync();
+
+        Assert.That((await Registry.GetShardMapAsync(physical))!.Slots,
+            Is.EqualTo((await Registry.GetShardMapAsync(logical))!.Slots).AsCollection,
+            "Every fold committed onto the logical row must be mirrored onto the copy's own row.");
+        await AssertReadableAsync(Grains.GetGrain<ILattice>(physical), expected, "through the copy's own id after healing");
+    }
+
+    [Test]
+    public async Task A_copy_routing_map_a_fold_left_behind_is_repaired_by_a_forced_refresh_through_the_copy()
+    {
+        // The state a deployment running the #6083 fix without the #6089 one is
+        // left in: folds committed onto the logical row only, so the copy's own
+        // row still routes the folded slots to the retired donors.
+        var (logical, physical) = await CreateAliasedTreeAsync("heal-alias-copy-repair", derived: true);
+        var expected = await PopulateAsync(Grains.GetGrain<ILattice>(logical));
+        var staleCopyRow = (await Registry.GetEntryAsync(physical))!;
+
+        var healer = Grains.GetGrain<IShardHealingOrchestratorGrain>(logical);
+        for (var pass = 0; pass < 200 && await PhysicalShardCountAsync(logical) > BaseShardCount; pass++)
+            await healer.RunHealingPassAsync();
+        await Registry.UpdateAsync(physical, (await Registry.GetEntryAsync(physical))! with { ShardMap = staleCopyRow.ShardMap });
+        var logicalSlots = (await Registry.GetShardMapAsync(logical))!.Slots;
+        Assert.That((await Registry.GetShardMapAsync(physical))!.Slots, Is.Not.EqualTo(logicalSlots).AsCollection,
+            "the copy's row must start out behind the logical row");
+
+        // What ViewMaintainerGrain.ReadSourceAsync does after a shard refuses it.
+        var copyRouter = Grains.GetGrain<ILattice>(physical);
+        var routing = await copyRouter.GetRoutingAsync(forceRefresh: true);
+
+        Assert.That(routing.Map.Slots, Is.EqualTo(logicalSlots).AsCollection,
+            "A forced refresh through the copy must bring its row into line with the logical row.");
+        Assert.That((await Registry.GetShardMapAsync(physical))!.Slots, Is.EqualTo(logicalSlots).AsCollection);
+        await AssertReadableAsync(copyRouter, expected, "through the copy's own id after the repair");
+    }
+
+    private static async Task AssertReadableAsync(ILattice tree, Dictionary<string, byte[]> expected, string when)
+    {
+        foreach (var (key, value) in expected)
+        {
+            using var budget = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+            Assert.That(await tree.GetAsync(key, budget.Token), Is.EqualTo(value).AsCollection,
+                $"Key '{key}' must be readable {when}.");
+        }
+    }
+
     /// <summary>
     /// Reproduces the state a deployment running the pre-fix healer is left in:
     /// a fold keyed by the alias target's id, driven to completion, retires the

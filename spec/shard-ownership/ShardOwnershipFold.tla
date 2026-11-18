@@ -69,7 +69,7 @@ Rows == {"logical", "copy"}
 
 VARIABLES
     rmap,       \* registry: where k2 routes on the logical row, which routers read
-    cmap,       \* registry: where k2 routes on the alias target's own row
+    cmap,       \* registry: where k2 routes on the alias target's own row, which a router addressed by the copy's id reads
     ck,         \* the registry row the current or last migration's coordinator is keyed by
     published,  \* every map the registry has published; any stale router may still hold one
     row,        \* row[s][k]: committed projection value on shard s
@@ -282,7 +282,10 @@ MigCommit ==
     \* keyed by (ILatticeRegistry.ReassignSlotsAsync); only the logical row is
     \* published to routers.
     /\ rmap' = IF ck = "logical" THEN dst ELSE rmap
-    /\ cmap' = IF ck = "copy" THEN dst ELSE cmap
+    \* A commit onto the logical row is mirrored onto the alias target's own row
+    \* in the same registry turn (LatticeRegistryGrain.MirrorOntoAliasTargetAsync,
+    \* #6089), so a router addressed by the copy's id reads the same map.
+    /\ cmap' = dst
     /\ published' = IF ck = "logical" THEN published \cup {dst} ELSE published
     /\ mp' = "flipped"
     /\ UNCHANGED <<ck, pend, term, retired, mk, src, dst, mdone, cancels, sg, prepped, told, dec, opDone, young, ackOn>>
@@ -503,6 +506,8 @@ OwnerMonotonic ==
 
 MigrationCompletes == mp # "idle" ~> mp = "idle"
 SagaCompletes == sg \in {"exec", "decided"} ~> sg = "done"
-RoutingConverges == <>[](\A k \in Keys : Serves(rmap, k))
+\* Both identities converge: the logical row routers read, and the copy's own
+\* row that a router addressed by the copy's id (a view maintainer) reads.
+RoutingConverges == <>[](\A k \in Keys : Serves(rmap, k) /\ Serves(cmap, k))
 
 =============================================================================

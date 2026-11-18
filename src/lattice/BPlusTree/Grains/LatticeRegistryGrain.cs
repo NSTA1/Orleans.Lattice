@@ -894,6 +894,21 @@ internal sealed partial class LatticeRegistryGrain(
             return null;
         }
 
+        // Only a reassignment bound to the copy the logical row aliases can need
+        // mirroring onto that copy's own row (issue #6089); an unaliased tree pays
+        // nothing for it.
+        var mirrors = boundPhysicalTreeId is not null
+            && !string.Equals(boundPhysicalTreeId, treeId, StringComparison.Ordinal);
+
+        // An empty fenced reassignment changes nothing on the logical row; it only
+        // brings the alias target's row into line, so the logical row is neither
+        // rewritten nor re-versioned.
+        if (mirrors && slots.Length == 0 && existing.ShardMap is { } live)
+        {
+            await MirrorOntoAliasTargetAsync(treeId, existing, boundPhysicalTreeId!, live, slots, targetShardIndex);
+            return live;
+        }
+
         var currentMap = existing.ShardMap ?? fallbackMap;
         var newSlots = (int[])currentMap.Slots.Clone();
         foreach (var slot in slots)
@@ -927,8 +942,86 @@ internal sealed partial class LatticeRegistryGrain(
         var highWater = Math.Max(existing.NextShardIndex ?? -1, highestReferenced);
         int? nextShardIndex = highWater >= 0 ? highWater : existing.NextShardIndex;
 
-        await UpdateAsync(treeId, existing with { ShardMap = reassigned, NextShardIndex = nextShardIndex });
+        var updated = existing with { ShardMap = reassigned, NextShardIndex = nextShardIndex };
+        await UpdateAsync(treeId, updated);
+        if (mirrors)
+            await MirrorOntoAliasTargetAsync(treeId, updated, boundPhysicalTreeId!, reassigned, slots, targetShardIndex);
         return reassigned;
+    }
+
+    /// <summary>
+    /// Keeps the own registry row of the derived copy that <paramref name="treeId"/>
+    /// aliases in line with <paramref name="treeId"/>'s row (issue #6089).
+    /// <para>
+    /// Routing for the logical tree reads the logical row, but the copy keeps its
+    /// own row, and callers that address the copy directly - view maintainers
+    /// bound to the physical copy, and the copy's leaves filtering their WAL
+    /// replay by slot ownership - read that one. Since #6083 a split or fold
+    /// commits only onto the logical row, so without this the copy's row kept the
+    /// map from before every later split or fold, and a router addressed by the
+    /// copy's id kept routing the moved slots to the shard that gave them up.
+    /// </para>
+    /// <para>
+    /// Runs in the same non-interleaved registry turn as the logical write. A
+    /// non-empty diff is applied to the copy's row as it was to the logical row;
+    /// an empty one (<see cref="ILatticeRegistry.ReassignSlotsAsync(string, int[], int, ShardMap, string)"/>
+    /// with no slots, which leaves the logical row untouched) copies the whole
+    /// logical map, which is how a copy that fell behind is brought back into
+    /// line. The copy's row is written only when its slots actually change, and
+    /// only a copy derived from <paramref name="treeId"/> is touched: an
+    /// independent tree a bare alias names keeps its own row, which its own
+    /// coordinators still write.
+    /// </para>
+    /// </summary>
+    private async Task MirrorOntoAliasTargetAsync(
+        string treeId,
+        TreeRegistryEntry logical,
+        string boundPhysicalTreeId,
+        ShardMap logicalMap,
+        int[] slots,
+        int targetShardIndex)
+    {
+        var target = await GetEntryCoreAsync(boundPhysicalTreeId);
+        if (target is null
+            || !string.Equals(target.DerivedFrom, treeId, StringComparison.Ordinal)
+            || !ShardMapCommitFence.IsAliasTarget(target, boundPhysicalTreeId, logical))
+        {
+            return;
+        }
+
+        int[] mirrored;
+        var targetSlots = target.ShardMap?.Slots;
+        if (slots.Length == 0 || targetSlots is null || targetSlots.Length != logicalMap.Slots.Length)
+        {
+            if (targetSlots is not null && targetSlots.AsSpan().SequenceEqual(logicalMap.Slots)) return;
+
+            // The logical row's array is never written in place once persisted,
+            // so the copy's row may share it rather than clone it.
+            mirrored = logicalMap.Slots;
+        }
+        else
+        {
+            var changed = false;
+            foreach (var slot in slots)
+            {
+                if (targetSlots[slot] != targetShardIndex) { changed = true; break; }
+            }
+
+            if (!changed) return;
+            mirrored = (int[])targetSlots.Clone();
+            foreach (var slot in slots) mirrored[slot] = targetShardIndex;
+        }
+
+        var targetNext = Math.Max(target.NextShardIndex ?? -1, logical.NextShardIndex ?? -1);
+        await UpdateAsync(boundPhysicalTreeId, target with
+        {
+            ShardMap = new ShardMap
+            {
+                Slots = mirrored,
+                Version = Math.Max((target.ShardMap?.Version ?? 0L) + 1, logicalMap.Version),
+            },
+            NextShardIndex = targetNext >= 0 ? targetNext : target.NextShardIndex,
+        });
     }
 
     public async Task<int> AllocateNextShardIndexAsync(string treeId, int currentMaxFromMap)

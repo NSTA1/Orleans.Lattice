@@ -1,0 +1,17 @@
+# Pairs with RoutingConverges. Reproduces production after #6083 was fixed and
+# before #6089: a fold committed onto the logical row is not mirrored onto the
+# alias target's own row, so a router addressed by the copy's id - a view
+# maintainer bound to the physical copy - keeps routing the slot to the donor,
+# which the fold seals and retires, and is refused for ever.
+MODULE: RoutingConvergesFoldSkipsCopyMirror
+TARGET: RoutingConverges
+CLASS: Temporal
+SUMMARY: a commit onto the logical row is not mirrored onto the alias target's own row, so the copy's router routes to the sealed donor for ever
+PERTURBS: MigCommit
+
+--- FIND
+    /\ cmap' = dst
+--- REPLACE
+\* MUTATION: no mirror onto the alias target's own row.
+    /\ cmap' = IF ck = "copy" THEN dst ELSE cmap
+--- END

@@ -36,24 +36,44 @@ internal static class AliasFoldRoutingRepair
 {
     /// <summary>The outcome of one <see cref="RepairAsync"/> call.</summary>
     /// <param name="Settled">
-    /// <see langword="true"/> when the logical map references no shard the alias
-    /// target's map has dropped, so nothing could need repair until the logical
-    /// map changes again.
+    /// <see langword="true"/> when the logical row and the alias target's own row
+    /// agree, or nothing more can be done until one of them changes.
     /// </param>
-    /// <param name="SlotsRepaired">The number of virtual slots re-pointed.</param>
-    internal readonly record struct Outcome(bool Settled, int SlotsRepaired);
+    /// <param name="SlotsRepaired">The number of logical-row virtual slots re-pointed.</param>
+    /// <param name="CopySynced">Whether the alias target's own row was brought into line.</param>
+    internal readonly record struct Outcome(bool Settled, int SlotsRepaired, bool CopySynced = false);
 
     /// <summary>
     /// Checks <paramref name="logicalEntry"/>, the registry row of
-    /// <paramref name="logicalTreeId"/>, and repairs it when routing sends
-    /// slots to a retired shard of its alias target. An unaliased tree, or one
+    /// <paramref name="logicalTreeId"/>, against the own row of the copy it
+    /// aliases, and repairs whichever is behind. An unaliased tree, or one
     /// mid-cutover, is settled without a call.
+    /// <para>
+    /// <b>The logical row is behind</b> when it routes slots to a shard the
+    /// copy's map has dropped and that shard is retired: a fold committed onto
+    /// the copy's row before #6083 was fixed. Those slots are re-pointed where the
+    /// copy's map sends them.
+    /// </para>
+    /// <para>
+    /// <b>The copy's row is behind</b> otherwise, when the two maps differ and the
+    /// copy is derived from the logical tree: a split or fold committed onto the
+    /// logical row between the #6083 and #6089 fixes. One empty fenced
+    /// reassignment copies the logical map onto it inside the registry
+    /// (issue #6089).
+    /// </para>
+    /// <para>
+    /// Cost: one registry read of the copy's row (none when the caller already
+    /// holds it, <paramref name="copyEntry"/>), a span comparison that settles the
+    /// common in-sync case with no further call, and a retirement probe only for
+    /// a shard the logical map names and the copy's does not.
+    /// </para>
     /// </summary>
     public static async Task<Outcome> RepairAsync(
         IGrainFactory grainFactory,
         string logicalTreeId,
         TreeRegistryEntry? logicalEntry,
-        ILogger logger)
+        ILogger logger,
+        TreeRegistryEntry? copyEntry = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(logicalTreeId);
@@ -67,24 +87,47 @@ internal static class AliasFoldRoutingRepair
         }
 
         var registry = grainFactory.GetLatticeRegistry();
-        var copyMap = (await registry.GetEntryAsync(physicalTreeId))?.ShardMap;
-        if (copyMap is null || copyMap.Slots.Length != logicalMap.Slots.Length)
-            return new Outcome(Settled: true, SlotsRepaired: 0);
-
-        var copyIndices = copyMap.GetPhysicalShardIndices();
-        List<int>? candidates = null;
-        foreach (var index in logicalMap.GetPhysicalShardIndices())
+        var copy = copyEntry ?? await registry.GetEntryAsync(physicalTreeId);
+        var copyMap = copy?.ShardMap;
+        if (copyMap is null
+            || copyMap.Slots.Length != logicalMap.Slots.Length
+            || copyMap.Slots.AsSpan().SequenceEqual(logicalMap.Slots))
         {
-            if (!Contains(copyIndices, index)) (candidates ??= []).Add(index);
+            return new Outcome(Settled: true, SlotsRepaired: 0);
         }
 
-        if (candidates is null) return new Outcome(Settled: true, SlotsRepaired: 0);
+        // Shards the logical map names and the copy's does not: retired ones are
+        // pre-#6083 damage (the copy's map is newer there); live ones are splits
+        // committed onto the logical row since (the logical map is newer).
+        var copyIndices = copyMap.GetPhysicalShardIndices();
+        List<int>? retiredDonors = null;
+        foreach (var index in logicalMap.GetPhysicalShardIndices())
+        {
+            if (!Contains(copyIndices, index)
+                && await Shard(grainFactory, physicalTreeId, index).IsRetiredAsync())
+            {
+                (retiredDonors ??= []).Add(index);
+            }
+        }
+
+        if (retiredDonors is null)
+        {
+            // The logical map is the authority: bring a derived copy's row in line.
+            if (!string.Equals(copy!.DerivedFrom, logicalTreeId, StringComparison.Ordinal))
+                return new Outcome(Settled: true, SlotsRepaired: 0);
+
+            if (await registry.ReassignSlotsAsync(logicalTreeId, [], 0, logicalMap, physicalTreeId) is null)
+                return new Outcome(Settled: false, SlotsRepaired: 0);
+
+            logger.LogWarning(
+                "Brought the shard map of {PhysicalTreeId} back into line with tree {TreeId}, which aliases it: a split or fold committed onto {TreeId} had left the copy's own map behind (issue #6089).",
+                physicalTreeId, logicalTreeId, logicalTreeId);
+            return new Outcome(Settled: true, SlotsRepaired: 0, CopySynced: true);
+        }
 
         var repaired = 0;
-        foreach (var donor in candidates)
+        foreach (var donor in retiredDonors)
         {
-            if (!await Shard(grainFactory, physicalTreeId, donor).IsRetiredAsync()) continue;
-
             var byTarget = new SortedDictionary<int, List<int>>();
             for (var slot = 0; slot < logicalMap.Slots.Length; slot++)
             {
