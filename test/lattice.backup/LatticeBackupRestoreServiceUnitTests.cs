@@ -122,6 +122,16 @@ public sealed partial class LatticeBackupRestoreServiceUnitTests
         TreeRegistryEntry shadowEntry)
     {
         var registry = Substitute.For<ILatticeRegistry>();
+        registry.GetEntriesAsync(Arg.Any<IReadOnlyList<string>>()).Returns(async call =>
+        {
+            var rows = new Dictionary<string, TreeRegistryEntry>(StringComparer.Ordinal);
+            foreach (var id in call.Arg<IReadOnlyList<string>>())
+            {
+                if (await registry.GetEntryAsync(id) is { } row) rows[id] = row;
+            }
+
+            return rows;
+        });
         registry.GetEntryAsync("orders-shadow").Returns(Task.FromResult<TreeRegistryEntry?>(shadowEntry));
         registry.ResolveAsync("orders").Returns(Task.FromResult("orders-shadow"));
 

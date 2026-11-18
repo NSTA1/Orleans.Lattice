@@ -1479,10 +1479,10 @@ internal sealed class TreeResizeGrain(
         // default would recreate a purged tree's row and hide whatever removed
         // it (issue #4270).
         var oldEntry = state.State.OldRegistryEntry;
-        var current = await registry.GetEntryAsync(TreeId)
-            ?? throw new LatticeTreeNotRegisteredException(TreeId, "the resize alias swap");
         var snapshotTreeId = state.State.SnapshotTreeId!;
-        var resized = await registry.GetEntryAsync(snapshotTreeId);
+        var (logicalRow, resized) = await AliasCutoverShardMaps.GetEntryPairAsync(registry, TreeId, snapshotTreeId);
+        var current = logicalRow
+            ?? throw new LatticeTreeNotRegisteredException(TreeId, "the resize alias swap");
         var entry = current with
         {
             MaxLeafKeys = state.State.NewMaxLeafKeys,

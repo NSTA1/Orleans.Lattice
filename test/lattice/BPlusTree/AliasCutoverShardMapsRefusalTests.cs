@@ -21,6 +21,7 @@ public sealed class AliasCutoverShardMapsRefusalTests
 
     private IGrainFactory _grains = null!;
     private ILatticeRegistry _registry = null!;
+    private readonly Dictionary<string, TreeRegistryEntry> _entries = new(StringComparer.Ordinal);
 
     [SetUp]
     public void SetUp()
@@ -29,6 +30,20 @@ public sealed class AliasCutoverShardMapsRefusalTests
         _registry = Substitute.For<ILatticeRegistry>();
         _grains.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(_registry);
         _registry.GetEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<TreeRegistryEntry?>(null));
+        _entries.Clear();
+        _registry.GetEntriesAsync(Arg.Any<IReadOnlyList<string>>()).Returns(call =>
+        {
+            var found = new Dictionary<string, TreeRegistryEntry>(StringComparer.Ordinal);
+            foreach (var id in call.Arg<IReadOnlyList<string>>())
+            {
+                if (_entries.TryGetValue(id, out var entry))
+                {
+                    found[id] = entry;
+                }
+            }
+
+            return Task.FromResult(found);
+        });
         StubRouting(Logical);
         StubRouting(Destination);
     }
@@ -183,8 +198,38 @@ public sealed class AliasCutoverShardMapsRefusalTests
             Arg.Any<string>(), Arg.Any<string>(), Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
     }
 
-    private void StubEntry(string treeId, TreeRegistryEntry entry) =>
+    [Test]
+    public async Task PrepareCutoverResolvingAsync_reads_both_rows_in_one_registry_call()
+    {
+        StubEntry(Logical, new TreeRegistryEntry { ShardCount = 2 });
+        StubEntry(Destination, new TreeRegistryEntry { ShardCount = 3 });
+
+        await AliasCutoverShardMaps.PrepareCutoverResolvingAsync(_grains, Logical, Destination);
+
+        await _registry.Received(1).GetEntriesAsync(
+            Arg.Is<IReadOnlyList<string>>(ids => ids.SequenceEqual(new[] { Logical, Destination })));
+        await _registry.DidNotReceive().GetEntryAsync(Logical);
+    }
+
+    [Test]
+    public async Task CarryAcrossExplicitAliasAsync_reads_logical_and_target_rows_in_one_registry_call()
+    {
+        StubEntry(Logical, new TreeRegistryEntry { PhysicalTreeId = Destination, ShardCount = 3 });
+        StubEntry(Destination, new TreeRegistryEntry { ShardCount = 3 });
+
+        await AliasCutoverShardMaps.CarryAcrossExplicitAliasAsync(_grains, Logical, Destination);
+
+        await _registry.Received(1).GetEntriesAsync(
+            Arg.Is<IReadOnlyList<string>>(ids => ids.SequenceEqual(new[] { Logical, Destination })));
+        await _registry.DidNotReceive().GetEntryAsync(Arg.Any<string>());
+        await _registry.Received(1).SetAliasAsync(Logical, Destination);
+    }
+
+    private void StubEntry(string treeId, TreeRegistryEntry entry)
+    {
+        _entries[treeId] = entry;
         _registry.GetEntryAsync(treeId).Returns(Task.FromResult<TreeRegistryEntry?>(entry));
+    }
 
     private void StubRouting(string treeId)
     {

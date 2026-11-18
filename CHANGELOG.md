@@ -14,8 +14,11 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **Auth - Subject-relative scopes.** A rule's key or prefix may name the caller with `{subject}` or `{group:<prefix>}`, so one rule grants every caller their own slice: segment-bounded, ranked by resolved length, checked by the Explorer editors, allocation-free when deciding. ([#6061](https://github.com/NSTA1/Orleans.Lattice/issues/6061)) (`Orleans.Lattice.Auth`, `Orleans.Lattice.Api.Auth`, `Orleans.Lattice.Api.TenantAdmin`, `Orleans.Lattice.Api.Mcp`, `Orleans.Lattice.Explorer.UI`)
 
-### Fixed
+### Changed
 
+- **Performance - Paired registry reads share one call.** Cutover prepare, explicit-alias carry-across and the resize alias swap read both registry rows in one batched call instead of two serial grain hops. ([#6082](https://github.com/NSTA1/Orleans.Lattice/pull/6082)) (`Orleans.Lattice`)
+
+### Fixed
 - **Views - Cross-tree repairs of aggregation views no longer wedge.** A joint repair over two or more keys no longer fails every drain pass sorting its keys by timestamp; `HybridLogicalClock` now implements `IComparable<HybridLogicalClock>`. ([#6068](https://github.com/NSTA1/Orleans.Lattice/issues/6068)) (`Orleans.Lattice`)
 - **Atomic - Partial storage reports no longer loosen cross-tree admission.** A partial report can only raise a participant's held admission sample, never lower it, so a tree near its live-key or byte budget is no longer admitted past it. ([#6070](https://github.com/NSTA1/Orleans.Lattice/issues/6070)) (`Orleans.Lattice`)
 - **Observability - WAL bytes publish after a partial deep report.** A fresh WAL report now replaces a held partial deep report instead of inheriting its partial flag, so the WAL-bytes series no longer stays dark until the next complete report. ([#6071](https://github.com/NSTA1/Orleans.Lattice/issues/6071)) (`Orleans.Lattice`)
