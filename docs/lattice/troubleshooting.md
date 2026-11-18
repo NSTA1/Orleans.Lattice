@@ -520,8 +520,9 @@ Scan cost is dominated by:
   since that set grows with the number of distinct keys the scan has yielded.
 - **Use the resilient streaming API for scans.** `ScanKeysAsync` and
   `ScanEntriesAsync` transparently reconnect and resume when an enumeration is
-  aborted mid-flight, with a default budget of 8 reconnect attempts
-  (overridable per call via `maxAttempts`). The raw `ILattice.KeysAsync` and
+  aborted mid-flight, with a default budget of 8 consecutive reconnect
+  attempts (overridable per call via `maxAttempts`), replenished whenever the
+  walk yields a record and bounded by 1024 reconnects in total. The raw `ILattice.KeysAsync` and
   `EntriesAsync` streams surface the abort instead, and because the tree grain
   is a stateless worker the abort rate rises with concurrency on the tree
   rather than with scan length, so prefer the resilient pair for scans of any

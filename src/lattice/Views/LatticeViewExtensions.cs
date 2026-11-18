@@ -36,8 +36,11 @@ public static class LatticeViewExtensions
     /// <para>
     /// The first reconnect is immediate; subsequent attempts apply a small linear
     /// backoff (10&#160;ms × attempt, capped at 100&#160;ms) to avoid a tight loop
-    /// against a persistently-faulting activation. If the reconnect budget is
-    /// exhausted the last <c>EnumerationAbortedException</c> is rethrown verbatim.
+    /// against a persistently-faulting activation. The reconnect budget counts
+    /// consecutive reopens and is replenished every time a record is yielded;
+    /// <see cref="LatticeExtensions.DefaultScanReconnectCeiling"/> bounds the
+    /// lifetime total. If either is exhausted the last
+    /// <c>EnumerationAbortedException</c> is rethrown verbatim.
     /// This is the recommended client API for long-running view key scans -
     /// <see cref="ILatticeView.KeysAsync"/> is retained for short, single-page
     /// reads and for deliberate low-level use.
@@ -82,7 +85,11 @@ public static class LatticeViewExtensions
         var reassertCredential = LatticeCredentialContext.Current;
 
         string? lastKey = null;
-        var attempt = 0;
+
+        // See LatticeExtensions.ScanKeysAsyncCore: abort reopens use a
+        // consecutive, progress-reset counter and a monotonic total (issue 6080).
+        var abortAttempt = 0;
+        var abortTotal = 0;
 
         // See LatticeExtensions.ScanKeysAsyncCore: stalls resume on their own
         // budget and their own backoff, gated by that budget alone.
@@ -117,9 +124,10 @@ public static class LatticeViewExtensions
                     {
                         hasNext = await enumerator.MoveNextAsync().ConfigureAwait(false);
                     }
-                    catch (EnumerationAbortedException) when (attempt < budget)
+                    catch (EnumerationAbortedException) when (ResilientScanResume.MayReopenAfterAbort(abortAttempt, abortTotal, budget))
                     {
-                        attempt++;
+                        abortAttempt++;
+                        abortTotal++;
                         shouldReopen = true;
                         break;
                     }
@@ -157,12 +165,13 @@ public static class LatticeViewExtensions
                         break;
                     }
 
-                    // Progress replenishes the consecutive stall budget only;
-                    // stallTotal stays monotonic because it feeds both the
-                    // ceiling and the backoff, and `attempt` is deliberately not
-                    // reset and is not an unfixed instance of this defect (issue
-                    // 2539). See LatticeExtensions.ScanKeysAsyncCore's yield site.
+                    // Progress replenishes the consecutive stall and abort
+                    // budgets only; stallTotal and abortTotal stay monotonic
+                    // because they feed the ceilings and the backoffs (issues
+                    // 2539 and 6080). See LatticeExtensions.ScanKeysAsyncCore's
+                    // yield site.
                     stallAttempt = 0;
+                    abortAttempt = 0;
                     lastKey = enumerator.Current;
                     LatticeExtensions.NoteScanProgress(view, enumerator.Current);
                     yield return enumerator.Current;
@@ -180,7 +189,7 @@ public static class LatticeViewExtensions
 
             if (shouldReopen)
             {
-                var delayMs = stallDelayMs > 0 ? stallDelayMs : ResilientScanResume.ReconnectDelayMs(attempt);
+                var delayMs = stallDelayMs > 0 ? stallDelayMs : ResilientScanResume.ReconnectDelayMs(abortTotal);
                 stallDelayMs = 0;
                 if (delayMs > 0)
                 {
@@ -231,7 +240,11 @@ public static class LatticeViewExtensions
         var reassertCredential = LatticeCredentialContext.Current;
 
         string? lastKey = null;
-        var attempt = 0;
+
+        // See LatticeExtensions.ScanKeysAsyncCore: abort reopens use a
+        // consecutive, progress-reset counter and a monotonic total (issue 6080).
+        var abortAttempt = 0;
+        var abortTotal = 0;
 
         // See LatticeExtensions.ScanKeysAsyncCore: stalls resume on their own
         // budget and their own backoff, gated by that budget alone.
@@ -266,9 +279,10 @@ public static class LatticeViewExtensions
                     {
                         hasNext = await enumerator.MoveNextAsync().ConfigureAwait(false);
                     }
-                    catch (EnumerationAbortedException) when (attempt < budget)
+                    catch (EnumerationAbortedException) when (ResilientScanResume.MayReopenAfterAbort(abortAttempt, abortTotal, budget))
                     {
-                        attempt++;
+                        abortAttempt++;
+                        abortTotal++;
                         shouldReopen = true;
                         break;
                     }
@@ -306,12 +320,13 @@ public static class LatticeViewExtensions
                         break;
                     }
 
-                    // Progress replenishes the consecutive stall budget only;
-                    // stallTotal stays monotonic because it feeds both the
-                    // ceiling and the backoff, and `attempt` is deliberately not
-                    // reset and is not an unfixed instance of this defect (issue
-                    // 2539). See LatticeExtensions.ScanKeysAsyncCore's yield site.
+                    // Progress replenishes the consecutive stall and abort
+                    // budgets only; stallTotal and abortTotal stay monotonic
+                    // because they feed the ceilings and the backoffs (issues
+                    // 2539 and 6080). See LatticeExtensions.ScanKeysAsyncCore's
+                    // yield site.
                     stallAttempt = 0;
+                    abortAttempt = 0;
                     lastKey = enumerator.Current.Key;
                     LatticeExtensions.NoteScanProgress(view, enumerator.Current.Key);
                     yield return enumerator.Current;
@@ -329,7 +344,7 @@ public static class LatticeViewExtensions
 
             if (shouldReopen)
             {
-                var delayMs = stallDelayMs > 0 ? stallDelayMs : ResilientScanResume.ReconnectDelayMs(attempt);
+                var delayMs = stallDelayMs > 0 ? stallDelayMs : ResilientScanResume.ReconnectDelayMs(abortTotal);
                 stallDelayMs = 0;
                 if (delayMs > 0)
                 {

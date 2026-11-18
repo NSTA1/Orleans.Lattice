@@ -362,6 +362,53 @@ public class SystemLatticeScanExtensionsTests
         Assert.That(callIndex, Is.EqualTo(1), "Negative budget clamps to zero - no reconnects attempted.");
     }
 
+    [Test]
+    public async Task ScanKeysAsync_survives_more_aborts_than_the_budget_when_each_segment_progresses()
+    {
+        // Issue 6080: progress replenishes the consecutive abort budget.
+        const int segments = 6;
+        var tree = Substitute.For<ISystemLattice>();
+        var callIndex = 0;
+        tree.KeysAsync(
+            Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<bool>(), Arg.Any<bool?>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                var index = callIndex++;
+                return index < segments
+                    ? ScriptedKeys([$"k{index:D2}"], abortAfter: 1)
+                    : ScriptedKeys([], abortAfter: int.MaxValue);
+            });
+
+        var keys = new List<string>();
+        await foreach (var k in tree.ScanKeysAsync(maxAttempts: 2)) keys.Add(k);
+
+        Assert.That(keys, Has.Count.EqualTo(segments));
+        Assert.That(keys, Is.Unique);
+    }
+
+    [Test]
+    public async Task ScanEntriesAsync_survives_more_aborts_than_the_budget_when_each_segment_progresses()
+    {
+        const int segments = 6;
+        var tree = Substitute.For<ISystemLattice>();
+        var callIndex = 0;
+        tree.EntriesAsync(
+            Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<bool>(), Arg.Any<bool?>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                var index = callIndex++;
+                return index < segments
+                    ? ScriptedEntries(new[] { ($"k{index:D2}", index) }, abortAfter: 1)
+                    : ScriptedEntries(Array.Empty<(string, int)>(), abortAfter: int.MaxValue);
+            });
+
+        var entries = new List<KeyValuePair<string, byte[]>>();
+        await foreach (var e in tree.ScanEntriesAsync(maxAttempts: 2)) entries.Add(e);
+
+        Assert.That(entries, Has.Count.EqualTo(segments));
+        Assert.That(entries[^1].Key, Is.EqualTo($"k{segments - 1:D2}"));
+    }
+
     // -- Helpers --------------------------------------------------
 
     private static async IAsyncEnumerable<string> ScriptedKeys(string[] keys, int abortAfter)
