@@ -34,6 +34,16 @@ public sealed class TelemetryFormatTests
     public void Value_precision_uses_the_absolute_magnitude(double value, string expected) =>
         Assert.That(TelemetryFormat.Value(value, null, TelemetryMeasurementSemantic.Level), Is.EqualTo(expected));
 
+    [TestCase(-0d, null, TelemetryMeasurementSemantic.Level, "0")]
+    [TestCase(-0.001d, null, TelemetryMeasurementSemantic.Level, "0")]
+    [TestCase(-0.004d, "ms", TelemetryMeasurementSemantic.Level, "0 ms")]
+    [TestCase(-0.4d, "By", TelemetryMeasurementSemantic.Level, "0 B")]
+    [TestCase(-0d, "By", TelemetryMeasurementSemantic.Level, "0 B")]
+    [TestCase(-0.0001d, "1", TelemetryMeasurementSemantic.Ratio, "0 %")]
+    [TestCase(-0.001d, "1", TelemetryMeasurementSemantic.Ratio, "-0.1 %")]
+    public void Value_a_negative_reading_that_rounds_to_zero_is_written_as_zero(double value, string? unit, TelemetryMeasurementSemantic semantic, string expected) =>
+        Assert.That(TelemetryFormat.Value(value, unit, semantic), Is.EqualTo(expected));
+
     [TestCase(null, "")]
     [TestCase("", "")]
     [TestCase(" \t", "")]

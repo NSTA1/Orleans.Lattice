@@ -23,6 +23,9 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 - **Explorer - Rule shadowing checks use the shown tenant's rules.** A rules list answered for a tenant the rule detail view has left is dropped, so the editor no longer warns about shadowing against another tenant's rules. ([#6074](https://github.com/NSTA1/Orleans.Lattice/issues/6074)) (`Orleans.Lattice.Explorer.UI`)
 - **Explorer - The tenant rule cap shows the shown tenant's quota.** A quota posture answered for a tenant the rules view has left is dropped instead of replacing the cap text and at-cap gating. ([#6075](https://github.com/NSTA1/Orleans.Lattice/issues/6075)) (`Orleans.Lattice.Explorer.UI`)
 - **Explorer - Late read failures no longer replace tenant Access pages.** A read for a tenant, rule or group the view has left no longer shows an error or a not-found over the page now displayed. ([#6076](https://github.com/NSTA1/Orleans.Lattice/issues/6076)) (`Orleans.Lattice.Explorer.UI`)
+- **Explorer - Tenancy commands open their form from the directory.** Create a tenant and Set a tenant's regions now open their form when run while the tenant directory is already shown. ([#6078](https://github.com/NSTA1/Orleans.Lattice/issues/6078)) (`Orleans.Lattice.Explorer.UI`)
+- **Explorer - Telemetry readings never read -0.** A negative reading that rounds to zero is written as 0, 0 B or 0 %. ([#6078](https://github.com/NSTA1/Orleans.Lattice/issues/6078)) (`Orleans.Lattice.Explorer.UI`)
+- **Explorer - JSON with a byte order mark is pretty-printed.** A value starting with a UTF-8 byte order mark is now shown as formatted JSON rather than text. ([#6078](https://github.com/NSTA1/Orleans.Lattice/issues/6078)) (`Orleans.Lattice.Explorer.Core`)
 ## Released
 
 ## [2026-11-17]
