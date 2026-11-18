@@ -884,6 +884,16 @@ internal sealed partial class LatticeRegistryGrain(
             return null;
         }
 
+        // A derived copy its owner aliases is routed by the owner's row, not this
+        // one, so a diff here would move nothing a router reads (issue #6083).
+        if (boundPhysicalTreeId is not null
+            && existing.DerivedFrom is { } owner
+            && !string.Equals(owner, treeId, StringComparison.Ordinal)
+            && ShardMapCommitFence.IsAliasTarget(existing, treeId, await GetEntryCoreAsync(owner)))
+        {
+            return null;
+        }
+
         var currentMap = existing.ShardMap ?? fallbackMap;
         var newSlots = (int[])currentMap.Slots.Clone();
         foreach (var slot in slots)

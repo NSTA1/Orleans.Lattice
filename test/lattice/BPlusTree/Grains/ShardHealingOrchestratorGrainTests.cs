@@ -35,6 +35,7 @@ public partial class ShardHealingOrchestratorGrainTests
     private sealed class Harness
     {
         public required ShardHealingOrchestratorGrain Grain { get; init; }
+        public required IGrainFactory GrainFactory { get; init; }
         public required FakePersistentState<ShardHealingOrchestratorState> State { get; init; }
         public required ILatticeRegistry Registry { get; init; }
         public required ILattice Lattice { get; init; }
@@ -64,7 +65,8 @@ public partial class ShardHealingOrchestratorGrainTests
         int baseShardCount = 2,
         int virtualShardCount = 64,
         LatticeOptions? options = null,
-        ShardHealingOrchestratorState? existingState = null)
+        ShardHealingOrchestratorState? existingState = null,
+        Func<string, TreeRegistryEntry, TreeRegistryEntry?>? shapeEntry = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("healing", TreeId));
@@ -101,14 +103,20 @@ public partial class ShardHealingOrchestratorGrainTests
         // through the other is not a faithful stand-in for the real grain. Read
         // the current map through the same closure the GetShardMapAsync arm uses,
         // so SetMap keeps both arms in agreement.
-        registry.GetEntryAsync(Arg.Any<string>()).Returns(_ => Task.FromResult<TreeRegistryEntry?>(
-            new TreeRegistryEntry
+        //
+        // shapeEntry lets a test give individual rows an alias or an owner; it
+        // receives the default row and returns the row the registry reports.
+        registry.GetEntryAsync(Arg.Any<string>()).Returns(ci =>
+        {
+            var row = new TreeRegistryEntry
             {
                 MaxLeafKeys = 128,
                 MaxInternalChildren = 128,
                 ShardCount = baseShardCount,
                 ShardMap = map,
-            }));
+            };
+            return Task.FromResult(shapeEntry is null ? row : shapeEntry((string)ci[0], row));
+        });
         registry.GetEntriesAsync(Arg.Any<IReadOnlyList<string>>()).Returns(call =>
         {
             var result = new Dictionary<string, TreeRegistryEntry>(StringComparer.Ordinal);
@@ -182,6 +190,7 @@ public partial class ShardHealingOrchestratorGrainTests
         return new Harness
         {
             Grain = grain,
+            GrainFactory = grainFactory,
             State = state,
             Registry = registry,
             Lattice = lattice,

@@ -143,6 +143,18 @@ detected before the swap freezes *S*, *S*'s migration record is cleared, so
 the replaced tree is unchanged if the cutover is later undone. Shard
 consolidation folds are bound and abandoned the same way.
 
+Splits and folds are always driven through the logical tree id, because the
+logical tree's registry entry holds the map routing reads; the copy an aliased
+tree resolves to keeps a row of its own that no router reads. A split or fold
+keyed by a resize, restore or remediation copy's own id while its owner routes
+through it is refused before its window opens, and the registry refuses its
+slot diff, and the hot-shard monitor and the healing orchestrator a copy's own
+router arms stand down. Before issue #6083 was fixed, automatic healing keyed
+its folds by the copy, so a fold of an aliased tree retired its donor while the
+logical map still routed the folded slots there. A healing sweep, or a router
+whose refreshed map is the one a shard just refused, now repairs such a tree by
+re-pointing those slots where the copy's map sends them.
+
 ## Scan semantics during a split
 
 This section describes the *mechanism* by which live operations behave

@@ -10,6 +10,12 @@
 (* over k1 and k2, stale routers, one later write or delete of k2, and     *)
 (* tombstone compaction run alongside.                                     *)
 (*                                                                         *)
+(* The copy is the alias target of a logical tree, whose registry row is   *)
+(* the map routers read. The copy keeps its own row too, and a migration   *)
+(* commits its slot diff onto the row of the tree id its coordinator is    *)
+(* keyed by, so a fold keyed by the copy would move nothing a router reads *)
+(* (#6083).                                                                *)
+(*                                                                         *)
 (* One physical copy: the resize, the undo and the registry's retention    *)
 (* are the companion modules' (ShardOwnership, ShardOwnershipRetention).   *)
 (* See README.md for the instance and how to run TLC, and RefinementFold.md *)
@@ -57,8 +63,14 @@ LWW(a, b) == IF Stamp(a) > Stamp(b) THEN a
 \* slot never moves.
 MapOf(m, k) == IF k = k2 THEN m ELSE s1
 
+\* The two registry rows a coordinator can be keyed by: the logical tree's, which
+\* routers read, and the alias target's own.
+Rows == {"logical", "copy"}
+
 VARIABLES
-    rmap,       \* registry: where k2 routes
+    rmap,       \* registry: where k2 routes on the logical row, which routers read
+    cmap,       \* registry: where k2 routes on the alias target's own row
+    ck,         \* the registry row the current or last migration's coordinator is keyed by
     published,  \* every map the registry has published; any stale router may still hold one
     row,        \* row[s][k]: committed projection value on shard s
     pend,       \* pend[s][k]: the saga's prepared bucket, "none" or "pending"
@@ -80,12 +92,12 @@ VARIABLES
     ackOn,      \* ghost: ackOn[k] is the rank of the newest version acknowledged for k
     vis         \* ghost: vis[k] is the highest rank a fresh reader has been served for k
 
-vars == <<rmap, published, row, pend, term, sealed, retired, mp, mk, src, dst, mdone,
+vars == <<rmap, cmap, ck, published, row, pend, term, sealed, retired, mp, mk, src, dst, mdone,
           cancels, sg, prepped, told, dec, opDone, young, ackOn, vis>>
 
 \* Every variable but the ghost vis, which the step relation sets alongside each
 \* action (see VisStep).
-svars == <<rmap, published, row, pend, term, sealed, retired, mp, mk, src, dst, mdone,
+svars == <<rmap, cmap, ck, published, row, pend, term, sealed, retired, mp, mk, src, dst, mdone,
            cancels, sg, prepped, told, dec, opDone, young, ackOn>>
 
 -----------------------------------------------------------------------------
@@ -164,6 +176,8 @@ TermRow(s, k) ==
 -----------------------------------------------------------------------------
 Init ==
     /\ rmap = s1
+    /\ cmap = s1
+    /\ ck = "logical"
     /\ published = {s1}
     /\ row = [s \in Shards |-> [k \in Keys |-> IF s = s1 THEN InitV ELSE Absent]]
     /\ pend = [s \in Shards |-> [k \in Keys |-> "none"]]
@@ -200,7 +214,8 @@ SplitBegin ==
     /\ mk' = "split"
     /\ src' = s1
     /\ dst' = s2
-    /\ UNCHANGED <<rmap, published, row, pend, term, sealed, retired, mdone, cancels, sg, prepped, told, dec, opDone, young, ackOn>>
+    /\ ck' = "logical"
+    /\ UNCHANGED <<rmap, cmap, published, row, pend, term, sealed, retired, mdone, cancels, sg, prepped, told, dec, opDone, young, ackOn>>
 
 FoldBegin ==
     /\ mp = "idle"
@@ -211,7 +226,14 @@ FoldBegin ==
     /\ mk' = "fold"
     /\ src' = s2
     /\ dst' = s1
-    /\ UNCHANGED <<rmap, published, row, pend, term, sealed, retired, mdone, cancels, sg, prepped, told, dec, opDone, young, ackOn>>
+    \* The coordinator is keyed by the logical tree: the healer keys every fold
+    \* by it (ShardHealingOrchestratorGrain.ConsolidationGrain), and a fold keyed
+    \* by the alias target's own id is refused before its window opens
+    \* (ShardMapCommitFence.IsAliasTargetAsync, #6083).
+    /\ \E key \in Rows :
+          /\ key = "logical"
+          /\ ck' = key
+    /\ UNCHANGED <<rmap, cmap, published, row, pend, term, sealed, retired, mdone, cancels, sg, prepped, told, dec, opDone, young, ackOn>>
 
 \* The retroactive sweep of a prepare that predates the window: a decided saga
 \* is resolved at the destination by applying the saga's terminal there
@@ -237,13 +259,13 @@ MigSweep ==
                     /\ pend' = [pend EXCEPT ![dst][k2] = b]
                     /\ UNCHANGED <<row, term>>
     /\ mp' = "swept"
-    /\ UNCHANGED <<rmap, published, sealed, retired, mk, src, dst, mdone, cancels, sg, prepped, told, dec, opDone, young, ackOn>>
+    /\ UNCHANGED <<rmap, cmap, ck, published, sealed, retired, mk, src, dst, mdone, cancels, sg, prepped, told, dec, opDone, young, ackOn>>
 
 \* Seal the source's leaves and enter Reject: the source refuses k2.
 MigFreeze ==
     /\ mp = "swept"
     /\ mp' = "frozen"
-    /\ UNCHANGED <<rmap, published, row, pend, term, sealed, retired, mk, src, dst, mdone, cancels, sg, prepped, told, dec, opDone, young, ackOn>>
+    /\ UNCHANGED <<rmap, cmap, ck, published, row, pend, term, sealed, retired, mk, src, dst, mdone, cancels, sg, prepped, told, dec, opDone, young, ackOn>>
 
 \* The authoritative final drain over the frozen source, then, for a fold, the
 \* survivor's reclaim of the slot, then the map moves. The drain is a migration
@@ -256,10 +278,14 @@ MigCommit ==
     /\ mp = "frozen"
     /\ row' = [row EXCEPT ![dst][k2] = Drained]
     /\ sealed' = IF mk = "fold" THEN [sealed EXCEPT ![dst] = FALSE] ELSE sealed
-    /\ rmap' = dst
-    /\ published' = published \cup {dst}
+    \* The fenced slot diff lands on the row of the tree id the coordinator is
+    \* keyed by (ILatticeRegistry.ReassignSlotsAsync); only the logical row is
+    \* published to routers.
+    /\ rmap' = IF ck = "logical" THEN dst ELSE rmap
+    /\ cmap' = IF ck = "copy" THEN dst ELSE cmap
+    /\ published' = IF ck = "logical" THEN published \cup {dst} ELSE published
     /\ mp' = "flipped"
-    /\ UNCHANGED <<pend, term, retired, mk, src, dst, mdone, cancels, sg, prepped, told, dec, opDone, young, ackOn>>
+    /\ UNCHANGED <<ck, pend, term, retired, mk, src, dst, mdone, cancels, sg, prepped, told, dec, opDone, young, ackOn>>
 
 \* The migration finishes: the source records the slot in its permanent seal.
 \* A fold then retires its donor, releasing its storage, unless a prepared
@@ -273,7 +299,7 @@ MigFinish ==
     /\ mdone' = mdone \cup {mk}
     /\ mp' = "idle"
     /\ mk' = "none"
-    /\ UNCHANGED <<rmap, published, pend, term, src, dst, cancels, sg, prepped, told, dec, opDone, young, ackOn>>
+    /\ UNCHANGED <<rmap, cmap, ck, published, pend, term, src, dst, cancels, sg, prepped, told, dec, opDone, young, ackOn>>
 
 \* A fold cancelled before its freeze: the donor's window closes and the fold
 \* may start again. The survivor keeps whatever the sweep gave it.
@@ -284,7 +310,7 @@ FoldCancel ==
     /\ cancels' = cancels - 1
     /\ mp' = "idle"
     /\ mk' = "none"
-    /\ UNCHANGED <<rmap, published, row, pend, term, sealed, retired, src, dst, mdone, sg, prepped, told, dec, opDone, young, ackOn>>
+    /\ UNCHANGED <<rmap, cmap, ck, published, row, pend, term, sealed, retired, src, dst, mdone, sg, prepped, told, dec, opDone, young, ackOn>>
 
 -----------------------------------------------------------------------------
 (* The atomic-write saga (AtomicWriteGrain), writing SagaV to k1 and k2.    *)
@@ -292,7 +318,7 @@ FoldCancel ==
 SagaStart ==
     /\ sg = "idle"
     /\ sg' = "exec"
-    /\ UNCHANGED <<rmap, published, row, pend, term, sealed, retired, mp, mk, src, dst, mdone, cancels, prepped, told, dec, opDone, young, ackOn>>
+    /\ UNCHANGED <<rmap, cmap, ck, published, row, pend, term, sealed, retired, mp, mk, src, dst, mdone, cancels, prepped, told, dec, opDone, young, ackOn>>
 
 \* One key's prepared write, dispatched through a router holding map m.
 SagaPrepare(k, m) ==
@@ -305,14 +331,14 @@ SagaPrepare(k, m) ==
           /\ pend' = [x \in Shards |-> [j \in Keys |->
                          IF j = k /\ x \in Landing(s, k) THEN "pending" ELSE pend[x][j]]]
     /\ prepped' = prepped \cup {k}
-    /\ UNCHANGED <<rmap, published, row, term, sealed, retired, mp, mk, src, dst, mdone, cancels, sg, told, dec, opDone, young, ackOn>>
+    /\ UNCHANGED <<rmap, cmap, ck, published, row, term, sealed, retired, mp, mk, src, dst, mdone, cancels, sg, told, dec, opDone, young, ackOn>>
 
 SagaDecide ==
     /\ sg = "exec"
     /\ prepped = Keys
     /\ dec' = "committed"
     /\ sg' = "decided"
-    /\ UNCHANGED <<rmap, published, row, pend, term, sealed, retired, mp, mk, src, dst, mdone, cancels, prepped, told, opDone, young, ackOn>>
+    /\ UNCHANGED <<rmap, cmap, ck, published, row, pend, term, sealed, retired, mp, mk, src, dst, mdone, cancels, prepped, told, opDone, young, ackOn>>
 
 \* The saga records an abort: a prepare failed past its retries, or the caller
 \* went away.
@@ -320,7 +346,7 @@ SagaAbort ==
     /\ sg = "exec"
     /\ dec' = "aborted"
     /\ sg' = "decided"
-    /\ UNCHANGED <<rmap, published, row, pend, term, sealed, retired, mp, mk, src, dst, mdone, cancels, prepped, told, opDone, young, ackOn>>
+    /\ UNCHANGED <<rmap, cmap, ck, published, row, pend, term, sealed, retired, mp, mk, src, dst, mdone, cancels, prepped, told, opDone, young, ackOn>>
 
 \* One shard of the terminal broadcast.
 SagaTerminal(s) ==
@@ -330,7 +356,7 @@ SagaTerminal(s) ==
     /\ row' = [row EXCEPT ![s] = [k \in Keys |-> TermRow(s, k)]]
     /\ pend' = [pend EXCEPT ![s] = [k \in Keys |-> "none"]]
     /\ term' = [term EXCEPT ![s] = TRUE]
-    /\ UNCHANGED <<rmap, published, sealed, retired, mp, mk, src, dst, mdone, cancels, sg, prepped, dec, opDone, young, ackOn>>
+    /\ UNCHANGED <<rmap, cmap, ck, published, sealed, retired, mp, mk, src, dst, mdone, cancels, sg, prepped, dec, opDone, young, ackOn>>
 
 \* The broadcast has visited every target: the saga completes, and a committed
 \* saga's caller is acknowledged.
@@ -340,7 +366,7 @@ SagaComplete ==
     /\ sg' = "done"
     /\ ackOn' = IF dec = "committed" THEN [k \in Keys |-> Max(ackOn[k], Rank(SagaV))] ELSE ackOn
     /\ young' = FALSE
-    /\ UNCHANGED <<rmap, published, row, pend, term, sealed, retired, mp, mk, src, dst, mdone, cancels, prepped, told, dec, opDone>>
+    /\ UNCHANGED <<rmap, cmap, ck, published, row, pend, term, sealed, retired, mp, mk, src, dst, mdone, cancels, prepped, told, dec, opDone>>
 
 -----------------------------------------------------------------------------
 (* Environment                                                              *)
@@ -361,7 +387,7 @@ LaterOp(m, v) ==
     /\ ackOn' = [ackOn EXCEPT ![k2] = Max(@, Rank(v))]
     /\ opDone' = TRUE
     /\ young' = (v = DelV /\ sg = "decided")
-    /\ UNCHANGED <<rmap, published, pend, term, sealed, retired, mp, mk, src, dst, mdone, cancels, sg, prepped, told, dec>>
+    /\ UNCHANGED <<rmap, cmap, ck, published, pend, term, sealed, retired, mp, mk, src, dst, mdone, cancels, sg, prepped, told, dec>>
 
 \* Tombstone compaction (TombstoneCompactionGrain) reaps a tombstone once its
 \* grace period has passed, on whichever shard holds it. A key whose saga bucket
@@ -380,7 +406,7 @@ Compact(s) ==
     /\ pend[s][k2] = "none"
     /\ ~young
     /\ row' = [row EXCEPT ![s][k2] = Reaped]
-    /\ UNCHANGED <<rmap, published, pend, term, sealed, retired, mp, mk, src, dst, mdone, cancels, sg, prepped, told, dec, opDone, young, ackOn>>
+    /\ UNCHANGED <<rmap, cmap, ck, published, pend, term, sealed, retired, mp, mk, src, dst, mdone, cancels, sg, prepped, told, dec, opDone, young, ackOn>>
 
 \* Nothing is in flight.
 Quiescent ==
@@ -427,6 +453,8 @@ Spec ==
 
 TypeOK ==
     /\ rmap \in Shards
+    /\ cmap \in Shards
+    /\ ck \in Rows
     /\ published \subseteq Shards
     /\ row \in [Shards -> [Keys -> Vals]]
     /\ pend \in [Shards -> [Keys -> {"none", "pending"}]]

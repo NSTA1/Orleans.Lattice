@@ -5360,7 +5360,23 @@ internal sealed partial class LatticeGrain(
         }
         else
         {
-            var entry = await grainFactory.GetLatticeRegistry().GetEntryAsync(TreeId);
+            var registry = grainFactory.GetLatticeRegistry();
+            var entry = await registry.GetEntryAsync(TreeId);
+
+            // A shard refused the map just read back unchanged: on an aliased
+            // tree that can be routing a pre-#6083 healing fold left behind,
+            // which no refresh clears. Repair it, then read the repaired row.
+            if (_staleRoutingMapVersion is { } staleVersion)
+            {
+                _staleRoutingMapVersion = null;
+                if (entry is { PhysicalTreeId: not null, ShardMap: { } staleMap }
+                    && staleMap.Version == staleVersion
+                    && await TryRepairAliasFoldRoutingAsync(entry))
+                {
+                    entry = await registry.GetEntryAsync(TreeId);
+                }
+            }
+
             physicalTreeId = entry?.PhysicalTreeId ?? TreeId;
             shardMap = entry?.ShardMap;
             shardCount = entry?.ShardCount;
@@ -5535,12 +5551,63 @@ internal sealed partial class LatticeGrain(
     /// </summary>
     private bool InvalidateShardMap()
     {
+        _staleRoutingMapVersion = _cachedRouting?.Map.Version;
         _shardMap = null;
         _cachedShards = null;
         _cachedShardsTreeId = null;
         _cachedRouting = null;
         _routingEpoch++;
         return true;
+    }
+
+    /// <summary>
+    /// Version of the map a shard just refused as stale, recorded by
+    /// <see cref="InvalidateShardMap"/> and consumed by the next routing resolve.
+    /// When that resolve reads back the same version for an aliased tree, a
+    /// refresh cannot help, and the resolve checks for routing a pre-#6083 fold
+    /// left behind (<see cref="AliasFoldRoutingRepair"/>).
+    /// </summary>
+    private long? _staleRoutingMapVersion;
+
+    /// <summary>
+    /// <see cref="Environment.TickCount64"/> of this activation's last
+    /// <see cref="AliasFoldRoutingRepair"/> attempt, so a burst of stale-routing
+    /// retries costs at most one check per <see cref="AliasRoutingRepairInterval"/>.
+    /// </summary>
+    private long _lastAliasRoutingRepairTicks = long.MinValue;
+
+    private static readonly TimeSpan AliasRoutingRepairInterval = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Runs <see cref="AliasFoldRoutingRepair"/> for this tree, at most once per
+    /// <see cref="AliasRoutingRepairInterval"/> per activation, and reports
+    /// whether it re-pointed any slot. Never faults: the caller is a routing
+    /// resolve on behalf of a user operation, which the stale-routing retry
+    /// bounds regardless.
+    /// </summary>
+    private async Task<bool> TryRepairAliasFoldRoutingAsync(State.TreeRegistryEntry entry)
+    {
+        var now = Environment.TickCount64;
+        if (_lastAliasRoutingRepairTicks != long.MinValue
+            && now - _lastAliasRoutingRepairTicks < (long)AliasRoutingRepairInterval.TotalMilliseconds)
+        {
+            return false;
+        }
+
+        _lastAliasRoutingRepairTicks = now;
+        try
+        {
+            using (LatticeAccessGateContext.EnterSystemOrigin())
+            {
+                var outcome = await AliasFoldRoutingRepair.RepairAsync(grainFactory, TreeId, entry, logger);
+                return outcome.SlotsRepaired > 0;
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(ex, "Checking tree {TreeId} for routing left behind by an alias-target fold failed.", TreeId);
+            return false;
+        }
     }
 
     /// <summary>

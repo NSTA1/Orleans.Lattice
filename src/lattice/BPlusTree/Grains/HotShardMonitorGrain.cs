@@ -429,6 +429,20 @@ internal sealed class HotShardMonitorGrain(
         // the map are both projections of the same registry row, so one entry
         // read yields both instead of a resolve followed by a map read.
         var entry = await optionsResolver.RegistryReads.GetEntryAsync(TreeId);
+
+        // A copy another tree aliases is split through that tree, whose row holds
+        // the routing map. A monitor keyed by the copy itself - armed when a
+        // restore or resize activated the copy's own router - would commit its
+        // splits onto the copy's row, which nothing routes by (issue #6083).
+        if (await ShardMapCommitFence.IsAliasTargetAsync(grainFactory.GetLatticeRegistry(), entry, TreeId))
+        {
+            logger.LogInformation(
+                "Stopping the hot-shard monitor for tree {TreeId}: tree {Owner} routes through it, so its shards are split through that tree.",
+                TreeId, entry!.DerivedFrom);
+            await StopAsync();
+            return;
+        }
+
         var physicalTreeId = entry?.PhysicalTreeId ?? TreeId;
         var map = entry?.ShardMap
             ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);

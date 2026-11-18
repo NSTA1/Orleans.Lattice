@@ -216,8 +216,9 @@ internal sealed class TreeShardConsolidationGrain(
     /// </summary>
     private async Task<bool> IsBoundTreeCurrentAsync()
     {
-        var entry = await grainFactory.GetLatticeRegistry().GetEntryAsync(TreeId);
-        return ShardMapCommitFence.Admits(entry, TreeId, await GetPhysicalTreeIdAsync());
+        var registry = grainFactory.GetLatticeRegistry();
+        var entry = await registry.GetEntryAsync(TreeId);
+        return await ShardMapCommitFence.AdmitsAsync(registry, entry, TreeId, await GetPhysicalTreeIdAsync());
     }
 
     private int[] DonorSlots
@@ -340,6 +341,13 @@ internal sealed class TreeShardConsolidationGrain(
         if (!ShardMapCommitFence.Admits(entry, TreeId, physicalTreeId))
             throw new InvalidOperationException(
                 $"Shard {donorShardIndex} of tree '{TreeId}' cannot be consolidated while an alias cutover of the tree is in progress.");
+
+        // Refuse a coordinator keyed by a copy another tree aliases: its own row
+        // is not the map routing reads, so the fold would retire a shard routing
+        // still sends traffic to (issue #6083).
+        if (await ShardMapCommitFence.IsAliasTargetAsync(registry, entry, TreeId))
+            throw new InvalidOperationException(
+                $"Shard {donorShardIndex} of tree '{TreeId}' cannot be consolidated through the copy's own id: tree '{entry!.DerivedFrom}' routes through it. Consolidate through '{entry.DerivedFrom}'.");
 
         // Refuse while a resize of the tree holds shard migrations (issue
         // #4452); the read after the donor's record opens below is what closes

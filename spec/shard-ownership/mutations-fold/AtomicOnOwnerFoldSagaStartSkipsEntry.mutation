@@ -9,10 +9,10 @@ PERTURBS: SagaStart
 
 --- FIND
     /\ sg' = "exec"
-    /\ UNCHANGED <<rmap, published, row, pend, term, sealed, retired, mp, mk, src, dst, mdone, cancels, prepped, told, dec, opDone, young, ackOn>>
+    /\ UNCHANGED <<rmap, cmap, ck, published, row, pend, term, sealed, retired, mp, mk, src, dst, mdone, cancels, prepped, told, dec, opDone, young, ackOn>>
 --- REPLACE
     /\ sg' = "exec"
 \* MUTATION: k2 counted as dispatched.
     /\ prepped' = {k2}
-    /\ UNCHANGED <<rmap, published, row, pend, term, sealed, retired, mp, mk, src, dst, mdone, cancels, told, dec, opDone, young, ackOn>>
+    /\ UNCHANGED <<rmap, cmap, ck, published, row, pend, term, sealed, retired, mp, mk, src, dst, mdone, cancels, told, dec, opDone, young, ackOn>>
 --- END

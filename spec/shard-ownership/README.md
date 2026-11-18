@@ -20,7 +20,8 @@ checks a saga bound to the previous copy across a local shadow-cutover restore
 and its revert, the alias move the other modules do not make (see
 [`RefinementCutover.md`](RefinementCutover.md)). A fifth, `ShardOwnershipFold`,
 checks a slot that a shard fold returns to the shard an earlier split took it
-from (see [`RefinementFold.md`](RefinementFold.md)).
+from, and that the fold of an aliased tree commits onto the logical tree's row
+(see [`RefinementFold.md`](RefinementFold.md)).
 
 ## Files
 
@@ -46,7 +47,7 @@ from (see [`RefinementFold.md`](RefinementFold.md)).
 | [`ShardOwnershipCutover.manifest.json`](ShardOwnershipCutover.manifest.json) | Its manifest. |
 | [`mutations-cutover/`](mutations-cutover/) | Its mutation catalogue. |
 | [`RefinementCutover.md`](RefinementCutover.md) | Its refinement note. |
-| [`ShardOwnershipFold.tla`](ShardOwnershipFold.tla) | Fold: a slot a split moved away and a shard fold moves back, onto a survivor that still holds the slot sealed and still holds its old rows, with the fold's sweep, reclaim, cancel and retirement, a saga, a later write or delete, and tombstone compaction. |
+| [`ShardOwnershipFold.tla`](ShardOwnershipFold.tla) | Fold: a slot a split moved away and a shard fold moves back, onto a survivor that still holds the slot sealed and still holds its old rows, with the fold's sweep, reclaim, cancel and retirement, the registry row its coordinator is keyed by, a saga, a later write or delete, and tombstone compaction. |
 | [`ShardOwnershipFold.cfg`](ShardOwnershipFold.cfg) | Its TLC model. |
 | [`ShardOwnershipFold.manifest.json`](ShardOwnershipFold.manifest.json) | Its manifest. |
 | [`mutations-fold/`](mutations-fold/) | Its mutation catalogue. |
@@ -359,6 +360,7 @@ standing mutation. The refinement notes record which are fixed.
 | #4689 | A saga re-bound across a shadow-cutover restore leaves its prepares on the previous copy, which a stale reader before the redirect, or any reader after a revert, is served torn (found by the cutover module; fixed) | `AtomicAcrossCutoverDecideSkipsDiscard`, `AtomicAcrossCutoverRebindForgetsLeftCopy`, `CommittedBatchOnBoundCopyRebindBeforeDecisionForgets` |
 | #4619 | A late forward of a saga whose registry row was retired is bucketed on a leaf that lost its memory of the terminal, stranded for good (found while answering #4619's question; fixed, #4638) | `NoLiveBucketAfterForgetLateForwardBucketed`, `NoLiveBucketAfterForgetForwardRecreatesRow`, `AtomicOnOwnerParticipantRowBestEffort` |
 | #5130 | A fold back onto the shard a split took the slot from dropped its drain over the rows the survivor kept behind its seal, reverting every write and delete made since the split, and revived a key whose delete compaction had reaped (found while extending this area to the fold; fixed, #5131) | `NoKeyLostFoldImportDroppedOverSealedRow`, `NoKeyLostFoldSkipsReapReconciliation` |
+| #6083 | Automatic healing keyed its folds by the physical copy an aliased tree resolves to, so each fold committed onto the copy's own registry row and the logical map kept routing the folded slots to the retired donor (found in a deployment after a shadow-cutover restore, outside this area, which did not then model which row a fold commits onto; fixed) | `UniqueOwnerFoldKeyedByAliasTarget` |
 
 #4445 (a late forwarded orphan read past the terminal) was fixed elsewhere
 (#4461); its mutation is `NoResurrectionLatePrepareActivationMemory`, and the
@@ -413,4 +415,4 @@ TLC's own state counts.
 | `ShardOwnershipRetention` | 7 | 4 | 27 | 36 | 36 | 142,980 |
 | `ShardOwnershipCrdt` | 2 | 0 | 10 | 10 | 10 | 1,573 |
 | `ShardOwnershipCutover` | 3 | 1 | 14 | 15 | 16 | 2,088 |
-| `ShardOwnershipFold` | 6 | 3 | 16 | 18 | 23 | 4,128 |
+| `ShardOwnershipFold` | 6 | 3 | 16 | 19 | 23 | 4,128 |

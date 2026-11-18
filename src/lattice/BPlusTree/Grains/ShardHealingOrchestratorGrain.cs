@@ -78,6 +78,13 @@ internal sealed class ShardHealingOrchestratorGrain(
     private int _lastPhysicalShardCount;
     private int _lastBaseShardCount;
 
+    /// <summary>
+    /// The logical map version at which <see cref="AliasFoldRoutingRepair"/>
+    /// last found nothing that could need repair, so later sweeps skip the check
+    /// until the map moves.
+    /// </summary>
+    private long? _aliasRoutingSettledVersion;
+
     /// <inheritdoc />
     public async Task EnsureRunningAsync()
     {
@@ -269,6 +276,39 @@ internal sealed class ShardHealingOrchestratorGrain(
             return;
         }
         var (resolved, entry) = registered;
+
+        // A copy another tree aliases is healed through that tree, whose row is
+        // the routing map. This orchestrator is armed when a restore or resize
+        // activates the copy's own router, and folding under the copy's id would
+        // commit onto a row nothing routes by (issue #6083), so it stands down.
+        if (await ShardMapCommitFence.IsAliasTargetAsync(grainFactory.GetLatticeRegistry(), entry, TreeId))
+        {
+            logger.LogInformation(
+                "Stopping the shard-healing orchestrator for tree {TreeId}: tree {Owner} routes through it, so its shards are healed through that tree.",
+                TreeId, entry!.DerivedFrom);
+            await StopAsync();
+            return;
+        }
+
+        // Repair routing left behind by a fold that, before #6083 was fixed,
+        // committed onto the alias target's row instead of this one. Settled once
+        // per map version, so a healthy aliased tree pays one extra registry read
+        // per activation rather than per sweep.
+        if (entry?.PhysicalTreeId is not null && entry.ShardMap?.Version != _aliasRoutingSettledVersion)
+        {
+            var repair = await AliasFoldRoutingRepair.RepairAsync(grainFactory, TreeId, entry, logger);
+            if (repair.SlotsRepaired > 0)
+            {
+                observed = await optionsResolver.ResolveWithEntryIfRegisteredAsync(TreeId);
+                if (observed is not { } repairedRow) return;
+                (resolved, entry) = repairedRow;
+            }
+            else if (repair.Settled)
+            {
+                _aliasRoutingSettledVersion = entry.ShardMap?.Version;
+            }
+        }
+
         var map = entry?.ShardMap
             ?? ShardMap.GetOrCreateDefaultShared(LatticeConstants.DefaultVirtualShardCount, resolved.ShardCount);
         var physicalShards = map.GetPhysicalShardIndices();
@@ -346,7 +386,7 @@ internal sealed class ShardHealingOrchestratorGrain(
             await DriveInFlightFoldsAsync(physicalTreeId);
 
         if (decision == ShardHealingDecision.Admitted)
-            decision = await AdmitNextFoldAsync(physicalTreeId, map);
+            decision = await AdmitNextFoldAsync(map);
 
         await PublishAsync(decision, shardCount, baseShardCount, nowUtc);
     }
@@ -374,7 +414,7 @@ internal sealed class ShardHealingOrchestratorGrain(
             ShardConsolidationProgress progress;
             try
             {
-                progress = await ConsolidationGrain(physicalTreeId, donor).GetProgressAsync();
+                progress = await GetFoldProgressAsync(physicalTreeId, donor);
             }
             catch (Exception ex)
             {
@@ -434,7 +474,9 @@ internal sealed class ShardHealingOrchestratorGrain(
             var donor = tracked[i];
             try
             {
-                await ConsolidationGrain(physicalTreeId, donor).RunConsolidationPassAsync();
+                await ConsolidationGrain(donor).RunConsolidationPassAsync();
+                if (LegacyConsolidationGrain(physicalTreeId, donor) is { } legacy)
+                    await legacy.RunConsolidationPassAsync();
             }
             catch (Exception ex)
             {
@@ -454,7 +496,7 @@ internal sealed class ShardHealingOrchestratorGrain(
     /// started, or <see cref="ShardHealingDecision.NoFoldablePair"/> when the
     /// map offered none this sweep.
     /// </summary>
-    private async Task<ShardHealingDecision> AdmitNextFoldAsync(string physicalTreeId, ShardMap map)
+    private async Task<ShardHealingDecision> AdmitNextFoldAsync(ShardMap map)
     {
         var tracked = state.State.InFlightDonorShardIndices;
 
@@ -501,7 +543,7 @@ internal sealed class ShardHealingOrchestratorGrain(
 
         try
         {
-            await ConsolidationGrain(physicalTreeId, plan.DonorShardIndex).StartAsync(plan.SurvivorShardIndex);
+            await ConsolidationGrain(plan.DonorShardIndex).StartAsync(plan.SurvivorShardIndex);
         }
         catch (InvalidOperationException ex) when (ex is not ILatticeDomainFault)
         {
@@ -692,8 +734,45 @@ internal sealed class ShardHealingOrchestratorGrain(
         _ => LatticeMetrics.HealingNotObservedDecisionTag,
     };
 
-    private ITreeShardConsolidationGrain ConsolidationGrain(string physicalTreeId, int donorShardIndex)
-        => grainFactory.GetGrain<ITreeShardConsolidationGrain>($"{physicalTreeId}/{donorShardIndex}");
+    /// <summary>
+    /// The consolidation coordinator for <paramref name="donorShardIndex"/>,
+    /// keyed by the logical tree id exactly as <c>TreeReshardGrain</c> keys its
+    /// folds, so the coordinator binds the physical tree itself and commits onto
+    /// the logical row that routing reads. Keyed by the physical id, as it was
+    /// before issue #6083, a fold of an aliased tree committed onto the copy's
+    /// own row and left the logical map routing the folded slots to the retired
+    /// donor. For an unaliased tree the two keys are the same grain.
+    /// </summary>
+    private ITreeShardConsolidationGrain ConsolidationGrain(int donorShardIndex)
+        => grainFactory.GetGrain<ITreeShardConsolidationGrain>($"{TreeId}/{donorShardIndex}");
+
+    /// <summary>
+    /// The coordinator a fold admitted before issue #6083 was fixed ran under on
+    /// an aliased tree, keyed by the physical id; <see langword="null"/> when the
+    /// tree is unaliased and the key is the logical one. Polled and driven only
+    /// so such a fold keeps counting against admission until it ends: the commit
+    /// fence now refuses its swap, so it abandons before anything irreversible.
+    /// </summary>
+    private ITreeShardConsolidationGrain? LegacyConsolidationGrain(string physicalTreeId, int donorShardIndex)
+        => string.Equals(physicalTreeId, TreeId, StringComparison.Ordinal)
+            ? null
+            : grainFactory.GetGrain<ITreeShardConsolidationGrain>($"{physicalTreeId}/{donorShardIndex}");
+
+    /// <summary>
+    /// The progress of the tracked fold of <paramref name="donorShardIndex"/>: the
+    /// logical-keyed coordinator's, or, when that one is not running, a still
+    /// running legacy physical-keyed coordinator's (see
+    /// <see cref="LegacyConsolidationGrain"/>).
+    /// </summary>
+    private async Task<ShardConsolidationProgress> GetFoldProgressAsync(string physicalTreeId, int donorShardIndex)
+    {
+        var progress = await ConsolidationGrain(donorShardIndex).GetProgressAsync();
+        if (progress.InProgress || LegacyConsolidationGrain(physicalTreeId, donorShardIndex) is not { } legacy)
+            return progress;
+
+        var legacyProgress = await legacy.GetProgressAsync();
+        return legacyProgress.InProgress ? legacyProgress : progress;
+    }
 
     /// <summary>
     /// Persists scheduling state, treating a storage failure as a warning
