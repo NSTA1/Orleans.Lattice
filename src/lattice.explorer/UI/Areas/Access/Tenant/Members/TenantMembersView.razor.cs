@@ -119,7 +119,10 @@ public partial class TenantMembersView
         }
         catch (Exception exception) when (TenantAccessFailure.From(exception, tenant) is { } failure)
         {
-            _failure = failure;
+            if (!Lifetime.IsLeft && string.Equals(tenant, Tenant, StringComparison.Ordinal))
+            {
+                _failure = failure;
+            }
         }
     }
 

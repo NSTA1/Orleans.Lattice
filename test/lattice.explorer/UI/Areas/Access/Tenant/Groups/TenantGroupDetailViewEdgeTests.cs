@@ -185,6 +185,47 @@ public sealed class TenantGroupDetailViewEdgeTests : TenantAccessPagesTestContex
     }
 
     [Test]
+    public async Task A_group_read_failing_after_the_view_moved_to_another_group_does_not_replace_it_with_an_error()
+    {
+        TenantFacades.AsTenantAdmin();
+        var ops = new TaskCompletionSource<TenantGroupDescriptor?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var directory = Substitute.For<ILatticeTenantDirectoryAdmin>();
+        directory.GetGroupAsync("acme", "ops", Arg.Any<CancellationToken>()).Returns(ops.Task);
+        directory.GetGroupAsync("acme", "eng", Arg.Any<CancellationToken>()).Returns(new TenantGroupDescriptor { Name = "eng", DisplayName = "Engineering" });
+        directory.ListGroupMembersAsync(default!, default!, default).ReturnsForAnyArgs(Task.FromResult<IReadOnlyList<TenantGroupMember>>([]));
+        UseDirectory(directory);
+        var cut = RenderView("ops");
+        cut.WaitUntil(() => Assert.That(directory.ReceivedCalls(), Is.Not.Empty));
+
+        cut.Render(parameters => parameters.Add(view => view.Tenant, "acme").Add(view => view.Name, "eng"));
+        cut.WaitUntil(() => Assert.That(cut.Markup, Does.Contain("Engineering")));
+        ops.SetException(new InvalidOperationException("down"));
+
+        Assert.That(await TestPoll.TryUntilAsync(() => cut.Markup.Contains(Unreachable, StringComparison.Ordinal), TimeSpan.FromSeconds(1)), Is.False);
+        Assert.That(cut.Markup, Does.Contain("Engineering"));
+    }
+
+    [Test]
+    public async Task A_group_name_refused_after_the_view_moved_to_another_group_does_not_report_not_found()
+    {
+        TenantFacades.AsTenantAdmin();
+        var ops = new TaskCompletionSource<TenantGroupDescriptor?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var directory = Substitute.For<ILatticeTenantDirectoryAdmin>();
+        directory.GetGroupAsync("acme", "ops", Arg.Any<CancellationToken>()).Returns(ops.Task);
+        directory.GetGroupAsync("acme", "eng", Arg.Any<CancellationToken>()).Returns(new TenantGroupDescriptor { Name = "eng", DisplayName = "Engineering" });
+        directory.ListGroupMembersAsync(default!, default!, default).ReturnsForAnyArgs(Task.FromResult<IReadOnlyList<TenantGroupMember>>([]));
+        UseDirectory(directory);
+        var cut = RenderView("ops");
+        cut.WaitUntil(() => Assert.That(directory.ReceivedCalls(), Is.Not.Empty));
+
+        cut.Render(parameters => parameters.Add(view => view.Tenant, "acme").Add(view => view.Name, "eng"));
+        cut.WaitUntil(() => Assert.That(cut.Markup, Does.Contain("Engineering")));
+        ops.SetException(new ArgumentException("not a group name"));
+
+        Assert.That(await TestPoll.TryUntilAsync(() => NotFound > 0, TimeSpan.FromSeconds(1)), Is.False, "the group the view now shows exists");
+    }
+
+    [Test]
     public async Task A_member_read_for_a_group_the_view_has_left_is_dropped()
     {
         TenantFacades.AsTenantAdmin();

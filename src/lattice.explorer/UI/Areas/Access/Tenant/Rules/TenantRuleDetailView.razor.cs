@@ -87,7 +87,11 @@ public partial class TenantRuleDetailView
         }
         catch (Exception exception) when (TenantAccessFailure.From(exception, tenant) is { } failure)
         {
-            _failure = failure;
+            if (!Lifetime.IsLeft && tenant == Tenant && ruleId == RuleId)
+            {
+                _failure = failure;
+            }
+
             return;
         }
 
@@ -101,18 +105,28 @@ public partial class TenantRuleDetailView
     /// </summary>
     private async Task ReadContextAsync(string tenant)
     {
+        IReadOnlyList<TenantRuleView> rules;
         try
         {
-            _rules = await Access.GetRulesAsync(tenant, Lifetime.Token).ConfigureAwait(true);
+            rules = await Access.GetRulesAsync(tenant, Lifetime.Token).ConfigureAwait(true);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            _rules = [];
+            rules = [];
         }
         catch (OperationCanceledException) when (Lifetime.IsLeft)
         {
             return;
         }
+
+        // A read for a tenant the view has since left must not replace the
+        // rules the editor's shadow check uses for the tenant it now shows.
+        if (Lifetime.IsLeft || tenant != Tenant)
+        {
+            return;
+        }
+
+        _rules = rules;
 
         AccessCatalog? catalog;
         try

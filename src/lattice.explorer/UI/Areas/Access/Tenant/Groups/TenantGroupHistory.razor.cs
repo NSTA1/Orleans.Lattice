@@ -107,17 +107,26 @@ public partial class TenantGroupHistory
         catch (OperationCanceledException) when (Lifetime.IsLeft)
         {
         }
-        catch (LatticeAuthorizationDeniedException)
+        catch (LatticeAuthorizationDeniedException) when (!Lifetime.IsLeft && tenant == Tenant && name == Name)
         {
             _unavailable = DeniedText;
         }
-        catch (Exception exception) when (exception is not OperationCanceledException)
+        catch (Exception exception) when (exception is not OperationCanceledException && !Lifetime.IsLeft && tenant == Tenant && name == Name)
         {
             _unavailable = "The group's history could not be read. " + (TenantAccessFailure.From(exception, tenant)?.Message ?? string.Empty);
         }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // A read for a group the view has since left neither reports nor
+            // ends the read of the group it now shows.
+            return;
+        }
         finally
         {
-            _loading = false;
+            if (tenant == Tenant && name == Name)
+            {
+                _loading = false;
+            }
         }
     }
 
