@@ -17,7 +17,7 @@ namespace Orleans.Lattice.Api.Backup.Grpc.Tests;
 /// gRPC-only envelopes.
 /// </summary>
 [TestFixture]
-public sealed class BackupGrpcDtoSerializationTests
+public sealed partial class BackupGrpcDtoSerializationTests
 {
     private ServiceProvider _services = null!;
 

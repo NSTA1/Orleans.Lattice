@@ -213,6 +213,12 @@ internal sealed class LatticeBackupApiGrpcAuthInterceptor : Interceptor
             LatticeBackupGrpcMethods.StartBackupHealthCheckMethodName => LatticeBackupApiOperation.StartBackupHealthCheck,
             LatticeBackupGrpcMethods.StartCatalogRebuildMethodName => LatticeBackupApiOperation.StartCatalogRebuild,
             LatticeBackupGrpcMethods.StartCatalogScrubMethodName => LatticeBackupApiOperation.StartCatalogScrub,
+            LatticeBackupGrpcMethods.ScheduleBackupSetMethodName => LatticeBackupApiOperation.ScheduleBackupSet,
+            LatticeBackupGrpcMethods.CancelBackupSetScheduleMethodName => LatticeBackupApiOperation.CancelBackupSetSchedule,
+            LatticeBackupGrpcMethods.RemoveBackupSetScheduleMethodName => LatticeBackupApiOperation.RemoveBackupSetSchedule,
+            LatticeBackupGrpcMethods.GetBackupSetScheduleStatusMethodName => LatticeBackupApiOperation.GetBackupSetScheduleStatus,
+            LatticeBackupGrpcMethods.ListBackupSetSchedulesMethodName => LatticeBackupApiOperation.ListBackupSetSchedules,
+            LatticeBackupGrpcMethods.RunBackupSetScheduleNowMethodName => LatticeBackupApiOperation.RunBackupSetScheduleNow,
             _ => LatticeBackupApiOperation.Unknown,
         };
 
@@ -240,6 +246,12 @@ internal sealed class LatticeBackupApiGrpcAuthInterceptor : Interceptor
             // the facade authorizes it at the reserved catalog tree.
             BackupCatalogRebuildRequestMessage => null,
             BackupCatalogScrubRequestMessage => null,
+            // A backup-set schedule spans many trees (or every tree), so it names no
+            // single target; the facade authorizes every member tree fail-closed.
+            BackupSetScheduleRequestMessage => null,
+            BackupSetScheduleNameRequestMessage => null,
+            BackupSetScheduleRemoveRequestMessage => null,
+            BackupSetScheduleListRequestMessage => null,
             _ => null,
         };
 

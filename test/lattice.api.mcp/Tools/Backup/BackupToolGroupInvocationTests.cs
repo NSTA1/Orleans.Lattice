@@ -23,7 +23,7 @@ namespace Orleans.Lattice.Api.Mcp.Tests;
 /// deterministic - a stateful in-memory facade fake, no cluster, no transport.
 /// </remarks>
 [TestFixture]
-public sealed class BackupToolGroupInvocationTests
+public sealed partial class BackupToolGroupInvocationTests
 {
     private FakeLatticeBackupControl _control = null!;
 

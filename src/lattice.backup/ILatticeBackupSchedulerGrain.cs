@@ -182,4 +182,26 @@ internal interface ILatticeBackupSchedulerGrain : IGrainWithStringKey
     /// <param name="finish">Whether to delete the sink manifest; <see langword="false"/> when the artifact deletes failed, so a retry finds the manifest.</param>
     [AlwaysInterleave]
     Task<BackupRetireOutcome> EndDeleteAsync(string backupId, Guid token, bool finish);
+
+    /// <summary>
+    /// Replaces the backups of this scope that the backup-set schedule keyed
+    /// <paramref name="scheduleKey"/> holds from retention (issue #6067): the
+    /// members of its retained sets. An empty list removes the schedule's hold.
+    /// Durable, so the hold survives a restart of either grain. Performs no
+    /// authorization of its own: the schedule authorized its scopes when a caller
+    /// registered it, and only the schedule's grain calls this.
+    /// </summary>
+    /// <param name="scheduleKey">The schedule's grain key.</param>
+    /// <param name="backupIds">The held backup ids of this scope.</param>
+    Task SetSetScheduleHoldsAsync(string scheduleKey, IReadOnlyList<string> backupIds);
+
+    /// <summary>
+    /// Returns <see langword="true"/> when any backup-set schedule other than
+    /// <paramref name="exceptScheduleKey"/> holds <paramref name="backupId"/>, so
+    /// the excepted schedule's retention must not delete it.
+    /// </summary>
+    /// <param name="backupId">The backup id.</param>
+    /// <param name="exceptScheduleKey">The asking schedule's grain key, whose own hold is ignored.</param>
+    [AlwaysInterleave]
+    Task<bool> IsHeldBySetScheduleAsync(string backupId, string exceptScheduleKey);
 }

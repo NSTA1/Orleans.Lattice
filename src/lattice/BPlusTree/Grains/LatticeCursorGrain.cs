@@ -458,6 +458,70 @@ internal sealed partial class LatticeCursorGrain(
     }
 
     /// <inheritdoc />
+    public async Task EvictSnapshotLeavesAsync(bool persist)
+    {
+        var coord = await GetSnapshotCoordinateAsync();
+        if (coord.SnapshotBaselineToken == Guid.Empty)
+        {
+            return;
+        }
+
+        if (persist && !state.State.SnapshotBaselinePersisted)
+        {
+            // Durable before it is recorded, and recorded before any leaf lets go
+            // of its in-memory seed: a leaf released ahead of its row would leave
+            // the cursor nothing to reload, and an unrecorded row would outlive
+            // the cursor's close.
+            await EnsureSnapshotBaselinesPersistedAsync(coord);
+            state.State.SnapshotBaselinePersisted = true;
+            try
+            {
+                await state.WriteStateAsync();
+            }
+            catch
+            {
+                state.State.SnapshotBaselinePersisted = false;
+                throw;
+            }
+        }
+
+        var shards = ResolvePerShardPerPartitionOffsets(coord);
+        var tasks = new List<Task>(shards.Count);
+        foreach (var (shardIdx, _) in shards)
+        {
+            var leaf = grainFactory.GetGrain<ISnapshotLeafGrain>(BuildSnapshotLeafKey(coord, shardIdx));
+            tasks.Add(leaf.EvictAsync(persist, default));
+        }
+
+        await Task.WhenAll(tasks);
+        if (persist)
+        {
+            await SlideTtlAsync();
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task TouchSnapshotAsync()
+    {
+        var coord = await GetSnapshotCoordinateAsync();
+        if (coord.SnapshotBaselineToken != Guid.Empty && state.State.SnapshotBaselinePersisted)
+        {
+            var treeId = SnapshotLeafTreeId(coord);
+            var tasks = new List<Task>(coord.PerShardWalOffsets.Count);
+            foreach (var shardIndex in coord.PerShardWalOffsets.Keys)
+            {
+                var baseline = grainFactory.GetGrain<ISnapshotBaselineStorageGrain>(
+                    SnapshotLeafGrain.BuildBaselineKey(treeId, shardIndex, coord.SnapshotBaselineToken));
+                tasks.Add(baseline.TouchAsync(default));
+            }
+
+            await Task.WhenAll(tasks);
+        }
+
+        await SlideTtlAsync();
+    }
+
+    /// <inheritdoc />
     public async Task<LatticeCursorDeleteProgress> DeleteRangeStepAsync(int maxToDelete)
     {
         EnsureOpenFor(LatticeCursorKind.DeleteRange);

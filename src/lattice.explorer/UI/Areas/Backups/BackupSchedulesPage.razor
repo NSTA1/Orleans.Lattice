@@ -4,7 +4,8 @@
 @*
     /backups/schedules: a tree's recurring full and incremental schedules. Shows
     the tree's schedule status, and - when the capability probe allows capture -
-    registers, changes and cancels a schedule.
+    registers, changes and cancels a schedule. Below it, whatever tree is chosen,
+    the tenant's backup-set schedules (#6067).
 *@
 
 <PageTitle>Backup schedules - Orleans.Lattice Explorer</PageTitle>
@@ -115,3 +116,5 @@ else
         </Actions>
     </LtDialog>
 }
+
+<BackupSetSchedulesSection />

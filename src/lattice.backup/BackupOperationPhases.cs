@@ -10,8 +10,19 @@ public static class BackupOperationPhases
     /// <summary>Streaming a scope's entries to the sink. Units: <see cref="BackupOperationUnits.Entries"/>.</summary>
     public const string Capturing = "Capturing";
 
-    /// <summary>Capturing the members of a backup set. Units: <see cref="BackupOperationUnits.Members"/>.</summary>
+    /// <summary>
+    /// Capturing the members of a backup set. For a cross-tree-consistent set this
+    /// is the gated phase that pins each member's point-in-time snapshot. Units:
+    /// <see cref="BackupOperationUnits.Members"/>.
+    /// </summary>
     public const string CapturingMembers = "CapturingMembers";
+
+    /// <summary>
+    /// Writing the pinned members of a cross-tree-consistent backup set to the
+    /// sink, one at a time, after the set's decision gate has been released.
+    /// Units: <see cref="BackupOperationUnits.Members"/>.
+    /// </summary>
+    public const string WritingMembers = "WritingMembers";
 
     /// <summary>Writing the manifest to the sink and registering it in the catalog.</summary>
     public const string Cataloguing = "Cataloguing";

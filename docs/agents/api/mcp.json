@@ -2451,6 +2451,504 @@
       ]
     },
     {
+      "id": "lattice_backup_set_schedule_cancel",
+      "in_process": "BackupToolInvocations.CancelBackupSetScheduleAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/backup.json#cancel-backup-set-schedule",
+      "tool_annotations": {
+        "read_only": false,
+        "destructive": true,
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup.CreateSetScheduleCancelTool"
+      },
+      "availability": {
+        "module": "AddBackupTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableBackupControlTools",
+          "parameter": "enableControl",
+          "source": "src/lattice.api.mcp/Tools/Backup/LatticeMcpBackupServiceCollectionExtensions.cs#LatticeMcpBackupServiceCollectionExtensions.AddBackupTools"
+        },
+        "requires": [
+          "AddLatticeBackupApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup"
+      },
+      "request": [
+        {
+          "name": "name",
+          "type": "string",
+          "required": true,
+          "notes": "The backup-set schedule's name."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpBackupSetScheduleActionResult",
+        "shape": "Structured JSON projection of McpBackupSetScheduleActionResult returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CancelBackupSetScheduleAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Pausing is idempotent; false means no schedule has the name. Retained sets stay restorable.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CancelBackupSetScheduleAsync"
+      },
+      "concurrency": {
+        "rule": "Authorized like schedule-backup-set, against the schedule's recorded member trees.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CancelBackupSetScheduleAsync"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/Backup/BackupToolInvocations.cs#BackupToolInvocations.CancelBackupSetScheduleAsync",
+        "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup"
+      ]
+    },
+    {
+      "id": "lattice_backup_set_schedule_get",
+      "in_process": "BackupToolInvocations.GetBackupSetScheduleStatusAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/backup.json#get-backup-set-schedule-status",
+      "tool_annotations": {
+        "read_only": true,
+        "destructive": false,
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup.CreateSetScheduleGetTool"
+      },
+      "availability": {
+        "module": "AddBackupTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeBackupApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup"
+      },
+      "request": [
+        {
+          "name": "name",
+          "type": "string",
+          "required": true,
+          "notes": "The backup-set schedule's name."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpBackupSetSchedule",
+        "shape": "Structured JSON projection of McpBackupSetSchedule returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#GetBackupSetScheduleStatusAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only schedule status.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#GetBackupSetScheduleStatusAsync"
+      },
+      "concurrency": {
+        "rule": "Authorized like schedule-backup-set, against the schedule's recorded member trees.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#GetBackupSetScheduleStatusAsync"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/Backup/BackupToolInvocations.cs#BackupToolInvocations.GetBackupSetScheduleStatusAsync",
+        "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup"
+      ]
+    },
+    {
+      "id": "lattice_backup_set_schedule_list",
+      "in_process": "BackupToolInvocations.ListBackupSetSchedulesAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/backup.json#list-backup-set-schedules",
+      "tool_annotations": {
+        "read_only": true,
+        "destructive": false,
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup.CreateSetScheduleListTool"
+      },
+      "availability": {
+        "module": "AddBackupTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": null,
+        "requires": [
+          "AddLatticeBackupApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup"
+      },
+      "request": [
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpBackupSetScheduleList",
+        "shape": "Structured JSON projection of McpBackupSetScheduleList returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ListBackupSetSchedulesAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only listing of the caller's tenant; a schedule the caller may not read is omitted rather than failing the listing.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ListBackupSetSchedulesAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ListBackupSetSchedulesAsync"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/Backup/BackupToolInvocations.cs#BackupToolInvocations.ListBackupSetSchedulesAsync",
+        "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup"
+      ]
+    },
+    {
+      "id": "lattice_backup_set_schedule_remove",
+      "in_process": "BackupToolInvocations.RemoveBackupSetScheduleAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/backup.json#remove-backup-set-schedule",
+      "tool_annotations": {
+        "read_only": false,
+        "destructive": true,
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup.CreateSetScheduleRemoveTool"
+      },
+      "availability": {
+        "module": "AddBackupTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableBackupControlTools",
+          "parameter": "enableControl",
+          "source": "src/lattice.api.mcp/Tools/Backup/LatticeMcpBackupServiceCollectionExtensions.cs#LatticeMcpBackupServiceCollectionExtensions.AddBackupTools"
+        },
+        "requires": [
+          "AddLatticeBackupApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup"
+      },
+      "request": [
+        {
+          "name": "name",
+          "type": "string",
+          "required": true,
+          "notes": "The backup-set schedule's name."
+        },
+        {
+          "name": "deleteRetainedSets",
+          "type": "bool",
+          "required": false,
+          "default": "false",
+          "notes": "Whether to also delete the backups of the schedule's retained sets that no other schedule holds."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpBackupSetScheduleActionResult",
+        "shape": "Structured JSON projection of McpBackupSetScheduleActionResult returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request; a retry after the schedule was removed returns false.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#RemoveBackupSetScheduleAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Removal converges: false means no schedule had the name, including one an earlier attempt already removed. With deleteRetainedSets, only retained-set backups that no other schedule holds are deleted.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#RemoveBackupSetScheduleAsync"
+      },
+      "concurrency": {
+        "rule": "Authorized like schedule-backup-set, against the schedule's recorded member trees.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#RemoveBackupSetScheduleAsync"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/Backup/BackupToolInvocations.cs#BackupToolInvocations.RemoveBackupSetScheduleAsync",
+        "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup"
+      ]
+    },
+    {
+      "id": "lattice_backup_set_schedule_run_now",
+      "in_process": "BackupToolInvocations.RunBackupSetScheduleNowAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/backup.json#run-backup-set-schedule-now",
+      "tool_annotations": {
+        "read_only": false,
+        "destructive": true,
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup.CreateSetScheduleRunNowTool"
+      },
+      "availability": {
+        "module": "AddBackupTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableBackupControlTools",
+          "parameter": "enableControl",
+          "source": "src/lattice.api.mcp/Tools/Backup/LatticeMcpBackupServiceCollectionExtensions.cs#LatticeMcpBackupServiceCollectionExtensions.AddBackupTools"
+        },
+        "requires": [
+          "AddLatticeBackupApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup"
+      },
+      "request": [
+        {
+          "name": "name",
+          "type": "string",
+          "required": true,
+          "notes": "The backup-set schedule's name."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpBackupSetScheduleActionResult",
+        "shape": "Structured JSON projection of McpBackupSetScheduleActionResult returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request: a retry while the run is in flight joins it and returns false rather than stacking a second run.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#RunBackupSetScheduleNowAsync"
+      },
+      "idempotency": {
+        "idempotent": false,
+        "basis": "Each call while no run is in flight starts a new run; a call while one is in flight joins it and returns false.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#RunBackupSetScheduleNowAsync"
+      },
+      "concurrency": {
+        "rule": "At most one run of a schedule is in flight; follow it through get-backup-set-schedule-status.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#RunBackupSetScheduleNowAsync"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/Backup/BackupToolInvocations.cs#BackupToolInvocations.RunBackupSetScheduleNowAsync",
+        "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup"
+      ]
+    },
+    {
+      "id": "lattice_backup_set_schedule_set",
+      "in_process": "BackupToolInvocations.ScheduleBackupSetAsync",
+      "grpc_method": null,
+      "transport_scope": "mcp_tool",
+      "facade_operation": "api/backup.json#schedule-backup-set",
+      "tool_annotations": {
+        "read_only": false,
+        "destructive": true,
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup.CreateSetScheduleSetTool"
+      },
+      "availability": {
+        "module": "AddBackupTools",
+        "package": "Orleans.Lattice.Api.Mcp",
+        "opt_in": {
+          "option": "LatticeApiMcpOptions.EnableBackupControlTools",
+          "parameter": "enableControl",
+          "source": "src/lattice.api.mcp/Tools/Backup/LatticeMcpBackupServiceCollectionExtensions.cs#LatticeMcpBackupServiceCollectionExtensions.AddBackupTools"
+        },
+        "requires": [
+          "AddLatticeBackupApi"
+        ],
+        "source": "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup"
+      },
+      "request": [
+        {
+          "name": "name",
+          "type": "string",
+          "required": true,
+          "notes": "The schedule's tenant-local name (1-128 of A-Z, a-z, 0-9, '-', '_', '.'); re-using a name updates that schedule."
+        },
+        {
+          "name": "intervalSeconds",
+          "type": "long",
+          "required": true,
+          "notes": "The cadence between runs, in seconds; must be strictly positive."
+        },
+        {
+          "name": "membership",
+          "type": "string?",
+          "required": false,
+          "default": "null",
+          "notes": "Explicit (default) captures treeIds; AllTrees captures every tree of the caller's tenant."
+        },
+        {
+          "name": "treeIds",
+          "type": "IReadOnlyList<string>?",
+          "required": false,
+          "default": "null",
+          "notes": "The tree ids an Explicit schedule captures, one whole-tree member each; must be empty for AllTrees."
+        },
+        {
+          "name": "retentionKeepLast",
+          "type": "int?",
+          "required": false,
+          "default": "null",
+          "notes": "Keep at most this many sets (>= 1); at least one retention bound is required."
+        },
+        {
+          "name": "retentionMaxAgeSeconds",
+          "type": "long?",
+          "required": false,
+          "default": "null",
+          "notes": "Drop sets older than this many seconds (> 0); at least one retention bound is required."
+        },
+        {
+          "name": "crossTreeConsistent",
+          "type": "bool",
+          "required": false,
+          "default": "true",
+          "notes": "Whether each set is captured at one cross-tree causal fence."
+        },
+        {
+          "name": "includeNewTrees",
+          "type": "bool",
+          "required": false,
+          "default": "true",
+          "notes": "AllTrees only: also capture trees created later; needs the backup grant over the whole tenant (or cluster)."
+        },
+        {
+          "name": "excludedTreePrefixes",
+          "type": "IReadOnlyList<string>?",
+          "required": false,
+          "default": "null",
+          "notes": "AllTrees only: tree-id prefixes to exclude."
+        },
+        {
+          "name": "region",
+          "type": "string",
+          "required": false,
+          "notes": "Optional region id from lattice_list_regions; omitted targets the current region."
+        }
+      ],
+      "response": {
+        "type": "McpBackupSetSchedule",
+        "shape": "Structured JSON projection of McpBackupSetSchedule returned by the handler."
+      },
+      "errors": [
+        {
+          "error_id": "authorization-denied",
+          "condition": "The coarse MCP authorizer or the facade access gate denies the call."
+        },
+        {
+          "error_id": "invalid-argument",
+          "condition": "A required parameter is absent, malformed, out of range, or names an unsupported region."
+        },
+        {
+          "error_id": "facade-fault",
+          "condition": "The facade operation named by facade_operation raises one of its own errors (for example InvalidOperationException, KeyNotFoundException or a tenant or ownership denial); see that operation's errors."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ScheduleBackupSetAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Register or update is idempotent: re-registering an unchanged request leaves the schedule as it was, and an unchanged interval keeps the timing of the next run.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ScheduleBackupSetAsync"
+      },
+      "concurrency": {
+        "rule": "The caller must hold the backup grant over every tree the set captures; a schedule over all trees that also captures trees created later needs the grant over the whole tenant (or, for the default tenant, the whole cluster).",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ScheduleBackupSetAsync"
+      },
+      "sources": [
+        "src/lattice.api.mcp/Tools/Backup/BackupToolInvocations.cs#BackupToolInvocations.ScheduleBackupSetAsync",
+        "src/lattice.api.mcp/Tools/Backup/BackupToolGroup.cs#BackupToolGroup"
+      ]
+    },
+    {
       "id": "lattice_backup_start",
       "in_process": "BackupToolInvocations.StartBackupAsync",
       "grpc_method": null,

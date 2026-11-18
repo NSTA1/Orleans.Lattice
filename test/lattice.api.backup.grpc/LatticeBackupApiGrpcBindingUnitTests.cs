@@ -99,8 +99,8 @@ public sealed class LatticeBackupApiGrpcBindingUnitTests
         LatticeBackupGrpcServiceBase.BindService(binder, service);
 
         // 22 surviving backup RPCs, plus StartBackupHealthCheck, StartCatalogRebuild and StartCatalogScrub (#4125),
-        // plus GetBackupHealthConfig (#5523).
-        Assert.That(binder.AddedMethods, Is.EqualTo(26));
+        // plus GetBackupHealthConfig (#5523), plus the six backup-set schedule RPCs (#6067).
+        Assert.That(binder.AddedMethods, Is.EqualTo(32));
     }
 
     [Test]

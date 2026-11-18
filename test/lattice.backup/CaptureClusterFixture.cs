@@ -21,6 +21,7 @@ public sealed class CaptureClusterFixture
 {
     private static long s_maxSnapshotReplayEntries = 10_000_000L;
     private static string? s_localOriginClusterId;
+    private static long s_pinnedEntryBudget = 1_000_000;
 
     /// <summary>The deployed test cluster.</summary>
     public TestCluster Cluster { get; private set; } = null!;
@@ -60,9 +61,13 @@ public sealed class CaptureClusterFixture
     /// origin resolver with one that returns that id for every tree, so own
     /// writes reach the WAL stamped with it, as on a replicated host.
     /// </summary>
-    public async Task InitializeAsync(long maxSnapshotReplayEntries = 10_000_000L, string? localOriginClusterId = null)
+    public async Task InitializeAsync(
+        long maxSnapshotReplayEntries = 10_000_000L,
+        string? localOriginClusterId = null,
+        long pinnedEntryBudget = 1_000_000)
     {
         s_maxSnapshotReplayEntries = maxSnapshotReplayEntries;
+        s_pinnedEntryBudget = pinnedEntryBudget;
         s_localOriginClusterId = localOriginClusterId;
         var builder = new TestClusterBuilder(1);
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
@@ -99,6 +104,8 @@ public sealed class CaptureClusterFixture
                 o.MaxCrossTreeFenceAttempts = 50;
                 o.CrossTreeFenceDrainTimeout = TimeSpan.FromSeconds(15);
                 o.CrossTreeFencePollInterval = TimeSpan.FromMilliseconds(10);
+                o.CrossTreeSetPinnedEntryBudget = s_pinnedEntryBudget;
+                o.SetScheduleFenceRetryDelay = TimeSpan.Zero;
             });
         }
     }

@@ -66,6 +66,42 @@ public sealed class LatticeBackupOptions
     public int MaxCrossTreeFenceAttempts { get; set; } = 5;
 
     /// <summary>
+    /// How many in-scope entries a cross-tree-consistent backup-set capture may
+    /// hold pinned in memory while its saga decision gate is held. Each member's
+    /// point-in-time snapshot is opened under the gate (that fixes the set's cut),
+    /// and its frozen baselines live in memory until they are spilled to the
+    /// durable baseline store. While the members pinned so far stay within this
+    /// budget they stay in memory, which keeps the gate - and so the window in
+    /// which atomic writes on the set's trees are refused - as short as possible;
+    /// once a member takes the total past it, that member's snapshot is spilled
+    /// and evicted before the next one opens, so the gate grows by the spill
+    /// writes rather than memory by the next tree. Every member still in memory
+    /// is spilled once the gate is released, and members are then drained one
+    /// at a time. <c>0</c> spills every member as soon as it is pinned. Must not
+    /// be negative. Defaults to 1,000,000 entries. Single-tree and non-flagged
+    /// backups never consult this value.
+    /// </summary>
+    public long CrossTreeSetPinnedEntryBudget { get; set; } = 1_000_000;
+
+    /// <summary>
+    /// How many more times a backup-set schedule's run retries its capture after
+    /// it fails with <see cref="LatticeBackupCrossTreeFenceException"/> - every one
+    /// of the capture's own <see cref="MaxCrossTreeFenceAttempts"/> found the set
+    /// busy with cross-tree atomic writes - before the run is recorded as failed.
+    /// The next scheduled run tries again regardless. Must not be negative.
+    /// Defaults to 2.
+    /// </summary>
+    public int SetScheduleFenceRetries { get; set; } = 2;
+
+    /// <summary>
+    /// The pause before a backup-set schedule's run retries a capture that failed
+    /// to establish its cross-tree fence (<see cref="SetScheduleFenceRetries"/>).
+    /// Must not be negative and no longer than a timer can wait. Defaults to 30
+    /// seconds.
+    /// </summary>
+    public TimeSpan SetScheduleFenceRetryDelay { get; set; } = TimeSpan.FromSeconds(30);
+
+    /// <summary>
     /// How a positively refuted cross-cluster backup sink is enforced at silo
     /// start. A coordinated restore of a replicated tree requires every cluster
     /// to read the <b>same</b> backup store, and that is a deployment fact no

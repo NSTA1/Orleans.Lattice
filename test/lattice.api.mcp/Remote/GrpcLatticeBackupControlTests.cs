@@ -1,3 +1,4 @@
+using Grpc.Core;
 using Orleans.Lattice.Api.Backup;
 using Orleans.Lattice.Api.Backup.Grpc;
 using Orleans.Lattice.Backup;
@@ -251,4 +252,97 @@ public sealed class GrpcLatticeBackupControlTests
             () => Adapter(new FakeCallInvoker(_ => throw new InvalidOperationException())).GetInventoryAsync(),
             Throws.TypeOf<NotSupportedException>());
 
+    private static BackupSetScheduleStatus SetScheduleStatus(string name = "nightly")
+    {
+        var request = LatticeBackupSetScheduleRequest.ForTrees(name, new[] { Scope }, TimeSpan.FromHours(1), 2, null);
+        return new BackupSetScheduleStatus(
+            name, request, request.Scopes, true, null, false, DateTimeOffset.UnixEpoch, null, null,
+            BackupScopeRunOutcome.None, null, 0, Array.Empty<BackupSetScheduleRun>(), Array.Empty<ScheduledBackupSet>());
+    }
+
+    [Test]
+    public async Task ScheduleBackupSetAsync_forwards_the_request_and_returns_the_status()
+    {
+        var status = SetScheduleStatus();
+        var invoker = new FakeCallInvoker(_ => new BackupSetScheduleStatusResponse { Found = true, Status = status });
+
+        var result = await Adapter(invoker).ScheduleBackupSetAsync(status.Request);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result, Is.SameAs(status));
+            Assert.That(((BackupSetScheduleRequestMessage)invoker.LastRequest!).Request, Is.SameAs(status.Request));
+        });
+    }
+
+    [Test]
+    public async Task CancelBackupSetScheduleAsync_forwards_the_name_and_unwraps_the_result()
+    {
+        var invoker = new FakeCallInvoker(_ => new BackupSetScheduleActionResponse { Result = true });
+
+        var result = await Adapter(invoker).CancelBackupSetScheduleAsync("nightly");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result, Is.True);
+            Assert.That(((BackupSetScheduleNameRequestMessage)invoker.LastRequest!).Name, Is.EqualTo("nightly"));
+        });
+    }
+
+    [Test]
+    public async Task RemoveBackupSetScheduleAsync_forwards_the_flag()
+    {
+        var invoker = new FakeCallInvoker(_ => new BackupSetScheduleActionResponse { Result = true });
+
+        var result = await Adapter(invoker).RemoveBackupSetScheduleAsync("nightly", deleteRetainedSets: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result, Is.True);
+            Assert.That(((BackupSetScheduleRemoveRequestMessage)invoker.LastRequest!).DeleteRetainedSets, Is.True);
+        });
+    }
+
+    [Test]
+    public async Task GetBackupSetScheduleStatusAsync_found_and_not_found()
+    {
+        var status = SetScheduleStatus();
+        var found = await Adapter(new FakeCallInvoker(_ => new BackupSetScheduleStatusResponse { Found = true, Status = status }))
+            .GetBackupSetScheduleStatusAsync("nightly");
+        var missing = await Adapter(new FakeCallInvoker(_ => new BackupSetScheduleStatusResponse { Found = false }))
+            .GetBackupSetScheduleStatusAsync("absent");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(found, Is.SameAs(status));
+            Assert.That(missing, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task ListBackupSetSchedulesAsync_returns_every_status()
+    {
+        var statuses = new[] { SetScheduleStatus("a"), SetScheduleStatus("b") };
+
+        var result = await Adapter(new FakeCallInvoker(_ => new BackupSetScheduleListResponse { Schedules = statuses }))
+            .ListBackupSetSchedulesAsync();
+
+        Assert.That(result, Is.EqualTo(statuses));
+    }
+
+    [Test]
+    public async Task RunBackupSetScheduleNowAsync_unwraps_the_result()
+    {
+        var result = await Adapter(new FakeCallInvoker(_ => new BackupSetScheduleActionResponse { Result = false }))
+            .RunBackupSetScheduleNowAsync("nightly");
+
+        Assert.That(result, Is.False);
+    }
+
+    [Test]
+    public void RunBackupSetScheduleNowAsync_surfaces_an_unknown_schedule_as_key_not_found()
+        => Assert.That(
+            async () => await Adapter(new FakeCallInvoker(_ => new RpcException(new Status(StatusCode.NotFound, "none"))))
+                .RunBackupSetScheduleNowAsync("absent"),
+            Throws.TypeOf<KeyNotFoundException>());
 }

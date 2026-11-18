@@ -1,0 +1,279 @@
+@*
+    The Schedules page's backup-set section (#6067): the tenant's named backup-set
+    schedules - each capturing one backup set of several trees, cross-tree
+    consistent by default, at a fixed interval and pruned by its own retention -
+    with registering, changing, running, pausing, resuming and removing them.
+    Withdrawn entirely when the connection does not serve backup-set schedules.
+*@
+
+@if (_served)
+{
+    <section class="lt-backups-section" aria-labelledby="lt-backups-sets-title">
+        <h2 id="lt-backups-sets-title" class="lt-backups-section__title">Backup-set schedules</h2>
+        <p class="lt-backups-note">A backup-set schedule captures one backup set of several trees at a fixed interval, and keeps the sets its retention allows.</p>
+
+        @if (_actionMessage is { } actionMessage)
+        {
+            <p class="lt-backups-status" role="status">@actionMessage</p>
+        }
+        @if (_actionError is { } actionError)
+        {
+            <p class="lt-backups-error" role="alert">@actionError</p>
+        }
+
+        @if (_listError is { } listError)
+        {
+            <p class="lt-backups-error" role="alert">@listError</p>
+        }
+        else if (_schedules is null)
+        {
+            <LtSkeleton Lines="2" Label="Loading the backup-set schedules" />
+        }
+        else if (_schedules.Count == 0)
+        {
+            <p class="lt-backups-note" data-lt-backup-sets="empty">No backup-set schedule is registered.</p>
+        }
+        else
+        {
+            <LtTable TItem="BackupSetScheduleStatus"
+                     Items="@_schedules"
+                     Caption="The backup-set schedules"
+                     CaptionHidden="true"
+                     RowKey="row => row.Name"
+                     IsCurrent="row => row.Name == _selected">
+                <ChildContent>
+                    <LtColumn TItem="BackupSetScheduleStatus" Title="Name" RowHeader="true" Mono="true" Value="row => row.Name" />
+                    <LtColumn TItem="BackupSetScheduleStatus" Title="Trees" Value="row => BackupSetSchedulesText.Membership(row)" />
+                    <LtColumn TItem="BackupSetScheduleStatus" Title="Every" Value="row => BackupsFormat.Interval(row.Request.Interval)" />
+                    <LtColumn TItem="BackupSetScheduleStatus" Title="Retention" Value="row => BackupSetSchedulesText.Retention(row.Request)" />
+                    <LtColumn TItem="BackupSetScheduleStatus" Title="State">
+                        <LtStatusPill State="@(context.IsScheduled ? LtStateRole.Enabled : LtStateRole.Disabled)" Text="@(context.IsScheduled ? "Scheduled" : "Paused")" />
+                        @if (context.IsRunning)
+                        {
+                            <LtStatusPill State="LtStateRole.Healthy" Text="Running" />
+                        }
+                    </LtColumn>
+                    <LtColumn TItem="BackupSetScheduleStatus" Title="Next run" Mono="true" Value="row => BackupSetSchedulesText.NextRun(row)" />
+                    <LtColumn TItem="BackupSetScheduleStatus" Title="Last run" Value="row => BackupSetSchedulesText.LastRun(row)" />
+                    <LtColumn TItem="BackupSetScheduleStatus" Title="Failures in a row" Value="row => row.ConsecutiveFailures" />
+                    <LtColumn TItem="BackupSetScheduleStatus" Title="Actions">
+                        <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => Select(context.Name)" aria-label="@("Details, " + context.Name)">Details</LtButton>
+                    </LtColumn>
+                </ChildContent>
+                <CompactRow>
+                    <LtCompactRow>
+                        <Primary>@context.Name</Primary>
+                        <Secondary>Every @BackupsFormat.Interval(context.Request.Interval) - @BackupSetSchedulesText.Membership(context)</Secondary>
+                        <State><LtStatusPill State="@(context.IsScheduled ? LtStateRole.Enabled : LtStateRole.Disabled)" Text="@(context.IsScheduled ? "Scheduled" : "Paused")" /></State>
+                    </LtCompactRow>
+                </CompactRow>
+                <DetailActions>
+                    <LtButton OnClick="() => Select(context.Name)">Details</LtButton>
+                </DetailActions>
+            </LtTable>
+        }
+
+        <div class="lt-backups-actions">
+            @if (!_formOpen)
+            {
+                <LtButton Disabled="@_busy" OnClick="OpenNewForm">New backup-set schedule</LtButton>
+            }
+            <LtButton Variant="LtButtonVariant.Quiet" Disabled="@_busy" OnClick="RefreshAsync">Refresh</LtButton>
+        </div>
+
+        @if (Selected is { } selected)
+        {
+            <section class="lt-backups-section" aria-labelledby="lt-backups-set-detail-title" data-lt-backup-set="@selected.Name">
+                <h3 id="lt-backups-set-detail-title" class="lt-backups-section__title">Schedule <span class="lt-backups-mono">@selected.Name</span></h3>
+                <LtDefinitionList>
+                    <LtDefinition Term="Trees">@BackupSetSchedulesText.Membership(selected)</LtDefinition>
+                    <LtDefinition Term="Trees captured now">
+                        @if (selected.MemberScopes.Count == 0)
+                        {
+                            <span>None</span>
+                        }
+                        else
+                        {
+                            @for (var index = 0; index < selected.MemberScopes.Count; index++)
+                            {
+                                var scope = selected.MemberScopes[index];
+                                @if (index > 0)
+                                {
+                                    <span>, </span>
+                                }
+                                <BackupTreeLabel TreeId="@scope.TreeId" />
+                            }
+                        }
+                    </LtDefinition>
+                    @if (selected.Request.ExcludedTreePrefixes.Count > 0)
+                    {
+                        <LtDefinition Term="Excluded prefixes" Mono="true">@string.Join(", ", selected.Request.ExcludedTreePrefixes)</LtDefinition>
+                    }
+                    <LtDefinition Term="Cross-tree consistent">@(selected.Request.CrossTreeConsistent ? "Yes" : "No")</LtDefinition>
+                    <LtDefinition Term="Every">@BackupsFormat.Interval(selected.Request.Interval)</LtDefinition>
+                    <LtDefinition Term="Retention">@BackupSetSchedulesText.Retention(selected.Request)</LtDefinition>
+                    <LtDefinition Term="State">@(selected.IsScheduled ? "Scheduled" : "Paused")@(selected.IsRunning ? ", running now" : string.Empty)</LtDefinition>
+                    <LtDefinition Term="Next run" Mono="true">@BackupSetSchedulesText.NextRun(selected)</LtDefinition>
+                    <LtDefinition Term="Registered" Mono="true">@BackupsFormat.Time(selected.RegisteredAtUtc)</LtDefinition>
+                    <LtDefinition Term="Last run" Mono="true">@BackupsFormat.Time(selected.LastRunUtc, "Never")</LtDefinition>
+                    <LtDefinition Term="Last success" Mono="true">@BackupsFormat.Time(selected.LastSuccessUtc, "Never")</LtDefinition>
+                    <LtDefinition Term="Last outcome">@BackupsFormat.Outcome(selected.LastOutcome)</LtDefinition>
+                    @if (!string.IsNullOrEmpty(selected.LastFailureReason))
+                    {
+                        <LtDefinition Term="Last failure">@selected.LastFailureReason</LtDefinition>
+                    }
+                    <LtDefinition Term="Failures in a row">@selected.ConsecutiveFailures</LtDefinition>
+                </LtDefinitionList>
+
+                <div class="lt-backups-actions">
+                    <LtButton Disabled="@_busy" OnClick="() => RunNowAsync(selected.Name)">Run now</LtButton>
+                    @if (selected.IsScheduled)
+                    {
+                        <LtButton Disabled="@_busy" OnClick="() => AskPause(selected.Name)">Pause</LtButton>
+                    }
+                    else
+                    {
+                        <LtButton Disabled="@_busy" OnClick="() => ResumeAsync(selected)">Resume</LtButton>
+                    }
+                    <LtButton Variant="LtButtonVariant.Quiet" Disabled="@_busy" OnClick="() => OpenEditForm(selected)">Change</LtButton>
+                    <LtButton Variant="LtButtonVariant.Destructive" Disabled="@_busy" OnClick="() => AskRemove(selected.Name)">Remove...</LtButton>
+                </div>
+
+                <h4 class="lt-backups-section__title">Recent runs</h4>
+                @if (selected.RecentRuns.Count == 0)
+                {
+                    <p class="lt-backups-note">No run yet.</p>
+                }
+                else
+                {
+                    <LtTable TItem="BackupSetScheduleRun"
+                             Items="@BackupSetSchedulesText.NewestFirst(selected.RecentRuns)"
+                             Caption="Recent runs, newest first"
+                             CaptionHidden="true">
+                        <ChildContent>
+                            <LtColumn TItem="BackupSetScheduleRun" Title="Started" RowHeader="true" Mono="true" Value="run => BackupsFormat.Time(run.StartedAtUtc)" />
+                            <LtColumn TItem="BackupSetScheduleRun" Title="Finished" Mono="true" Value="run => BackupsFormat.Time(run.FinishedAtUtc)" />
+                            <LtColumn TItem="BackupSetScheduleRun" Title="Trigger" Value="run => BackupSetSchedulesText.Trigger(run.Trigger)" />
+                            <LtColumn TItem="BackupSetScheduleRun" Title="Outcome" Value="run => BackupsFormat.Outcome(run.Outcome)" />
+                            <LtColumn TItem="BackupSetScheduleRun" Title="Set" Mono="true" Value="run => run.SetId ?? string.Empty" />
+                            <LtColumn TItem="BackupSetScheduleRun" Title="Trees" Value="run => run.MemberCount" />
+                            <LtColumn TItem="BackupSetScheduleRun" Title="Attempts" Value="run => run.Attempts" />
+                            <LtColumn TItem="BackupSetScheduleRun" Title="Failure" Value="run => run.FailureReason ?? string.Empty" />
+                        </ChildContent>
+                    </LtTable>
+                }
+
+                <h4 class="lt-backups-section__title">Retained sets</h4>
+                @if (selected.RetainedSets.Count == 0)
+                {
+                    <p class="lt-backups-note">No set is retained yet.</p>
+                }
+                else
+                {
+                    <p class="lt-backups-note">Each member is an ordinary backup: open it to restore that tree.</p>
+                    <LtTable TItem="ScheduledBackupSet"
+                             Items="@selected.RetainedSets"
+                             Caption="Retained sets"
+                             CaptionHidden="true"
+                             RowKey="set => set.SetId">
+                        <ChildContent>
+                            <LtColumn TItem="ScheduledBackupSet" Title="Set" RowHeader="true">
+                                <LtMonoCell Value="@context.SetId" CopyLabel="Copy set id" />
+                            </LtColumn>
+                            <LtColumn TItem="ScheduledBackupSet" Title="Name" Value="set => set.Name" />
+                            <LtColumn TItem="ScheduledBackupSet" Title="Created" Mono="true" Value="set => BackupsFormat.Time(set.CreatedAtUtc)" />
+                            <LtColumn TItem="ScheduledBackupSet" Title="Last captured" Mono="true" Value="set => BackupsFormat.Time(set.LastCapturedAtUtc)" />
+                            <LtColumn TItem="ScheduledBackupSet" Title="Members">
+                                <ul class="lt-backups-trees" aria-label="@("Members of " + context.SetId)">
+                                    @foreach (var member in context.Members)
+                                    {
+                                        <li class="lt-backups-trees__item" @key="member.TreeId">
+                                            <BackupTreeLabel TreeId="@member.TreeId" />
+                                            <a class="lt-backups-link lt-backups-mono" href="@Href(BackupsAddresses.Backup(member.BackupId))">@BackupsFormat.ShortId(member.BackupId)</a>
+                                        </li>
+                                    }
+                                </ul>
+                            </LtColumn>
+                        </ChildContent>
+                    </LtTable>
+                }
+            </section>
+        }
+
+        @if (_formOpen)
+        {
+            <section class="lt-backups-section" aria-labelledby="lt-backups-set-form-title">
+                <h3 id="lt-backups-set-form-title" class="lt-backups-section__title">@(_editing ? "Change a backup-set schedule" : "New backup-set schedule")</h3>
+                <form class="lt-backups-form" data-lt-backup-set-form="true" @onsubmit="SaveAsync">
+                    <LtTextInput Label="Name" Mono="true" ReadOnly="@_editing" Value="@_name" ValueChanged="value => _name = value" Hint="Letters, digits, '-', '_' and '.'. Saving under an existing name changes that schedule." Error="@_nameError" />
+                    <LtSelect Label="Trees" Options="@MembershipOptions" Value="@_membership" ValueChanged="value => _membership = value" />
+                    @if (_membership == NamedTrees)
+                    {
+                        <fieldset class="lt-backups-fieldset">
+                            <legend class="lt-backups-section__title">Trees in the set</legend>
+                            @if (_trees.Count == 0)
+                            {
+                                <p class="lt-backups-note">No tree added yet.</p>
+                            }
+                            else
+                            {
+                                <ul class="lt-backups-trees" aria-label="Trees in the set">
+                                    @foreach (var tree in _trees)
+                                    {
+                                        <li class="lt-backups-trees__item" @key="tree">
+                                            <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => RemoveTree(tree)" aria-label="@("Remove " + tree)">Remove</LtButton>
+                                            <BackupTreeLabel TreeId="@tree" />
+                                        </li>
+                                    }
+                                </ul>
+                            }
+                            <div class="lt-backups-form__row">
+                                <LtComboBox @ref="_addBox" Label="Tree to add" Value="@_tree" ValueChanged="value => _tree = value" OnCommit="_ => AddTreeAsync()" Source="@Suggestions.Trees" Noun="tree" Placeholder="a/crm/orders" Error="@_treeError" />
+                                <div class="lt-backups-actions">
+                                    <LtButton OnClick="AddTreeAsync">Add tree</LtButton>
+                                </div>
+                            </div>
+                        </fieldset>
+                    }
+                    else
+                    {
+                        <LtCheckbox Label="Include trees created later" Checked="@_includeNewTrees" CheckedChanged="value => _includeNewTrees = value" Hint="Off pins the set to the trees that exist when the schedule is saved. On needs the backup grant over the whole tenant." />
+                        <LtTextInput Label="Leave out trees starting with" Mono="true" Value="@_excluded" ValueChanged="value => _excluded = value" Hint="Optional. Separate prefixes with commas." />
+                    }
+                    <LtDurationInput @ref="_intervalField" Label="Every" Value="@_interval" ValueChanged="value => _interval = value" Min="@BackupsFormat.ShortestInterval" />
+                    <LtTextInput Label="Keep the last" Value="@_keepLast" ValueChanged="value => _keepLast = value" Hint="Optional. How many sets to keep; the newest set is always kept." Error="@_keepLastError" />
+                    <LtDurationInput @ref="_maxAgeField" Label="Keep sets younger than" Units="LtDurationUnits.Days | LtDurationUnits.Hours" Optional="true" Value="@_maxAge" ValueChanged="value => _maxAge = value" Hint="Optional. Give a count, an age, or both." Error="@_retentionError" />
+                    <LtCheckbox Label="Capture every tree at one consistency fence" Checked="@_crossTree" CheckedChanged="value => _crossTree = value" Hint="A write that spans trees is then never torn across the set." />
+                    @if (_formError is { } formError)
+                    {
+                        <p class="lt-backups-error" role="alert">@formError</p>
+                    }
+                    <div class="lt-backups-actions">
+                        <LtButton Type="LtButtonType.Submit" Disabled="@_busy">Save schedule</LtButton>
+                        <LtButton Variant="LtButtonVariant.Quiet" Disabled="@_busy" OnClick="CloseForm">Discard</LtButton>
+                    </div>
+                </form>
+            </section>
+        }
+    </section>
+
+    <LtDialog @bind-Open="_confirmPause" Title="Pause this backup-set schedule?" Alert="true">
+        <ChildContent>
+            <p>No further run of <span class="lt-backups-mono">@_pending</span> starts until it is resumed. Its retained sets are kept and stay restorable.</p>
+        </ChildContent>
+        <Actions>
+            <LtButton Variant="LtButtonVariant.Quiet" OnClick="() => _confirmPause = false">Keep it running</LtButton>
+            <LtButton Variant="LtButtonVariant.Destructive" OnClick="PauseAsync">Pause schedule</LtButton>
+        </Actions>
+    </LtDialog>
+
+    <LtConfirmDestructive @bind-Open="_confirmRemove"
+                          Title="Remove this backup-set schedule?"
+                          ObjectKind="schedule"
+                          ObjectName="@(_pending ?? string.Empty)"
+                          ConfirmText="Remove"
+                          OnConfirm="RemoveAsync">
+        <p>The schedule stops and is forgotten, and its sets are no longer held from per-tree retention. Without the option below, the sets' backups stay in the catalogue as ordinary backups.</p>
+        <LtCheckbox Label="Also delete the retained sets' backups" Checked="@_deleteRetainedSets" CheckedChanged="value => _deleteRetainedSets = value" Hint="Backups another schedule holds, or another capture has since taken over, are kept. This cannot be undone." />
+    </LtConfirmDestructive>
+}

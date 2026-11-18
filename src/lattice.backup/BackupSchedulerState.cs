@@ -59,4 +59,15 @@ internal sealed class BackupSchedulerState
     /// </summary>
     [Id(7)]
     public TimeSpan? RuntimeIncrementalBackupInterval { get; set; }
+
+    /// <summary>
+    /// The backups of this scope that a backup-set schedule's retained sets
+    /// hold, keyed by the schedule's grain key (issue #6067). A held backup is
+    /// never doomed by this scope's retention, so a member of a retained
+    /// scheduled set stays restorable for as long as the set is retained. Each
+    /// schedule replaces its own entry after every retention pass of its own, and
+    /// removes it when the schedule is removed.
+    /// </summary>
+    [Id(8)]
+    public Dictionary<string, List<string>> SetScheduleHolds { get; set; } = new(StringComparer.Ordinal);
 }

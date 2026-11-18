@@ -127,4 +127,72 @@ public sealed class BackupToolMappingsTests
             () => BackupToolMappings.ToScope("orders", kind, keyOrPrefix: null),
             Throws.ArgumentException,
             "Enum.TryParse folds a comma-combined name as a bitwise OR onto a defined member; a round-trip name check must reject it.");
+
+    [TestCase(null, BackupSetMembershipMode.Explicit)]
+    [TestCase("", BackupSetMembershipMode.Explicit)]
+    [TestCase("explicit", BackupSetMembershipMode.Explicit)]
+    [TestCase("AllTrees", BackupSetMembershipMode.AllTrees)]
+    public void ToMembership_parses_a_defined_name_case_insensitively(string? membership, BackupSetMembershipMode expected)
+        => Assert.That(BackupToolMappings.ToMembership(membership), Is.EqualTo(expected));
+
+    [TestCase("1")]
+    [TestCase("Explicit,AllTrees")]
+    [TestCase("all-trees")]
+    public void ToMembership_rejects_an_ordinal_combined_or_unknown_name(string membership)
+        => Assert.That(() => BackupToolMappings.ToMembership(membership), Throws.ArgumentException);
+
+    [Test]
+    public void ToMcp_projects_a_backup_set_schedule_with_its_runs_and_retained_sets()
+    {
+        var orders = BackupScopeSelector.WholeTree("orders");
+        var request = LatticeBackupSetScheduleRequest.ForTrees(
+            "nightly", new[] { orders }, TimeSpan.FromMinutes(30), retentionKeepLast: 2, retentionMaxAge: TimeSpan.FromHours(6));
+        var status = new BackupSetScheduleStatus(
+            "nightly",
+            request,
+            new[] { orders },
+            isScheduled: true,
+            nextRunUtc: DateTimeOffset.UnixEpoch.AddHours(1),
+            isRunning: true,
+            registeredAtUtc: DateTimeOffset.UnixEpoch,
+            lastRunUtc: DateTimeOffset.UnixEpoch.AddMinutes(30),
+            lastSuccessUtc: null,
+            BackupScopeRunOutcome.Failure,
+            lastFailureReason: "sink down",
+            consecutiveFailures: 2,
+            new[]
+            {
+                new BackupSetScheduleRun(
+                    DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch.AddSeconds(5), BackupSetScheduleTrigger.Manual,
+                    BackupScopeRunOutcome.Success, "set-1", memberCount: 1, attempts: 1, failureReason: null),
+            },
+            new[]
+            {
+                new ScheduledBackupSet(
+                    "set-1", "nightly", DateTimeOffset.UnixEpoch, DateTimeOffset.UnixEpoch, crossTreeConsistent: true,
+                    new[] { new ScheduledBackupSetMember(BackupScopeSelector.Prefix("orders", "eu/"), "bk-1") }),
+            });
+
+        var mcp = BackupToolMappings.ToMcp(status);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(mcp.Found, Is.True);
+            Assert.That(mcp.IntervalSeconds, Is.EqualTo(1800));
+            Assert.That(mcp.RetentionKeepLast, Is.EqualTo(2));
+            Assert.That(mcp.RetentionMaxAgeSeconds, Is.EqualTo(21600));
+            Assert.That(mcp.IsRunning, Is.True);
+            Assert.That(mcp.LastOutcome, Is.EqualTo("Failure"));
+            Assert.That(mcp.LastFailureReason, Is.EqualTo("sink down"));
+            Assert.That(mcp.ConsecutiveFailures, Is.EqualTo(2));
+            Assert.That(mcp.RecentRuns.Single().Trigger, Is.EqualTo("Manual"));
+            Assert.That(mcp.RecentRuns.Single().SetId, Is.EqualTo("set-1"));
+            var member = mcp.RetainedSets.Single().Members.Single();
+            Assert.That((member.TreeId, member.ScopeKind, member.KeyOrPrefix, member.BackupId), Is.EqualTo(("orders", "Prefix", "eu/", "bk-1")));
+        });
+    }
+
+    [Test]
+    public void ToMcp_maps_a_missing_backup_set_schedule_to_not_found()
+        => Assert.That(BackupToolMappings.ToMcp((BackupSetScheduleStatus?)null).Found, Is.False);
 }

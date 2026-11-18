@@ -36,7 +36,7 @@ The kinds are the `BackupOperationKinds` constants and every one starts with `ba
 |---|---|---|
 | `backup.capture` | `Capturing`, `Cataloguing` | `Capturing` counts `entries` against the scope's live entry count. |
 | `backup.incremental-capture` | `Capturing`, `Cataloguing` | None: a forward WAL drain has no total, so none is invented. |
-| `backup.set-capture` | `CapturingMembers` | `members`, one per scope. |
+| `backup.set-capture` | `CapturingMembers`, `WritingMembers` | `members`, one per scope. A cross-tree-consistent set reports `CapturingMembers` while it pins each member's snapshot under its decision gate and `WritingMembers` while it writes them after the gate is released; any other set captures and writes each member in `CapturingMembers`. |
 | `backup.restore` | `Validating`, `Applying`, `Replaying` | `manifests` validated; `entries` streamed from the chain against the chain's entry count; `shards` bulk-loaded. A restore into a tree that already holds data merges and skips `Replaying`. |
 | `backup.cold-restore` | `Bootstrapping`, `Validating`, `Applying`, `Replaying`, `Cataloguing` | As a restore. |
 | `backup.health-check` | `Verifying` | `artifacts` checked against the backup's distinct artifact count, present (re-hashed) or missing. A backup whose manifest is gone from the sink reports no units. |

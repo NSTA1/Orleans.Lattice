@@ -12,9 +12,10 @@ namespace Orleans.Lattice.Api.Mcp;
 /// <see cref="LatticeApiMcpGroup.Backup"/> whose tools are thin adapters over the
 /// <see cref="ILatticeBackupControl"/> and <see cref="ILatticeBackupOperations"/>
 /// facades. The read-only inspect tools (list, describe, inventory, scope status,
-/// artifact export, operation status and operation list) are always contributed;
-/// the mutating control tools (the accept-then-poll start tools, operation cancel,
-/// revert, and delete) are contributed only when backup control is opted in
+/// artifact export, operation status, operation list, and backup-set schedule
+/// get and list) are always contributed; the mutating control tools (the
+/// accept-then-poll start tools, operation cancel, revert, delete, and the
+/// backup-set schedule set, cancel, remove and run-now tools) are contributed only when backup control is opted in
 /// via <see cref="LatticeApiMcpOptions.EnableBackupControlTools"/> or
 /// <c>AddBackupTools(enableControl: true)</c>. Every control tool is annotated
 /// destructive and non-read-only.
@@ -60,7 +61,7 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
 
     private static IReadOnlyList<McpServerTool> BuildTools(bool enableControl)
     {
-        var tools = new List<McpServerTool>(enableControl ? 20 : 7)
+        var tools = new List<McpServerTool>(enableControl ? 23 : 9)
         {
             CreateListTool(),
             CreateDescribeTool(),
@@ -69,6 +70,8 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
             CreateExportArtifactTool(),
             CreateOperationStatusTool(),
             CreateOperationListTool(),
+            CreateSetScheduleGetTool(),
+            CreateSetScheduleListTool(),
         };
 
         if (enableControl)
@@ -94,11 +97,174 @@ internal sealed class BackupToolGroup : ILatticeApiMcpToolGroup
             tools.Add(CreateOperationCancelTool());
             tools.Add(CreateRevertRestoreTool());
             tools.Add(CreateDeleteTool());
-
+            tools.Add(CreateSetScheduleSetTool());
+            tools.Add(CreateSetScheduleCancelTool());
+            tools.Add(CreateSetScheduleRemoveTool());
+            tools.Add(CreateSetScheduleRunNowTool());
         }
 
         return tools;
     }
+
+    private static McpServerTool CreateSetScheduleGetTool()
+        => McpServerTool.Create(
+            (
+                RequestContext<CallToolRequestParams> context,
+                [Description("The backup-set schedule's name.")] string name,
+                CancellationToken cancellationToken) =>
+            {
+                using var scope = McpToolCredentialScope.Stamp(context.Services!);
+                var control = context.Services!.GetRequiredService<ILatticeBackupControl>();
+                return BackupToolInvocations.GetBackupSetScheduleStatusAsync(control, name, cancellationToken);
+            },
+            new McpServerToolCreateOptions
+            {
+                Name = "lattice_backup_set_schedule_get",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
+                Title = "Backup-set schedule status",
+                Description =
+                    "Reads one backup-set schedule: its membership, cadence and retention, its member trees, whether it "
+                    + "is scheduled and when it next runs, its recent runs, and the sets it retains (pass a set id to a "
+                    + "set restore). Reports found=false when no schedule has the name. Read-only.",
+                ReadOnly = true,
+                Destructive = false,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool CreateSetScheduleListTool()
+        => McpServerTool.Create(
+            (RequestContext<CallToolRequestParams> context, CancellationToken cancellationToken) =>
+            {
+                using var scope = McpToolCredentialScope.Stamp(context.Services!);
+                var control = context.Services!.GetRequiredService<ILatticeBackupControl>();
+                return BackupToolInvocations.ListBackupSetSchedulesAsync(control, cancellationToken);
+            },
+            new McpServerToolCreateOptions
+            {
+                Name = "lattice_backup_set_schedule_list",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
+                Title = "List backup-set schedules",
+                Description =
+                    "Lists the backup-set schedules of the caller's tenant that the caller may read, in name order, each "
+                    + "with the same status lattice_backup_set_schedule_get returns. Read-only.",
+                ReadOnly = true,
+                Destructive = false,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool CreateSetScheduleSetTool()
+        => McpServerTool.Create(
+            (
+                RequestContext<CallToolRequestParams> context,
+                [Description("The schedule's tenant-local name (1-128 of A-Z, a-z, 0-9, '-', '_', '.'). Re-using a name updates that schedule.")] string name,
+                [Description("The cadence between runs, in seconds. Must be strictly positive.")] long intervalSeconds,
+                CancellationToken cancellationToken,
+                [Description("How the schedule chooses its trees: Explicit (default) captures treeIds; AllTrees captures every tree of the caller's tenant.")] string? membership = null,
+                [Description("The tree ids an Explicit schedule captures, one whole-tree member each. Must be empty for AllTrees.")] IReadOnlyList<string>? treeIds = null,
+                [Description("Keep at most this many sets (>= 1). At least one of retentionKeepLast and retentionMaxAgeSeconds is required; the newest set is always kept.")] int? retentionKeepLast = null,
+                [Description("Drop sets older than this many seconds (> 0). At least one of retentionKeepLast and retentionMaxAgeSeconds is required.")] long? retentionMaxAgeSeconds = null,
+                [Description("When true (default), capture every member at one causal fence so a cross-tree atomic write is never torn across the set.")] bool crossTreeConsistent = true,
+                [Description("AllTrees only: when true (default), also capture trees created later; this needs the backup grant over the whole tenant (or cluster).")] bool includeNewTrees = true,
+                [Description("AllTrees only: tree-id prefixes to exclude.")] IReadOnlyList<string>? excludedTreePrefixes = null) =>
+            {
+                using var scope = McpToolCredentialScope.Stamp(context.Services!);
+                var control = context.Services!.GetRequiredService<ILatticeBackupControl>();
+                return BackupToolInvocations.ScheduleBackupSetAsync(
+                    control, name, intervalSeconds, membership, treeIds, retentionKeepLast, retentionMaxAgeSeconds,
+                    crossTreeConsistent, includeNewTrees, excludedTreePrefixes, cancellationToken);
+            },
+            new McpServerToolCreateOptions
+            {
+                Name = "lattice_backup_set_schedule_set",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
+                Title = "Set backup-set schedule",
+                Description =
+                    "Registers or updates a named, recurring backup-set schedule and returns its status: every interval "
+                    + "one backup set is captured over the schedule's trees and the schedule's own retention prunes whole "
+                    + "sets. Re-registering with an unchanged interval keeps the timing of the next run. Mutating: the "
+                    + "caller must hold the backup grant over every tree the set captures. Requires backup control to be "
+                    + "enabled on the server.",
+                ReadOnly = false,
+                Destructive = true,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool CreateSetScheduleCancelTool()
+        => McpServerTool.Create(
+            (
+                RequestContext<CallToolRequestParams> context,
+                [Description("The backup-set schedule's name.")] string name,
+                CancellationToken cancellationToken) =>
+            {
+                using var scope = McpToolCredentialScope.Stamp(context.Services!);
+                var control = context.Services!.GetRequiredService<ILatticeBackupControl>();
+                return BackupToolInvocations.CancelBackupSetScheduleAsync(control, name, cancellationToken);
+            },
+            new McpServerToolCreateOptions
+            {
+                Name = "lattice_backup_set_schedule_cancel",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
+                Title = "Pause backup-set schedule",
+                Description =
+                    "Pauses a backup-set schedule: no further run starts until it is set again, while its retained sets "
+                    + "stay restorable. Reports found=false when no schedule has the name. Idempotent. Mutating. Requires "
+                    + "backup control to be enabled on the server.",
+                ReadOnly = false,
+                Destructive = true,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool CreateSetScheduleRemoveTool()
+        => McpServerTool.Create(
+            (
+                RequestContext<CallToolRequestParams> context,
+                [Description("The backup-set schedule's name.")] string name,
+                CancellationToken cancellationToken,
+                [Description("When true, also delete the backups of the schedule's retained sets that no other schedule holds; when false (the default), they stay catalogued as ordinary backups.")] bool deleteRetainedSets = false) =>
+            {
+                using var scope = McpToolCredentialScope.Stamp(context.Services!);
+                var control = context.Services!.GetRequiredService<ILatticeBackupControl>();
+                return BackupToolInvocations.RemoveBackupSetScheduleAsync(control, name, deleteRetainedSets, cancellationToken);
+            },
+            new McpServerToolCreateOptions
+            {
+                Name = "lattice_backup_set_schedule_remove",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
+                Title = "Remove backup-set schedule",
+                Description =
+                    "Removes a backup-set schedule: stops it, lifts its retention holds and forgets it, deleting the "
+                    + "backups of its retained sets when deleteRetainedSets is true. Reports found=false when no schedule "
+                    + "has the name. Destructive. Requires backup control to be enabled on the server.",
+                ReadOnly = false,
+                Destructive = true,
+                UseStructuredContent = true,
+            });
+
+    private static McpServerTool CreateSetScheduleRunNowTool()
+        => McpServerTool.Create(
+            (
+                RequestContext<CallToolRequestParams> context,
+                [Description("The backup-set schedule's name.")] string name,
+                CancellationToken cancellationToken) =>
+            {
+                using var scope = McpToolCredentialScope.Stamp(context.Services!);
+                var control = context.Services!.GetRequiredService<ILatticeBackupControl>();
+                return BackupToolInvocations.RunBackupSetScheduleNowAsync(control, name, cancellationToken);
+            },
+            new McpServerToolCreateOptions
+            {
+                Name = "lattice_backup_set_schedule_run_now",
+                SerializerOptions = LatticeApiMcpToolSerialization.Options,
+                Title = "Run backup-set schedule now",
+                Description =
+                    "Starts one run of a backup-set schedule now without waiting for it; follow it with "
+                    + "lattice_backup_set_schedule_get. Reports applied=false when a run is already in flight and "
+                    + "found=false when no schedule has the name. Mutating. Requires backup control to be enabled on "
+                    + "the server.",
+                ReadOnly = false,
+                Destructive = true,
+                UseStructuredContent = true,
+            });
 
     private static McpServerTool CreateListTool()
         => McpServerTool.Create(

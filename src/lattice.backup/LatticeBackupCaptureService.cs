@@ -579,183 +579,205 @@ internal sealed class LatticeBackupCaptureService(
                     .ConfigureAwait(false);
             }
 
-            List<LatticeBackupCaptureResult>? members = null;
+            // The members' pinned snapshots. Owned by this attempt until the drain
+            // takes each one; whatever is left when the attempt ends - discarded,
+            // faulted or cancelled - is closed below.
+            var pins = new List<PinnedTree>(scopes.Count);
+            var pinnedAll = false;
             long fenceHlc = 0;
             var stable = false;
             var recheckClean = false;
             var valid = false;
             try
             {
-                bool renewed;
-                using (var renewStop = new CancellationTokenSource())
+                try
                 {
-                    var renewal = RenewSetGateAsync(grainFactory, registries, highWaters, gateToken, renewStop.Token);
-                    try
+                    bool renewed;
+                    using (var renewStop = new CancellationTokenSource())
                     {
-                        // Step 1: drain in-flight cross-tree sagas touching the set
-                        // and capture the per-tree registration epoch at the drained
-                        // moment. The drain runs OUTSIDE the decision gate: a
-                        // cross-tree sub-saga drains only by recording its local
-                        // finalize, which the gate would refuse.
-                        var (epochBefore, drained, waited) = await DrainCrossTreeInFlightAsync(
-                            grainFactory, registries, options, cancellationToken).ConfigureAwait(false);
-                        totalDrainWait += waited;
-                        totalDrained += drained;
-
-                        // Step 2: GATE every member. From here no saga decision is
-                        // recorded on any member tree, and each registry key has
-                        // snapshotted its local decisions (D0).
-                        for (var i = 0; i < registries.Length; i++)
+                        var renewal = RenewSetGateAsync(grainFactory, registries, highWaters, gateToken, renewStop.Token);
+                        try
                         {
-                            var covered = await TxRegistryFanOut.AcquireCaptureGateAsync(
-                                grainFactory, registries[i], gateToken, TxRegistryCaptureGateMode.Gate, SnapshotDecisionGateContext.Lease)
-                                .ConfigureAwait(false);
-                            highWaters[i] = Math.Max(highWaters[i], covered);
-                        }
+                            // Step 1: drain in-flight cross-tree sagas touching the set
+                            // and capture the per-tree registration epoch at the drained
+                            // moment. The drain runs OUTSIDE the decision gate: a
+                            // cross-tree sub-saga drains only by recording its local
+                            // finalize, which the gate would refuse.
+                            var (epochBefore, drained, waited) = await DrainCrossTreeInFlightAsync(
+                                grainFactory, registries, options, cancellationToken).ConfigureAwait(false);
+                            totalDrainWait += waited;
+                            totalDrained += drained;
 
-                        // Step 3: re-check under the gate. A cross-tree saga finalized
-                        // on one member before its gate but still delegated on another
-                        // would be post-saga on the first and pre-saga on the second;
-                        // its live delegation row is what refuses the attempt. Under
-                        // the fence no row can register, and under the gate none can
-                        // be cached away, so a clean re-check is stable for the rest
-                        // of the attempt.
-                        recheckClean = true;
-                        for (var i = 0; i < registries.Length; i++)
-                        {
-                            var underGate = await TxRegistryFanOut.ObserveCrossTreeInFlightAsync(
-                                grainFactory, registries[i]).ConfigureAwait(false);
-                            if (!CrossTreeFenceWindow.IsRecheckClean(underGate.InFlightCount, underGate.UnresolvableCount))
-                            {
-                                recheckClean = false;
-                                break;
-                            }
-                        }
-
-                        if (recheckClean)
-                        {
-                            // Step 4: select the fence and capture every tree as of
-                            // it, each member resolving its pending buckets against
-                            // its own D0 under the set's gate.
-                            fenceHlc = DateTimeOffset.UtcNow.UtcTicks;
-                            using (SnapshotDecisionGateContext.With(gateToken))
-                            {
-                                members = await CaptureMembersAsync(request, unregistered, cancellationToken).ConfigureAwait(false);
-                            }
-
-                            // Step 5: re-observe. The window is stable iff no
-                            // cross-tree saga registered on any set tree during the
-                            // capture (epoch unchanged) and nothing is in-flight now.
-                            //
-                            // Both clauses observe a PROXY for cross-tree quiescence,
-                            // not quiescence itself, and the two clauses cover
-                            // different populations:
-                            //
-                            //  * The epoch clause covers exactly the sagas that
-                            //    REGISTERED a cross-tree delegation on this tree during
-                            //    the capture window. It is a monotonic counter compared
-                            //    as a delta across the window, so a saga that
-                            //    registered and finalized entirely inside the window is
-                            //    still caught (the counter does not decrement), but a
-                            //    saga that registered BEFORE the window is not covered
-                            //    by it at all - that population is the drain gate's job
-                            //    (step 1).
-                            //  * The in-flight clause covers the delegation rows live
-                            //    at the instant of the re-observation. It is an absolute
-                            //    count, not a delta, so it is sensitive to a row that is
-                            //    present now for any reason - including a row stranded
-                            //    by a failed persist.
-                            //
-                            // The asymmetry matters: because the epoch is compared as a
-                            // delta and the count absolutely, a spurious epoch bump is
-                            // absorbed into the baseline and would be invisible here,
-                            // whereas a spurious row is not. That is why
-                            // TxRegistryGrain unwinds a failed Mark* persist by
-                            // restoring the delegation rows rather than by bumping the
-                            // epoch.
-                            //
-                            // Under the fence and gate this and the step-3 re-check are
-                            // mutually redundant defence in depth: a row can be live
-                            // here only if a lapsed lease admitted a registration,
-                            // which also moves the epoch (the #4440 backup model fires
-                            // only when both are skipped).
-                            stable = true;
+                            // Step 2: GATE every member. From here no saga decision is
+                            // recorded on any member tree, and each registry key has
+                            // snapshotted its local decisions (D0).
                             for (var i = 0; i < registries.Length; i++)
                             {
-                                var after = await TxRegistryFanOut.ObserveCrossTreeInFlightAsync(
+                                var covered = await TxRegistryFanOut.AcquireCaptureGateAsync(
+                                    grainFactory, registries[i], gateToken, TxRegistryCaptureGateMode.Gate, SnapshotDecisionGateContext.Lease)
+                                    .ConfigureAwait(false);
+                                highWaters[i] = Math.Max(highWaters[i], covered);
+                            }
+
+                            // Step 3: re-check under the gate. A cross-tree saga finalized
+                            // on one member before its gate but still delegated on another
+                            // would be post-saga on the first and pre-saga on the second;
+                            // its live delegation row is what refuses the attempt. Under
+                            // the fence no row can register, and under the gate none can
+                            // be cached away, so a clean re-check is stable for the rest
+                            // of the attempt.
+                            recheckClean = true;
+                            for (var i = 0; i < registries.Length; i++)
+                            {
+                                var underGate = await TxRegistryFanOut.ObserveCrossTreeInFlightAsync(
                                     grainFactory, registries[i]).ConfigureAwait(false);
-                                if (!CrossTreeFenceWindow.IsStable(epochBefore[i], after.RegistrationEpoch, after.InFlightCount))
+                                if (!CrossTreeFenceWindow.IsRecheckClean(underGate.InFlightCount, underGate.UnresolvableCount))
                                 {
-                                    stable = false;
+                                    recheckClean = false;
                                     break;
                                 }
                             }
+
+                            if (recheckClean)
+                            {
+                                // Step 4: select the fence and pin every tree as of it:
+                                // each member's point-in-time snapshot opens under the
+                                // set's gate, resolving its pending buckets against its
+                                // own D0, and freezes its baselines. Nothing is drained
+                                // here - what the backup holds is fixed by the open - so
+                                // the gate, and with it the window in which atomic
+                                // decisions on the set's trees are refused, lasts only as
+                                // long as the opens (issue #6067).
+                                fenceHlc = DateTimeOffset.UtcNow.UtcTicks;
+                                using (SnapshotDecisionGateContext.With(gateToken))
+                                {
+                                    await PinMembersAsync(request, pins, options, cancellationToken).ConfigureAwait(false);
+                                }
+
+                                pinnedAll = true;
+
+                                // Step 5: re-observe. The window is stable iff no
+                                // cross-tree saga registered on any set tree during the
+                                // capture (epoch unchanged) and nothing is in-flight now.
+                                //
+                                // Both clauses observe a PROXY for cross-tree quiescence,
+                                // not quiescence itself, and the two clauses cover
+                                // different populations:
+                                //
+                                //  * The epoch clause covers exactly the sagas that
+                                //    REGISTERED a cross-tree delegation on this tree during
+                                //    the capture window. It is a monotonic counter compared
+                                //    as a delta across the window, so a saga that
+                                //    registered and finalized entirely inside the window is
+                                //    still caught (the counter does not decrement), but a
+                                //    saga that registered BEFORE the window is not covered
+                                //    by it at all - that population is the drain gate's job
+                                //    (step 1).
+                                //  * The in-flight clause covers the delegation rows live
+                                //    at the instant of the re-observation. It is an absolute
+                                //    count, not a delta, so it is sensitive to a row that is
+                                //    present now for any reason - including a row stranded
+                                //    by a failed persist.
+                                //
+                                // The asymmetry matters: because the epoch is compared as a
+                                // delta and the count absolutely, a spurious epoch bump is
+                                // absorbed into the baseline and would be invisible here,
+                                // whereas a spurious row is not. That is why
+                                // TxRegistryGrain unwinds a failed Mark* persist by
+                                // restoring the delegation rows rather than by bumping the
+                                // epoch.
+                                //
+                                // Under the fence and gate this and the step-3 re-check are
+                                // mutually redundant defence in depth: a row can be live
+                                // here only if a lapsed lease admitted a registration,
+                                // which also moves the epoch (the #4440 backup model fires
+                                // only when both are skipped).
+                                stable = true;
+                                for (var i = 0; i < registries.Length; i++)
+                                {
+                                    var after = await TxRegistryFanOut.ObserveCrossTreeInFlightAsync(
+                                        grainFactory, registries[i]).ConfigureAwait(false);
+                                    if (!CrossTreeFenceWindow.IsStable(epochBefore[i], after.RegistrationEpoch, after.InFlightCount))
+                                    {
+                                        stable = false;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        finally
+                        {
+                            renewStop.Cancel();
+                            renewed = await renewal.ConfigureAwait(false);
                         }
                     }
-                    finally
+
+                    // Step 6: release with validation. The cut is accepted only when the
+                    // gate was held without a lapse on every registry key of every member
+                    // for the whole attempt, and no member's registry shard high-water
+                    // moved; otherwise a decision may have crossed the capture.
+                    valid = renewed;
+                }
+                finally
+                {
+                    // Every member's hold is released however the attempt ended, so
+                    // a failed or cancelled capture never leaves sagas waiting on its
+                    // lease.
+                    for (var i = 0; i < registries.Length; i++)
                     {
-                        renewStop.Cancel();
-                        renewed = await renewal.ConfigureAwait(false);
+                        if (!await TxRegistryFanOut.ReleaseCaptureGateAsync(grainFactory, registries[i], highWaters[i], gateToken)
+                                .ConfigureAwait(false))
+                        {
+                            valid = false;
+                        }
                     }
                 }
 
-                // Step 6: release with validation. The cut is accepted only when the
-                // gate was held without a lapse on every registry key of every member
-                // for the whole attempt, and no member's registry shard high-water
-                // moved; otherwise a decision may have crossed the capture.
-                valid = renewed;
+                if (recheckClean && stable && valid && pinnedAll)
+                {
+                    // The gate is released: drain the pinned members one at a time
+                    // while live writes and atomic decisions proceed on every tree.
+                    var members = await WritePinnedMembersAsync(request, pins, unregistered, cancellationToken)
+                        .ConfigureAwait(false);
+
+                    var fence = new BackupSetFence(
+                        fenceHlc, totalDrained, totalDrainWait.TotalMilliseconds, attempt);
+
+                    BackupMetrics.CrossTreeFenceSelections.Add(
+                        1, new KeyValuePair<string, object?>(BackupMetrics.TagTreeCount, scopes.Count),
+                        LatticeTenantLabel.Platform);
+                    if (totalDrained > 0)
+                    {
+                        BackupMetrics.CrossTreeFenceDrainedInFlight.Add(totalDrained, LatticeTenantLabel.Platform);
+                    }
+                    BackupMetrics.CrossTreeFenceDrainWaitMilliseconds.Record(totalDrainWait.TotalMilliseconds, LatticeTenantLabel.Platform);
+
+                    logger.LogInformation(
+                        "Captured cross-tree-consistent backup set '{SetName}' over {TreeCount} trees at fence hlc={FenceHlc} "
+                        + "(attempt {Attempt}, drained {Drained} in-flight sagas over {DrainWaitMs}ms).",
+                        request.Name, scopes.Count, fenceHlc, attempt, totalDrained, totalDrainWait.TotalMilliseconds);
+
+                    var manifest = BuildSetManifest(request.Name, members, crossTreeConsistent: true, fence);
+                    var stampedMembers = await StampSetMembershipAsync(manifest, members, unregistered, cancellationToken)
+                        .ConfigureAwait(false);
+                    return new LatticeBackupSetCaptureResult(manifest, stampedMembers);
+                }
+
+                // A cross-tree saga was still delegated under the gate, one registered
+                // on the set mid-capture, or the gate was not held throughout: the
+                // pinned snapshots may be torn. Nothing of them has been written, so
+                // discarding the attempt only closes them (below); retry with a fresh
+                // fence and gate.
+                BackupMetrics.CrossTreeFenceRetries.Add(1, LatticeTenantLabel.Platform);
+                logger.LogDebug(
+                    "Backup set '{SetName}' fence attempt {Attempt} was not accepted (re-check clean: {RecheckClean}, "
+                    + "window stable: {Stable}, gate held: {GateHeld}); retrying.",
+                    request.Name, attempt, recheckClean, stable, valid);
             }
             finally
             {
-                // Every member's hold is released however the attempt ended, so
-                // a failed or cancelled capture never leaves sagas waiting on its
-                // lease.
-                for (var i = 0; i < registries.Length; i++)
-                {
-                    if (!await TxRegistryFanOut.ReleaseCaptureGateAsync(grainFactory, registries[i], highWaters[i], gateToken)
-                            .ConfigureAwait(false))
-                    {
-                        valid = false;
-                    }
-                }
+                await ReleasePinsAsync(pins).ConfigureAwait(false);
             }
-
-            if (recheckClean && stable && valid && members is not null)
-            {
-                var fence = new BackupSetFence(
-                    fenceHlc, totalDrained, totalDrainWait.TotalMilliseconds, attempt);
-
-                BackupMetrics.CrossTreeFenceSelections.Add(
-                    1, new KeyValuePair<string, object?>(BackupMetrics.TagTreeCount, scopes.Count),
-                    LatticeTenantLabel.Platform);
-                if (totalDrained > 0)
-                {
-                    BackupMetrics.CrossTreeFenceDrainedInFlight.Add(totalDrained, LatticeTenantLabel.Platform);
-                }
-                BackupMetrics.CrossTreeFenceDrainWaitMilliseconds.Record(totalDrainWait.TotalMilliseconds, LatticeTenantLabel.Platform);
-
-                logger.LogInformation(
-                    "Captured cross-tree-consistent backup set '{SetName}' over {TreeCount} trees at fence hlc={FenceHlc} "
-                    + "(attempt {Attempt}, drained {Drained} in-flight sagas over {DrainWaitMs}ms).",
-                    request.Name, scopes.Count, fenceHlc, attempt, totalDrained, totalDrainWait.TotalMilliseconds);
-
-                var manifest = BuildSetManifest(request.Name, members, crossTreeConsistent: true, fence);
-                var stampedMembers = await StampSetMembershipAsync(manifest, members, unregistered, cancellationToken)
-                    .ConfigureAwait(false);
-                return new LatticeBackupSetCaptureResult(manifest, stampedMembers);
-            }
-
-            // A cross-tree saga was still delegated under the gate, one registered
-            // on the set mid-capture, or the gate was not held throughout: the
-            // captured members may be torn. Discard them (they remain as
-            // orphan per-tree backups, registered unstamped) and retry with a
-            // fresh fence and gate.
-            await RegisterUnstampedAsync(unregistered, cancellationToken).ConfigureAwait(false);
-            BackupMetrics.CrossTreeFenceRetries.Add(1, LatticeTenantLabel.Platform);
-            logger.LogDebug(
-                "Backup set '{SetName}' fence attempt {Attempt} was not accepted (re-check clean: {RecheckClean}, "
-                + "window stable: {Stable}, gate held: {GateHeld}); retrying.",
-                request.Name, attempt, recheckClean, stable, valid);
         }
 
         throw new LatticeBackupCrossTreeFenceException(
@@ -941,8 +963,10 @@ internal sealed class LatticeBackupCaptureService(
 
     /// <summary>
     /// Captures one tree's full backup for the given scope and page size: the
-    /// shared body behind both <see cref="CaptureAsync"/> and each member of
-    /// <see cref="CaptureSetAsync"/>.
+    /// shared body behind both <see cref="CaptureAsync"/> and each member of a
+    /// non-fenced <see cref="CaptureSetAsync"/>. Pins the tree's point-in-time
+    /// snapshot (<see cref="PinTreeAsync"/>) and drains it at once
+    /// (<see cref="DrainPinnedAsync"/>).
     /// </summary>
     private async Task<LatticeBackupCaptureResult> CaptureTreeAsync(
         string name,
@@ -951,12 +975,23 @@ internal sealed class LatticeBackupCaptureService(
         CancellationToken cancellationToken,
         bool register = true)
     {
+        var pinned = await PinTreeAsync(scope, cancellationToken).ConfigureAwait(false);
+        return await DrainPinnedAsync(pinned, name, pageSize, register, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The first half of a full capture: authorizes the scope, charges the
+    /// capture, enforces the snapshot size gate, records the WAL head frontier,
+    /// and opens the point-in-time snapshot cursor that fixes the capture's cut.
+    /// Everything the backup will hold is decided here: the snapshot freezes its
+    /// per-shard baselines, and resolves every pending saga against the ambient
+    /// saga decision gate, when it opens. The returned pin owns the open cursor;
+    /// <see cref="DrainPinnedAsync"/> or <see cref="ReleasePinAsync"/> closes it.
+    /// </summary>
+    private async Task<PinnedTree> PinTreeAsync(BackupScopeSelector scope, CancellationToken cancellationToken)
+    {
         var treeId = scope.TreeId;
         var stopwatch = Stopwatch.StartNew();
-
-        // Capture-failure phase tracker: advanced as the capture progresses so the
-        // failure filter tags the counter with the phase the fault surfaced in.
-        var phase = LatticeBackupMetrics.PhaseSnapshotOpen;
         try
         {
             // Fail-closed authorization before anything else is touched.
@@ -984,16 +1019,6 @@ internal sealed class LatticeBackupCaptureService(
                     + $"({nameof(LatticeOptions.MaxSnapshotReplayEntries)}). Narrow the scope or raise the budget.");
             }
 
-            // Tracked-operation progress (#4122): null outside a tracked operation, so
-            // an untracked capture pays one null check. A set capture suppresses it
-            // around its members so a member cannot overwrite the set-level phase.
-            var progress = LatticeOperationProgress.Current;
-            if (progress is not null)
-            {
-                await progress.ReportAsync(
-                    BackupOperationPhases.Capturing, 0, inScopeCount, BackupOperationUnits.Entries).ConfigureAwait(false);
-            }
-
             // Capture the per-partition WAL head frontier BEFORE opening the snapshot
             // cursor so a later incremental resumes its forward WAL read from exactly
             // this cut. Any entry that lands between this read and the snapshot freeze
@@ -1008,11 +1033,66 @@ internal sealed class LatticeBackupCaptureService(
                 .OpenSnapshotEntryCursorAsync(startInclusive, endExclusive, reverse: false, cancellationToken)
                 .ConfigureAwait(false);
 
+            var cursor = grainFactory.GetGrain<ILatticeCursorGrain>($"{treeId}/{cursorId}");
             try
             {
-                var cursor = grainFactory.GetGrain<ILatticeCursorGrain>($"{treeId}/{cursorId}");
                 var coordinate = await cursor.GetSnapshotCoordinateAsync().ConfigureAwait(false);
+                return new PinnedTree(
+                    scope, lattice, cursorId, cursor, coordinate, walPartitionOffsets, inScopeCount, stopwatch.Elapsed);
+            }
+            catch
+            {
+                await lattice.CloseCursorAsync(cursorId, CancellationToken.None).ConfigureAwait(false);
+                throw;
+            }
+        }
+        catch (Exception ex) when (LatticeBackupMetrics.EmitCaptureFailure(
+            BackupKind.Full, LatticeBackupMetrics.PhaseSnapshotOpen, ex))
+        {
+            // The filter records the failure metric and returns false, so this
+            // catch never runs and the original exception propagates unchanged.
+            throw;
+        }
+    }
 
+    /// <summary>
+    /// The second half of a full capture: streams the pinned snapshot to the sink,
+    /// builds and publishes the manifest, then releases the snapshot - evicting its
+    /// in-memory leaves before closing the cursor, so a drained tree holds no
+    /// memory while the next one is captured. Always closes the pin.
+    /// </summary>
+    private async Task<LatticeBackupCaptureResult> DrainPinnedAsync(
+        PinnedTree pinned,
+        string name,
+        int pageSize,
+        bool register,
+        CancellationToken cancellationToken)
+    {
+        var scope = pinned.Scope;
+        var treeId = scope.TreeId;
+        var lattice = pinned.Lattice;
+        var stopwatch = Stopwatch.StartNew();
+        var (startInclusive, endExclusive) = BackupScopeRange.Resolve(scope);
+
+        // Capture-failure phase tracker: advanced as the capture progresses so the
+        // failure filter tags the counter with the phase the fault surfaced in.
+        var phase = LatticeBackupMetrics.PhaseExport;
+        try
+        {
+            try
+            {
+                // Tracked-operation progress (#4122): null outside a tracked operation, so
+                // an untracked capture pays one null check. A set capture suppresses it
+                // around its members so a member cannot overwrite the set-level phase.
+                var progress = LatticeOperationProgress.Current;
+                if (progress is not null)
+                {
+                    await progress.ReportAsync(
+                        BackupOperationPhases.Capturing, 0, pinned.InScopeCount, BackupOperationUnits.Entries).ConfigureAwait(false);
+                }
+
+                var cursor = pinned.Cursor;
+                var coordinate = pinned.Coordinate;
                 var createdAtUtc = DateTimeOffset.UtcNow;
                 var artifactId = BuildArtifactId(scope, createdAtUtc);
 
@@ -1020,12 +1100,11 @@ internal sealed class LatticeBackupCaptureService(
                 // per-key descriptors, the content digest, the byte length, and the
                 // chunk count. WriteArtifactAsync fully drains the enumerable, so the
                 // collector is complete once it returns.
-                phase = LatticeBackupMetrics.PhaseExport;
                 var collector = new RawEntryCollector(serializer, ResolveTreeMergeMode(treeId));
                 var stream = collector.StreamAsync(cursor, pageSize, cancellationToken);
                 if (progress is not null)
                 {
-                    stream = ReportCapturedAsync(stream, collector, progress, inScopeCount, cancellationToken);
+                    stream = ReportCapturedAsync(stream, collector, progress, pinned.InScopeCount, cancellationToken);
                 }
 
                 await sink.WriteArtifactAsync(
@@ -1042,7 +1121,7 @@ internal sealed class LatticeBackupCaptureService(
                 var topology = await BuildTopologyAsync(lattice, startInclusive, endExclusive, cancellationToken)
                     .ConfigureAwait(false);
                 var consistencyCut = BuildConsistencyCut(
-                    coordinate, collector.HighestHlc, collector.PerOriginHighWater, walPartitionOffsets);
+                    coordinate, collector.HighestHlc, collector.PerOriginHighWater, pinned.WalPartitionOffsets);
                 var provenance = BuildProvenance(collector.PerOriginHighWater);
 
                 // An empty provenance is expected on a local-only tree and alarming on a
@@ -1095,7 +1174,7 @@ internal sealed class LatticeBackupCaptureService(
 
                 LatticeBackupMetrics.RecordCaptureSuccess(
                     manifest,
-                    stopwatch.Elapsed.TotalMilliseconds,
+                    (pinned.PinElapsed + stopwatch.Elapsed).TotalMilliseconds,
                     collector.ByteLength,
                     manifest.ContentDescriptors.Count,
                     collector.KeyDescriptors.Count);
@@ -1110,7 +1189,7 @@ internal sealed class LatticeBackupCaptureService(
             finally
             {
                 // Release the pinned snapshot even when the capture fails partway.
-                await lattice.CloseCursorAsync(cursorId, CancellationToken.None).ConfigureAwait(false);
+                await ReleasePinAsync(pinned).ConfigureAwait(false);
             }
         }
         catch (Exception ex) when (LatticeBackupMetrics.EmitCaptureFailure(BackupKind.Full, phase, ex))
@@ -1119,6 +1198,46 @@ internal sealed class LatticeBackupCaptureService(
             // catch never runs and the original exception propagates unchanged.
             throw;
         }
+    }
+
+    /// <summary>
+    /// Releases a pinned snapshot: evicts its in-memory snapshot leaves (best
+    /// effort - they would otherwise linger until the runtime collects them) and
+    /// closes the cursor, which deletes any durable baseline the pin spilled.
+    /// Never throws for a failed eviction; the close is what releases the pin.
+    /// </summary>
+    private async Task ReleasePinAsync(PinnedTree pinned)
+    {
+        try
+        {
+            await pinned.Cursor.EvictSnapshotLeavesAsync(persist: false).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(
+                ex,
+                "Backup capture of tree {TreeId}: evicting the snapshot leaves before close failed; they are collected when idle.",
+                pinned.Scope.TreeId);
+        }
+
+        await pinned.Lattice.CloseCursorAsync(pinned.CursorId, CancellationToken.None).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// One member tree's point-in-time snapshot, pinned and not yet drained.
+    /// </summary>
+    private sealed record PinnedTree(
+        BackupScopeSelector Scope,
+        ILattice Lattice,
+        string CursorId,
+        ILatticeCursorGrain Cursor,
+        LatticeSnapshotCoordinate Coordinate,
+        IReadOnlyDictionary<int, long> WalPartitionOffsets,
+        long InScopeCount,
+        TimeSpan PinElapsed)
+    {
+        /// <summary>Whether the pin's baselines were spilled to the durable store and its leaves evicted.</summary>
+        public bool Spilled { get; set; }
     }
 
     /// <summary>
@@ -1190,6 +1309,255 @@ internal sealed class LatticeBackupCaptureService(
         }
 
         return members;
+    }
+
+    /// <summary>
+    /// Pins every member of a cross-tree-consistent set under the set's saga
+    /// decision gate, in scope order, adding each pin to <paramref name="pins"/>
+    /// as it opens so the caller can release whatever was pinned if a later open
+    /// faults. Reports one <see cref="BackupOperationPhases.CapturingMembers"/>
+    /// unit per pinned member. Keeps the members' frozen baselines in memory
+    /// while they fit <see cref="LatticeBackupOptions.CrossTreeSetPinnedEntryBudget"/>,
+    /// and spills a member that takes the total past it - persisting its
+    /// baselines and evicting its snapshot leaves - before the next one opens, so
+    /// a large estate never holds every tree in memory at once.
+    /// </summary>
+    private async Task PinMembersAsync(
+        LatticeBackupSetCaptureRequest request,
+        List<PinnedTree> pins,
+        LatticeBackupOptions options,
+        CancellationToken cancellationToken)
+    {
+        var scopes = request.Scopes;
+        var progress = LatticeOperationProgress.Current;
+        if (progress is not null)
+        {
+            await progress.ReportAsync(
+                BackupOperationPhases.CapturingMembers, 0, scopes.Count, BackupOperationUnits.Members).ConfigureAwait(false);
+        }
+
+        long inMemory = 0;
+        using (LatticeOperationProgress.Enter(null))
+        {
+            foreach (var scope in scopes)
+            {
+                var pin = await PinTreeAsync(scope, cancellationToken).ConfigureAwait(false);
+                pins.Add(pin);
+                inMemory += pin.InScopeCount;
+                if (inMemory > options.CrossTreeSetPinnedEntryBudget)
+                {
+                    await SpillPinAsync(pin).ConfigureAwait(false);
+                    inMemory -= pin.InScopeCount;
+                }
+
+                if (progress is not null)
+                {
+                    await progress.ReportAsync(
+                        BackupOperationPhases.CapturingMembers,
+                        pins.Count,
+                        scopes.Count,
+                        BackupOperationUnits.Members).ConfigureAwait(false);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Drains the pinned members of an accepted cross-tree-consistent set, after
+    /// its gate has been released. Every member still held in memory is spilled
+    /// first, so no member's in-memory snapshot can be collected while it waits
+    /// its turn; then the members are written one at a time, each released as
+    /// soon as it is written, while a background keep-alive slides the TTLs of
+    /// the members still queued. Each pin is removed from <paramref name="pins"/>
+    /// once it has been drained (and so closed). Reports one
+    /// <see cref="BackupOperationPhases.WritingMembers"/> unit per member.
+    /// </summary>
+    private async Task<List<LatticeBackupCaptureResult>> WritePinnedMembersAsync(
+        LatticeBackupSetCaptureRequest request,
+        List<PinnedTree> pins,
+        List<LatticeBackupCaptureResult> unregistered,
+        CancellationToken cancellationToken)
+    {
+        var total = pins.Count;
+        var deferRegistration = BackupSetIdentity.RecordsMembership(total);
+        var progress = LatticeOperationProgress.Current;
+        if (progress is not null)
+        {
+            await progress.ReportAsync(
+                BackupOperationPhases.WritingMembers, 0, total, BackupOperationUnits.Members).ConfigureAwait(false);
+        }
+
+        foreach (var pin in pins)
+        {
+            if (!pin.Spilled)
+            {
+                await SpillPinAsync(pin).ConfigureAwait(false);
+            }
+        }
+
+        var members = new List<LatticeBackupCaptureResult>(total);
+        using var keepAliveStop = new CancellationTokenSource();
+        var keepAlive = KeepPinsAliveAsync(pins, keepAliveStop.Token);
+        try
+        {
+            using (LatticeOperationProgress.Enter(null))
+            {
+                while (pins.Count > 0)
+                {
+                    var pin = pins[0];
+                    LatticeBackupCaptureResult member;
+                    try
+                    {
+                        member = await DrainPinnedAsync(
+                                pin, request.Name, request.PageSize, register: !deferRegistration, cancellationToken)
+                            .ConfigureAwait(false);
+                    }
+                    finally
+                    {
+                        // Drained or not, the drain closed the pin.
+                        lock (pins)
+                        {
+                            pins.RemoveAt(0);
+                        }
+                    }
+
+                    if (deferRegistration)
+                    {
+                        unregistered.Add(member);
+                    }
+
+                    members.Add(member);
+                    if (progress is not null)
+                    {
+                        await progress.ReportAsync(
+                            BackupOperationPhases.WritingMembers,
+                            members.Count,
+                            total,
+                            BackupOperationUnits.Members).ConfigureAwait(false);
+                    }
+                }
+            }
+        }
+        finally
+        {
+            keepAliveStop.Cancel();
+            await keepAlive.ConfigureAwait(false);
+        }
+
+        return members;
+    }
+
+    /// <summary>
+    /// Spills one pin: persists its frozen baselines to the durable store and
+    /// evicts its snapshot leaves, so it holds no memory and survives idle
+    /// collection until it is drained.
+    /// </summary>
+    private async Task SpillPinAsync(PinnedTree pin)
+    {
+        await pin.Cursor.EvictSnapshotLeavesAsync(persist: true).ConfigureAwait(false);
+        pin.Spilled = true;
+        logger.LogDebug(
+            "Backup set capture: spilled the pinned snapshot of tree {TreeId} ({EntryCount} entries) to the durable baseline store.",
+            pin.Scope.TreeId,
+            pin.InScopeCount);
+    }
+
+    /// <summary>
+    /// Slides the TTLs of the pins still queued for draining every third of the
+    /// shortest of their trees' <see cref="LatticeOptions.SnapshotBaselineTtl"/>
+    /// and <see cref="LatticeOptions.CursorIdleTtl"/> (at least once a minute), so
+    /// a member waiting behind a long drain is never reclaimed by a leak guard.
+    /// Best effort: a failed touch is retried at the next tick, and a pin that is
+    /// lost surfaces as an explicit failure when it is drained.
+    /// </summary>
+    private async Task KeepPinsAliveAsync(List<PinnedTree> pins, CancellationToken stop)
+    {
+        var interval = Timeout.InfiniteTimeSpan;
+        lock (pins)
+        {
+            foreach (var pin in pins)
+            {
+                var treeOptions = optionsMonitor.Get(pin.Scope.TreeId);
+                foreach (var ttl in new[] { treeOptions.SnapshotBaselineTtl, treeOptions.CursorIdleTtl })
+                {
+                    if (ttl > TimeSpan.Zero && (interval == Timeout.InfiniteTimeSpan || ttl < interval))
+                    {
+                        interval = ttl;
+                    }
+                }
+            }
+        }
+
+        if (interval == Timeout.InfiniteTimeSpan)
+        {
+            return;
+        }
+
+        interval = TimeSpan.FromTicks(Math.Max(TimeSpan.FromMinutes(1).Ticks, interval.Ticks / 3));
+        while (true)
+        {
+            try
+            {
+                await Task.Delay(interval, stop).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+
+            PinnedTree[] queued;
+            lock (pins)
+            {
+                // The head is being drained, which slides its own TTLs.
+                queued = pins.Skip(1).ToArray();
+            }
+
+            foreach (var pin in queued)
+            {
+                try
+                {
+                    await pin.Cursor.TouchSnapshotAsync().ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(
+                        ex,
+                        "Backup set capture: keeping the pinned snapshot of tree {TreeId} alive failed; retrying at the next tick.",
+                        pin.Scope.TreeId);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Closes every pin still in <paramref name="pins"/>: the attempt was
+    /// discarded, faulted or cancelled before they were drained. Best effort per
+    /// pin - one failed close does not strand the others, and a pin that cannot
+    /// be closed is reclaimed by its cursor's idle TTL.
+    /// </summary>
+    private async Task ReleasePinsAsync(List<PinnedTree> pins)
+    {
+        PinnedTree[] remaining;
+        lock (pins)
+        {
+            remaining = pins.ToArray();
+            pins.Clear();
+        }
+
+        foreach (var pin in remaining)
+        {
+            try
+            {
+                await ReleasePinAsync(pin).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(
+                    ex,
+                    "Backup set capture: closing the pinned snapshot of tree {TreeId} failed; its cursor's idle TTL reclaims it.",
+                    pin.Scope.TreeId);
+            }
+        }
     }
 
     /// <summary>

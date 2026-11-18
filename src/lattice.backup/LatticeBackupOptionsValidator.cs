@@ -60,6 +60,27 @@ internal sealed class LatticeBackupOptionsValidator : IValidateOptions<LatticeBa
             failures.Add($"{nameof(LatticeBackupOptions.MaxCrossTreeFenceAttempts)} must be at least 1.");
         }
 
+        if (options.CrossTreeSetPinnedEntryBudget < 0)
+        {
+            failures.Add($"{nameof(LatticeBackupOptions.CrossTreeSetPinnedEntryBudget)} must not be negative.");
+        }
+
+        if (options.SetScheduleFenceRetries < 0)
+        {
+            failures.Add($"{nameof(LatticeBackupOptions.SetScheduleFenceRetries)} must not be negative.");
+        }
+
+        if (options.SetScheduleFenceRetryDelay < TimeSpan.Zero)
+        {
+            failures.Add($"{nameof(LatticeBackupOptions.SetScheduleFenceRetryDelay)} must not be negative.");
+        }
+        else if (options.SetScheduleFenceRetryDelay > MaxTimerDuration)
+        {
+            failures.Add(
+                $"{nameof(LatticeBackupOptions.SetScheduleFenceRetryDelay)} must be at most {MaxTimerDuration}, "
+                + "the longest delay a timer can wait.");
+        }
+
         if (!Enum.IsDefined(options.SinkSharingEnforcement))
         {
             failures.Add($"{nameof(LatticeBackupOptions.SinkSharingEnforcement)} must be a defined BackupSinkSharingEnforcement value.");

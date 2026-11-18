@@ -1,4 +1,5 @@
 using Orleans.Lattice.Api.Backup;
+using Orleans.Lattice.Api.Backup.Grpc;
 using Orleans.Lattice.Backup;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Transport;
@@ -13,6 +14,12 @@ public sealed class ShellBackupControlTransportTests : ShellTransportAdapterCont
 
     private static readonly LatticeRestoreResult Restore =
         new("b1", "orders", LatticeRestoreMode.InPlace, "op-1", ["b1"], 3);
+
+    private static readonly LatticeBackupSetScheduleRequest SetRequest =
+        LatticeBackupSetScheduleRequest.ForTrees("pics", [Scope], TimeSpan.FromHours(24), 7, null);
+
+    private static readonly BackupSetScheduleStatus SetStatus = new(
+        "pics", SetRequest, [Scope], true, null, false, DateTimeOffset.UnixEpoch, null, null, BackupScopeRunOutcome.None, null, 0, [], []);
 
     internal override IEnumerable<ShellTransportCall<ILatticeBackupControl>> Calls() =>
     [
@@ -40,11 +47,16 @@ public sealed class ShellBackupControlTransportTests : ShellTransportAdapterCont
         new("GetBackupHealthAsync", Service + "GetBackupHealth", (f, ct) => f.GetBackupHealthAsync("b1", ct)),
         new("ConfigureBackupHealthAsync", Service + "ConfigureBackupHealth", (f, ct) => f.ConfigureBackupHealthAsync("b1", new BackupHealthConfig(true, TimeSpan.FromHours(1)), ct)),
         new("GetBackupHealthConfigAsync", Service + "GetBackupHealthConfig", (f, ct) => f.GetBackupHealthConfigAsync("b1", ct)),
+        new("ScheduleBackupSetAsync", Service + "ScheduleBackupSet", (f, ct) => f.ScheduleBackupSetAsync(SetRequest, ct)),
+        new("CancelBackupSetScheduleAsync", Service + "CancelBackupSetSchedule", (f, ct) => f.CancelBackupSetScheduleAsync("pics", ct)),
+        new("RemoveBackupSetScheduleAsync", Service + "RemoveBackupSetSchedule", (f, ct) => f.RemoveBackupSetScheduleAsync("pics", true, ct)),
+        new("GetBackupSetScheduleStatusAsync", Service + "GetBackupSetScheduleStatus", (f, ct) => f.GetBackupSetScheduleStatusAsync("pics", ct)),
+        new("ListBackupSetSchedulesAsync", Service + "ListBackupSetSchedules", (f, ct) => f.ListBackupSetSchedulesAsync(ct)),
+        new("RunBackupSetScheduleNowAsync", Service + "RunBackupSetScheduleNow", (f, ct) => f.RunBackupSetScheduleNowAsync("pics", ct)),
     ];
 
-    internal override void ScriptSuccess(ShellTransportPeer peer)
-    {
-    }
+    internal override void ScriptSuccess(ShellTransportPeer peer) =>
+        peer.Respond(Service + "ScheduleBackupSet", new BackupSetScheduleStatusResponse { Found = true, Status = SetStatus });
 
     [Test]
     public void The_verbs_the_binding_does_not_serve_fail_as_not_supported_without_a_call()
@@ -77,6 +89,52 @@ public sealed class ShellBackupControlTransportTests : ShellTransportAdapterCont
     }
 
     [Test]
+    public async Task The_backup_set_schedule_verbs_carry_their_answers_and_requests()
+    {
+        using var circuit = new ShellTransportCircuit();
+        var control = circuit.Resolve<ILatticeBackupControl>();
+        circuit.Peer.Respond(Service + "ScheduleBackupSet", new BackupSetScheduleStatusResponse { Found = true, Status = SetStatus });
+        circuit.Peer.Respond(Service + "ListBackupSetSchedules", new BackupSetScheduleListResponse { Schedules = [SetStatus] });
+        circuit.Peer.Respond(Service + "RemoveBackupSetSchedule", new BackupSetScheduleActionResponse { Result = true });
+        circuit.Peer.AnswerWithSuccess();
+
+        var scheduled = await control.ScheduleBackupSetAsync(SetRequest);
+        var listed = await control.ListBackupSetSchedulesAsync();
+        var removed = await control.RemoveBackupSetScheduleAsync("pics", deleteRetainedSets: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(scheduled.Name, Is.EqualTo("pics"));
+            var sent = circuit.Peer.Decode<BackupSetScheduleRequestMessage>(circuit.Peer.Requests[0]).Request!;
+            Assert.That((sent.Name, sent.Scopes.Single().TreeId, sent.RetentionKeepLast), Is.EqualTo(("pics", "orders", (int?)7)));
+            Assert.That(listed.Select(status => status.Name), Is.EqualTo(new[] { "pics" }));
+            Assert.That(removed, Is.True);
+            var remove = circuit.Peer.Decode<BackupSetScheduleRemoveRequestMessage>(circuit.Peer.Requests[2]);
+            Assert.That((remove.Name, remove.DeleteRetainedSets), Is.EqualTo(("pics", true)));
+        });
+    }
+
+    [Test]
+    public void A_cluster_without_backup_set_schedules_reads_as_not_supported()
+    {
+        using var circuit = new ShellTransportCircuit();
+        var control = circuit.Resolve<ILatticeBackupControl>();
+        circuit.Peer.AnswerWith(Grpc.Core.StatusCode.Unimplemented, "no backup-set schedules");
+
+        Assert.That(() => control.ListBackupSetSchedulesAsync(), Throws.InstanceOf<NotSupportedException>());
+    }
+
+    [Test]
+    public void Running_an_absent_backup_set_schedule_reads_as_not_found()
+    {
+        using var circuit = new ShellTransportCircuit();
+        var control = circuit.Resolve<ILatticeBackupControl>();
+        circuit.Peer.AnswerWith(Grpc.Core.StatusCode.NotFound, "no such schedule");
+
+        Assert.That(() => control.RunBackupSetScheduleNowAsync("pics"), Throws.InstanceOf<KeyNotFoundException>());
+    }
+
+    [Test]
     public void Argument_guards_run_before_any_call()
     {
         using var circuit = new ShellTransportCircuit();
@@ -96,6 +154,11 @@ public sealed class ShellBackupControlTransportTests : ShellTransportAdapterCont
             Assert.That(() => control.GetBackupHealthAsync(string.Empty), Throws.ArgumentException);
             Assert.That(() => control.ConfigureBackupHealthAsync("b1", null!), Throws.ArgumentNullException);
             Assert.That(() => control.GetBackupHealthConfigAsync(string.Empty), Throws.ArgumentException);
+            Assert.That(() => control.ScheduleBackupSetAsync(null!), Throws.ArgumentNullException);
+            Assert.That(() => control.CancelBackupSetScheduleAsync(string.Empty), Throws.ArgumentException);
+            Assert.That(() => control.RemoveBackupSetScheduleAsync(string.Empty, false), Throws.ArgumentException);
+            Assert.That(() => control.GetBackupSetScheduleStatusAsync(string.Empty), Throws.ArgumentException);
+            Assert.That(() => control.RunBackupSetScheduleNowAsync(string.Empty), Throws.ArgumentException);
             Assert.That(circuit.Peer.Requests, Is.Empty);
         });
     }

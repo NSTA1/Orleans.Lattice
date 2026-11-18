@@ -151,6 +151,8 @@ Backup control over `ILatticeBackupControl` and `ILatticeBackupOperations`. Regi
 | `lattice_backup_export_artifact` | inspect | Export one bounded, base64-encoded page of a backup artifact's bytes, resumed from `chunkOffset` until `endOfStream`. |
 | `lattice_backup_operation_status` | inspect | Read a tracked backup or restore operation by operation id; returns `found` plus the operation view when visible. |
 | `lattice_backup_operation_list` | inspect | Page the caller's tracked backup and restore operations newest-first. |
+| `lattice_backup_set_schedule_get` | inspect | Read one backup-set schedule by `name`: membership, cadence, retention, member trees, next run, recent runs, and retained sets; `found=false` when unknown. |
+| `lattice_backup_set_schedule_list` | inspect | List the caller's readable backup-set schedules in name order. |
 | `lattice_backup_start` | control | Start a tracked full backup and return `{ operationId, kind, treeIds, created, statusTool }`. |
 | `lattice_backup_start_incremental` | control | Start a tracked incremental backup layered on a base backup and return an operation handle. |
 | `lattice_backup_start_set` | control | Start a tracked backup set over `treeIds` and return an operation handle. |
@@ -161,8 +163,12 @@ Backup control over `ILatticeBackupControl` and `ILatticeBackupOperations`. Regi
 | `lattice_backup_operation_cancel` | control | Request cancellation of a tracked backup or restore operation. |
 | `lattice_backup_revert_restore` | control | Undo a shadow-cutover restore from a prior restore result. |
 | `lattice_backup_delete` | control | Delete a backup and its unshared artifacts. |
+| `lattice_backup_set_schedule_set` | control | Register or update a named, recurring backup-set schedule over `treeIds` (`membership` `Explicit`, the default) or every tree (`AllTrees`, with `includeNewTrees` and `excludedTreePrefixes`), every `intervalSeconds`, bounded by `retentionKeepLast` and/or `retentionMaxAgeSeconds`; cross-tree consistent unless `crossTreeConsistent` is false. |
+| `lattice_backup_set_schedule_cancel` | control | Pause a backup-set schedule; its retained sets stay restorable. |
+| `lattice_backup_set_schedule_remove` | control | Remove a backup-set schedule, deleting its retained sets' backups when `deleteRetainedSets` is true. |
+| `lattice_backup_set_schedule_run_now` | control | Start one run of a backup-set schedule now; `applied=false` when a run is already in flight, `found=false` when unknown. |
 
-The operation view returned by `lattice_backup_operation_status`, `lattice_backup_operation_list`, and `lattice_backup_operation_cancel` includes `operationId`, `kind`, `treeIds`, `state`, `phase`, `phaseIndex`, `phaseCount`, `completedUnits`, `totalUnits`, `unitName`, start and finish timestamps, `failureReason`, `resultReference`, the `result` map, `restoreResult` for a succeeded restore, and `cancelRequested`. Without control enabled the backup group exposes 7 tools; with control enabled it exposes 17.
+The operation view returned by `lattice_backup_operation_status`, `lattice_backup_operation_list`, and `lattice_backup_operation_cancel` includes `operationId`, `kind`, `treeIds`, `state`, `phase`, `phaseIndex`, `phaseCount`, `completedUnits`, `totalUnits`, `unitName`, start and finish timestamps, `failureReason`, `resultReference`, the `result` map, `restoreResult` for a succeeded restore, and `cancelRequested`. Without control enabled the backup group exposes 9 tools; with control enabled it exposes 23.
 
 ## Auth tools (`lattice_auth_*`)
 

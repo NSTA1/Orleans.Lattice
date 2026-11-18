@@ -222,7 +222,77 @@ internal sealed partial class BackupSchedulerGrain
         || _retiring.Contains(backupId)
         || HasLiveLease(_pendingMembers, backupId)
         || IsDeleting(backupId)
-        || (_publishedDuringListing?.Contains(backupId) ?? false);
+        || (_publishedDuringListing?.Contains(backupId) ?? false)
+        || IsSetScheduleHeld(backupId, exceptScheduleKey: null);
+
+    /// <inheritdoc />
+    public async Task SetSetScheduleHoldsAsync(string scheduleKey, IReadOnlyList<string> backupIds)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(scheduleKey);
+        ArgumentNullException.ThrowIfNull(backupIds);
+        var holds = state.State.SetScheduleHolds;
+        holds.TryGetValue(scheduleKey, out var previous);
+        if (backupIds.Count == 0)
+        {
+            if (previous is null)
+            {
+                return;
+            }
+
+            holds.Remove(scheduleKey);
+        }
+        else
+        {
+            var next = backupIds.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
+            if (previous is not null && previous.SequenceEqual(next, StringComparer.Ordinal))
+            {
+                return;
+            }
+
+            holds[scheduleKey] = next;
+        }
+
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            // Restore what storage still holds, so a retry is not short-circuited
+            // by the equality guard above (cf. #3471).
+            if (previous is null)
+            {
+                holds.Remove(scheduleKey);
+            }
+            else
+            {
+                holds[scheduleKey] = previous;
+            }
+
+            throw;
+        }
+    }
+
+    /// <inheritdoc />
+    public Task<bool> IsHeldBySetScheduleAsync(string backupId, string exceptScheduleKey)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(backupId);
+        return Task.FromResult(IsSetScheduleHeld(backupId, exceptScheduleKey));
+    }
+
+    private bool IsSetScheduleHeld(string backupId, string? exceptScheduleKey)
+    {
+        foreach (var (scheduleKey, held) in state.State.SetScheduleHolds)
+        {
+            if (!string.Equals(scheduleKey, exceptScheduleKey, StringComparison.Ordinal)
+                && held.BinarySearch(backupId, StringComparer.Ordinal) >= 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     private static bool HasLiveLease(Dictionary<string, DateTimeOffset> leases, string backupId)
     {

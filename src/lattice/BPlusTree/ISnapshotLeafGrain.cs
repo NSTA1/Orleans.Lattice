@@ -127,6 +127,21 @@ internal interface ISnapshotLeafGrain : IGrainWithStringKey
     Task EnsurePersistedAsync(CancellationToken cancellationToken);
 
     /// <summary>
+    /// Releases this leaf's in-memory projection and requests deactivation, so a
+    /// caller holding many snapshots open at once (a backup set pinning one
+    /// snapshot per member tree) keeps at most the snapshots it is reading in
+    /// memory. With <paramref name="persist"/> set the frozen baseline is first
+    /// made durable (as <see cref="EnsurePersistedAsync"/>), so the next read
+    /// reactivates the leaf and reloads the identical rows from the durable
+    /// store; without it the caller asserts it will not read the leaf again (it
+    /// is about to close the cursor). Idempotent; a leaf that is not materialised
+    /// simply deactivates.
+    /// </summary>
+    /// <param name="persist">Whether to make the baseline durable before releasing it.</param>
+    /// <param name="cancellationToken">Cancellation observed before the persist.</param>
+    Task EvictAsync(bool persist, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Returns the sorted list of keys this snapshot leaf observes in
     /// the optional [<paramref name="startInclusive"/>,
     /// <paramref name="endExclusive"/>) range. Mirrors the live

@@ -120,4 +120,43 @@ internal static class BackupTypeAliases
 
     /// <summary>Alias for <see cref="BackupIdPendingClaim"/>.</summary>
     internal const string BackupIdPendingClaim = "olb.ip";
+
+    /// <summary>Alias for <see cref="LatticeBackupSetScheduleRequest"/>.</summary>
+    internal const string LatticeBackupSetScheduleRequest = "olb.sq";
+
+    /// <summary>Alias for <see cref="BackupSetMembershipMode"/>.</summary>
+    internal const string BackupSetMembershipMode = "olb.mm";
+
+    /// <summary>Alias for <see cref="BackupSetScheduleStatus"/>.</summary>
+    internal const string BackupSetScheduleStatus = "olb.st";
+
+    /// <summary>Alias for <see cref="BackupSetScheduleRun"/>.</summary>
+    internal const string BackupSetScheduleRun = "olb.su";
+
+    /// <summary>Alias for <see cref="BackupSetScheduleTrigger"/>.</summary>
+    internal const string BackupSetScheduleTrigger = "olb.tg";
+
+    /// <summary>Alias for <see cref="ScheduledBackupSet"/>.</summary>
+    internal const string ScheduledBackupSet = "olb.sx";
+
+    /// <summary>Alias for <see cref="ScheduledBackupSetMember"/>.</summary>
+    internal const string ScheduledBackupSetMember = "olb.sy";
+
+    /// <summary>Alias for <see cref="ILatticeBackupSetSchedulerGrain"/>.</summary>
+    internal const string ILatticeBackupSetSchedulerGrain = "olb.gt";
+
+    /// <summary>Alias for <see cref="BackupSetSchedulerState"/>.</summary>
+    internal const string BackupSetSchedulerState = "olb.sz";
+
+    /// <summary>Alias for <see cref="IBackupSetScheduleRegistryGrain"/>.</summary>
+    internal const string IBackupSetScheduleRegistryGrain = "olb.gr";
+
+    /// <summary>Alias for <see cref="BackupSetScheduleRegistryState"/>.</summary>
+    internal const string BackupSetScheduleRegistryState = "olb.rg";
+
+    /// <summary>Alias for <see cref="BackupSetScheduleTarget"/>.</summary>
+    internal const string BackupSetScheduleTarget = "olb.tt";
+
+    /// <summary>Alias for <see cref="BackupSetScheduleConfig"/>.</summary>
+    internal const string BackupSetScheduleConfig = "olb.cf";
 }

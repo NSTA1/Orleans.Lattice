@@ -95,6 +95,29 @@ internal interface ILatticeCursorGrain : IGrainWithStringKey
     Task<LatticeSnapshotCoordinate> GetSnapshotCoordinateAsync();
 
     /// <summary>
+    /// Releases the in-memory snapshot leaves of a zero-observable-writes
+    /// snapshot cursor. With <paramref name="persist"/> set every per-shard
+    /// frozen baseline is first made durable (and the cursor records that, so
+    /// its close deletes the rows), so a later page reloads the identical view
+    /// from the durable store: the cursor stays open and readable while holding
+    /// nothing in memory. Without it the caller asserts it has finished reading
+    /// and is about to close the cursor. A no-op for a legacy coordinate with no
+    /// baseline token; throws <see cref="InvalidOperationException"/> on a cursor
+    /// that is not a snapshot cursor.
+    /// </summary>
+    /// <param name="persist">Whether to make the baselines durable before releasing them.</param>
+    Task EvictSnapshotLeavesAsync(bool persist);
+
+    /// <summary>
+    /// Keeps a parked snapshot cursor alive while it waits to be read: slides the
+    /// leak-guard TTL of every durable per-shard baseline
+    /// (<see cref="LatticeOptions.SnapshotBaselineTtl"/>) and the cursor's own
+    /// idle TTL (<see cref="LatticeOptions.CursorIdleTtl"/>). A no-op for a
+    /// baseline that was never made durable.
+    /// </summary>
+    Task TouchSnapshotAsync();
+
+    /// <summary>
     /// Deletes up to <paramref name="maxToDelete"/> keys from the cursor's
     /// range and returns the resulting progress. Valid only when the cursor
     /// was opened with <see cref="LatticeCursorKind.DeleteRange"/>; throws

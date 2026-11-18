@@ -342,6 +342,24 @@ internal sealed class SnapshotLeafGrain(
         }
     }
 
+    /// <inheritdoc />
+    public async Task EvictAsync(bool persist, CancellationToken cancellationToken)
+    {
+        if (persist && _materialised)
+        {
+            await EnsurePersistedAsync(cancellationToken);
+        }
+
+        // Drop the references so the projection is collectable even before the
+        // activation is torn down; a later read reactivates the leaf, which
+        // reloads the durable baseline on its first OpenAsync.
+        _folder = null;
+        _seedBaseline = null;
+        _opened = false;
+        _materialised = false;
+        this.DeactivateOnIdle();
+    }
+
     /// <summary>
     /// Slides the durable baseline's leak-guard TTL while the cursor is actively
     /// paging, throttled to at most one reminder-table refresh per

@@ -90,6 +90,9 @@ public static class LatticeBackupMetrics
     /// <summary><see cref="TagReason"/> value: an incremental capture fell back to a full capture.</summary>
     public const string ReasonIncrementalFallback = "incremental-fallback";
 
+    /// <summary><see cref="TagReason"/> value: a backup set could not establish its cross-tree fence (<see cref="LatticeBackupCrossTreeFenceException"/>).</summary>
+    public const string ReasonCrossTreeFence = "cross-tree-fence";
+
     private static readonly KeyValuePair<string, object?> KindFullTag = new(TagKind, "full");
     private static readonly KeyValuePair<string, object?> KindIncrementalTag = new(TagKind, "incremental");
 
@@ -450,6 +453,7 @@ public static class LatticeBackupMetrics
         LatticeCursorSnapshotExpiredException => ReasonSaturation,
         LatticeSnapshotReplayBudgetExceededException => ReasonSaturation,
         LatticeRestoreValidationException => ReasonIntegrityMismatch,
+        LatticeBackupCrossTreeFenceException => ReasonCrossTreeFence,
         OperationCanceledException => ReasonCancellation,
         IOException => ReasonSinkIoError,
         _ => ReasonUnknown,
