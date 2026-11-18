@@ -155,8 +155,9 @@ internal sealed class TreeShardSplitGrain(
     /// </summary>
     private async Task<bool> IsBoundTreeCurrentAsync()
     {
-        var entry = await grainFactory.GetLatticeRegistry().GetEntryAsync(TreeId);
-        return ShardMapCommitFence.Admits(entry, TreeId, await GetPhysicalTreeIdAsync());
+        var registry = grainFactory.GetLatticeRegistry();
+        var entry = await registry.GetEntryAsync(TreeId);
+        return await ShardMapCommitFence.AdmitsAsync(registry, entry, TreeId, await GetPhysicalTreeIdAsync());
     }
 
     /// <summary>
@@ -331,6 +332,12 @@ internal sealed class TreeShardSplitGrain(
         if (!ShardMapCommitFence.Admits(entry, TreeId, physicalTreeId))
             throw new InvalidOperationException(
                 $"Shard {sourceShardIndex} of tree '{TreeId}' cannot be split while an alias cutover of the tree is in progress.");
+
+        // Refuse a coordinator keyed by a copy another tree aliases: its own row
+        // is not the map routing reads (issue #6083).
+        if (await ShardMapCommitFence.IsAliasTargetAsync(registry, entry, TreeId))
+            throw new InvalidOperationException(
+                $"Shard {sourceShardIndex} of tree '{TreeId}' cannot be split through the copy's own id: tree '{entry!.DerivedFrom}' routes through it. Split through '{entry.DerivedFrom}'.");
 
         // Atomically allocate a fresh target physical shard index via the
         // registry - the registry's non-reentrant scheduling guarantees that

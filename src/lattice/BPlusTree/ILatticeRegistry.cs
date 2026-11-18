@@ -401,15 +401,18 @@ internal interface ILatticeRegistry : IGrainWithStringKey
     /// Fenced form of <see cref="ReassignSlotsAsync(string, int[], int, ShardMap)"/>
     /// for a split or fold bound to <paramref name="boundPhysicalTreeId"/>: applies
     /// the diff exactly as the unfenced form does, but only while
-    /// <see cref="ShardMapCommitFence.Admits"/> holds for the tree's entry, and
+    /// <see cref="ShardMapCommitFence.Admits"/> holds for the tree's entry and the
+    /// tree is not a derived copy its owner aliases
+    /// (<see cref="ShardMapCommitFence.IsAliasTarget"/>, issue #6083), and
     /// returns <see langword="null"/> without writing anything otherwise.
     /// </summary>
     /// <remarks>
     /// The check and the write run inside one call, so no alias cutover can land
     /// between them (issue #4264). A <see langword="null"/> result means the
     /// logical tree now resolves to, or is being cut over to, a different
-    /// physical tree, whose map the diff's shard indices do not describe; the
-    /// caller abandons its migration rather than retrying.
+    /// physical tree, whose map the diff's shard indices do not describe, or that
+    /// <paramref name="treeId"/> is a copy whose routing another tree's row
+    /// holds; the caller abandons its migration rather than retrying.
     /// </remarks>
     /// <param name="treeId">The tree whose shard map is being updated.</param>
     /// <param name="slots">Virtual-slot indices to reassign; may be empty.</param>

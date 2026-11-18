@@ -702,16 +702,24 @@ internal sealed class TreeReshardGrain(
     /// <summary>
     /// Whether automatic healing still has a fold running on this tree. Reads
     /// the orchestrator's tracked donors and asks each donor's coordinator,
-    /// because the orchestrator's own record can over-count.
+    /// because the orchestrator's own record can over-count. Healing keys its
+    /// coordinators by the logical id, as this coordinator does; a fold admitted
+    /// before issue #6083 was fixed may still run under the physical id of an
+    /// aliased tree, so that key is asked too.
     /// </summary>
     private async Task<bool> HasHealingFoldInFlightAsync(string physicalTreeId)
     {
         var donors = await grainFactory.GetGrain<IShardHealingOrchestratorGrain>(TreeId)
             .GetInFlightDonorShardIndicesAsync();
+        var aliased = !string.Equals(physicalTreeId, TreeId, StringComparison.Ordinal);
         foreach (var donor in donors)
         {
-            var fold = grainFactory.GetGrain<ITreeShardConsolidationGrain>($"{physicalTreeId}/{donor}");
-            if (!await fold.IsIdleAsync()) return true;
+            if (!await ConsolidationGrain(donor).IsIdleAsync()) return true;
+            if (aliased
+                && !await grainFactory.GetGrain<ITreeShardConsolidationGrain>($"{physicalTreeId}/{donor}").IsIdleAsync())
+            {
+                return true;
+            }
         }
 
         return false;

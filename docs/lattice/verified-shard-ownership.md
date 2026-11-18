@@ -62,7 +62,10 @@ reader is most likely to over-read are these.
   seal and still holds the rows it had when the split moved it. Its drain
   resolves the survivor's old rows by last-writer-wins, and a row whose key the
   donor no longer holds is tombstoned before the survivor reclaims the slot
-  (#5130, fixed). `ShardOwnershipRetention` still models only the split.
+  (#5130, fixed). It also models the registry row a fold commits onto: the
+  copy is an aliased tree's target, and a fold keyed by the copy's own id,
+  which committed onto a row no router reads, is refused (#6083, fixed).
+  `ShardOwnershipRetention` still models only the split.
 - **Cross-cluster replication is not modelled.** Unlike the
   [atomic-commit protocol](verified-atomic-commit.md#the-replicated-half), whose
   replicated half has its own module, shard ownership's has no formal artefact.

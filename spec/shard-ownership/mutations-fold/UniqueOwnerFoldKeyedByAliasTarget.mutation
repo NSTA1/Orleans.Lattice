@@ -1,0 +1,18 @@
+# Pairs with UniqueOwner. Reproduces production before #6083 was fixed: the
+# healer keyed its folds by the physical copy an aliased tree resolves to, and
+# nothing refused a fold keyed by an alias target. The fold reclaims the slot
+# on the survivor but commits its slot diff onto the copy's own registry row,
+# so the logical row routers read keeps routing the slot to the donor: two
+# shards answer for one key, and the donor is then retired under its routing.
+MODULE: UniqueOwnerFoldKeyedByAliasTarget
+TARGET: UniqueOwner
+CLASS: Invariant
+SUMMARY: a fold keyed by the alias target's id commits onto the copy's row, so the logical map keeps routing the reclaimed slot to the donor
+PERTURBS: FoldBegin
+
+--- FIND
+          /\ key = "logical"
+--- REPLACE
+\* MUTATION: a fold may be keyed by the alias target's own id.
+          /\ key \in Rows
+--- END
