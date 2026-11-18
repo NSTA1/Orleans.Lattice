@@ -172,7 +172,8 @@ under-approximations are stated so that they are not mistaken for coverage:
   and schema remediation stamp. A bare `ILatticeRegistry.SetAliasAsync` onto an
   independent tree records none, so a coordinator keyed by that tree's own id
   is admitted; that tree is a live tree under its own name, not a copy.
-  Production symbols: `ShardMapCommitFence.IsAliasTarget`.
+  Production symbols: `ShardMapCommitFence.IsAliasTarget`, `TreeRegistryEntry.DerivedFrom`,
+  `ILatticeRegistry.SetAliasAsync`.
 - **Time.** No timers or deadlines beyond the compaction guards above.
   No production symbol: the gap is the model's absence of time, not a production
   mechanism.
