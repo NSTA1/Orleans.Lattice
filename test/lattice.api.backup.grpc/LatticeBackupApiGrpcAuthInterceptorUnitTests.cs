@@ -222,6 +222,11 @@ public sealed class LatticeBackupApiGrpcAuthInterceptorUnitTests
             LatticeBackupApiOperation.RunBackupSetScheduleNow,
             (string?)null).SetName("RunBackupSetScheduleNow_no_single_target");
         yield return new TestCaseData(
+            LatticeBackupGrpcMethods.GetBackupSetScheduleProgressMethodName,
+            (object)new BackupSetScheduleNameRequestMessage { Name = "s" },
+            LatticeBackupApiOperation.GetBackupSetScheduleProgress,
+            (string?)null).SetName("GetBackupSetScheduleProgress_no_single_target");
+        yield return new TestCaseData(
             "SomeFutureRpc",
             (object)new BackupHealthAvailabilityRequest(),
             LatticeBackupApiOperation.Unknown,

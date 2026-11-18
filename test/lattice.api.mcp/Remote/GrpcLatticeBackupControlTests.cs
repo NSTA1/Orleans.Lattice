@@ -345,4 +345,25 @@ public sealed class GrpcLatticeBackupControlTests
             async () => await Adapter(new FakeCallInvoker(_ => new RpcException(new Status(StatusCode.NotFound, "none"))))
                 .RunBackupSetScheduleNowAsync("absent"),
             Throws.TypeOf<KeyNotFoundException>());
+
+    [Test]
+    public async Task GetBackupSetScheduleProgressAsync_forwards_the_name_and_unwraps_the_progress()
+    {
+        var progress = new BackupSetScheduleRunProgress(
+            DateTimeOffset.UnixEpoch, BackupSetScheduleTrigger.Schedule, 1, BackupOperationPhases.CapturingMembers,
+            0, 2, BackupOperationUnits.Members, null, DateTimeOffset.UnixEpoch);
+        var invoker = new FakeCallInvoker(_ => new BackupSetScheduleProgressResponse { Found = true, Progress = progress });
+
+        var result = await Adapter(invoker).GetBackupSetScheduleProgressAsync("nightly");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result, Is.SameAs(progress));
+            Assert.That(((BackupSetScheduleNameRequestMessage)invoker.LastRequest!).Name, Is.EqualTo("nightly"));
+            Assert.That(
+                async () => await Adapter(new FakeCallInvoker(_ => new BackupSetScheduleProgressResponse { Found = false }))
+                    .GetBackupSetScheduleProgressAsync("absent"),
+                Throws.TypeOf<KeyNotFoundException>());
+        });
+    }
 }

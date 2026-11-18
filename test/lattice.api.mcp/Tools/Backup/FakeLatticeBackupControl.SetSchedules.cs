@@ -99,4 +99,12 @@ internal sealed partial class FakeLatticeBackupControl
 
         return Task.FromResult(RunNowResult);
     }
+
+    public Task<BackupSetScheduleRunProgress?> GetBackupSetScheduleProgressAsync(string name, CancellationToken cancellationToken = default)
+    {
+        Gate();
+        return _setSchedules.TryGetValue(name, out var status)
+            ? Task.FromResult(status.CurrentRun)
+            : throw new KeyNotFoundException($"No backup-set schedule is named '{name}'.");
+    }
 }

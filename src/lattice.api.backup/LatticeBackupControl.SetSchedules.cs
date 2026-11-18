@@ -25,7 +25,29 @@ internal sealed partial class LatticeBackupControl
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+
+        // A request decoded from the wire (or copied with `with`) never ran its
+        // constructor; rebuild it through the constructor so every branch below
+        // sees a validated request.
+        request = new LatticeBackupSetScheduleRequest(
+            request.Name, request.Membership, request.Scopes, request.Interval,
+            request.RetentionKeepLast, request.RetentionMaxAge, request.CrossTreeConsistent,
+            request.IncludeNewTrees, request.ExcludedTreePrefixes);
         var prefix = await ResolveTenantTreePrefixAsync(cancellationToken).ConfigureAwait(false);
+
+        // Re-registering a name replaces that schedule, and its next run applies
+        // the new retention to the sets it already retains - deleting backups of
+        // trees the new request may not name. The caller must therefore hold the
+        // grant over the existing schedule (its trees and every retained set's
+        // members) as well as over the new request.
+        var existing = await SetScheduleGrain(prefix, request.Name).GetStatusAsync().ConfigureAwait(false);
+        if (existing is not null)
+        {
+            foreach (var scope in AuthorizationScopes(existing, prefix))
+            {
+                await _authorizer.AuthorizeBackupAsync(scope, cancellationToken).ConfigureAwait(false);
+            }
+        }
 
         LatticeBackupSetScheduleRequest effective;
         BackupSetScheduleTarget target;
@@ -100,6 +122,20 @@ internal sealed partial class LatticeBackupControl
     {
         var (_, status, _) = await AuthorizeExistingScheduleAsync(name, cancellationToken).ConfigureAwait(false);
         return status;
+    }
+
+    /// <inheritdoc />
+    public async Task<BackupSetScheduleRunProgress?> GetBackupSetScheduleProgressAsync(
+        string name,
+        CancellationToken cancellationToken = default)
+    {
+        var (_, status, _) = await AuthorizeExistingScheduleAsync(name, cancellationToken).ConfigureAwait(false);
+        if (status is null)
+        {
+            throw new KeyNotFoundException($"No backup-set schedule is named '{name}'.");
+        }
+
+        return status.CurrentRun;
     }
 
     /// <inheritdoc />
@@ -182,9 +218,12 @@ internal sealed partial class LatticeBackupControl
 
     /// <summary>
     /// The scopes a caller must be authorized over to act on a schedule: every
-    /// scope it captures, and the tenant-wide (or cluster-wide) scope when it
-    /// re-resolves its trees. Read back from the schedule's own state, which holds
-    /// effective ids, so none is re-composed.
+    /// scope it captures, the tenant-wide (or cluster-wide) scope when it
+    /// re-resolves its trees, and every member of every set it retains - which can
+    /// name trees an earlier registration captured and the current one does not,
+    /// and which retention or removal may delete. Read back from the schedule's own
+    /// state, which holds effective ids, so none is re-composed; each tree is
+    /// yielded once.
     /// </summary>
     private static IEnumerable<BackupScopeSelector> AuthorizationScopes(BackupSetScheduleStatus status, string? prefix)
     {
@@ -193,9 +232,24 @@ internal sealed partial class LatticeBackupControl
             yield return WideScope(prefix);
         }
 
+        var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var scope in status.MemberScopes)
         {
-            yield return scope;
+            if (seen.Add(scope.TreeId))
+            {
+                yield return scope;
+            }
+        }
+
+        foreach (var set in status.RetainedSets)
+        {
+            foreach (var member in set.Members)
+            {
+                if (seen.Add(member.TreeId))
+                {
+                    yield return member.Scope;
+                }
+            }
         }
     }
 

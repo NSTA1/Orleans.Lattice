@@ -60,6 +60,12 @@ internal sealed partial class BackupSetSchedulerGrain(
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(target);
+
+        // A request decoded from the wire never ran its constructor, so it is
+        // re-validated (by round-tripping through it) before anything is written:
+        // a persisted config that cannot rebuild its request would wedge the grain.
+        var config = BackupSetScheduleConfig.From(request);
+        _ = config.ToRequest();
         var period = ClampInterval(request.Interval);
         var s = state.State;
         var previous = (s.Config, s.Target, s.Scheduled, s.RegisteredAtUtc);
@@ -69,7 +75,7 @@ internal sealed partial class BackupSetSchedulerGrain(
             && s.Config is { } existing
             && ClampInterval(existing.Interval) == period;
 
-        s.Config = BackupSetScheduleConfig.From(request);
+        s.Config = config;
         s.Target = target;
         s.Scheduled = true;
         if (!keepClock)
@@ -290,7 +296,6 @@ internal sealed partial class BackupSetSchedulerGrain(
     /// </summary>
     private async Task<BackupSetScheduleRun> RunGuardedCycleAsync(BackupSetScheduleTrigger trigger)
     {
-        var request = state.State.Config!.ToRequest();
         var target = state.State.Target!;
         var options = backupOptions.Value;
         var startedAt = DateTimeOffset.UtcNow;
@@ -301,6 +306,7 @@ internal sealed partial class BackupSetSchedulerGrain(
         _progress = progress;
         try
         {
+            var request = state.State.Config!.ToRequest();
             await progress.ReportAsync(BackupOperationPhases.ResolvingMembers);
             var scopes = await ResolveScopesAsync(request, target);
             memberCount = scopes.Count;
@@ -347,9 +353,26 @@ internal sealed partial class BackupSetSchedulerGrain(
                 startedAt, finishedAt, trigger, BackupScopeRunOutcome.Success, set.SetId, memberCount, attempts, null);
             RecordRun(run);
             await state.WriteStateAsync();
-            await Registry.SetRetainedSetIdsAsync(ScheduleKey, state.State.Sets.Select(s => s.SetId).ToList());
-            await progress.ReportAsync(BackupOperationPhases.ApplyingRetention);
-            await ApplyRetentionAsync(request);
+
+            // The set is captured and its run recorded; what follows is
+            // housekeeping. A fault here must not record a second, failed run for
+            // a capture that succeeded - the next run re-publishes the retained
+            // ids and re-applies retention, so it is logged and left to retry.
+            try
+            {
+                await Registry.SetRetainedSetIdsAsync(ScheduleKey, state.State.Sets.Select(s => s.SetId).ToList());
+                await progress.ReportAsync(BackupOperationPhases.ApplyingRetention);
+                await ApplyRetentionAsync(request);
+            }
+            catch (Exception ex)
+            {
+                LatticeBackupMetrics.RecordSchedulerFailure(ScheduleKey, LatticeBackupMetrics.MapReason(ex));
+                logger.LogWarning(
+                    ex,
+                    "Backup-set schedule {Schedule}: set {SetId} was captured, but applying retention failed; the next run retries it.",
+                    ScheduleKey, set.SetId);
+            }
+
             logger.LogInformation(
                 "Backup-set schedule {Schedule}: captured set {SetId} over {MemberCount} tree(s) in {Attempts} attempt(s).",
                 ScheduleKey, set.SetId, memberCount, attempts);

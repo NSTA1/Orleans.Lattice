@@ -561,6 +561,19 @@ internal sealed class LatticeBackupCaptureService(
         var totalDrainWait = TimeSpan.Zero;
         var totalDrained = 0;
 
+        // Authorize, admit, size-check and record the WAL head frontier of every
+        // member up front, before any fence or gate is taken: none of it needs the
+        // gate, and on a large set these per-tree round trips would otherwise
+        // dominate the window in which saga decisions on the set are refused. The
+        // WAL heads stay ahead of every later snapshot open, which is the only
+        // ordering an incremental depends on (an entry landing in between is
+        // re-read forward, a benign last-writer-wins overlap).
+        var prepared = new PreparedTree[scopes.Count];
+        for (var i = 0; i < scopes.Count; i++)
+        {
+            prepared[i] = await PrepareTreeAsync(scopes[i], cancellationToken).ConfigureAwait(false);
+        }
+
         for (var attempt = 1; attempt <= options.MaxCrossTreeFenceAttempts; attempt++)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -651,7 +664,7 @@ internal sealed class LatticeBackupCaptureService(
                                 fenceHlc = DateTimeOffset.UtcNow.UtcTicks;
                                 using (SnapshotDecisionGateContext.With(gateToken))
                                 {
-                                    await PinMembersAsync(request, pins, options, cancellationToken).ConfigureAwait(false);
+                                    await PinMembersAsync(prepared, pins, options, cancellationToken).ConfigureAwait(false);
                                 }
 
                                 pinnedAll = true;
@@ -990,6 +1003,20 @@ internal sealed class LatticeBackupCaptureService(
     /// </summary>
     private async Task<PinnedTree> PinTreeAsync(BackupScopeSelector scope, CancellationToken cancellationToken)
     {
+        var prepared = await PrepareTreeAsync(scope, cancellationToken).ConfigureAwait(false);
+        return await OpenPinAsync(prepared, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The preparatory half of <see cref="PinTreeAsync"/>: authorizes the scope,
+    /// charges the capture, enforces the snapshot size gate, and records the WAL
+    /// head frontier - everything that must precede the snapshot open but need not
+    /// coincide with it. A cross-tree-consistent set prepares every member before
+    /// it fences, so none of these round trips is paid while the set's decision
+    /// gate is held.
+    /// </summary>
+    private async Task<PreparedTree> PrepareTreeAsync(BackupScopeSelector scope, CancellationToken cancellationToken)
+    {
         var treeId = scope.TreeId;
         var stopwatch = Stopwatch.StartNew();
         try
@@ -1025,6 +1052,34 @@ internal sealed class LatticeBackupCaptureService(
             // is re-read forward by the increment (a benign last-writer-wins overlap)
             // rather than lost.
             var walPartitionOffsets = await CaptureWalHeadsAsync(treeId, cancellationToken).ConfigureAwait(false);
+            return new PreparedTree(scope, lattice, walPartitionOffsets, inScopeCount, stopwatch.Elapsed);
+        }
+        catch (Exception ex) when (LatticeBackupMetrics.EmitCaptureFailure(
+            BackupKind.Full, LatticeBackupMetrics.PhaseSnapshotOpen, ex))
+        {
+            // The filter records the failure metric and returns false, so this
+            // catch never runs and the original exception propagates unchanged.
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// The opening half of <see cref="PinTreeAsync"/>: opens the point-in-time
+    /// snapshot cursor that fixes the capture's cut. Everything the backup will
+    /// hold is decided here: the snapshot freezes its per-shard baselines, and
+    /// resolves every pending saga against the ambient saga decision gate, when it
+    /// opens. The returned pin owns the open cursor;
+    /// <see cref="DrainPinnedAsync"/> or <see cref="ReleasePinAsync"/> closes it.
+    /// </summary>
+    private async Task<PinnedTree> OpenPinAsync(PreparedTree prepared, CancellationToken cancellationToken)
+    {
+        var scope = prepared.Scope;
+        var treeId = scope.TreeId;
+        var lattice = prepared.Lattice;
+        var stopwatch = Stopwatch.StartNew();
+        try
+        {
+            var (startInclusive, endExclusive) = BackupScopeRange.Resolve(scope);
 
             // Open the point-in-time cut through the public snapshot cursor surface;
             // this consults the core shedding / budget policy and surfaces
@@ -1038,7 +1093,8 @@ internal sealed class LatticeBackupCaptureService(
             {
                 var coordinate = await cursor.GetSnapshotCoordinateAsync().ConfigureAwait(false);
                 return new PinnedTree(
-                    scope, lattice, cursorId, cursor, coordinate, walPartitionOffsets, inScopeCount, stopwatch.Elapsed);
+                    scope, lattice, cursorId, cursor, coordinate, prepared.WalPartitionOffsets,
+                    prepared.InScopeCount, prepared.PrepareElapsed + stopwatch.Elapsed);
             }
             catch
             {
@@ -1224,6 +1280,17 @@ internal sealed class LatticeBackupCaptureService(
     }
 
     /// <summary>
+    /// One member tree prepared for its snapshot open: authorized, admitted,
+    /// size-checked, and with its WAL head frontier recorded.
+    /// </summary>
+    private sealed record PreparedTree(
+        BackupScopeSelector Scope,
+        ILattice Lattice,
+        IReadOnlyDictionary<int, long> WalPartitionOffsets,
+        long InScopeCount,
+        TimeSpan PrepareElapsed);
+
+    /// <summary>
     /// One member tree's point-in-time snapshot, pinned and not yet drained.
     /// </summary>
     private sealed record PinnedTree(
@@ -1323,25 +1390,24 @@ internal sealed class LatticeBackupCaptureService(
     /// a large estate never holds every tree in memory at once.
     /// </summary>
     private async Task PinMembersAsync(
-        LatticeBackupSetCaptureRequest request,
+        IReadOnlyList<PreparedTree> prepared,
         List<PinnedTree> pins,
         LatticeBackupOptions options,
         CancellationToken cancellationToken)
     {
-        var scopes = request.Scopes;
         var progress = LatticeOperationProgress.Current;
         if (progress is not null)
         {
             await progress.ReportAsync(
-                BackupOperationPhases.CapturingMembers, 0, scopes.Count, BackupOperationUnits.Members).ConfigureAwait(false);
+                BackupOperationPhases.CapturingMembers, 0, prepared.Count, BackupOperationUnits.Members).ConfigureAwait(false);
         }
 
         long inMemory = 0;
         using (LatticeOperationProgress.Enter(null))
         {
-            foreach (var scope in scopes)
+            foreach (var member in prepared)
             {
-                var pin = await PinTreeAsync(scope, cancellationToken).ConfigureAwait(false);
+                var pin = await OpenPinAsync(member, cancellationToken).ConfigureAwait(false);
                 pins.Add(pin);
                 inMemory += pin.InScopeCount;
                 if (inMemory > options.CrossTreeSetPinnedEntryBudget)
@@ -1355,7 +1421,7 @@ internal sealed class LatticeBackupCaptureService(
                     await progress.ReportAsync(
                         BackupOperationPhases.CapturingMembers,
                         pins.Count,
-                        scopes.Count,
+                        prepared.Count,
                         BackupOperationUnits.Members).ConfigureAwait(false);
                 }
             }

@@ -97,6 +97,44 @@ public sealed class LatticeBackupSetCaptureStagingTests
         }
     }
 
+    [Test]
+    public async Task Every_member_is_authorized_before_any_member_is_pinned()
+    {
+        // Regression (#6090 review): authorization, the size check and the WAL head
+        // read ran per member under the set's decision gate, interleaved with the
+        // snapshot opens. They now run for every member before the fence, so the
+        // gate covers only the opens.
+        await _fixture.InitializeAsync();
+        var suffix = Guid.NewGuid().ToString("N");
+        var trees = new[] { $"prep-a-{suffix}", $"prep-b-{suffix}", $"prep-c-{suffix}" };
+        foreach (var tree in trees)
+        {
+            await Tree(tree).SetAsync("k", Bytes("v"));
+        }
+
+        var log = new List<string>();
+        var capture = _fixture.CreateCaptureServiceWith(new BackupAccessAuthorizer(new LoggingAccessGate(log)));
+        using (LatticeOperationProgress.Enter(new PhaseLog(log)))
+        {
+            await capture.CaptureSetAsync(new LatticeBackupSetCaptureRequest(
+                $"prep-{suffix}", trees.Select(BackupScopeSelector.WholeTree).ToList(), crossTreeConsistent: true));
+        }
+
+        List<string> snapshot;
+        lock (log)
+        {
+            snapshot = [.. log];
+        }
+
+        var firstPin = snapshot.IndexOf($"phase:{BackupOperationPhases.CapturingMembers}");
+        Assert.That(firstPin, Is.GreaterThan(0), "the set reports its pin phase");
+        foreach (var tree in trees)
+        {
+            var authorized = snapshot.IndexOf($"auth:{tree}");
+            Assert.That(authorized, Is.InRange(0, firstPin - 1), $"{tree} must be authorized before the pin phase");
+        }
+    }
+
     private async Task<string?> ValueAsync(LatticeBackupSetCaptureResult result, string treeId)
     {
         var member = result.Members.Single(m => m.Manifest.Scope.TreeId == treeId);
@@ -122,6 +160,34 @@ public sealed class LatticeBackupSetCaptureStagingTests
     private ILattice Tree(string treeId) => _fixture.GrainFactory.GetGrain<ILattice>(treeId);
 
     private static byte[] Bytes(string s) => Encoding.UTF8.GetBytes(s);
+
+    private sealed class LoggingAccessGate(List<string> log) : ILatticeAccessGate
+    {
+        public ValueTask<LatticeAccessDecision> AuthorizeAsync(
+            in LatticeAccessRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            lock (log)
+            {
+                log.Add($"auth:{request.TreeId}");
+            }
+
+            return new(LatticeAccessDecision.Allow());
+        }
+    }
+
+    private sealed class PhaseLog(List<string> log) : ILatticeOperationProgress
+    {
+        public ValueTask ReportAsync(string phase, long completedUnits = 0, long? totalUnits = null, string? unitName = null)
+        {
+            lock (log)
+            {
+                log.Add($"phase:{phase}");
+            }
+
+            return ValueTask.CompletedTask;
+        }
+    }
 
     private sealed class WritingPhaseHook(Func<Task> write) : ILatticeOperationProgress
     {

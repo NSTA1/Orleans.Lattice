@@ -64,6 +64,7 @@ The gRPC service name is `orleans.lattice.api.backup`.
 | `GetBackupSetScheduleStatus` | unary | Read a backup-set schedule's status, live run progress, recent runs, and retained sets |
 | `ListBackupSetSchedules` | unary | List the caller's backup-set schedules |
 | `RunBackupSetScheduleNow` | unary | Start one run of a backup-set schedule now |
+| `GetBackupSetScheduleProgress` | unary | Read only the live progress of a backup-set schedule's in-flight run, for polling |
 
 The start RPC request messages (`BackupCaptureRequestMessage`, `BackupIncrementalCaptureRequestMessage`, `BackupSetCaptureRequestMessage`, `RestoreRequestMessage`, `BackupHealthCheckRequestMessage`, `BackupCatalogRebuildRequestMessage`, and `BackupCatalogScrubRequestMessage`) carry optional `TrackingOperationId`, the idempotency id of the tracked operation. `RestoreRequestMessage.OperationId` keeps its meaning as the restore engine's own key; pass `TrackingOperationId` separately for the tracked operation. The blocking `CreateBackup`, `CreateIncrementalBackup`, `CreateBackupSet`, `RestoreBackup`, and `CheckBackupHealth` RPCs were removed in this major version; see [Backup operations](../lattice.api.backup/operations.md#migrating-from-the-removed-blocking-verbs). A server registered only with `ILatticeBackupControl` still serves the direct-call RPCs; if that control does not also implement `ILatticeBackupOperations`, the start and operation RPCs return gRPC `Unimplemented`.
 

@@ -73,6 +73,53 @@ public sealed partial class LatticeBackupGrpcServiceUnitTests
     }
 
     [Test]
+    public async Task GetBackupSetScheduleProgress_reports_progress_idle_and_not_found()
+    {
+        var control = Substitute.For<ILatticeBackupControl>();
+        var progress = BackupSetScheduleTestData.Progress();
+        control.GetBackupSetScheduleProgressAsync("running", Arg.Any<CancellationToken>()).Returns(progress);
+        control.GetBackupSetScheduleProgressAsync("idle", Arg.Any<CancellationToken>()).Returns((BackupSetScheduleRunProgress?)null);
+        control.GetBackupSetScheduleProgressAsync("absent", Arg.Any<CancellationToken>())
+            .ThrowsAsync(new KeyNotFoundException("No backup-set schedule is named 'absent'."));
+        var service = CreateService(control);
+
+        var running = await service.GetBackupSetScheduleProgress(new BackupSetScheduleNameRequestMessage { Name = "running" }, Context());
+        var idle = await service.GetBackupSetScheduleProgress(new BackupSetScheduleNameRequestMessage { Name = "idle" }, Context());
+        var missing = await service.GetBackupSetScheduleProgress(new BackupSetScheduleNameRequestMessage { Name = "absent" }, Context());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That((running.Found, running.Progress), Is.EqualTo((true, progress)));
+            Assert.That((idle.Found, idle.Progress), Is.EqualTo((true, (BackupSetScheduleRunProgress?)null)));
+            Assert.That((missing.Found, missing.Progress), Is.EqualTo((false, (BackupSetScheduleRunProgress?)null)));
+        });
+    }
+
+    [Test]
+    public void GetBackupSetScheduleProgress_on_a_facade_without_it_answers_unimplemented()
+    {
+        var service = CreateService(new NoSetScheduleControl());
+
+        var ex = Assert.ThrowsAsync<RpcException>(async () =>
+            await service.GetBackupSetScheduleProgress(new BackupSetScheduleNameRequestMessage { Name = "nightly" }, Context()));
+
+        Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.Unimplemented));
+    }
+
+    [Test]
+    public void GetBackupSetScheduleProgress_maps_a_denial_to_permission_denied()
+    {
+        var control = Substitute.For<ILatticeBackupControl>();
+        control.GetBackupSetScheduleProgressAsync("guarded", Arg.Any<CancellationToken>())
+            .ThrowsAsync(new LatticeAuthorizationDeniedException("no"));
+
+        var ex = Assert.ThrowsAsync<RpcException>(async () => await CreateService(control)
+            .GetBackupSetScheduleProgress(new BackupSetScheduleNameRequestMessage { Name = "guarded" }, Context()));
+
+        Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
+    }
+
+    [Test]
     public async Task ListBackupSetSchedules_wraps_every_status()
     {
         var control = Substitute.For<ILatticeBackupControl>();

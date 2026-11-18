@@ -53,10 +53,14 @@ public sealed class ShellBackupControlTransportTests : ShellTransportAdapterCont
         new("GetBackupSetScheduleStatusAsync", Service + "GetBackupSetScheduleStatus", (f, ct) => f.GetBackupSetScheduleStatusAsync("pics", ct)),
         new("ListBackupSetSchedulesAsync", Service + "ListBackupSetSchedules", (f, ct) => f.ListBackupSetSchedulesAsync(ct)),
         new("RunBackupSetScheduleNowAsync", Service + "RunBackupSetScheduleNow", (f, ct) => f.RunBackupSetScheduleNowAsync("pics", ct)),
+        new("GetBackupSetScheduleProgressAsync", Service + "GetBackupSetScheduleProgress", (f, ct) => f.GetBackupSetScheduleProgressAsync("pics", ct)),
     ];
 
-    internal override void ScriptSuccess(ShellTransportPeer peer) =>
+    internal override void ScriptSuccess(ShellTransportPeer peer)
+    {
         peer.Respond(Service + "ScheduleBackupSet", new BackupSetScheduleStatusResponse { Found = true, Status = SetStatus });
+        peer.Respond(Service + "GetBackupSetScheduleProgress", new BackupSetScheduleProgressResponse { Found = true });
+    }
 
     [Test]
     public void The_verbs_the_binding_does_not_serve_fail_as_not_supported_without_a_call()
@@ -159,6 +163,7 @@ public sealed class ShellBackupControlTransportTests : ShellTransportAdapterCont
             Assert.That(() => control.RemoveBackupSetScheduleAsync(string.Empty, false), Throws.ArgumentException);
             Assert.That(() => control.GetBackupSetScheduleStatusAsync(string.Empty), Throws.ArgumentException);
             Assert.That(() => control.RunBackupSetScheduleNowAsync(string.Empty), Throws.ArgumentException);
+            Assert.That(() => control.GetBackupSetScheduleProgressAsync(string.Empty), Throws.ArgumentException);
             Assert.That(circuit.Peer.Requests, Is.Empty);
         });
     }

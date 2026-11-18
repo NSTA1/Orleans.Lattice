@@ -155,4 +155,7 @@ public static class GrpcBackupTypeAliases
 
     /// <summary>Alias for <see cref="BackupSetScheduleListResponse"/>.</summary>
     public const string BackupSetScheduleListResponse = "oibg.sslresp";
+
+    /// <summary>Alias for <see cref="BackupSetScheduleProgressResponse"/>.</summary>
+    public const string BackupSetScheduleProgressResponse = "oibg.ssprogresp";
 }

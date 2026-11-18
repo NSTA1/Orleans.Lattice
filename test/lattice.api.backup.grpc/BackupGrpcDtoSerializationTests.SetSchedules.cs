@@ -71,6 +71,22 @@ public sealed partial class BackupGrpcDtoSerializationTests
         Assert.That(RoundTrip(new BackupSetScheduleListRequestMessage()), Is.Not.Null);
 
     [Test]
+    public void BackupSetScheduleProgressResponse_round_trips_the_progress()
+    {
+        var progress = BackupSetScheduleTestData.Progress();
+
+        var copy = RoundTrip(new BackupSetScheduleProgressResponse { Found = true, Progress = progress });
+        var notFound = RoundTrip(new BackupSetScheduleProgressResponse { Found = false });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(copy.Found, Is.True);
+            Assert.That(copy.Progress, Is.EqualTo(progress));
+            Assert.That((notFound.Found, notFound.Progress), Is.EqualTo((false, (BackupSetScheduleRunProgress?)null)));
+        });
+    }
+
+    [Test]
     public void BackupSetScheduleListResponse_round_trips_every_schedule()
     {
         var copy = RoundTrip(new BackupSetScheduleListResponse

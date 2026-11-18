@@ -125,6 +125,34 @@ public sealed class LatticeBackupApiGrpcClientSetScheduleUnitTests
     }
 
     [Test]
+    public async Task GetBackupSetScheduleProgressAsync_returns_the_progress_or_null_and_throws_when_not_found()
+    {
+        var progress = BackupSetScheduleTestData.Progress();
+        var (client, invoker) = Client(new BackupSetScheduleProgressResponse { Found = true, Progress = progress });
+
+        var running = await client.GetBackupSetScheduleProgressAsync("nightly");
+        var idle = await Client(new BackupSetScheduleProgressResponse { Found = true }).Client
+            .GetBackupSetScheduleProgressAsync("nightly");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(running, Is.SameAs(progress));
+            Assert.That(idle, Is.Null);
+            Assert.That(invoker.LastMethodName, Is.EqualTo(LatticeBackupGrpcMethods.GetBackupSetScheduleProgressMethodName));
+            Assert.That(((BackupSetScheduleNameRequestMessage)invoker.LastRequest!).Name, Is.EqualTo("nightly"));
+            Assert.That(
+                async () => await Client(new BackupSetScheduleProgressResponse { Found = false }).Client
+                    .GetBackupSetScheduleProgressAsync("absent"),
+                Throws.TypeOf<KeyNotFoundException>().With.Message.Contains("absent"));
+            Assert.That(
+                async () => await Client(new RpcException(new Status(StatusCode.Unimplemented, "unsupported"))).Client
+                    .GetBackupSetScheduleProgressAsync("nightly"),
+                Throws.TypeOf<NotSupportedException>());
+            Assert.That(async () => await client.GetBackupSetScheduleProgressAsync(string.Empty), Throws.ArgumentException);
+        });
+    }
+
+    [Test]
     public void RunBackupSetScheduleNowAsync_maps_not_found_to_key_not_found()
     {
         var (client, _) = Client(new RpcException(new Status(StatusCode.NotFound, "No backup-set schedule is named 'absent'.")));

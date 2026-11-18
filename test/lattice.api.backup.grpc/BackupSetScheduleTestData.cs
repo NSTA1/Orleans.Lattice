@@ -17,6 +17,18 @@ internal static class BackupSetScheduleTestData
             retentionKeepLast: 3,
             retentionMaxAge: TimeSpan.FromDays(2));
 
+    public static BackupSetScheduleRunProgress Progress() =>
+        new(
+            DateTimeOffset.UnixEpoch.AddMinutes(5),
+            BackupSetScheduleTrigger.Manual,
+            attempt: 2,
+            BackupOperationPhases.WritingMembers,
+            completedUnits: 1,
+            totalUnits: 2,
+            BackupOperationUnits.Members,
+            currentTreeId: "orders",
+            updatedAtUtc: DateTimeOffset.UnixEpoch.AddMinutes(6));
+
     public static BackupSetScheduleStatus Status(string name = "nightly")
     {
         var request = Request(name);

@@ -28,6 +28,9 @@ internal sealed partial class FakeBackupControl
     /// <summary>The run-now verb; true for a stored schedule, <see cref="KeyNotFoundException"/> otherwise, by default.</summary>
     public Func<string, Task<bool>>? RunSetNow { get; set; }
 
+    /// <summary>The progress read; a stored schedule's current run, <see cref="KeyNotFoundException"/> otherwise, by default.</summary>
+    public Func<string, Task<BackupSetScheduleRunProgress?>>? SetProgress { get; set; }
+
     /// <summary>A scheduled backup-set status for tests.</summary>
     /// <param name="request">The schedule's request.</param>
     /// <param name="scheduled">Whether it is scheduled rather than paused.</param>
@@ -120,5 +123,19 @@ internal sealed partial class FakeBackupControl
         return SetSchedules.ContainsKey(name)
             ? Task.FromResult(true)
             : Task.FromException<bool>(new KeyNotFoundException(name));
+    }
+
+    /// <inheritdoc />
+    public Task<BackupSetScheduleRunProgress?> GetBackupSetScheduleProgressAsync(string name, CancellationToken cancellationToken = default)
+    {
+        Calls.Add((nameof(GetBackupSetScheduleProgressAsync), name));
+        if (SetProgress is { } progress)
+        {
+            return progress(name);
+        }
+
+        return SetSchedules.TryGetValue(name, out var status)
+            ? Task.FromResult(status.CurrentRun)
+            : Task.FromException<BackupSetScheduleRunProgress?>(new KeyNotFoundException(name));
     }
 }

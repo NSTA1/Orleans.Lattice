@@ -98,6 +98,57 @@ public sealed partial class BackupSetSchedulesSectionTests
     }
 
     [Test]
+    public void While_a_run_is_in_flight_the_section_reads_only_its_progress_then_the_listing_once_it_ends()
+    {
+        Backups.SetSchedules[Nightly.Name] = Running(Progress(BackupOperationPhases.WritingMembers, 1, 2, "albums"));
+        var cut = RenderAt<BackupSchedulesPage>(Page);
+        cut.WaitUntil(() => Assert.That(cut.Find("[data-lt-set-run-progress]").TextContent, Does.Contain("1 of 2 trees")));
+        var lists = Backups.CountOf(nameof(ILatticeBackupControl.ListBackupSetSchedulesAsync));
+
+        Backups.SetSchedules[Nightly.Name] = Running(Progress(BackupOperationPhases.WritingMembers, 2, 2, "photos"));
+        Tick();
+        cut.WaitUntil(() => Assert.That(cut.Find("[data-lt-set-run-progress]").TextContent, Does.Contain("2 of 2 trees, now photos")));
+        Assert.Multiple(() =>
+        {
+            Assert.That(Backups.CountOf(nameof(ILatticeBackupControl.GetBackupSetScheduleProgressAsync)), Is.EqualTo(1));
+            Assert.That(Backups.CountOf(nameof(ILatticeBackupControl.ListBackupSetSchedulesAsync)), Is.EqualTo(lists), "a running tick reads no listing");
+        });
+
+        Backups.SetSchedules[Nightly.Name] = FakeBackupControl.SetStatus(Nightly);
+        Tick();
+        cut.WaitUntil(() => Assert.That(cut.FindAll("[data-lt-set-run-progress]"), Is.Empty));
+        Time.Advance(ClusterStatusPoller.Interval * 3);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Backups.CountOf(nameof(ILatticeBackupControl.GetBackupSetScheduleProgressAsync)), Is.EqualTo(2));
+            Assert.That(Backups.CountOf(nameof(ILatticeBackupControl.ListBackupSetSchedulesAsync)), Is.EqualTo(lists + 1), "one listing once the run ends, then none");
+        });
+    }
+
+    [Test]
+    public void A_connection_without_the_progress_read_falls_back_to_re_reading_the_listing()
+    {
+        Backups.SetProgress = _ => Task.FromException<BackupSetScheduleRunProgress?>(new NotSupportedException());
+        Backups.SetSchedules[Nightly.Name] = Running(Progress(BackupOperationPhases.WritingMembers, 1, 2, "albums"));
+        var cut = RenderAt<BackupSchedulesPage>(Page);
+        cut.WaitUntil(() => Assert.That(cut.Find("[data-lt-set-run-progress]").TextContent, Does.Contain("1 of 2 trees")));
+        var lists = Backups.CountOf(nameof(ILatticeBackupControl.ListBackupSetSchedulesAsync));
+
+        Backups.SetSchedules[Nightly.Name] = Running(Progress(BackupOperationPhases.WritingMembers, 2, 2, "photos"));
+        Tick();
+        cut.WaitUntil(() => Assert.That(cut.Find("[data-lt-set-run-progress]").TextContent, Does.Contain("2 of 2 trees, now photos")));
+        Tick();
+        cut.WaitUntil(() => Assert.That(
+            Backups.CountOf(nameof(ILatticeBackupControl.ListBackupSetSchedulesAsync)), Is.EqualTo(lists + 2)));
+
+        Assert.That(
+            Backups.CountOf(nameof(ILatticeBackupControl.GetBackupSetScheduleProgressAsync)),
+            Is.EqualTo(1),
+            "a refused progress read is not asked again");
+    }
+
+    [Test]
     public void Leaving_the_page_stops_re_reading_a_running_schedule()
     {
         Backups.SetSchedules[Nightly.Name] = Running(Progress(BackupOperationPhases.CapturingMembers, 0, 2, null));

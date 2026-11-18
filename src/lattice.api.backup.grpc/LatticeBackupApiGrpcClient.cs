@@ -688,6 +688,32 @@ public sealed class LatticeBackupApiGrpcClient
     }
 
     /// <summary>
+    /// Reads only the live progress of the in-flight run of the backup-set schedule
+    /// named <paramref name="name"/> - the lightweight read for polling a run, which
+    /// does not carry the schedule's member trees, recent runs or retained sets.
+    /// </summary>
+    /// <param name="name">The schedule's name. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The in-flight run's progress, or <see langword="null"/> when no run is in flight.</returns>
+    /// <exception cref="ArgumentException"><paramref name="name"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="KeyNotFoundException">No schedule has the name (the server answered <c>Found = false</c>).</exception>
+    /// <exception cref="NotSupportedException">The server does not serve the progress read (it answered <see cref="StatusCode.Unimplemented"/>).</exception>
+    public async Task<BackupSetScheduleRunProgress?> GetBackupSetScheduleProgressAsync(
+        string name,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        var response = await SetScheduleUnaryAsync(
+            _methods.GetBackupSetScheduleProgress,
+            new BackupSetScheduleNameRequestMessage { Name = name },
+            cancellationToken).ConfigureAwait(false);
+
+        return response.Found
+            ? response.Progress
+            : throw new KeyNotFoundException($"No backup-set schedule is named '{name}'.");
+    }
+
+    /// <summary>
     /// Issues a backup-set schedule RPC, surfacing a server whose backup control
     /// does not support backup-set schedules (<see cref="StatusCode.Unimplemented"/>)
     /// as the <see cref="NotSupportedException"/> the facade contract names.

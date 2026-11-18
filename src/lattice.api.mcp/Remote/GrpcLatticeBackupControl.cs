@@ -116,4 +116,8 @@ internal sealed class GrpcLatticeBackupControl : ILatticeBackupControl
     /// <inheritdoc />
     public Task<bool> RunBackupSetScheduleNowAsync(string name, CancellationToken cancellationToken = default)
         => _client.RunBackupSetScheduleNowAsync(name, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<BackupSetScheduleRunProgress?> GetBackupSetScheduleProgressAsync(string name, CancellationToken cancellationToken = default)
+        => _client.GetBackupSetScheduleProgressAsync(name, cancellationToken);
 }

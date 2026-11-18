@@ -219,6 +219,7 @@ internal sealed class LatticeBackupApiGrpcAuthInterceptor : Interceptor
             LatticeBackupGrpcMethods.GetBackupSetScheduleStatusMethodName => LatticeBackupApiOperation.GetBackupSetScheduleStatus,
             LatticeBackupGrpcMethods.ListBackupSetSchedulesMethodName => LatticeBackupApiOperation.ListBackupSetSchedules,
             LatticeBackupGrpcMethods.RunBackupSetScheduleNowMethodName => LatticeBackupApiOperation.RunBackupSetScheduleNow,
+            LatticeBackupGrpcMethods.GetBackupSetScheduleProgressMethodName => LatticeBackupApiOperation.GetBackupSetScheduleProgress,
             _ => LatticeBackupApiOperation.Unknown,
         };
 

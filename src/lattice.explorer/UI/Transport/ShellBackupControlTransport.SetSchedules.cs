@@ -58,4 +58,11 @@ internal sealed partial class ShellBackupControlTransport
         ArgumentException.ThrowIfNullOrEmpty(name);
         return CallAsync(name, static (client, state, ct) => client.RunBackupSetScheduleNowAsync(state, ct), null, cancellationToken);
     }
+
+    /// <inheritdoc />
+    public Task<BackupSetScheduleRunProgress?> GetBackupSetScheduleProgressAsync(string name, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        return CallAsync(name, static (client, state, ct) => client.GetBackupSetScheduleProgressAsync(state, ct), null, cancellationToken);
+    }
 }

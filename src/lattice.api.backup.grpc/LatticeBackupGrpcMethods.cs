@@ -27,7 +27,8 @@ namespace Orleans.Lattice.Api.Backup.Grpc;
 /// <c>ListBackupOperations</c>, <c>CancelBackupOperation</c>), and the backup-set
 /// schedule RPCs (<c>ScheduleBackupSet</c>, <c>CancelBackupSetSchedule</c>,
 /// <c>RemoveBackupSetSchedule</c>, <c>GetBackupSetScheduleStatus</c>,
-/// <c>ListBackupSetSchedules</c>, <c>RunBackupSetScheduleNow</c>). The blocking
+/// <c>ListBackupSetSchedules</c>, <c>RunBackupSetScheduleNow</c>,
+/// <c>GetBackupSetScheduleProgress</c>). The blocking
 /// Contract-versioning policy: fields on the wire
 /// messages are additive-only (new <c>[Id(n)]</c>); aliases and field numbers
 /// are never renumbered, so a newer response decodes cleanly under an older
@@ -134,6 +135,9 @@ internal sealed class LatticeBackupGrpcMethods
     /// <summary>The unary run-backup-set-schedule-now RPC method name.</summary>
     public const string RunBackupSetScheduleNowMethodName = "RunBackupSetScheduleNow";
 
+    /// <summary>The unary backup-set-schedule run-progress RPC method name.</summary>
+    public const string GetBackupSetScheduleProgressMethodName = "GetBackupSetScheduleProgress";
+
     /// <summary>Initialises the method definitions from DI-resolved serializers.</summary>
     public LatticeBackupGrpcMethods(
         Serializer<BackupCaptureRequestMessage> captureRequestSerializer,
@@ -186,7 +190,8 @@ internal sealed class LatticeBackupGrpcMethods
         Serializer<BackupSetScheduleRemoveRequestMessage> setScheduleRemoveRequestSerializer,
         Serializer<BackupSetScheduleActionResponse> setScheduleActionResponseSerializer,
         Serializer<BackupSetScheduleListRequestMessage> setScheduleListRequestSerializer,
-        Serializer<BackupSetScheduleListResponse> setScheduleListResponseSerializer)
+        Serializer<BackupSetScheduleListResponse> setScheduleListResponseSerializer,
+        Serializer<BackupSetScheduleProgressResponse> setScheduleProgressResponseSerializer)
     {
         ArgumentNullException.ThrowIfNull(captureRequestSerializer);
         ArgumentNullException.ThrowIfNull(incrementalCaptureRequestSerializer);
@@ -237,6 +242,7 @@ internal sealed class LatticeBackupGrpcMethods
         ArgumentNullException.ThrowIfNull(setScheduleActionResponseSerializer);
         ArgumentNullException.ThrowIfNull(setScheduleListRequestSerializer);
         ArgumentNullException.ThrowIfNull(setScheduleListResponseSerializer);
+        ArgumentNullException.ThrowIfNull(setScheduleProgressResponseSerializer);
 
 
 
@@ -425,6 +431,10 @@ internal sealed class LatticeBackupGrpcMethods
         RunBackupSetScheduleNow = new Method<BackupSetScheduleNameRequestMessage, BackupSetScheduleActionResponse>(
             MethodType.Unary, ServiceName, RunBackupSetScheduleNowMethodName,
             setScheduleNameMarshaller, setScheduleActionMarshaller);
+
+        GetBackupSetScheduleProgress = new Method<BackupSetScheduleNameRequestMessage, BackupSetScheduleProgressResponse>(
+            MethodType.Unary, ServiceName, GetBackupSetScheduleProgressMethodName,
+            setScheduleNameMarshaller, LatticeBackupGrpcMarshallers.Create(setScheduleProgressResponseSerializer));
     }
 
     /// <summary>The unary <c>ListBackups</c> cursor-resumable catalog RPC.</summary>
@@ -523,6 +533,9 @@ internal sealed class LatticeBackupGrpcMethods
     /// <summary>The unary <c>RunBackupSetScheduleNow</c> RPC.</summary>
     public Method<BackupSetScheduleNameRequestMessage, BackupSetScheduleActionResponse> RunBackupSetScheduleNow { get; }
 
+    /// <summary>The unary <c>GetBackupSetScheduleProgress</c> RPC.</summary>
+    public Method<BackupSetScheduleNameRequestMessage, BackupSetScheduleProgressResponse> GetBackupSetScheduleProgress { get; }
+
     /// <summary>
     /// Builds the method definitions from the Orleans serializers resolved out
     /// of <paramref name="serializerProvider"/>. Shared by the server-side DI
@@ -583,7 +596,8 @@ internal sealed class LatticeBackupGrpcMethods
             serializerProvider.GetRequiredService<Serializer<BackupSetScheduleRemoveRequestMessage>>(),
             serializerProvider.GetRequiredService<Serializer<BackupSetScheduleActionResponse>>(),
             serializerProvider.GetRequiredService<Serializer<BackupSetScheduleListRequestMessage>>(),
-            serializerProvider.GetRequiredService<Serializer<BackupSetScheduleListResponse>>());
+            serializerProvider.GetRequiredService<Serializer<BackupSetScheduleListResponse>>(),
+            serializerProvider.GetRequiredService<Serializer<BackupSetScheduleProgressResponse>>());
     }
 }
 

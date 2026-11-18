@@ -190,6 +190,68 @@ public sealed class BackupSetScheduleIntegrationTests
     }
 
     [Test]
+    public async Task An_invalid_request_is_rejected_before_it_is_written()
+    {
+        // Regression (#6090 review): a request that never ran its constructor - as
+        // one decoded from the wire - was persisted, after which every status read
+        // and run of the schedule threw.
+        var (a, b) = await SeedAsync("wedge");
+        var grain = await ScheduleAsync("wedge", [a, b], keepLast: 3);
+        var valid = (await grain.GetStatusAsync())!.Request;
+
+        Assert.That(
+            async () => await grain.ScheduleAsync(valid with { RetentionKeepLast = 0 }, new BackupSetScheduleTarget(null, valid.Scopes, [])),
+            Throws.InstanceOf<ArgumentException>());
+        Assert.That(
+            async () => await grain.ScheduleAsync(valid with { Name = "t/other/wedge" }, new BackupSetScheduleTarget(null, valid.Scopes, [])),
+            Throws.InstanceOf<ArgumentException>());
+
+        var status = await grain.GetStatusAsync();
+        var run = await grain.RunCycleAsync();
+        Assert.Multiple(() =>
+        {
+            Assert.That(status!.Request.RetentionKeepLast, Is.EqualTo(3), "the stored schedule is unchanged");
+            Assert.That(status.Request.Name, Is.EqualTo("wedge"));
+            Assert.That(run!.Outcome, Is.EqualTo(BackupScopeRunOutcome.Success));
+        });
+    }
+
+    [Test]
+    public async Task A_fault_applying_retention_does_not_record_a_failed_run_for_a_captured_set()
+    {
+        // Regression (#6090 review): a fault after the set was captured and its run
+        // recorded used to record a second, failed run for the same capture.
+        var (a, b) = await SeedAsync("postcap");
+        var grain = await ScheduleAsync("postcap", [a, b], keepLast: 1);
+        await grain.RunCycleAsync();
+        await Tree(b).SetAsync("k", Bytes("changed"));
+
+        // Fault only the write retention makes once it has pruned to one set in
+        // the second run - after the run itself was recorded with both sets.
+        CaptureClusterFixture.StateWriteFault = (_, state) =>
+            state is BackupSetSchedulerState { Sets.Count: 1, RecentRuns.Count: 2 };
+        BackupSetScheduleRun? run;
+        try
+        {
+            run = await grain.RunCycleAsync();
+        }
+        finally
+        {
+            CaptureClusterFixture.StateWriteFault = null;
+        }
+
+        var status = (await grain.GetStatusAsync())!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(run!.Outcome, Is.EqualTo(BackupScopeRunOutcome.Success));
+            Assert.That(status.RecentRuns, Has.Count.EqualTo(2), "one run per capture");
+            Assert.That(status.RecentRuns.Select(r => r.Outcome), Is.All.EqualTo(BackupScopeRunOutcome.Success));
+            Assert.That(status.LastOutcome, Is.EqualTo(BackupScopeRunOutcome.Success));
+            Assert.That(status.ConsecutiveFailures, Is.Zero);
+        });
+    }
+
+    [Test]
     public async Task A_run_in_flight_reports_its_phase_and_member_progress()
     {
         var suffix = Guid.NewGuid().ToString("N");

@@ -35,6 +35,7 @@ public partial class BackupSetSchedulesSection : IDisposable
     private readonly ComponentLifetime _load = new();
     private readonly List<string> _trees = [];
     private bool _served = true;
+    private bool _progressServed = true;
     private IReadOnlyList<BackupSetScheduleStatus>? _schedules;
     private string? _listError;
     private string? _selected;
@@ -240,9 +241,12 @@ public partial class BackupSetSchedulesSection : IDisposable
     }
 
     /// <summary>
-    /// Starts reading the schedules again every <see cref="ClusterStatusPoller.Interval"/>
-    /// while any of them reports a run in flight, so its progress stays live; the
-    /// poller stops by itself once a read finds no run in flight, and with the component.
+    /// Starts following the schedules every <see cref="ClusterStatusPoller.Interval"/>
+    /// while any of them reports a run in flight, so its progress stays live. Each
+    /// tick reads only the running schedules' progress, and the whole listing once a
+    /// run finishes (or every tick, when the connection does not serve the progress
+    /// read); the poller stops by itself once a read finds no run in flight, and
+    /// with the component.
     /// </summary>
     private void FollowWhileRunning()
     {
@@ -259,6 +263,85 @@ public partial class BackupSetSchedulesSection : IDisposable
     }
 
     private async Task<ClusterPollOutcome> PollAsync(CancellationToken cancellationToken)
+    {
+        if (_progressServed)
+        {
+            var followed = await PollProgressAsync(cancellationToken).ConfigureAwait(false);
+            if (followed is { } outcome)
+            {
+                return outcome;
+            }
+        }
+
+        return await PollListAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Reads only the in-flight runs' progress - not every schedule's members and
+    /// retained sets - and updates those schedules in place. Returns
+    /// <see langword="null"/> when a run has finished (or its schedule is gone), so
+    /// the caller reads the whole listing once to pick up the recorded run and
+    /// retained sets, and also when the connection does not serve the progress
+    /// read, which falls back to reading the listing on every tick.
+    /// </summary>
+    private async Task<ClusterPollOutcome?> PollProgressAsync(CancellationToken cancellationToken)
+    {
+        var running = _schedules?.Where(schedule => schedule.CurrentRun is not null).Select(schedule => schedule.Name).ToList() ?? [];
+        if (running.Count == 0)
+        {
+            return null;
+        }
+
+        var progress = new Dictionary<string, BackupSetScheduleRunProgress>(StringComparer.Ordinal);
+        foreach (var name in running)
+        {
+            BackupSetScheduleRunProgress? current;
+            try
+            {
+                current = await Control.GetBackupSetScheduleProgressAsync(name, cancellationToken).ConfigureAwait(false);
+            }
+            catch (NotSupportedException)
+            {
+                _progressServed = false;
+                return null;
+            }
+            catch (KeyNotFoundException)
+            {
+                return null;
+            }
+            catch (Exception) when (!cancellationToken.IsCancellationRequested)
+            {
+                return ClusterPollOutcome.Failed;
+            }
+
+            if (current is null)
+            {
+                return null;
+            }
+
+            progress[name] = current;
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        await InvokeAsync(() =>
+        {
+            if (_load.Token.IsCancellationRequested || _schedules is null)
+            {
+                return;
+            }
+
+            _schedules =
+            [
+                .. _schedules.Select(schedule => schedule.CurrentRun is not null && progress.TryGetValue(schedule.Name, out var current)
+                    ? schedule with { CurrentRun = current, IsRunning = true }
+                    : schedule),
+            ];
+            StateHasChanged();
+        }).ConfigureAwait(false);
+        return ClusterPollOutcome.Running;
+    }
+
+    private async Task<ClusterPollOutcome> PollListAsync(CancellationToken cancellationToken)
     {
         IReadOnlyList<BackupSetScheduleStatus>? schedules;
         try

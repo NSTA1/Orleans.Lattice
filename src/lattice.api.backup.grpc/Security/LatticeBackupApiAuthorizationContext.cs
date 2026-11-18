@@ -120,6 +120,14 @@ public enum LatticeBackupApiOperation
 
     /// <summary>The <c>RunBackupSetScheduleNow</c> RPC.</summary>
     RunBackupSetScheduleNow,
+
+    /// <summary>
+    /// The <c>GetBackupSetScheduleProgress</c> read RPC: only the live progress of a
+    /// schedule's in-flight run. It reads a subset of what
+    /// <see cref="GetBackupSetScheduleStatus"/> returns, so a policy that admits the
+    /// status read should admit this read too; the facade authorizes both with the same grant.
+    /// </summary>
+    GetBackupSetScheduleProgress,
 }
 
 /// <summary>

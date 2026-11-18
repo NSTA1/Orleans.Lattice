@@ -138,6 +138,94 @@ public sealed class LatticeBackupControlSetScheduleTests
         });
     }
 
+    [Test]
+    public async Task ScheduleBackupSetAsync_revalidates_a_request_that_skipped_its_constructor()
+    {
+        // Regression (#6090 review): the all-trees branch forwarded the request as
+        // received, so one decoded from the wire (or copied with `with`) could name
+        // another tenant's schedule or carry an invalid retention bound.
+        await _fixture.InitializeAsync();
+        var valid = LatticeBackupSetScheduleRequest.ForAllTrees("all", TimeSpan.FromHours(6), includeNewTrees: false, 1, null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(async () => await _fixture.Control.ScheduleBackupSetAsync(valid with { Name = "t/other/all" }),
+                Throws.InstanceOf<ArgumentException>());
+            Assert.That(async () => await _fixture.Control.ScheduleBackupSetAsync(valid with { RetentionKeepLast = 0 }),
+                Throws.InstanceOf<ArgumentException>());
+            Assert.That(async () => await _fixture.Control.ScheduleBackupSetAsync(valid with { Membership = (BackupSetMembershipMode)42 }),
+                Throws.InstanceOf<ArgumentException>());
+        });
+
+        var other = await _fixture.GrainFactory
+            .GetGrain<ILatticeBackupSetSchedulerGrain>(BackupSetScheduleKey.For("t/other/all"))
+            .GetStatusAsync();
+        Assert.That(other, Is.Null, "nothing was written under another tenant's schedule key");
+    }
+
+    [Test]
+    public async Task Replacing_a_schedule_requires_the_grant_over_the_schedule_it_replaces()
+    {
+        // Regression (#6090 review): re-registering a name authorized only the new
+        // request, so a caller with no grant over the existing schedule's trees could
+        // replace it and have its next run prune their backups.
+        await _fixture.InitializeAsync();
+        var (a, b) = await SeedAsync();
+        var c = $"set-c-{Guid.NewGuid():N}";
+        await _fixture.GrainFactory.GetGrain<ILattice>(c).SetAsync("k", Encoding.UTF8.GetBytes("v"));
+        await _fixture.Control.ScheduleBackupSetAsync(Request("takeover", a, b));
+        var onlyC = _fixture.CreateControlWith(
+            new BackupAccessAuthorizer(new TreeDenyingAccessGate(a, b), membership: null));
+
+        Assert.That(
+            async () => await onlyC.ScheduleBackupSetAsync(LatticeBackupSetScheduleRequest.ForTrees(
+                "takeover", [BackupScopeSelector.WholeTree(c)], TimeSpan.FromHours(6), 1, null)),
+            Throws.InstanceOf<LatticeAuthorizationDeniedException>());
+
+        var unchanged = await _fixture.Control.GetBackupSetScheduleStatusAsync("takeover");
+        Assert.That(unchanged!.MemberScopes.Select(s => s.TreeId), Is.EqualTo(new[] { a, b }));
+    }
+
+    [Test]
+    public async Task Acting_on_a_schedule_requires_the_grant_over_every_tree_its_retained_sets_name()
+    {
+        // Regression (#6090 review): authorization covered only the schedule's
+        // current trees, so after it was narrowed a caller with no grant over a tree
+        // only its retained sets still named could delete that tree's backups.
+        await _fixture.InitializeAsync();
+        var (a, b) = await SeedAsync();
+        await _fixture.Control.ScheduleBackupSetAsync(Request("narrowed", a, b));
+        await _fixture.Control.RunBackupSetScheduleNowAsync("narrowed");
+        await WaitForRunAsync("narrowed");
+        await _fixture.Control.ScheduleBackupSetAsync(LatticeBackupSetScheduleRequest.ForTrees(
+            "narrowed", [BackupScopeSelector.WholeTree(b)], TimeSpan.FromHours(6), 3, null));
+        var onlyB = _fixture.CreateControlWith(
+            new BackupAccessAuthorizer(new TreeDenyingAccessGate(a), membership: null));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(async () => await onlyB.RemoveBackupSetScheduleAsync("narrowed", deleteRetainedSets: true),
+                Throws.InstanceOf<LatticeAuthorizationDeniedException>());
+            Assert.That(async () => await onlyB.GetBackupSetScheduleStatusAsync("narrowed"),
+                Throws.InstanceOf<LatticeAuthorizationDeniedException>());
+        });
+
+        var kept = await _fixture.Control.GetBackupSetScheduleStatusAsync("narrowed");
+        Assert.That(kept!.RetainedSets.Single().Members.Select(m => m.TreeId), Is.EqualTo(new[] { a, b }));
+    }
+
+    private async Task WaitForRunAsync(string name)
+    {
+        BackupSetScheduleStatus? status = null;
+        for (var i = 0; i < 300 && status is not { IsRunning: false, RecentRuns.Count: > 0 }; i++)
+        {
+            await Task.Delay(100);
+            status = await _fixture.Control.GetBackupSetScheduleStatusAsync(name);
+        }
+
+        Assert.That(status!.LastOutcome, Is.EqualTo(BackupScopeRunOutcome.Success), status.LastFailureReason);
+    }
+
     private async Task<(string A, string B)> SeedAsync()
     {
         var suffix = Guid.NewGuid().ToString("N");
@@ -162,5 +250,15 @@ public sealed class LatticeBackupControlSetScheduleTests
             in LatticeAccessRequest request,
             CancellationToken cancellationToken = default) =>
             new(LatticeAccessDecision.Deny(reason));
+    }
+
+    private sealed class TreeDenyingAccessGate(params string[] deniedTrees) : ILatticeAccessGate
+    {
+        public ValueTask<LatticeAccessDecision> AuthorizeAsync(
+            in LatticeAccessRequest request,
+            CancellationToken cancellationToken = default) =>
+            new(deniedTrees.Contains(request.TreeId, StringComparer.Ordinal)
+                ? LatticeAccessDecision.Deny($"no grant over '{request.TreeId}'")
+                : LatticeAccessDecision.Allow());
     }
 }

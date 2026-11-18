@@ -44,6 +44,8 @@ public sealed class LatticeBackupCaptureServiceDrainTests
         optionsMonitor.Get(Arg.Any<string>()).Returns(new LatticeOptions());
         var optionsResolver = new LatticeOptionsResolver(grainFactory, optionsMonitor);
         var gate = Substitute.For<ILatticeAccessGate>();
+        gate.AuthorizeAsync(Arg.Any<LatticeAccessRequest>(), Arg.Any<CancellationToken>())
+            .Returns(new ValueTask<LatticeAccessDecision>(LatticeAccessDecision.Allow()));
         var authorizer = new BackupAccessAuthorizer(gate);
 
         return new LatticeBackupCaptureService(
@@ -71,8 +73,9 @@ public sealed class LatticeBackupCaptureServiceDrainTests
         // With CrossTreeFenceDrainTimeout = TimeSpan.Zero the condition
         // (sw.Elapsed >= timeout) is satisfied on the very first iteration,
         // so a registry that always reports one in-flight saga causes the drain
-        // to throw LatticeBackupCrossTreeFenceException before any tree capture
-        // or authorization runs.
+        // to throw LatticeBackupCrossTreeFenceException before any tree is
+        // pinned. (Each member is authorized and prepared before the fence, so
+        // the gate here allows.)
         var grainFactory = Substitute.For<IGrainFactory>();
 
         var registry = Substitute.For<ITxRegistryGrain>();

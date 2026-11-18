@@ -1434,6 +1434,22 @@
         }
       ],
       "source": "src/lattice.api.backup.grpc/Model/BackupSetScheduleListResponse.cs#BackupSetScheduleListResponse"
+    },
+    "BackupSetScheduleProgressResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Found",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "Progress",
+          "type": "BackupSetScheduleRunProgress?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.backup.grpc/Model/BackupSetScheduleProgressResponse.cs#BackupSetScheduleProgressResponse"
     }
   },
   "operations": [
@@ -1966,6 +1982,59 @@
       "sources": [
         "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#GetOperationStatusAsync",
         "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#GetBackupOperationStatus"
+      ]
+    },
+    {
+      "id": "get-backup-set-schedule-progress",
+      "in_process": "ILatticeBackupControl.GetBackupSetScheduleProgressAsync",
+      "grpc_method": "/orleans.lattice.api.backup/GetBackupSetScheduleProgress",
+      "transport_scope": "both",
+      "request": "BackupSetScheduleNameRequestMessage",
+      "response": "BackupSetScheduleProgressResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "The caller has no valid active tenant or may not act as the one it asserted."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "The server's backup control does not implement backup-set schedules, or predates the progress read."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#GetBackupSetScheduleProgressAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only run progress. An unknown schedule answers Found false over gRPC (KeyNotFoundException in process); a schedule with no run in flight answers a null Progress.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#GetBackupSetScheduleProgressAsync"
+      },
+      "concurrency": {
+        "rule": "Authorized like get-backup-set-schedule-status; the lightweight read for polling an in-flight run, carrying no members, runs or retained sets.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#GetBackupSetScheduleProgressAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#GetBackupSetScheduleProgressAsync",
+        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#GetBackupSetScheduleProgress",
+        "src/lattice.api.backup/LatticeBackupControl.SetSchedules.cs#LatticeBackupControl.GetBackupSetScheduleProgressAsync"
       ]
     },
     {

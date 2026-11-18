@@ -5,6 +5,9 @@ using Orleans.Hosting;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Wal;
+using Orleans.Runtime;
+using Orleans.Runtime.Hosting;
+using Orleans.Storage;
 using Orleans.Serialization;
 using Orleans.TestingHost;
 
@@ -22,6 +25,14 @@ public sealed class CaptureClusterFixture
     private static long s_maxSnapshotReplayEntries = 10_000_000L;
     private static string? s_localOriginClusterId;
     private static long s_pinnedEntryBudget = 1_000_000;
+
+    /// <summary>
+    /// When set, a grain-state write whose state name and state the predicate
+    /// matches throws, so a test can fault one specific write (for example the
+    /// one a set schedule's retention makes) without faulting the others. Reset by
+    /// <see cref="InitializeAsync"/>.
+    /// </summary>
+    internal static Func<string, object?, bool>? StateWriteFault { get; set; }
 
     /// <summary>The deployed test cluster.</summary>
     public TestCluster Cluster { get; private set; } = null!;
@@ -69,6 +80,7 @@ public sealed class CaptureClusterFixture
         s_maxSnapshotReplayEntries = maxSnapshotReplayEntries;
         s_pinnedEntryBudget = pinnedEntryBudget;
         s_localOriginClusterId = localOriginClusterId;
+        StateWriteFault = null;
         var builder = new TestClusterBuilder(1);
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
         Cluster = builder.Build();
@@ -89,7 +101,13 @@ public sealed class CaptureClusterFixture
     {
         public void Configure(ISiloBuilder siloBuilder)
         {
-            siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
+            siloBuilder.AddLattice((silo, name) =>
+            {
+                var inner = name + ".inner";
+                silo.AddMemoryGrainStorage(inner);
+                silo.Services.AddGrainStorage(name, (sp, _) =>
+                    new FaultableGrainStorage(sp.GetRequiredKeyedService<IGrainStorage>(inner)));
+            });
             siloBuilder.ConfigureLattice(o => o.MaxSnapshotReplayEntries = s_maxSnapshotReplayEntries);
             if (s_localOriginClusterId is { } localOrigin)
             {
@@ -97,6 +115,7 @@ public sealed class CaptureClusterFixture
             }
 
             siloBuilder.UseInMemoryReminderService();
+
             siloBuilder.AddLatticeBackup(o =>
             {
                 // Generous fence budget so a brief concurrent cross-tree write
@@ -131,6 +150,20 @@ public sealed class CaptureClusterFixture
             SiloServices.GetRequiredService<IWalCursorRegistry>(),
             SiloServices.GetRequiredService<IOptions<Orleans.Configuration.ClusterOptions>>(),
             SiloServices.GetRequiredService<ILoggerFactory>().CreateLogger<LatticeBackupCaptureService>());
+
+    private sealed class FaultableGrainStorage(IGrainStorage inner) : IGrainStorage
+    {
+        public Task ReadStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState) =>
+            inner.ReadStateAsync(stateName, grainId, grainState);
+
+        public Task WriteStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState) =>
+            StateWriteFault?.Invoke(stateName, grainState.State) == true
+                ? throw new IOException($"Injected fault writing '{stateName}'.")
+                : inner.WriteStateAsync(stateName, grainId, grainState);
+
+        public Task ClearStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState) =>
+            inner.ClearStateAsync(stateName, grainId, grainState);
+    }
 
     private sealed class FixedOriginClusterIdResolver(string originClusterId) : ILatticeOriginClusterIdResolver
     {

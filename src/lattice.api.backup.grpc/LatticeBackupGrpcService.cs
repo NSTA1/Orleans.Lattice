@@ -135,6 +135,9 @@ internal abstract class LatticeBackupGrpcServiceBase
     /// <summary>Starts one run of a backup-set schedule now. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
     public abstract Task<BackupSetScheduleActionResponse> RunBackupSetScheduleNow(BackupSetScheduleNameRequestMessage request, ServerCallContext context);
 
+    /// <summary>Reads the live progress of a backup-set schedule's in-flight run. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
+    public abstract Task<BackupSetScheduleProgressResponse> GetBackupSetScheduleProgress(BackupSetScheduleNameRequestMessage request, ServerCallContext context);
+
     /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at
     /// startup with <paramref name="serviceImpl"/> set to
@@ -186,6 +189,7 @@ internal abstract class LatticeBackupGrpcServiceBase
             binder.AddMethod(methods.GetBackupSetScheduleStatus, (UnaryServerMethod<BackupSetScheduleNameRequestMessage, BackupSetScheduleStatusResponse>?)null);
             binder.AddMethod(methods.ListBackupSetSchedules, (UnaryServerMethod<BackupSetScheduleListRequestMessage, BackupSetScheduleListResponse>?)null);
             binder.AddMethod(methods.RunBackupSetScheduleNow, (UnaryServerMethod<BackupSetScheduleNameRequestMessage, BackupSetScheduleActionResponse>?)null);
+            binder.AddMethod(methods.GetBackupSetScheduleProgress, (UnaryServerMethod<BackupSetScheduleNameRequestMessage, BackupSetScheduleProgressResponse>?)null);
             return;
         }
 
@@ -221,6 +225,7 @@ internal abstract class LatticeBackupGrpcServiceBase
         binder.AddMethod(methods.GetBackupSetScheduleStatus, new UnaryServerMethod<BackupSetScheduleNameRequestMessage, BackupSetScheduleStatusResponse>(serviceImpl.GetBackupSetScheduleStatus));
         binder.AddMethod(methods.ListBackupSetSchedules, new UnaryServerMethod<BackupSetScheduleListRequestMessage, BackupSetScheduleListResponse>(serviceImpl.ListBackupSetSchedules));
         binder.AddMethod(methods.RunBackupSetScheduleNow, new UnaryServerMethod<BackupSetScheduleNameRequestMessage, BackupSetScheduleActionResponse>(serviceImpl.RunBackupSetScheduleNow));
+        binder.AddMethod(methods.GetBackupSetScheduleProgress, new UnaryServerMethod<BackupSetScheduleNameRequestMessage, BackupSetScheduleProgressResponse>(serviceImpl.GetBackupSetScheduleProgress));
     }
 }
 
@@ -387,6 +392,22 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
     public override Task<BackupSetScheduleActionResponse> RunBackupSetScheduleNow(BackupSetScheduleNameRequestMessage request, ServerCallContext context)
         => InvokeAsync(request, context, static (control, req, ct) => InvokeSetScheduleAsync(control, req, ct, static async (c, r, t) =>
             new BackupSetScheduleActionResponse { Result = await c.RunBackupSetScheduleNowAsync(r.Name, t).ConfigureAwait(false) }));
+
+    /// <inheritdoc />
+    public override Task<BackupSetScheduleProgressResponse> GetBackupSetScheduleProgress(BackupSetScheduleNameRequestMessage request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => InvokeSetScheduleAsync(control, req, ct, static async (c, r, t) =>
+        {
+            try
+            {
+                var progress = await c.GetBackupSetScheduleProgressAsync(r.Name, t).ConfigureAwait(false);
+                return new BackupSetScheduleProgressResponse { Found = true, Progress = progress };
+            }
+            catch (KeyNotFoundException)
+            {
+                // A missing schedule answers Found = false, as the status read does.
+                return new BackupSetScheduleProgressResponse { Found = false };
+            }
+        }));
 
     /// <summary>
     /// Runs one backup-set schedule verb, surfacing a facade that does not support

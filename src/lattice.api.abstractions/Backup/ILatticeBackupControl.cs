@@ -330,6 +330,27 @@ public interface ILatticeBackupControl
         throw new NotSupportedException("This backup control does not support backup-set schedules.");
 
     /// <summary>
+    /// Reads only the live progress of a backup-set schedule's in-flight run - the
+    /// lightweight counterpart of <see cref="GetBackupSetScheduleStatusAsync"/> for
+    /// polling a run, which omits the schedule's member trees, recent runs and
+    /// retained sets. Authorized like <see cref="ScheduleBackupSetAsync"/>.
+    /// </summary>
+    /// <param name="name">The schedule's name. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>
+    /// The in-flight run's progress, or <see langword="null"/> when the schedule
+    /// exists but no run is in flight (read the status for the run it recorded).
+    /// </returns>
+    /// <exception cref="ArgumentException"><paramref name="name"/> is not a valid schedule name.</exception>
+    /// <exception cref="KeyNotFoundException">No schedule has the name.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to back up a tree the set captures.</exception>
+    /// <exception cref="NotSupportedException">The implementation does not support backup-set schedule progress reads.</exception>
+    Task<BackupSetScheduleRunProgress?> GetBackupSetScheduleProgressAsync(
+        string name,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This backup control does not support backup-set schedules.");
+
+    /// <summary>
     /// Lists the backup-set schedules of the caller's tenant that the caller is
     /// authorized to read, in name order. A schedule the caller may not read is
     /// omitted rather than failing the listing.
