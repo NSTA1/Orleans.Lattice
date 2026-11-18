@@ -491,9 +491,11 @@ public partial class TagIndexReconcileGrainTests
             {
                 var tree = Substitute.For<ILattice>();
                 tree.GetRoutingAsync(true, Arg.Any<CancellationToken>())
-                    .Returns(new ValueTask<RoutingInfo>(RoutingFor(shardCount: 1)));
-                tree.GetLeafProjectionDigestAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+                    .Returns(new ValueTask<RoutingInfo>(RoutingFor(shardCount: 1, physicalTreeId: "tree-a")));
+                var shard = Substitute.For<IShardRootGrain>();
+                shard.GetShardProjectionDigestAsync(Arg.Any<CancellationToken>())
                     .ThrowsAsync(new TimeoutException("digest unavailable"));
+                f.GetGrain<IShardRootGrain>("tree-a/0", Arg.Any<string?>()).Returns(shard);
                 f.GetGrain<ILattice>("tree-a", Arg.Any<string?>()).Returns(tree);
             });
 
@@ -546,20 +548,22 @@ public partial class TagIndexReconcileGrainTests
         await harness.Reminders.DidNotReceive().UnregisterReminder(Arg.Any<GrainId>(), Arg.Any<IGrainReminder>());
     }
 
-    private static RoutingInfo RoutingFor(int shardCount)
+    private static RoutingInfo RoutingFor(int shardCount, string physicalTreeId = IndexName)
     {
         var slots = new int[shardCount];
         for (var i = 0; i < shardCount; i++) slots[i] = i;
-        return new RoutingInfo(IndexName, new ShardMap { Slots = slots });
+        return new RoutingInfo(physicalTreeId, new ShardMap { Slots = slots });
     }
 
     private static void StubSubjectTree(IGrainFactory factory, string treeId, byte[] digestHash)
     {
         var tree = Substitute.For<ILattice>();
         tree.GetRoutingAsync(true, Arg.Any<CancellationToken>())
-            .Returns(new ValueTask<RoutingInfo>(RoutingFor(shardCount: 1)));
-        tree.GetLeafProjectionDigestAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(new ValueTask<RoutingInfo>(RoutingFor(shardCount: 1, physicalTreeId: treeId)));
+        var shard = Substitute.For<IShardRootGrain>();
+        shard.GetShardProjectionDigestAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new LeafProjectionDigest { Hash = digestHash, Version = 1 }));
+        factory.GetGrain<IShardRootGrain>($"{treeId}/0", Arg.Any<string?>()).Returns(shard);
         tree.GetManyWithGateAccountingAsync(Arg.Any<List<string>>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new GatedMultiReadResult()));
         factory.GetGrain<ILattice>(treeId, Arg.Any<string?>()).Returns(tree);

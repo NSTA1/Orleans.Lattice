@@ -606,15 +606,53 @@ internal sealed class TagIndexReconcileGrain(
     /// </summary>
     internal async Task<byte[]?> ComputeFingerprintAsync(string treeId, CancellationToken cancellationToken)
     {
+        // A system tree is never addressable through the public surface, which
+        // refused it with a fault the catches below turned into null; keep that
+        // outcome without paying for the calls.
+        if (treeId.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
         var tree = grainFactory.GetGrain<ILattice>(treeId);
+        RoutingInfo routing;
         IReadOnlyList<int> shards;
         try
         {
             // Forced: the fingerprint enumerates shards and routes no key, so the
             // tree's cached map would fold a pre-reshard shard set and gate a sweep
             // off a tree whose changes landed on a shard it no longer lists (#4180).
-            var routing = await tree.GetRoutingAsync(forceRefresh: true, cancellationToken);
+            routing = await tree.GetRoutingAsync(forceRefresh: true, cancellationToken);
             shards = routing.Map.GetPhysicalShardIndices();
+        }
+        catch
+        {
+            return null;
+        }
+
+        // Read each shard root's digest directly against the routing just resolved
+        // rather than through ILattice.GetLeafProjectionDigestAsync, which would
+        // re-pay a router hop and another forced registry read per shard only to
+        // re-resolve this same pair. The sweep runs under system origin, so the
+        // forwarder's access check is bypassed anyway, and a tree with digest
+        // maintenance disabled still faults here: the leaf and internal grains
+        // repeat that check. The reads are independent, so they run as one bounded
+        // fan-out whose results come back in shard order for the fold.
+        LeafProjectionDigest[] digests;
+        try
+        {
+            var physicalTreeId = routing.PhysicalTreeId;
+            digests = await BoundedFanOut.RunAsync(
+                shards.Count,
+                BoundedFanOut.DefaultWidth,
+                slot =>
+                {
+                    var shard = grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shards[slot]}");
+                    return ShardActivationRetry.RunAsync(
+                        () => shard.GetShardProjectionDigestAsync(cancellationToken),
+                        cancellationToken);
+                },
+                cancellationToken);
         }
         catch
         {
@@ -623,17 +661,10 @@ internal sealed class TagIndexReconcileGrain(
 
         var hash = new XxHash128();
         var scratch = new byte[4];
-        foreach (var shardIndex in shards)
+        for (var i = 0; i < shards.Count; i++)
         {
-            LeafProjectionDigest digest;
-            try
-            {
-                digest = await tree.GetLeafProjectionDigestAsync(shardIndex, cancellationToken);
-            }
-            catch
-            {
-                return null;
-            }
+            var shardIndex = shards[i];
+            var digest = digests[i];
 
             // The per-shard digest Hash already folds in EntryCount and
             // CheckpointOffset (it is XxHash128(running_xor || entryCount ||

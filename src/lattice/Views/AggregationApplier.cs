@@ -162,11 +162,46 @@ internal sealed class AggregationApplier(
     private async Task ContributeNumericAsync(AggregationContribution contribution, CancellationToken cancellationToken)
     {
         var sourceKey = contribution.SourceKey;
-        await CompletePendingNumericMaterialisationAsync(sourceKey, cancellationToken);
         var membershipKey = MembershipKey(sourceKey);
         var newGroup = contribution.GroupKey;
+
+        // The source key's accumulator shard is a pure function of the key and
+        // the fanout, and neither changes across this method - but a re-group
+        // touches two accumulator keys, and deriving the slot for each of them
+        // separately transcoded the key to UTF-8 and hashed it twice per
+        // contribution. Derive it once.
+        var slot = Slot(sourceKey, _fanout);
+        var newKey = AccumulatorKey(newGroup, slot);
+
+        // The prior intent, the membership row and the target slot are read in
+        // ONE overlapping wave rather than three serial round trips. Completing a
+        // prior intent only republishes its groups' value rows and retires the
+        // intent (the spec's Publish); it never writes a membership row or an
+        // accumulator slot, so reading those two before or alongside it observes
+        // exactly what reading them after it would. The completion is still
+        // awaited before anything below decides or flips, preserving the spec's
+        // Flip precondition that the prior obligation is retired first. The
+        // target-slot read is the old-slot read too in the steady state (a
+        // re-contribution that keeps its group), so it is speculative only for a
+        // replay that the exact-membership check below skips.
+        var intentRead = store.GetAsync(NumericMaterialisationKey(sourceKey), cancellationToken);
+        var membershipRead = store.GetAsync(membershipKey, cancellationToken);
+        var newSlotRead = ReadAccumulatorAsync(newKey, cancellationToken);
+        byte[]? priorBytes;
+        AccumulatorRow? newSlotRow;
+        try
+        {
+            await CompletePendingNumericMaterialisationAsync(sourceKey, await intentRead, cancellationToken);
+            priorBytes = await membershipRead;
+            newSlotRow = await newSlotRead;
+        }
+        catch
+        {
+            await ObserveAsync(membershipRead, newSlotRead);
+            throw;
+        }
+
         var membership = EncodeMembership(new MembershipRow(newGroup, contribution.Numeric, contribution.Member));
-        var priorBytes = await store.GetAsync(membershipKey, cancellationToken);
         if (priorBytes is not null && priorBytes.AsSpan().SequenceEqual(membership))
         {
             // A committed regroup changed which slots a retry would submit under
@@ -188,34 +223,26 @@ internal sealed class AggregationApplier(
         // second List to re-extract the very keys it had just put in, on the
         // hottest path an aggregation view has. Both are gone; `sameSlot` below
         // carries the de-duplication the dictionary used to provide.
-        //
-        // The source key's accumulator shard is a pure function of the key and
-        // the fanout, and neither changes across this method - but a re-group
-        // touches two accumulator keys, and deriving the slot for each of them
-        // separately transcoded the key to UTF-8 and hashed it twice per
-        // contribution. Derive it once.
-        var slot = Slot(sourceKey, _fanout);
-
         string? oldGroup = null;
         string? oldKey = null;
         var oldRow = new AccumulatorRow(0, 0);
+        var sameSlot = false;
         if (prior is { } old)
         {
             oldGroup = old.GroupKey;
             oldKey = AccumulatorKey(old.GroupKey, slot);
-            var current = await ReadAccumulatorAsync(oldKey, cancellationToken) ?? new AccumulatorRow(0, 0);
+            sameSlot = string.Equals(oldKey, newKey, StringComparison.Ordinal);
+
+            // A same-group overwrite retracts from the very slot the wave above
+            // already read, so only a re-group pays a further (dependent) read.
+            var current = (sameSlot ? newSlotRow : await ReadAccumulatorAsync(oldKey, cancellationToken)) ?? new AccumulatorRow(0, 0);
             oldRow = new AccumulatorRow(current.Count - 1, current.Sum - old.Numeric);
         }
 
-        var newKey = AccumulatorKey(newGroup, slot);
-
         // A same-group overwrite retracts and adds on one key. Fold onto the
-        // retracted row rather than re-reading the store, exactly as the
+        // retracted row rather than the pre-retraction read, exactly as the
         // dictionary's TryGetValue hit used to.
-        var sameSlot = oldKey is not null && string.Equals(oldKey, newKey, StringComparison.Ordinal);
-        var baseRow = sameSlot
-            ? oldRow
-            : await ReadAccumulatorAsync(newKey, cancellationToken) ?? new AccumulatorRow(0, 0);
+        var baseRow = sameSlot ? oldRow : newSlotRow ?? new AccumulatorRow(0, 0);
         var newRow = new AccumulatorRow(baseRow.Count + 1, baseRow.Sum + contribution.Numeric);
 
         // Insertion order matters: the dictionary this replaces enumerated the
@@ -256,9 +283,25 @@ internal sealed class AggregationApplier(
     private async Task RetractNumericAsync(AggregationContribution contribution, CancellationToken cancellationToken)
     {
         var sourceKey = contribution.SourceKey;
-        await CompletePendingNumericMaterialisationAsync(sourceKey, cancellationToken);
         var membershipKey = MembershipKey(sourceKey);
-        var prior = await ReadMembershipAsync(membershipKey, cancellationToken);
+
+        // The prior intent and the membership row are read in one overlapping
+        // wave; see ContributeNumericAsync for why completing the intent cannot
+        // change the membership row the second read observes.
+        var intentRead = store.GetAsync(NumericMaterialisationKey(sourceKey), cancellationToken);
+        var membershipRead = ReadMembershipAsync(membershipKey, cancellationToken);
+        MembershipHead? prior;
+        try
+        {
+            await CompletePendingNumericMaterialisationAsync(sourceKey, await intentRead, cancellationToken);
+            prior = await membershipRead;
+        }
+        catch
+        {
+            await ObserveAsync(membershipRead);
+            throw;
+        }
+
         if (prior is not { } old)
         {
             // Nothing recorded for this source key: idempotent no-op.
@@ -289,14 +332,21 @@ internal sealed class AggregationApplier(
     }
 
     private async Task CompletePendingNumericMaterialisationAsync(string sourceKey, CancellationToken cancellationToken)
+        => await CompletePendingNumericMaterialisationAsync(
+            sourceKey,
+            await store.GetAsync(NumericMaterialisationKey(sourceKey), cancellationToken),
+            cancellationToken);
+
+    // Completes the intent whose bytes the caller already read, so a caller that
+    // overlaps that read with others does not pay for it twice.
+    private async Task CompletePendingNumericMaterialisationAsync(string sourceKey, byte[]? bytes, CancellationToken cancellationToken)
     {
-        var key = NumericMaterialisationKey(sourceKey);
-        var bytes = await store.GetAsync(key, cancellationToken);
         if (bytes is null)
         {
             return;
         }
 
+        var key = NumericMaterialisationKey(sourceKey);
         // The intent flips with membership and slots. A lost flip response or a
         // failed group write cannot erase the old group's identity (#4890).
         var (group, otherGroup) = DecodeNumericMaterialisation(bytes);
@@ -1025,5 +1075,19 @@ internal sealed class AggregationApplier(
     {
         var bytes = await store.GetAsync(key, cancellationToken);
         return bytes is null || IsEmpty(bytes) ? null : DecodeAccumulator(bytes);
+    }
+
+    // Waits out reads a faulted wave left in flight, so a second fault is
+    // observed here instead of surfacing as an unobserved task exception; the
+    // caller rethrows the first.
+    private static async Task ObserveAsync(params Task[] reads)
+    {
+        try
+        {
+            await Task.WhenAll(reads);
+        }
+        catch
+        {
+        }
     }
 }
