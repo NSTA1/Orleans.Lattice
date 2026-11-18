@@ -70,6 +70,16 @@ public sealed class LatticeTreeAdminTenantScopingTests
     private static ILatticeRegistry WireRegistry(IGrainFactory factory)
     {
         var registry = Substitute.For<ILatticeRegistry>();
+        registry.GetEntriesAsync(Arg.Any<IReadOnlyList<string>>()).Returns(async call =>
+        {
+            var rows = new Dictionary<string, TreeRegistryEntry>(StringComparer.Ordinal);
+            foreach (var id in call.Arg<IReadOnlyList<string>>())
+            {
+                if (await registry.GetEntryAsync(id) is { } row) rows[id] = row;
+            }
+
+            return rows;
+        });
         factory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
         return registry;
     }

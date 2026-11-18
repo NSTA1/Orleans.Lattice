@@ -26,6 +26,16 @@ public sealed partial class LatticeBackupRestoreServiceUnitTests
             Lineage = built,
         };
         var registry = Substitute.For<ILatticeRegistry>();
+        registry.GetEntriesAsync(Arg.Any<IReadOnlyList<string>>()).Returns(async call =>
+        {
+            var rows = new Dictionary<string, TreeRegistryEntry>(StringComparer.Ordinal);
+            foreach (var id in call.Arg<IReadOnlyList<string>>())
+            {
+                if (await registry.GetEntryAsync(id) is { } row) rows[id] = row;
+            }
+
+            return rows;
+        });
         registry.GetEntryAsync("shadow").Returns(Task.FromResult<TreeRegistryEntry?>(entry));
         var factory = Substitute.For<IGrainFactory>();
         factory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);

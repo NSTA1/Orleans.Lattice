@@ -39,6 +39,17 @@ public partial class TreeResizeGrainTests
 
         // Setup default registry grain mock.
         var registry = Substitute.For<ILatticeRegistry>();
+        // Batched reads answer from whatever each test stubs for the single-row read.
+        registry.GetEntriesAsync(Arg.Any<IReadOnlyList<string>>()).Returns(async call =>
+        {
+            var rows = new Dictionary<string, TreeRegistryEntry>(StringComparer.Ordinal);
+            foreach (var id in call.Arg<IReadOnlyList<string>>())
+            {
+                if (await registry.GetEntryAsync(id) is { } row) rows[id] = row;
+            }
+
+            return rows;
+        });
         grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
         registry.ResolveAsync(TreeId).Returns(Task.FromResult(TreeId));
         // Default entry has the structural pin used by tests via resolver.

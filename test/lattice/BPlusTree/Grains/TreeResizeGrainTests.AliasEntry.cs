@@ -128,6 +128,27 @@ public partial class TreeResizeGrainTests
     }
 
     [Test]
+    public async Task SwapAlias_reads_the_logical_and_resized_rows_in_one_registry_call()
+    {
+        var (grain, state, _, grainFactory, _) = CreateGrain();
+        var snapshotTreeId = $"{TreeId}/resized/batched";
+        PrepareSwap(state, snapshotTreeId);
+        var registry = grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
+        registry.GetEntryAsync(snapshotTreeId).Returns(Task.FromResult<TreeRegistryEntry?>(new TreeRegistryEntry
+        {
+            ShardCount = ShardCount,
+        }));
+        registry.ClearReceivedCalls();
+
+        await grain.SwapAliasAsync();
+
+        await registry.Received(1).GetEntriesAsync(Arg.Is<IReadOnlyList<string>>(ids =>
+            ids.Count == 2 && ids[0] == TreeId && ids[1] == snapshotTreeId));
+        await registry.Received(1).SwapAliasAsync(
+            TreeId, snapshotTreeId, Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string>());
+    }
+
+    [Test]
     public async Task SwapAlias_keeps_the_current_alias_until_the_flip()
     {
         var (grain, state, _, grainFactory, _) = CreateGrain();

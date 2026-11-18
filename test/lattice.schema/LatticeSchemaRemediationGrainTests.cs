@@ -184,6 +184,16 @@ public partial class LatticeSchemaRemediationGrainTests
             new RoutingInfo(TreeId + "/remediated/", new ShardMap { Slots = new[] { 0 } })));
 
         var registry = Substitute.For<ILatticeRegistry>();
+        registry.GetEntriesAsync(Arg.Any<IReadOnlyList<string>>()).Returns(async call =>
+        {
+            var rows = new Dictionary<string, TreeRegistryEntry>(StringComparer.Ordinal);
+            foreach (var id in call.Arg<IReadOnlyList<string>>())
+            {
+                if (await registry.GetEntryAsync(id) is { } row) rows[id] = row;
+            }
+
+            return rows;
+        });
         // A never-aliased source tree resolves its physical id to its own name.
         registry.ResolveAsync(TreeId).Returns(TreeId);
         registry.GetEntryAsync(TreeId).Returns(new TreeRegistryEntry { PhysicalTreeId = TreeId });

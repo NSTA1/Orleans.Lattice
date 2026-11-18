@@ -88,6 +88,12 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// <item><see cref="Site.AbsentParticipantDiscard"/> - a replicated cross-tree
 /// terminal dropped for a de-enrolled tree discarding its pending bucket:
 /// Exists + Resolve + GetShardMap -> one GetEntry, 3 serial reads -> 1.</item>
+/// <item><see cref="Site.CutoverPreparePair"/>, <see cref="Site.AliasCarryAcrossPair"/>
+/// and <see cref="Site.ResizeAliasSwapPair"/> - <c>AliasCutoverShardMaps</c>'s
+/// cutover prepare and explicit-alias carry-across, and <c>TreeResizeGrain</c>'s
+/// alias swap: two serial GetEntry reads of independent rows -> one
+/// <c>GetEntriesAsync</c>, 2 serial registry hops -> 1. The registry also
+/// overlaps the two backing reads in its turn, which this fake does not price.</item>
 /// </list>
 /// <para>
 /// <b>Read the hop model.</b> <see cref="HopModel.Yield"/> prices only the
@@ -104,7 +110,8 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// three complete-pin resize/deletion lanes; missing or incomplete pins retain
 /// the seeding fallback and are not represented by these timing lanes.
 /// <c>--suite registrymaintenance</c> selects just the hot-shard tick, healing
-/// sweep and absent-participant discard lanes.
+/// sweep and absent-participant discard lanes. <c>--suite registrypairs</c>
+/// selects just the three paired-entry batching lanes.
 /// </para>
 /// </summary>
 [MemoryDiagnoser]
@@ -117,7 +124,7 @@ public class RegistryProjectionElisionBenchmarks
     private RegistryStore _registry = null!;
 
     /// <summary>The routing read being measured; see the class summary.</summary>
-    [Params(Site.StateObserverOpen, Site.BootstrapFenceResolve, Site.SnapshotExport, Site.ResizeInitiate, Site.CompactionTopology, Site.MergeInitiate, Site.SplitInitiate, Site.ConsolidationInitiate, Site.ReshardSplitTick, Site.ReshardConsolidateTick, Site.StalePendingSettle, Site.BootstrapReceiverScan, Site.SnapshotInitiate, Site.RestoreShadowValidate, Site.CutoverPrepare, Site.ResizeEmptyProbe, Site.ResizeIntentOptions, Site.DeletionShardCensus, Site.StatsCacheHit, Site.WalByteSizes, Site.WalUsageMiss, Site.MergeFrontDoor, Site.ResizeUndoFence, Site.HotShardTick, Site.HealingSweep, Site.AbsentParticipantDiscard)]
+    [Params(Site.StateObserverOpen, Site.BootstrapFenceResolve, Site.SnapshotExport, Site.ResizeInitiate, Site.CompactionTopology, Site.MergeInitiate, Site.SplitInitiate, Site.ConsolidationInitiate, Site.ReshardSplitTick, Site.ReshardConsolidateTick, Site.StalePendingSettle, Site.BootstrapReceiverScan, Site.SnapshotInitiate, Site.RestoreShadowValidate, Site.CutoverPrepare, Site.ResizeEmptyProbe, Site.ResizeIntentOptions, Site.DeletionShardCensus, Site.StatsCacheHit, Site.WalByteSizes, Site.WalUsageMiss, Site.MergeFrontDoor, Site.ResizeUndoFence, Site.HotShardTick, Site.HealingSweep, Site.AbsentParticipantDiscard, Site.CutoverPreparePair, Site.AliasCarryAcrossPair, Site.ResizeAliasSwapPair)]
     public Site Path { get; set; }
 
     /// <summary>How each simulated registry call completes; see the class summary.</summary>
@@ -141,6 +148,15 @@ public class RegistryProjectionElisionBenchmarks
     {
         switch (Path)
         {
+            case Site.CutoverPreparePair:
+            case Site.AliasCarryAcrossPair:
+            case Site.ResizeAliasSwapPair:
+            {
+                var logical = await _registry.GetEntryAsync(TreeId);
+                var other = await _registry.GetEntryAsync(ShadowTreeId);
+                return Fold(logical?.PhysicalTreeId ?? TreeId, (logical?.ShardMapVersion ?? 0) + (other?.ShardMapVersion ?? 0));
+            }
+
             case Site.HotShardTick:
             {
                 var registered = await _registry.GetEntryAsync(TreeId);
@@ -327,6 +343,16 @@ public class RegistryProjectionElisionBenchmarks
     {
         switch (Path)
         {
+            case Site.CutoverPreparePair:
+            case Site.AliasCarryAcrossPair:
+            case Site.ResizeAliasSwapPair:
+            {
+                var entries = await _registry.GetEntriesAsync([TreeId, ShadowTreeId]);
+                var logical = entries.GetValueOrDefault(TreeId);
+                var other = entries.GetValueOrDefault(ShadowTreeId);
+                return Fold(logical?.PhysicalTreeId ?? TreeId, (logical?.ShardMapVersion ?? 0) + (other?.ShardMapVersion ?? 0));
+            }
+
             case Site.StatsCacheHit:
                 return Fold("cached-report", 7);
 
@@ -516,6 +542,15 @@ public class RegistryProjectionElisionBenchmarks
 
         /// <summary>A de-enrolled tree's dropped cross-tree terminal discarding its pending bucket.</summary>
         AbsentParticipantDiscard,
+
+        /// <summary>A cutover prepare reading the logical and destination rows.</summary>
+        CutoverPreparePair,
+
+        /// <summary>An explicit-alias carry-across reading the logical and target rows.</summary>
+        AliasCarryAcrossPair,
+
+        /// <summary>A resize alias swap reading the logical row and the resized copy's row.</summary>
+        ResizeAliasSwapPair,
     }
 
     /// <summary>How a simulated grain call completes.</summary>
@@ -541,6 +576,18 @@ public class RegistryProjectionElisionBenchmarks
         {
             await HopAsync();
             return entry;
+        }
+
+        public async Task<System.Collections.Generic.Dictionary<string, Entry>> GetEntriesAsync(string[] ids)
+        {
+            await HopAsync();
+            var entries = new System.Collections.Generic.Dictionary<string, Entry>(ids.Length, StringComparer.Ordinal);
+            foreach (var id in ids)
+            {
+                entries[id] = entry;
+            }
+
+            return entries;
         }
 
         public async Task<bool> ExistsAsync(string id)

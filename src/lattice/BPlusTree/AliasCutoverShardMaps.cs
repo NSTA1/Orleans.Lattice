@@ -71,9 +71,8 @@ internal static class AliasCutoverShardMaps
 
         using var systemOrigin = LatticeAccessGateContext.EnterSystemOrigin();
         var registry = grainFactory.GetLatticeRegistry();
-        var logicalBefore = await registry.GetEntryAsync(logicalTreeId);
+        var (logicalBefore, recorded) = await GetEntryPairAsync(registry, logicalTreeId, destinationPhysicalTreeId);
         var current = logicalBefore?.PhysicalTreeId ?? logicalTreeId;
-        var recorded = await registry.GetEntryAsync(destinationPhysicalTreeId);
 
         // A cutover resumed after its swap has nothing left to record: the logical
         // entry now describes the destination, and splits since may have moved it.
@@ -345,7 +344,7 @@ internal static class AliasCutoverShardMaps
 
         await grainFactory.GetGrain<ITreeDeletionGrain>(logicalTreeId).EnsureAliasUnreservedAsync();
         var registry = grainFactory.GetLatticeRegistry();
-        var logicalBefore = await registry.GetEntryAsync(logicalTreeId);
+        var (logicalBefore, target) = await GetEntryPairAsync(registry, logicalTreeId, targetPhysicalTreeId);
         var current = logicalBefore?.PhysicalTreeId ?? logicalTreeId;
         if (string.Equals(current, targetPhysicalTreeId, StringComparison.Ordinal))
         {
@@ -357,7 +356,6 @@ internal static class AliasCutoverShardMaps
 
         // Routing reads the map under the logical id, so the target's shards are
         // addressed by whatever map the logical entry holds: carry the target's.
-        var target = await registry.GetEntryAsync(targetPhysicalTreeId);
         var targetMap = EffectiveMap(target);
 
         // Re-stamp the lineage before the swap (#4537): a crash in between leaves
@@ -391,6 +389,21 @@ internal static class AliasCutoverShardMaps
             logicalTreeId,
             $"alias:{logicalTreeId}->{targetPhysicalTreeId}",
             cancellationToken);
+    }
+
+    /// <summary>
+    /// Reads two registry rows in one registry round trip rather than two serial
+    /// <see cref="ILatticeRegistry.GetEntryAsync"/> hops. The batched read issues
+    /// the same single-key backing reads concurrently inside the registry's turn,
+    /// so each row is exactly what its own <c>GetEntryAsync</c> would return.
+    /// </summary>
+    internal static async Task<(TreeRegistryEntry? First, TreeRegistryEntry? Second)> GetEntryPairAsync(
+        ILatticeRegistry registry, string firstTreeId, string secondTreeId)
+    {
+        // A plain array, not a collection expression: targeting IReadOnlyList
+        // would synthesize a wrapper object around the array as well.
+        var entries = await registry.GetEntriesAsync(new[] { firstTreeId, secondTreeId });
+        return (entries.GetValueOrDefault(firstTreeId), entries.GetValueOrDefault(secondTreeId));
     }
 
     /// <summary>

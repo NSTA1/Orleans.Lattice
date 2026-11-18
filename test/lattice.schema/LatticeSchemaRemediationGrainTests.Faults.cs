@@ -2,6 +2,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.State;
 using Orleans.Lattice.Schema.Tests.Fakes;
 using Orleans.Runtime;
 
@@ -200,6 +201,16 @@ public partial class LatticeSchemaRemediationGrainTests
         destination.GetRoutingAsync(true).Returns(new ValueTask<RoutingInfo>(
             new RoutingInfo(TreeId + "/remediated/", new ShardMap { Slots = new[] { 0 } })));
         var registryGrain = Substitute.For<ILatticeRegistry>();
+        registryGrain.GetEntriesAsync(Arg.Any<IReadOnlyList<string>>()).Returns(async call =>
+        {
+            var rows = new Dictionary<string, TreeRegistryEntry>(StringComparer.Ordinal);
+            foreach (var id in call.Arg<IReadOnlyList<string>>())
+            {
+                if (await registryGrain.GetEntryAsync(id) is { } row) rows[id] = row;
+            }
+
+            return rows;
+        });
         registryGrain.ResolveAsync(TreeId).Returns(TreeId);
         var shard = Substitute.For<IShardRootGrain>();
         var grainFactory = Substitute.For<IGrainFactory>();
