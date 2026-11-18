@@ -175,4 +175,63 @@ public class BufferingAggregationViewStoreTests
         Assert.That(result["b"], Is.EqualTo(B("2")));
         await inner.DidNotReceive().GetManyAsync(Arg.Any<List<string>>(), Arg.Any<CancellationToken>());
     }
+
+    [Test]
+    public async Task GetAsync_repeatedRead_consultsInnerOnceForPresentAndAbsentKeys()
+    {
+        var inner = Inner();
+        inner.GetAsync("present", Arg.Any<CancellationToken>()).Returns(B("v"));
+        inner.GetAsync("absent", Arg.Any<CancellationToken>()).Returns((byte[]?)null);
+        var store = new Orleans.Lattice.Views.BufferingAggregationViewStore(inner);
+
+        for (var i = 0; i < 3; i++)
+        {
+            Assert.That(await store.GetAsync("present"), Is.EqualTo(B("v")));
+            Assert.That(await store.GetAsync("absent"), Is.Null);
+        }
+
+        await inner.Received(1).GetAsync("present", Arg.Any<CancellationToken>());
+        await inner.Received(1).GetAsync("absent", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task GetManyAsync_repeatedGather_forwardsOnlyKeysNotYetRead()
+    {
+        var inner = Inner();
+        inner.GetManyAsync(Arg.Any<List<string>>(), Arg.Any<CancellationToken>())
+            .Returns(new Dictionary<string, byte[]>(StringComparer.Ordinal) { ["a"] = B("1") });
+        var store = new Orleans.Lattice.Views.BufferingAggregationViewStore(inner);
+
+        var first = await store.GetManyAsync(["a", "b"]);
+        var second = await store.GetManyAsync(["a", "b"]);
+
+        Assert.That(first, Is.EquivalentTo(second));
+        Assert.That(second.Keys, Is.EquivalentTo(new[] { "a" }), "an absent key stays absent from the cache");
+        await inner.Received(1).GetManyAsync(Arg.Any<List<string>>(), Arg.Any<CancellationToken>());
+        // A key served by the gather is served to a later point read without the tree.
+        Assert.That(await store.GetAsync("b"), Is.Null);
+        await inner.DidNotReceive().GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task Write_after_cached_read_wins_and_cached_reads_are_not_captured()
+    {
+        var inner = Inner();
+        inner.GetAsync("k", Arg.Any<CancellationToken>()).Returns(B("old"));
+        inner.GetAsync("untouched", Arg.Any<CancellationToken>()).Returns(B("x"));
+        var store = new Orleans.Lattice.Views.BufferingAggregationViewStore(inner);
+
+        Assert.That(await store.GetAsync("k"), Is.EqualTo(B("old")));
+        _ = await store.GetAsync("untouched");
+        await store.SetAsync("k", B("new"));
+
+        Assert.That(await store.GetAsync("k"), Is.EqualTo(B("new")));
+        Assert.That((await store.GetManyAsync(["k"]))["k"], Is.EqualTo(B("new")));
+        await store.DeleteAsync("k");
+        Assert.That(await store.GetAsync("k"), Is.Null);
+
+        var (upserts, deletes) = store.Capture();
+        Assert.That(upserts, Is.Empty, "a cached read is not a write");
+        Assert.That(deletes, Is.EqualTo(new[] { "k" }));
+    }
 }
