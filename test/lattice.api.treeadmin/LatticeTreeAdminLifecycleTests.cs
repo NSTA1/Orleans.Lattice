@@ -256,7 +256,6 @@ public sealed class LatticeTreeAdminLifecycleTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var registry = Registry(factory);
-        registry.ResolveAsync(Tree).Returns("phys-orders");
         var facade = Create(factory);
 
         var result = await facade.SetTreeAliasAsync(Tree, "phys-orders");
@@ -268,6 +267,29 @@ public sealed class LatticeTreeAdminLifecycleTests
             Assert.That(result.IsAliased, Is.True);
         });
         await registry.Received(1).SwapAliasAsync(Tree, "phys-orders", Arg.Any<ShardMap>(), Arg.Any<int?>(), Arg.Any<string?>());
+
+        // The alias the write established is reported directly: no post-write
+        // ResolveAsync round trip to the registry.
+        await registry.DidNotReceive().ResolveAsync(Arg.Any<string>());
+    }
+
+    [Test]
+    public async Task SetTreeAliasAsync_re_set_of_the_current_alias_reports_it_without_a_resolve()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var registry = Registry(factory);
+        registry.GetEntryAsync(Tree).Returns(new TreeRegistryEntry { PhysicalTreeId = "phys-orders" });
+        var facade = Create(factory);
+
+        var result = await facade.SetTreeAliasAsync(Tree, "phys-orders");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.PhysicalTreeId, Is.EqualTo("phys-orders"));
+            Assert.That(result.IsAliased, Is.True);
+        });
+        await registry.Received(1).SetAliasAsync(Tree, "phys-orders");
+        await registry.DidNotReceive().ResolveAsync(Arg.Any<string>());
     }
 
     [Test]

@@ -92,7 +92,7 @@ var config = (IConfig)new HarnessConfig(resultsPath);
 // path is unchanged so CI / the trend dashboard keep running the main
 // LatticeMicroBenchmarks suite.
 //
-// Recognised suites: observer, leafgetmany, leafrangeread, leafrangedelete, authdecision, hotpath, hashalloc, identitydigestalloc, repocontexthashstaging, pooledreturntrims, rowcodec, ordedup, replayadmission, replayownership, mergefold, catalog, fanout, crosstree, alloctrims, viewdrain, aggiter, viewmaint, queryproj, readpathtrims, readpathpresize, draintrims, fusiontrims, slotfolds, reshardfolds, batchfolds, slotgroupfolds, fanoutslots, replicationtrims, replicationapplytrims, authcompiletrims, tenancycompiletrims, ingestapplytrims, crdtcoalescetrims, crdtrunfolds, coalescedefertrims, grainindexquerytrims, grainindexplanfolds, applymergefanout, terminalpendingtrim, statetrims, stateorder, applygatetrims, alloctrio, crdtreadtrio, dataapicrdtreads, crdtprovenancedecode, historyreadtrims, ormapfilterhoisttrims, crdtcoveragecollapse, crdtdotscantrims, leafdigestscantrims, leafboundhoistdotspan, ormapdotspantranscode, tagrowtrims, tagindexbatching, decisionstamp, viewrebuildfanout, bulkloadfanout, fanoutcollapse, roundtripwaves, partitionwaves, batchhoisttrims, condsetmanyadmission, detachedtransfer, blockedcensus, partitionfloorsampling, sharetouch, orphanedsurvey, rowtranscodecopytrims, ormapkeyorderfoldbox, leafsnapshotframetrims, aggfold, aggsplice, aggfused, aggblock, aggshardgather, tenantgatesnapshot, aggkey, aggfoldwrite, vvpresize, digestappendfolds, sortcomparertrims, walbatchbuffertrims, setkeytrims, crdtapplyprobetrims, crdtapplywalktrims, crdtdeltauniontrims, crdtdecodewalktrims, scratchkeywindowtrims, gsetdecodetrims, tagwritetrims, crdtmergelivenesstrims, crdtlivenessgatetrims, walclockfloor, replayscanloop, registryprojection, registryoptions, registrymaintenance, registrypairs, leafchainwalk, cursorseedfanout, autonomicprobes, walpolling, internalnodefusion, adminstatus
+// Recognised suites: observer, leafgetmany, leafrangeread, leafrangedelete, authdecision, hotpath, hashalloc, identitydigestalloc, repocontexthashstaging, pooledreturntrims, rowcodec, ordedup, replayadmission, replayownership, mergefold, catalog, fanout, crosstree, alloctrims, viewdrain, aggiter, viewmaint, queryproj, readpathtrims, readpathpresize, draintrims, fusiontrims, slotfolds, reshardfolds, batchfolds, slotgroupfolds, fanoutslots, replicationtrims, replicationapplytrims, authcompiletrims, tenancycompiletrims, ingestapplytrims, crdtcoalescetrims, crdtrunfolds, coalescedefertrims, grainindexquerytrims, grainindexplanfolds, applymergefanout, terminalpendingtrim, statetrims, stateorder, applygatetrims, alloctrio, crdtreadtrio, dataapicrdtreads, crdtprovenancedecode, historyreadtrims, ormapfilterhoisttrims, crdtcoveragecollapse, crdtdotscantrims, leafdigestscantrims, leafboundhoistdotspan, ormapdotspantranscode, tagrowtrims, tagindexbatching, decisionstamp, viewrebuildfanout, bulkloadfanout, fanoutcollapse, roundtripwaves, partitionwaves, batchhoisttrims, condsetmanyadmission, detachedtransfer, blockedcensus, partitionfloorsampling, sharetouch, orphanedsurvey, rowtranscodecopytrims, ormapkeyorderfoldbox, leafsnapshotframetrims, aggfold, aggsplice, aggfused, aggblock, aggshardgather, tenantgatesnapshot, aggkey, aggfoldwrite, vvpresize, digestappendfolds, sortcomparertrims, walbatchbuffertrims, setkeytrims, crdtapplyprobetrims, crdtapplywalktrims, crdtdeltauniontrims, crdtdecodewalktrims, scratchkeywindowtrims, gsetdecodetrims, tagwritetrims, crdtmergelivenesstrims, crdtlivenessgatetrims, walclockfloor, replayscanloop, registryprojection, registryoptions, registrymaintenance, registrypairs, registryhops, leafchainwalk, cursorseedfanout, autonomicprobes, walpolling, viewdrainheads, internalnodefusion, adminstatus
 var suite = Environment.GetEnvironmentVariable("BENCH_MICROBENCH_SUITE");
 for (var i = 0; i < args.Length - 1; i++)
 {
@@ -278,6 +278,12 @@ if (string.Equals(suite, "walpolling", StringComparison.OrdinalIgnoreCase))
 {
     var pollingSummary = BenchmarkRunner.Run<WalPollingCallBenchmarks>(config);
     return pollingSummary.HasCriticalValidationErrors || pollingSummary.Reports.Any(report => !report.Success) ? 1 : 0;
+}
+
+if (string.Equals(suite, "viewdrainheads", StringComparison.OrdinalIgnoreCase))
+{
+    var drainHeadSummary = BenchmarkRunner.Run<ViewDrainHeadProbeBenchmarks>(config);
+    return drainHeadSummary.HasCriticalValidationErrors || drainHeadSummary.Reports.Any(report => !report.Success) ? 1 : 0;
 }
 
 if (string.Equals(suite, "frontierprobes", StringComparison.OrdinalIgnoreCase))
@@ -1084,7 +1090,8 @@ if (string.Equals(suite, "diagnosticregistry", StringComparison.OrdinalIgnoreCas
 if (string.Equals(suite, "registryprojection", StringComparison.OrdinalIgnoreCase)
     || string.Equals(suite, "registryoptions", StringComparison.OrdinalIgnoreCase)
     || string.Equals(suite, "registrymaintenance", StringComparison.OrdinalIgnoreCase)
-    || string.Equals(suite, "registrypairs", StringComparison.OrdinalIgnoreCase))
+    || string.Equals(suite, "registrypairs", StringComparison.OrdinalIgnoreCase)
+    || string.Equals(suite, "registryhops", StringComparison.OrdinalIgnoreCase))
 {
     if (string.Equals(suite, "registrypairs", StringComparison.OrdinalIgnoreCase))
     {
@@ -1092,6 +1099,13 @@ if (string.Equals(suite, "registryprojection", StringComparison.OrdinalIgnoreCas
             benchmark.Parameters["Path"] is RegistryProjectionElisionBenchmarks.Site.CutoverPreparePair
                 or RegistryProjectionElisionBenchmarks.Site.AliasCarryAcrossPair
                 or RegistryProjectionElisionBenchmarks.Site.ResizeAliasSwapPair));
+    }
+    if (string.Equals(suite, "registryhops", StringComparison.OrdinalIgnoreCase))
+    {
+        config = config.AddFilter(new SimpleFilter(benchmark =>
+            benchmark.Parameters["Path"] is RegistryProjectionElisionBenchmarks.Site.MergeInitiatePair
+                or RegistryProjectionElisionBenchmarks.Site.AliasMoveRestamp
+                or RegistryProjectionElisionBenchmarks.Site.AdminAliasSet));
     }
     if (string.Equals(suite, "registrymaintenance", StringComparison.OrdinalIgnoreCase))
     {

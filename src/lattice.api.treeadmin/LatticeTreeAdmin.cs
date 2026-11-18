@@ -738,8 +738,6 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
         // alias-swap seam (LatticeBackupRestoreService.AssertPhysicalBelongsToTargetAsync).
         await _authorizer.AuthorizeTreeAdminAsync(effectivePhysicalTreeId, cancellationToken).ConfigureAwait(false);
 
-        var registry = _grainFactory.GetLatticeRegistry();
-
         // Routing reads the shard map under the logical id, so the target's map is
         // carried onto the logical entry in the same registry write as the alias
         // (#4263, #4336), and the previous copy is armed to redirect routing
@@ -750,12 +748,15 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
             effectivePhysicalTreeId,
             cancellationToken).ConfigureAwait(false);
 
-        var resolved = await registry.ResolveAsync(effectiveTreeId).ConfigureAwait(false);
+        // Both registry writers on this path (SetAliasAsync for a re-set,
+        // SwapAliasAsync for a move) stamp exactly this physical id onto the
+        // logical row, and a refused write throws, so the alias this call
+        // established is known without a post-write ResolveAsync round trip.
         return new TreeAliasResolution
         {
             TreeId = treeId,
-            PhysicalTreeId = resolved,
-            IsAliased = !string.Equals(effectiveTreeId, resolved, StringComparison.Ordinal),
+            PhysicalTreeId = effectivePhysicalTreeId,
+            IsAliased = true,
         };
     }
 

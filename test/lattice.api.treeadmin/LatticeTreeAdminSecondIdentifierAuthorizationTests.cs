@@ -106,7 +106,6 @@ public sealed class LatticeTreeAdminSecondIdentifierAuthorizationTests
     {
         var factory = Substitute.For<IGrainFactory>();
         var registry = Registry(factory);
-        registry.ResolveAsync(Owned).Returns("orders-v2");
         var gate = new PerTreeGate(Owned, "orders-v2");
         var facade = Create(factory, gate);
 

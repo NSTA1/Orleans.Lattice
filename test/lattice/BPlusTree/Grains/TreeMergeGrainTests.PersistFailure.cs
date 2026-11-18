@@ -68,6 +68,7 @@ public partial class TreeMergeGrainTests
                 MaxInternalChildren = 128,
                 ShardCount = ShardCount,
             }));
+        ServeEntriesFromSingleReads(registry);
 
         var state = existingState ?? new FakePersistentState<TreeMergeState>();
         var grain = new TreeMergeGrain(

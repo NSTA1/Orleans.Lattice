@@ -58,6 +58,16 @@ protocol transition is elided. The trim-watermark and read-side fall-off detecto
 below still exercise the production path. Idle dispatch and next-drain recovery
 are covered by the `WalLogSubscriberTests` idle-read-elision cases.
 
+The pre-read head probes for distinct partitions are issued as one bounded,
+overlapped wave rather than serially. Each probe is a pure read of an independent
+partition's readable head and no decision is taken until all have returned, so the
+observed heads are those a serial interleaving could have returned. The drain
+reports those heads, and a view maintainer whose drain read and applied nothing
+folds its lag from them instead of probing each head again. That reuse is a
+stuttering step: no offset advanced between the probe and the fold, and lag is a
+reported gauge, never an input to a checkpoint. A drain that applied entries
+still re-probes, so arrivals during the apply are counted.
+
 ## Variable mapping
 
 | Spec variable | Protocol role | Code counterpart |

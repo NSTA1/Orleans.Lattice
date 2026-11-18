@@ -94,6 +94,15 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// alias swap: two serial GetEntry reads of independent rows -> one
 /// <c>GetEntriesAsync</c>, 2 serial registry hops -> 1. The registry also
 /// overlaps the two backing reads in its turn, which this fake does not price.</item>
+/// <item><see cref="Site.MergeInitiatePair"/> - <c>TreeMergeGrain</c> initiating a
+/// merge: source GetEntry + target Resolve -> one <c>GetEntriesAsync</c>, 2 serial
+/// registry hops -> 1.</item>
+/// <item><see cref="Site.AliasMoveRestamp"/> - <c>AliasCutoverShardMaps</c>
+/// restamping a moving explicit alias: the pair read already carries the logical
+/// row, so the follow-up GetEntry is dropped, 2 serial hops -> 1.</item>
+/// <item><see cref="Site.AdminAliasSet"/> - <c>LatticeTreeAdmin</c> setting an
+/// alias: the post-write Resolve is answered from the alias just written,
+/// 3 serial hops -> 2.</item>
 /// </list>
 /// <para>
 /// <b>Read the hop model.</b> <see cref="HopModel.Yield"/> prices only the
@@ -124,7 +133,7 @@ public class RegistryProjectionElisionBenchmarks
     private RegistryStore _registry = null!;
 
     /// <summary>The routing read being measured; see the class summary.</summary>
-    [Params(Site.StateObserverOpen, Site.BootstrapFenceResolve, Site.SnapshotExport, Site.ResizeInitiate, Site.CompactionTopology, Site.MergeInitiate, Site.SplitInitiate, Site.ConsolidationInitiate, Site.ReshardSplitTick, Site.ReshardConsolidateTick, Site.StalePendingSettle, Site.BootstrapReceiverScan, Site.SnapshotInitiate, Site.RestoreShadowValidate, Site.CutoverPrepare, Site.ResizeEmptyProbe, Site.ResizeIntentOptions, Site.DeletionShardCensus, Site.StatsCacheHit, Site.WalByteSizes, Site.WalUsageMiss, Site.MergeFrontDoor, Site.ResizeUndoFence, Site.HotShardTick, Site.HealingSweep, Site.AbsentParticipantDiscard, Site.CutoverPreparePair, Site.AliasCarryAcrossPair, Site.ResizeAliasSwapPair)]
+    [Params(Site.StateObserverOpen, Site.BootstrapFenceResolve, Site.SnapshotExport, Site.ResizeInitiate, Site.CompactionTopology, Site.MergeInitiate, Site.SplitInitiate, Site.ConsolidationInitiate, Site.ReshardSplitTick, Site.ReshardConsolidateTick, Site.StalePendingSettle, Site.BootstrapReceiverScan, Site.SnapshotInitiate, Site.RestoreShadowValidate, Site.CutoverPrepare, Site.ResizeEmptyProbe, Site.ResizeIntentOptions, Site.DeletionShardCensus, Site.StatsCacheHit, Site.WalByteSizes, Site.WalUsageMiss, Site.MergeFrontDoor, Site.ResizeUndoFence, Site.HotShardTick, Site.HealingSweep, Site.AbsentParticipantDiscard, Site.CutoverPreparePair, Site.AliasCarryAcrossPair, Site.ResizeAliasSwapPair, Site.MergeInitiatePair, Site.AliasMoveRestamp, Site.AdminAliasSet)]
     public Site Path { get; set; }
 
     /// <summary>How each simulated registry call completes; see the class summary.</summary>
@@ -155,6 +164,29 @@ public class RegistryProjectionElisionBenchmarks
                 var logical = await _registry.GetEntryAsync(TreeId);
                 var other = await _registry.GetEntryAsync(ShadowTreeId);
                 return Fold(logical?.PhysicalTreeId ?? TreeId, (logical?.ShardMapVersion ?? 0) + (other?.ShardMapVersion ?? 0));
+            }
+
+            case Site.MergeInitiatePair:
+            {
+                var source = await _registry.GetEntryAsync(TreeId);
+                var targetPhysical = await _registry.ResolveAsync(TargetTreeId);
+                return Fold(targetPhysical, source?.ShardMapVersion ?? 0);
+            }
+
+            case Site.AliasMoveRestamp:
+            {
+                var entries = await _registry.GetEntriesAsync([TreeId, ShadowTreeId]);
+                var logicalBefore = entries.GetValueOrDefault(TreeId);
+                var moving = await _registry.GetEntryAsync(TreeId);
+                return Fold(moving?.PhysicalTreeId ?? TreeId, (logicalBefore?.ShardMapVersion ?? 0) + (entries.GetValueOrDefault(ShadowTreeId)?.ShardMapVersion ?? 0));
+            }
+
+            case Site.AdminAliasSet:
+            {
+                var entry = await _registry.GetEntryAsync(TreeId);
+                await _registry.SetAliasAsync(TreeId, ShadowTreeId);
+                var physical = await _registry.ResolveAsync(TreeId);
+                return Fold(physical, entry?.ShardMapVersion ?? 0);
             }
 
             case Site.HotShardTick:
@@ -351,6 +383,28 @@ public class RegistryProjectionElisionBenchmarks
                 var logical = entries.GetValueOrDefault(TreeId);
                 var other = entries.GetValueOrDefault(ShadowTreeId);
                 return Fold(logical?.PhysicalTreeId ?? TreeId, (logical?.ShardMapVersion ?? 0) + (other?.ShardMapVersion ?? 0));
+            }
+
+            case Site.MergeInitiatePair:
+            {
+                var entries = await _registry.GetEntriesAsync([TreeId, TargetTreeId]);
+                var source = entries.GetValueOrDefault(TreeId);
+                var targetPhysical = entries.GetValueOrDefault(TargetTreeId)?.PhysicalTreeId ?? TargetTreeId;
+                return Fold(targetPhysical, source?.ShardMapVersion ?? 0);
+            }
+
+            case Site.AliasMoveRestamp:
+            {
+                var entries = await _registry.GetEntriesAsync([TreeId, ShadowTreeId]);
+                var logicalBefore = entries.GetValueOrDefault(TreeId);
+                return Fold(logicalBefore?.PhysicalTreeId ?? TreeId, (logicalBefore?.ShardMapVersion ?? 0) + (entries.GetValueOrDefault(ShadowTreeId)?.ShardMapVersion ?? 0));
+            }
+
+            case Site.AdminAliasSet:
+            {
+                var entry = await _registry.GetEntryAsync(TreeId);
+                await _registry.SetAliasAsync(TreeId, ShadowTreeId);
+                return Fold(ShadowTreeId, entry?.ShardMapVersion ?? 0);
             }
 
             case Site.StatsCacheHit:
@@ -551,6 +605,15 @@ public class RegistryProjectionElisionBenchmarks
 
         /// <summary>A resize alias swap reading the logical row and the resized copy's row.</summary>
         ResizeAliasSwapPair,
+
+        /// <summary>A merge initiation reading the source row and resolving the target alias.</summary>
+        MergeInitiatePair,
+
+        /// <summary>A moving explicit-alias carry-across restamping the logical row's lineage.</summary>
+        AliasMoveRestamp,
+
+        /// <summary>An admin alias set reporting the resulting alias state.</summary>
+        AdminAliasSet,
     }
 
     /// <summary>How a simulated grain call completes.</summary>
@@ -599,7 +662,15 @@ public class RegistryProjectionElisionBenchmarks
         public async Task<string> ResolveAsync(string id)
         {
             await HopAsync();
-            return entry.PhysicalTreeId ?? id;
+            return _aliases.TryGetValue(id, out var aliased) ? aliased : entry.PhysicalTreeId ?? id;
+        }
+
+        private readonly System.Collections.Generic.Dictionary<string, string> _aliases = new(StringComparer.Ordinal);
+
+        public async Task SetAliasAsync(string id, string physicalTreeId)
+        {
+            await HopAsync();
+            _aliases[id] = physicalTreeId;
         }
 
         public async Task<long?> GetShardMapAsync(string id)

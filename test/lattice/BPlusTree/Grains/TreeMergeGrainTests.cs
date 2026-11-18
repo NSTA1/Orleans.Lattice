@@ -45,6 +45,11 @@ public partial class TreeMergeGrainTests
                 MaxInternalChildren = 128,
                 ShardCount = ShardCount,
             }));
+        // The batched read serves each id from whatever its single-key read is
+        // stubbed to, absent ids omitted, as the registry grain does. Each
+        // delegated lookup records a GetEntryAsync call on the substitute, so
+        // call-count assertions count GetEntriesAsync separately.
+        ServeEntriesFromSingleReads(registry);
         var optionsResolver = TestOptionsResolver.ForFactory(grainFactory, options);
 
         var grain = new TreeMergeGrain(
@@ -72,6 +77,46 @@ public partial class TreeMergeGrainTests
             }));
         return registry;
     }
+
+    /// <summary>
+    /// Serves <see cref="ILatticeRegistry.GetEntriesAsync"/> from whatever each
+    /// id's <see cref="ILatticeRegistry.GetEntryAsync"/> is stubbed to, leaving
+    /// absent ids out, exactly as the registry grain does.
+    /// </summary>
+    internal static void ServeEntriesFromSingleReads(ILatticeRegistry registry) =>
+        registry.GetEntriesAsync(Arg.Any<IReadOnlyList<string>>()).Returns(async ci =>
+        {
+            var entries = new Dictionary<string, TreeRegistryEntry>(StringComparer.Ordinal);
+            foreach (var id in ci.Arg<IReadOnlyList<string>>())
+            {
+                if (await registry.GetEntryAsync(id) is { } entry)
+                {
+                    entries[id] = entry;
+                }
+            }
+
+            return entries;
+        });
+
+    /// <summary>
+    /// Serves the target tree's registry row aliased onto
+    /// <paramref name="physicalTreeId"/>; the merge reads it in the same
+    /// batched round trip as the source row rather than via <c>ResolveAsync</c>.
+    /// </summary>
+    private static void StubTargetAlias(ILatticeRegistry registry, string physicalTreeId, ShardMap? map = null) =>
+        registry.GetEntryAsync(TargetTreeId).Returns(Task.FromResult<TreeRegistryEntry?>(
+            new TreeRegistryEntry
+            {
+                MaxLeafKeys = 128,
+                MaxInternalChildren = 128,
+                ShardCount = ShardCount,
+                PhysicalTreeId = physicalTreeId,
+                ShardMap = map,
+            }));
+
+    /// <summary>Number of calls to the named <see cref="ILatticeRegistry"/> method.</summary>
+    private static int CallsTo(ILatticeRegistry registry, string method) =>
+        registry.ReceivedCalls().Count(c => c.GetMethodInfo().Name == method);
 
     /// <summary>
     /// The key the bounded drain resumes at when it parks before the source leaf
