@@ -86,9 +86,17 @@ public static class ValueRenderer
 
     private static bool TryFormatJson(byte[] bytes, out string formatted)
     {
+        // JsonDocument rejects a UTF-8 byte order mark, which many editors and
+        // encoders write ahead of a JSON document, so it is skipped first.
+        var json = bytes.AsMemory();
+        if (json.Span.StartsWith(Encoding.UTF8.Preamble))
+        {
+            json = json[Encoding.UTF8.Preamble.Length..];
+        }
+
         try
         {
-            using var document = JsonDocument.Parse(bytes, new JsonDocumentOptions
+            using var document = JsonDocument.Parse(json, new JsonDocumentOptions
             {
                 CommentHandling = JsonCommentHandling.Skip,
                 AllowTrailingCommas = true,

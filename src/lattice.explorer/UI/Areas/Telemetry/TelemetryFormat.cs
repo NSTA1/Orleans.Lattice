@@ -34,7 +34,7 @@ internal static class TelemetryFormat
 
         if (string.Equals(unit, "1", StringComparison.Ordinal) && semantic == TelemetryMeasurementSemantic.Ratio)
         {
-            return (value * 100).ToString("0.#", CultureInfo.CurrentCulture) + " %";
+            return Format(value * 100, "0.#") + " %";
         }
 
         var number = Number(value);
@@ -70,7 +70,7 @@ internal static class TelemetryFormat
     {
         var magnitude = Math.Abs(value);
         var format = magnitude >= 100 ? "N0" : magnitude >= 10 ? "0.#" : magnitude == 0 ? "0" : "0.##";
-        return value.ToString(format, CultureInfo.CurrentCulture);
+        return Format(value, format);
     }
 
     private static string Bytes(double value)
@@ -86,6 +86,14 @@ internal static class TelemetryFormat
             index++;
         }
 
-        return (index == 0 ? scaled.ToString("0", CultureInfo.CurrentCulture) : scaled.ToString("0.#", CultureInfo.CurrentCulture)) + " " + ByteUnits[index];
+        return Format(scaled, index == 0 ? "0" : "0.#") + " " + ByteUnits[index];
+    }
+
+    // .NET writes a negative value that rounds to zero, and negative zero itself,
+    // as "-0"; a figure with no non-zero digit is written as zero instead.
+    private static string Format(double value, string format)
+    {
+        var text = value.ToString(format, CultureInfo.CurrentCulture);
+        return text.AsSpan().IndexOfAnyInRange('1', '9') >= 0 ? text : 0d.ToString(format, CultureInfo.CurrentCulture);
     }
 }

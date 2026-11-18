@@ -52,6 +52,7 @@ public partial class TenancyDirectoryPage
     private string _pickedTenant = string.Empty;
     private LtComboBox? _pickBox;
     private string? _pickError;
+    private ExplorerAddress? _requestAddress;
 
     [Inject]
     internal TenancyCatalog Catalog { get; set; } = default!;
@@ -133,6 +134,7 @@ public partial class TenancyDirectoryPage
         }
 
         _rows = [.. tenants.Select(tenant => new TenancyDirectoryRow(tenant))];
+        _requestAddress = Address;
         _createOpen = string.Equals(Address.GetQuery(TenancyRoutes.NewQuery), TenancyRoutes.NewValue, StringComparison.Ordinal);
         if (!_createOpen && string.Equals(Address.GetQuery(TenancyRoutes.SetRegionsQuery), TenancyRoutes.NewValue, StringComparison.Ordinal) && _rows.Count > 0)
         {
@@ -140,6 +142,29 @@ public partial class TenancyDirectoryPage
         }
         StateHasChanged();
         await Task.WhenAll(_rows.Select(ReadDetailsAsync)).ConfigureAwait(true);
+    }
+
+    /// <inheritdoc />
+    protected override void OnParametersSet()
+    {
+        // The page is reused when the palette's create or set-regions command is run
+        // from the directory itself, so a newly requested form opens here as well as on load.
+        if (_rows is null || _saving || Equals(_requestAddress, Address))
+        {
+            return;
+        }
+
+        _requestAddress = Address;
+        if (string.Equals(Address.GetQuery(TenancyRoutes.NewQuery), TenancyRoutes.NewValue, StringComparison.Ordinal))
+        {
+            _setRegionsOpen = false;
+            OpenCreate();
+        }
+        else if (string.Equals(Address.GetQuery(TenancyRoutes.SetRegionsQuery), TenancyRoutes.NewValue, StringComparison.Ordinal) && _rows.Count > 0)
+        {
+            _createOpen = false;
+            OpenSetRegions();
+        }
     }
 
     private async Task ReadDetailsAsync(TenancyDirectoryRow row)

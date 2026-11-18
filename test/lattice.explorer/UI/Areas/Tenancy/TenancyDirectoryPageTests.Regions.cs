@@ -73,6 +73,26 @@ public sealed partial class TenancyDirectoryPageTests
     }
 
     [Test]
+    [TestCase(TenancyArea.CreateTenantCommandId, "New tenant")]
+    [TestCase(TenancyArea.SetRegionsCommandId, "Set a tenant's regions")]
+    public async Task A_palette_command_run_from_the_directory_itself_opens_its_form(string commandId, string title)
+    {
+        UseTenancyAs(isOperator: true);
+        var area = CreateArea();
+        await area.GetAvailabilityAsync(CancellationToken.None);
+        var command = area.Commands.Single(candidate => candidate.Id == commandId);
+        var cut = RenderAt<TenancyDirectoryPage>("tenancy");
+        cut.WaitUntil(() => Assert.That(cut.FindAll("tbody tr"), Is.Not.Empty));
+        Assert.That(cut.FindAll(".lt-dialog__title"), Is.Empty);
+
+        // The router reuses the page for the same route, so only its parameters are set again.
+        Navigation.NavigateTo(command.Target!.ToHref());
+        cut.Render();
+
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-dialog__title").TextContent, Is.EqualTo(title)));
+    }
+
+    [Test]
     public void The_set_regions_picker_asks_for_a_tenant_before_it_moves()
     {
         UseTenancyAs(isOperator: true);

@@ -34,6 +34,21 @@ public class ValueRendererTests
     }
 
     [Test]
+    public void Render_JsonValueWithUtf8ByteOrderMark_PrettyPrints()
+    {
+        var bytes = Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes("{\"a\":1}")).ToArray();
+
+        var rendered = ValueRenderer.Render(bytes);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(rendered.Format, Is.EqualTo(ValueFormat.Json));
+            Assert.That(rendered.Content, Does.StartWith("{"));
+            Assert.That(rendered.Content, Does.Contain("\"a\": 1"));
+        });
+    }
+
+    [Test]
     public void Render_PlainText_IsTextFormat()
     {
         var bytes = Encoding.UTF8.GetBytes("hello world");
