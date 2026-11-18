@@ -289,6 +289,17 @@ an executed production analogue above.
 
 ## Deliberate abstraction gaps
 
+- **Backup-set schedules (issue #6067).** A backup-set schedule
+  (`BackupSetSchedulerGrain`, indexed by `BackupSetScheduleRegistryGrain`) is a
+  client of the modelled protocol, not a new step of it. Its whole-set retention
+  deletes a pruned set's member through the same per-id hold an operator delete
+  takes, and the members of its retained sets are a further hold class on the
+  per-scope pass: `BackupSchedulerGrain.IsHeld` treats a backup a schedule holds
+  like any other held id, which the model's `Held` set already keeps out of a
+  pass's plan. The model does not represent which sets a schedule retains, so it
+  does not check that a schedule's own keep policy is honoured; that is pinned by
+  `BackupSetScheduleModelTests` and `BackupSetScheduleIntegrationTests`.
+  Production symbols: `BackupSchedulerGrain.IsHeld`, `BackupSchedulerGrain.SetSetScheduleHoldsAsync`, `BackupSetScheduleRegistryGrain`, `BackupSetSchedulerGrain`, `BackupSetSchedulerGrain.ApplyRetentionAsync`.
 - **One artifact per capture.** Each manifest references only its own artifact,
   as production writes it: an artifact id is unique per capture (a fresh GUID in
   its name). The pass's retained-artifact set, which keeps an artifact a retained
