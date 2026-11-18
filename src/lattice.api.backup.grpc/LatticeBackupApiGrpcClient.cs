@@ -547,6 +547,194 @@ public sealed class LatticeBackupApiGrpcClient
         return response.Found ? response.Config : null;
     }
 
+    /// <summary>
+    /// Registers (or updates) a named, recurring backup-set schedule and returns
+    /// its status. Every interval the server captures one backup set over the
+    /// schedule's trees and prunes whole sets by the schedule's retention.
+    /// </summary>
+    /// <param name="request">The schedule request. Must not be <c>null</c>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The schedule's status.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="request"/> is <c>null</c>.</exception>
+    /// <exception cref="NotSupportedException">The server's backup control does not support backup-set schedules.</exception>
+    public async Task<BackupSetScheduleStatus> ScheduleBackupSetAsync(
+        LatticeBackupSetScheduleRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var response = await SetScheduleUnaryAsync(
+            _methods.ScheduleBackupSet,
+            new BackupSetScheduleRequestMessage { Request = request },
+            cancellationToken).ConfigureAwait(false);
+
+        return response.Status
+            ?? throw new InvalidOperationException("The server answered the schedule-backup-set RPC without a status.");
+    }
+
+    /// <summary>
+    /// Pauses the backup-set schedule named <paramref name="name"/>: no further
+    /// run starts, while its retained sets stay restorable. Idempotent.
+    /// </summary>
+    /// <param name="name">The schedule's name. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns><see langword="true"/> when the schedule exists; otherwise <see langword="false"/>.</returns>
+    /// <exception cref="ArgumentException"><paramref name="name"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="NotSupportedException">The server's backup control does not support backup-set schedules.</exception>
+    public async Task<bool> CancelBackupSetScheduleAsync(
+        string name,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        var response = await SetScheduleUnaryAsync(
+            _methods.CancelBackupSetSchedule,
+            new BackupSetScheduleNameRequestMessage { Name = name },
+            cancellationToken).ConfigureAwait(false);
+
+        return response.Result;
+    }
+
+    /// <summary>
+    /// Removes the backup-set schedule named <paramref name="name"/>, optionally
+    /// deleting the backups of its retained sets.
+    /// </summary>
+    /// <param name="name">The schedule's name. Must not be <c>null</c> or empty.</param>
+    /// <param name="deleteRetainedSets">Whether to delete the retained sets' backups.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns><see langword="true"/> when a schedule was removed; otherwise <see langword="false"/>.</returns>
+    /// <exception cref="ArgumentException"><paramref name="name"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="NotSupportedException">The server's backup control does not support backup-set schedules.</exception>
+    public async Task<bool> RemoveBackupSetScheduleAsync(
+        string name,
+        bool deleteRetainedSets,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        var response = await SetScheduleUnaryAsync(
+            _methods.RemoveBackupSetSchedule,
+            new BackupSetScheduleRemoveRequestMessage { Name = name, DeleteRetainedSets = deleteRetainedSets },
+            cancellationToken).ConfigureAwait(false);
+
+        return response.Result;
+    }
+
+    /// <summary>
+    /// Reads the status of the backup-set schedule named <paramref name="name"/>,
+    /// or <see langword="null"/> when no schedule has the name.
+    /// </summary>
+    /// <param name="name">The schedule's name. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The schedule's status, or <see langword="null"/>.</returns>
+    /// <exception cref="ArgumentException"><paramref name="name"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="NotSupportedException">The server's backup control does not support backup-set schedules.</exception>
+    public async Task<BackupSetScheduleStatus?> GetBackupSetScheduleStatusAsync(
+        string name,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        var response = await SetScheduleUnaryAsync(
+            _methods.GetBackupSetScheduleStatus,
+            new BackupSetScheduleNameRequestMessage { Name = name },
+            cancellationToken).ConfigureAwait(false);
+
+        return response.Found ? response.Status : null;
+    }
+
+    /// <summary>
+    /// Lists the backup-set schedules of the caller's tenant that the caller may
+    /// read, in name order.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The schedules' statuses.</returns>
+    /// <exception cref="NotSupportedException">The server's backup control does not support backup-set schedules.</exception>
+    public async Task<IReadOnlyList<BackupSetScheduleStatus>> ListBackupSetSchedulesAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var response = await SetScheduleUnaryAsync(
+            _methods.ListBackupSetSchedules,
+            new BackupSetScheduleListRequestMessage(),
+            cancellationToken).ConfigureAwait(false);
+
+        return response.Schedules ?? Array.Empty<BackupSetScheduleStatus>();
+    }
+
+    /// <summary>
+    /// Starts one run of the backup-set schedule named <paramref name="name"/>
+    /// now, without waiting for it to finish.
+    /// </summary>
+    /// <param name="name">The schedule's name. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns><see langword="true"/> when a run was started; <see langword="false"/> when one was already in flight.</returns>
+    /// <exception cref="ArgumentException"><paramref name="name"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="KeyNotFoundException">No schedule has the name (the server answered <see cref="StatusCode.NotFound"/>).</exception>
+    /// <exception cref="NotSupportedException">The server's backup control does not support backup-set schedules.</exception>
+    public async Task<bool> RunBackupSetScheduleNowAsync(
+        string name,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        try
+        {
+            var response = await SetScheduleUnaryAsync(
+                _methods.RunBackupSetScheduleNow,
+                new BackupSetScheduleNameRequestMessage { Name = name },
+                cancellationToken).ConfigureAwait(false);
+
+            return response.Result;
+        }
+        catch (RpcException ex) when (ex.StatusCode == StatusCode.NotFound)
+        {
+            throw new KeyNotFoundException(ex.Status.Detail, ex);
+        }
+    }
+
+    /// <summary>
+    /// Reads only the live progress of the in-flight run of the backup-set schedule
+    /// named <paramref name="name"/> - the lightweight read for polling a run, which
+    /// does not carry the schedule's member trees, recent runs or retained sets.
+    /// </summary>
+    /// <param name="name">The schedule's name. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The in-flight run's progress, or <see langword="null"/> when no run is in flight.</returns>
+    /// <exception cref="ArgumentException"><paramref name="name"/> is <c>null</c> or empty.</exception>
+    /// <exception cref="KeyNotFoundException">No schedule has the name (the server answered <c>Found = false</c>).</exception>
+    /// <exception cref="NotSupportedException">The server does not serve the progress read (it answered <see cref="StatusCode.Unimplemented"/>).</exception>
+    public async Task<BackupSetScheduleRunProgress?> GetBackupSetScheduleProgressAsync(
+        string name,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(name);
+        var response = await SetScheduleUnaryAsync(
+            _methods.GetBackupSetScheduleProgress,
+            new BackupSetScheduleNameRequestMessage { Name = name },
+            cancellationToken).ConfigureAwait(false);
+
+        return response.Found
+            ? response.Progress
+            : throw new KeyNotFoundException($"No backup-set schedule is named '{name}'.");
+    }
+
+    /// <summary>
+    /// Issues a backup-set schedule RPC, surfacing a server whose backup control
+    /// does not support backup-set schedules (<see cref="StatusCode.Unimplemented"/>)
+    /// as the <see cref="NotSupportedException"/> the facade contract names.
+    /// </summary>
+    private async Task<TResponse> SetScheduleUnaryAsync<TRequest, TResponse>(
+        Method<TRequest, TResponse> method,
+        TRequest request,
+        CancellationToken cancellationToken)
+        where TRequest : class
+        where TResponse : class
+    {
+        try
+        {
+            return await UnaryAsync(method, request, cancellationToken).ConfigureAwait(false);
+        }
+        catch (RpcException ex) when (ex.StatusCode == StatusCode.Unimplemented)
+        {
+            throw new NotSupportedException(ex.Status.Detail, ex);
+        }
+    }
+
     private async Task<TResponse> UnaryAsync<TRequest, TResponse>(
         Method<TRequest, TResponse> method,
         TRequest request,

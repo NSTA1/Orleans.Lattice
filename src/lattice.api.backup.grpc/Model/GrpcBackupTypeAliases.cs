@@ -134,4 +134,28 @@ public static class GrpcBackupTypeAliases
 
     /// <summary>Alias for <see cref="BackupCatalogScrubRequestMessage"/>.</summary>
     public const string BackupCatalogScrubRequestMessage = "oibg.cscreq";
+
+    /// <summary>Alias for <see cref="BackupSetScheduleRequestMessage"/>.</summary>
+    public const string BackupSetScheduleRequestMessage = "oibg.ssreq";
+
+    /// <summary>Alias for <see cref="BackupSetScheduleStatusResponse"/>.</summary>
+    public const string BackupSetScheduleStatusResponse = "oibg.ssstat";
+
+    /// <summary>Alias for <see cref="BackupSetScheduleNameRequestMessage"/>.</summary>
+    public const string BackupSetScheduleNameRequestMessage = "oibg.ssnreq";
+
+    /// <summary>Alias for <see cref="BackupSetScheduleRemoveRequestMessage"/>.</summary>
+    public const string BackupSetScheduleRemoveRequestMessage = "oibg.ssrmreq";
+
+    /// <summary>Alias for <see cref="BackupSetScheduleActionResponse"/>.</summary>
+    public const string BackupSetScheduleActionResponse = "oibg.ssactresp";
+
+    /// <summary>Alias for <see cref="BackupSetScheduleListRequestMessage"/>.</summary>
+    public const string BackupSetScheduleListRequestMessage = "oibg.sslreq";
+
+    /// <summary>Alias for <see cref="BackupSetScheduleListResponse"/>.</summary>
+    public const string BackupSetScheduleListResponse = "oibg.sslresp";
+
+    /// <summary>Alias for <see cref="BackupSetScheduleProgressResponse"/>.</summary>
+    public const string BackupSetScheduleProgressResponse = "oibg.ssprogresp";
 }

@@ -351,6 +351,131 @@ internal static class BackupToolInvocations
         return new McpBackupDeleteResult { BackupId = backupId, Deleted = deleted };
     }
 
+    /// <summary>
+    /// Registers or updates a backup-set schedule. An <c>Explicit</c> schedule
+    /// captures one whole-tree member per id in <paramref name="treeIds"/>; an
+    /// <c>AllTrees</c> schedule resolves its trees itself.
+    /// </summary>
+    public static async Task<McpBackupSetSchedule> ScheduleBackupSetAsync(
+        ILatticeBackupControl control,
+        string name,
+        long intervalSeconds,
+        string? membership,
+        IReadOnlyList<string>? treeIds,
+        int? retentionKeepLast,
+        long? retentionMaxAgeSeconds,
+        bool crossTreeConsistent,
+        bool includeNewTrees,
+        IReadOnlyList<string>? excludedTreePrefixes,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(control);
+        if (intervalSeconds <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(intervalSeconds), intervalSeconds, "The interval must be strictly positive.");
+        }
+
+        if (retentionMaxAgeSeconds is <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(retentionMaxAgeSeconds), retentionMaxAgeSeconds, "The max-age retention must be strictly positive.");
+        }
+
+        BackupScopeSelector[]? scopes = null;
+        if (treeIds is { Count: > 0 })
+        {
+            scopes = new BackupScopeSelector[treeIds.Count];
+            for (var i = 0; i < scopes.Length; i++)
+            {
+                scopes[i] = BackupScopeSelector.WholeTree(treeIds[i]);
+            }
+        }
+
+        var request = new LatticeBackupSetScheduleRequest(
+            name,
+            BackupToolMappings.ToMembership(membership),
+            scopes,
+            TimeSpan.FromSeconds(intervalSeconds),
+            retentionKeepLast,
+            retentionMaxAgeSeconds is { } maxAge ? TimeSpan.FromSeconds(maxAge) : null,
+            crossTreeConsistent,
+            includeNewTrees,
+            excludedTreePrefixes is { Count: > 0 } ? excludedTreePrefixes : null);
+        var status = await control.ScheduleBackupSetAsync(request, cancellationToken).ConfigureAwait(false);
+        return BackupToolMappings.ToMcp(status);
+    }
+
+    /// <summary>Pauses a backup-set schedule, keeping its retained sets.</summary>
+    public static async Task<McpBackupSetScheduleActionResult> CancelBackupSetScheduleAsync(
+        ILatticeBackupControl control,
+        string name,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(control);
+        var paused = await control.CancelBackupSetScheduleAsync(name, cancellationToken).ConfigureAwait(false);
+        return new McpBackupSetScheduleActionResult { Name = name, Found = paused, Applied = paused };
+    }
+
+    /// <summary>Removes a backup-set schedule, optionally deleting its retained sets' backups.</summary>
+    public static async Task<McpBackupSetScheduleActionResult> RemoveBackupSetScheduleAsync(
+        ILatticeBackupControl control,
+        string name,
+        bool deleteRetainedSets,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(control);
+        var removed = await control.RemoveBackupSetScheduleAsync(name, deleteRetainedSets, cancellationToken).ConfigureAwait(false);
+        return new McpBackupSetScheduleActionResult { Name = name, Found = removed, Applied = removed };
+    }
+
+    /// <summary>Reads a backup-set schedule's status.</summary>
+    public static async Task<McpBackupSetSchedule> GetBackupSetScheduleStatusAsync(
+        ILatticeBackupControl control,
+        string name,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(control);
+        var status = await control.GetBackupSetScheduleStatusAsync(name, cancellationToken).ConfigureAwait(false);
+        return BackupToolMappings.ToMcp(status);
+    }
+
+    /// <summary>Lists the caller's readable backup-set schedules.</summary>
+    public static async Task<McpBackupSetScheduleList> ListBackupSetSchedulesAsync(
+        ILatticeBackupControl control,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(control);
+        var statuses = await control.ListBackupSetSchedulesAsync(cancellationToken).ConfigureAwait(false);
+        var schedules = new McpBackupSetSchedule[statuses.Count];
+        for (var i = 0; i < schedules.Length; i++)
+        {
+            schedules[i] = BackupToolMappings.ToMcp(statuses[i]);
+        }
+
+        return new McpBackupSetScheduleList { Schedules = schedules };
+    }
+
+    /// <summary>
+    /// Starts one run of a backup-set schedule now. An unknown schedule is
+    /// reported as <c>found=false</c> rather than raised, like the other
+    /// not-found reads of this module.
+    /// </summary>
+    public static async Task<McpBackupSetScheduleActionResult> RunBackupSetScheduleNowAsync(
+        ILatticeBackupControl control,
+        string name,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(control);
+        try
+        {
+            var started = await control.RunBackupSetScheduleNowAsync(name, cancellationToken).ConfigureAwait(false);
+            return new McpBackupSetScheduleActionResult { Name = name, Found = true, Applied = started };
+        }
+        catch (KeyNotFoundException)
+        {
+            return new McpBackupSetScheduleActionResult { Name = name, Found = false, Applied = false };
+        }
+    }
+
     private static McpBackupOperationResult ToResult(string operationId, LatticeOperationStatus? status) =>
         new()
         {

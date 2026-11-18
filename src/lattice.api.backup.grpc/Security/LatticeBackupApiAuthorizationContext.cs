@@ -100,6 +100,34 @@ public enum LatticeBackupApiOperation
     /// write should admit this read too; the facade authorizes both with the same grant.
     /// </summary>
     GetBackupHealthConfig,
+
+    // Appended for #6067, again after every earlier member.
+
+    /// <summary>The <c>ScheduleBackupSet</c> recurring backup-set schedule RPC.</summary>
+    ScheduleBackupSet,
+
+    /// <summary>The <c>CancelBackupSetSchedule</c> pause RPC.</summary>
+    CancelBackupSetSchedule,
+
+    /// <summary>The <c>RemoveBackupSetSchedule</c> RPC.</summary>
+    RemoveBackupSetSchedule,
+
+    /// <summary>The <c>GetBackupSetScheduleStatus</c> read RPC.</summary>
+    GetBackupSetScheduleStatus,
+
+    /// <summary>The <c>ListBackupSetSchedules</c> read RPC.</summary>
+    ListBackupSetSchedules,
+
+    /// <summary>The <c>RunBackupSetScheduleNow</c> RPC.</summary>
+    RunBackupSetScheduleNow,
+
+    /// <summary>
+    /// The <c>GetBackupSetScheduleProgress</c> read RPC: only the live progress of a
+    /// schedule's in-flight run. It reads a subset of what
+    /// <see cref="GetBackupSetScheduleStatus"/> returns, so a policy that admits the
+    /// status read should admit this read too; the facade authorizes both with the same grant.
+    /// </summary>
+    GetBackupSetScheduleProgress,
 }
 
 /// <summary>

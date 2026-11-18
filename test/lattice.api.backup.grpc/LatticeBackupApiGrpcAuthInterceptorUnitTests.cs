@@ -192,6 +192,41 @@ public sealed class LatticeBackupApiGrpcAuthInterceptorUnitTests
             LatticeBackupApiOperation.CancelBackupOperation,
             (string?)null).SetName("CancelBackupOperation_no_target");
         yield return new TestCaseData(
+            LatticeBackupGrpcMethods.ScheduleBackupSetMethodName,
+            (object)new BackupSetScheduleRequestMessage { Request = BackupSetScheduleTestData.Request() },
+            LatticeBackupApiOperation.ScheduleBackupSet,
+            (string?)null).SetName("ScheduleBackupSet_no_single_target");
+        yield return new TestCaseData(
+            LatticeBackupGrpcMethods.CancelBackupSetScheduleMethodName,
+            (object)new BackupSetScheduleNameRequestMessage { Name = "s" },
+            LatticeBackupApiOperation.CancelBackupSetSchedule,
+            (string?)null).SetName("CancelBackupSetSchedule_no_single_target");
+        yield return new TestCaseData(
+            LatticeBackupGrpcMethods.RemoveBackupSetScheduleMethodName,
+            (object)new BackupSetScheduleRemoveRequestMessage { Name = "s" },
+            LatticeBackupApiOperation.RemoveBackupSetSchedule,
+            (string?)null).SetName("RemoveBackupSetSchedule_no_single_target");
+        yield return new TestCaseData(
+            LatticeBackupGrpcMethods.GetBackupSetScheduleStatusMethodName,
+            (object)new BackupSetScheduleNameRequestMessage { Name = "s" },
+            LatticeBackupApiOperation.GetBackupSetScheduleStatus,
+            (string?)null).SetName("GetBackupSetScheduleStatus_no_single_target");
+        yield return new TestCaseData(
+            LatticeBackupGrpcMethods.ListBackupSetSchedulesMethodName,
+            (object)new BackupSetScheduleListRequestMessage(),
+            LatticeBackupApiOperation.ListBackupSetSchedules,
+            (string?)null).SetName("ListBackupSetSchedules_no_target");
+        yield return new TestCaseData(
+            LatticeBackupGrpcMethods.RunBackupSetScheduleNowMethodName,
+            (object)new BackupSetScheduleNameRequestMessage { Name = "s" },
+            LatticeBackupApiOperation.RunBackupSetScheduleNow,
+            (string?)null).SetName("RunBackupSetScheduleNow_no_single_target");
+        yield return new TestCaseData(
+            LatticeBackupGrpcMethods.GetBackupSetScheduleProgressMethodName,
+            (object)new BackupSetScheduleNameRequestMessage { Name = "s" },
+            LatticeBackupApiOperation.GetBackupSetScheduleProgress,
+            (string?)null).SetName("GetBackupSetScheduleProgress_no_single_target");
+        yield return new TestCaseData(
             "SomeFutureRpc",
             (object)new BackupHealthAvailabilityRequest(),
             LatticeBackupApiOperation.Unknown,

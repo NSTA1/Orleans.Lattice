@@ -1248,6 +1248,8 @@ capabilities:
         source: "src/lattice.explorer/Core/Data/ValueRenderer.cs#ValueRenderer"
       - statement: "Telemetry duration tokens are bounded in their own units before TimeSpan construction, so oversized counts are refused without overflowing."
         source: "src/lattice.explorer/UI/Areas/Telemetry/TelemetryDurations.cs#TelemetryDurations.TryParse"
+      - statement: "The Backups Schedules page lists, registers, runs, pauses, resumes and removes backup-set schedules, shows a running schedule's live progress and re-reads the schedules only while a run is in flight, refuses a schedule with no retention bound before any call, and withdraws that section when the connection does not serve backup-set schedules. It restores a retained set as a whole through tree administration only after the set's name is typed, offers the restore's per-tree revert until dismissed, reports each tree whose revert failed, and hides the action when tree administration is not served."
+        source: "docs/lattice.explorer/managing-backups.md"
     non_guarantees:
       - statement: "Every Explorer area is compiled in; there is no per-area registration or option, and an area whose facade is not served hides itself."
         source: "docs/lattice.explorer/managing-schema.md"

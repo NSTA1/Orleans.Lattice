@@ -9,7 +9,8 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Backups;
 /// <summary>
 /// The Backups area's probes, per circuit: whether the area may be seen at all,
 /// what the caller may do to one scope, whether health monitoring applies, and
-/// whether this connection serves the catalogue extensions (the inventory).
+/// whether this connection serves the catalogue extensions (the inventory) and
+/// backup-set schedules.
 /// Catalogue rebuild and scrub, and cold restore, are not among them: they run as
 /// cluster operations (#4122, #4125, #4218), which the gRPC binding serves.
 /// </summary>
@@ -50,6 +51,7 @@ internal sealed class BackupsAccess
     private AreaAvailability? _availability;
     private bool? _healthMonitoring;
     private bool? _extensionsServed;
+    private bool? _setSchedulesServed;
 
     /// <summary>Creates the probes over the circuit's backup facade.</summary>
     /// <param name="control">The backup facade.</param>
@@ -295,6 +297,62 @@ internal sealed class BackupsAccess
     /// <summary>Records that an extension call was refused as not served.</summary>
     public void MarkExtensionsNotServed() => MarkExtensions(served: false);
 
+    /// <summary>
+    /// Whether this connection serves backup-set schedules (#6067). Known only once
+    /// <see cref="ListBackupSetSchedulesAsync"/> has had an answer;
+    /// <see langword="null"/> until then.
+    /// </summary>
+    public bool? BackupSetSchedulesServed
+    {
+        get
+        {
+            lock (_gate)
+            {
+                ForgetIfTheCallerChanged();
+                return _setSchedulesServed;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The backup-set schedules the caller may read, or <see langword="null"/> when
+    /// this connection does not serve backup-set schedules, which is remembered for
+    /// the caller so the section stays withdrawn. Any other fault - a denial
+    /// included - is thrown for the page to report.
+    /// </summary>
+    /// <param name="cancellationToken">Cancels the read.</param>
+    public async Task<IReadOnlyList<BackupSetScheduleStatus>?> ListBackupSetSchedulesAsync(CancellationToken cancellationToken)
+    {
+        if (BackupSetSchedulesServed == false)
+        {
+            return null;
+        }
+
+        try
+        {
+            var schedules = await _control.ListBackupSetSchedulesAsync(cancellationToken).ConfigureAwait(false);
+            MarkSetSchedules(served: true);
+            return schedules ?? [];
+        }
+        catch (NotSupportedException)
+        {
+            MarkSetSchedules(served: false);
+            return null;
+        }
+    }
+
+    /// <summary>Records that a backup-set schedule call was refused as not served.</summary>
+    public void MarkBackupSetSchedulesNotServed() => MarkSetSchedules(served: false);
+
+    private void MarkSetSchedules(bool served)
+    {
+        lock (_gate)
+        {
+            ForgetIfTheCallerChanged();
+            _setSchedulesServed = served;
+        }
+    }
+
     private void MarkExtensions(bool served)
     {
         lock (_gate)
@@ -314,6 +372,7 @@ internal sealed class BackupsAccess
             _availability = null;
             _healthMonitoring = null;
             _extensionsServed = null;
+            _setSchedulesServed = null;
         }
 
         return caller;

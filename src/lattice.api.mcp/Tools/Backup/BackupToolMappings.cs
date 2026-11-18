@@ -158,6 +158,149 @@ internal static class BackupToolMappings
         };
     }
 
+    /// <summary>
+    /// Projects a backup-set schedule status (or its absence) onto its MCP DTO. A
+    /// <see langword="null"/> <paramref name="status"/> maps to a not-found result.
+    /// </summary>
+    /// <param name="status">The schedule status, or <c>null</c> when no schedule has the name.</param>
+    /// <returns>The MCP backup-set schedule DTO.</returns>
+    public static McpBackupSetSchedule ToMcp(BackupSetScheduleStatus? status)
+    {
+        if (status is null)
+        {
+            return new McpBackupSetSchedule { Found = false };
+        }
+
+        var request = status.Request;
+        var runs = new McpBackupSetScheduleRun[status.RecentRuns.Count];
+        for (var i = 0; i < runs.Length; i++)
+        {
+            var run = status.RecentRuns[i];
+            runs[i] = new McpBackupSetScheduleRun
+            {
+                StartedAtUtc = run.StartedAtUtc,
+                FinishedAtUtc = run.FinishedAtUtc,
+                Trigger = run.Trigger.ToString(),
+                Outcome = run.Outcome.ToString(),
+                SetId = run.SetId,
+                MemberCount = run.MemberCount,
+                Attempts = run.Attempts,
+                FailureReason = run.FailureReason,
+            };
+        }
+
+        var sets = new McpScheduledBackupSet[status.RetainedSets.Count];
+        for (var i = 0; i < sets.Length; i++)
+        {
+            var set = status.RetainedSets[i];
+            var members = new McpScheduledBackupSetMember[set.Members.Count];
+            for (var j = 0; j < members.Length; j++)
+            {
+                var member = set.Members[j];
+                members[j] = new McpScheduledBackupSetMember
+                {
+                    TreeId = member.Scope.TreeId,
+                    ScopeKind = member.Scope.Kind.ToString(),
+                    KeyOrPrefix = member.Scope.KeyOrPrefix,
+                    BackupId = member.BackupId,
+                };
+            }
+
+            sets[i] = new McpScheduledBackupSet
+            {
+                SetId = set.SetId,
+                Name = set.Name,
+                CreatedAtUtc = set.CreatedAtUtc,
+                LastCapturedAtUtc = set.LastCapturedAtUtc,
+                CrossTreeConsistent = set.CrossTreeConsistent,
+                Members = members,
+            };
+        }
+
+        return new McpBackupSetSchedule
+        {
+            Found = true,
+            Name = status.Name,
+            Membership = request.Membership.ToString(),
+            TreeIds = TreeIdsOf(request.Scopes),
+            MemberTreeIds = TreeIdsOf(status.MemberScopes),
+            IntervalSeconds = (long)request.Interval.TotalSeconds,
+            RetentionKeepLast = request.RetentionKeepLast,
+            RetentionMaxAgeSeconds = request.RetentionMaxAge is { } maxAge ? (long)maxAge.TotalSeconds : null,
+            CrossTreeConsistent = request.CrossTreeConsistent,
+            IncludeNewTrees = request.IncludeNewTrees,
+            ExcludedTreePrefixes = request.ExcludedTreePrefixes,
+            IsScheduled = status.IsScheduled,
+            NextRunUtc = status.NextRunUtc,
+            IsRunning = status.IsRunning,
+            RegisteredAtUtc = status.RegisteredAtUtc,
+            LastRunUtc = status.LastRunUtc,
+            LastSuccessUtc = status.LastSuccessUtc,
+            LastOutcome = status.LastOutcome.ToString(),
+            LastFailureReason = status.LastFailureReason,
+            ConsecutiveFailures = status.ConsecutiveFailures,
+            RecentRuns = runs,
+            RetainedSets = sets,
+            CurrentRun = status.CurrentRun is { } current
+                ? new McpBackupSetScheduleRunProgress
+                {
+                    StartedAtUtc = current.StartedAtUtc,
+                    Trigger = current.Trigger.ToString(),
+                    Attempt = current.Attempt,
+                    Phase = current.Phase,
+                    CompletedUnits = current.CompletedUnits,
+                    TotalUnits = current.TotalUnits,
+                    UnitName = current.UnitName,
+                    CurrentTreeId = current.CurrentTreeId,
+                    UpdatedAtUtc = current.UpdatedAtUtc,
+                }
+                : null,
+        };
+    }
+
+    /// <summary>
+    /// Parses a backup-set membership mode name (<c>Explicit</c> or
+    /// <c>AllTrees</c>, case-insensitive) into its enum, defaulting to
+    /// <see cref="BackupSetMembershipMode.Explicit"/> when <c>null</c> or empty.
+    /// </summary>
+    /// <param name="membership">The membership mode name.</param>
+    /// <returns>The parsed membership mode.</returns>
+    /// <exception cref="ArgumentException"><paramref name="membership"/> is not a recognised mode.</exception>
+    public static BackupSetMembershipMode ToMembership(string? membership)
+    {
+        if (string.IsNullOrEmpty(membership))
+        {
+            return BackupSetMembershipMode.Explicit;
+        }
+
+        if (Enum.TryParse<BackupSetMembershipMode>(membership, ignoreCase: true, out var parsed)
+            && Enum.IsDefined(parsed)
+            && string.Equals(parsed.ToString(), membership, StringComparison.OrdinalIgnoreCase))
+        {
+            return parsed;
+        }
+
+        throw new ArgumentException(
+            $"Unrecognised backup-set membership '{membership}'. Expected Explicit or AllTrees.",
+            nameof(membership));
+    }
+
+    private static IReadOnlyList<string> TreeIdsOf(IReadOnlyList<BackupScopeSelector> scopes)
+    {
+        if (scopes.Count == 0)
+        {
+            return Array.Empty<string>();
+        }
+
+        var ids = new string[scopes.Count];
+        for (var i = 0; i < ids.Length; i++)
+        {
+            ids[i] = scopes[i].TreeId;
+        }
+
+        return ids;
+    }
+
     /// <summary>Projects a restore result onto its MCP DTO.</summary>
     /// <param name="result">The restore result. Must not be <c>null</c>.</param>
     /// <returns>The MCP restore-result DTO.</returns>

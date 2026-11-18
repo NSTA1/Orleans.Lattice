@@ -1,0 +1,15 @@
+@*
+    One running backup-set schedule's live progress (#6067): the phase in plain
+    words, a bar over the trees when their total is known (hatched when it is
+    not), and a line naming the count, the tree being worked on, the attempt
+    when it is a retry, what started the run, and the time it has been going.
+*@
+
+<div class="lt-backups-run-progress" data-lt-set-run-progress="@Schedule">
+    <LtProgress Label="@("Run progress, " + Schedule)"
+                Phase="@BackupSetSchedulesText.Phase(Progress.Phase)"
+                Value="@Progress.CompletedUnits"
+                Maximum="@Progress.TotalUnits"
+                Detail="@BackupSetSchedulesText.RunDetail(Progress, Time.GetUtcNow())"
+                AnnouncePhase="@AnnouncePhase" />
+</div>

@@ -117,6 +117,27 @@ internal abstract class LatticeBackupGrpcServiceBase
     /// <summary>Starts a tracked catalog scrub. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
     public abstract Task<LatticeOperationHandle> StartCatalogScrub(BackupCatalogScrubRequestMessage request, ServerCallContext context);
 
+    /// <summary>Registers or updates a backup-set schedule. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
+    public abstract Task<BackupSetScheduleStatusResponse> ScheduleBackupSet(BackupSetScheduleRequestMessage request, ServerCallContext context);
+
+    /// <summary>Pauses a backup-set schedule. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
+    public abstract Task<BackupSetScheduleActionResponse> CancelBackupSetSchedule(BackupSetScheduleNameRequestMessage request, ServerCallContext context);
+
+    /// <summary>Removes a backup-set schedule. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
+    public abstract Task<BackupSetScheduleActionResponse> RemoveBackupSetSchedule(BackupSetScheduleRemoveRequestMessage request, ServerCallContext context);
+
+    /// <summary>Reads a backup-set schedule's status. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
+    public abstract Task<BackupSetScheduleStatusResponse> GetBackupSetScheduleStatus(BackupSetScheduleNameRequestMessage request, ServerCallContext context);
+
+    /// <summary>Lists the caller's backup-set schedules. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
+    public abstract Task<BackupSetScheduleListResponse> ListBackupSetSchedules(BackupSetScheduleListRequestMessage request, ServerCallContext context);
+
+    /// <summary>Starts one run of a backup-set schedule now. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
+    public abstract Task<BackupSetScheduleActionResponse> RunBackupSetScheduleNow(BackupSetScheduleNameRequestMessage request, ServerCallContext context);
+
+    /// <summary>Reads the live progress of a backup-set schedule's in-flight run. Implemented in <see cref="LatticeBackupGrpcService"/>.</summary>
+    public abstract Task<BackupSetScheduleProgressResponse> GetBackupSetScheduleProgress(BackupSetScheduleNameRequestMessage request, ServerCallContext context);
+
     /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at
     /// startup with <paramref name="serviceImpl"/> set to
@@ -162,6 +183,13 @@ internal abstract class LatticeBackupGrpcServiceBase
             binder.AddMethod(methods.StartBackupHealthCheck, (UnaryServerMethod<BackupHealthCheckRequestMessage, LatticeOperationHandle>?)null);
             binder.AddMethod(methods.StartCatalogRebuild, (UnaryServerMethod<BackupCatalogRebuildRequestMessage, LatticeOperationHandle>?)null);
             binder.AddMethod(methods.StartCatalogScrub, (UnaryServerMethod<BackupCatalogScrubRequestMessage, LatticeOperationHandle>?)null);
+            binder.AddMethod(methods.ScheduleBackupSet, (UnaryServerMethod<BackupSetScheduleRequestMessage, BackupSetScheduleStatusResponse>?)null);
+            binder.AddMethod(methods.CancelBackupSetSchedule, (UnaryServerMethod<BackupSetScheduleNameRequestMessage, BackupSetScheduleActionResponse>?)null);
+            binder.AddMethod(methods.RemoveBackupSetSchedule, (UnaryServerMethod<BackupSetScheduleRemoveRequestMessage, BackupSetScheduleActionResponse>?)null);
+            binder.AddMethod(methods.GetBackupSetScheduleStatus, (UnaryServerMethod<BackupSetScheduleNameRequestMessage, BackupSetScheduleStatusResponse>?)null);
+            binder.AddMethod(methods.ListBackupSetSchedules, (UnaryServerMethod<BackupSetScheduleListRequestMessage, BackupSetScheduleListResponse>?)null);
+            binder.AddMethod(methods.RunBackupSetScheduleNow, (UnaryServerMethod<BackupSetScheduleNameRequestMessage, BackupSetScheduleActionResponse>?)null);
+            binder.AddMethod(methods.GetBackupSetScheduleProgress, (UnaryServerMethod<BackupSetScheduleNameRequestMessage, BackupSetScheduleProgressResponse>?)null);
             return;
         }
 
@@ -191,6 +219,13 @@ internal abstract class LatticeBackupGrpcServiceBase
         binder.AddMethod(methods.StartBackupHealthCheck, new UnaryServerMethod<BackupHealthCheckRequestMessage, LatticeOperationHandle>(serviceImpl.StartBackupHealthCheck));
         binder.AddMethod(methods.StartCatalogRebuild, new UnaryServerMethod<BackupCatalogRebuildRequestMessage, LatticeOperationHandle>(serviceImpl.StartCatalogRebuild));
         binder.AddMethod(methods.StartCatalogScrub, new UnaryServerMethod<BackupCatalogScrubRequestMessage, LatticeOperationHandle>(serviceImpl.StartCatalogScrub));
+        binder.AddMethod(methods.ScheduleBackupSet, new UnaryServerMethod<BackupSetScheduleRequestMessage, BackupSetScheduleStatusResponse>(serviceImpl.ScheduleBackupSet));
+        binder.AddMethod(methods.CancelBackupSetSchedule, new UnaryServerMethod<BackupSetScheduleNameRequestMessage, BackupSetScheduleActionResponse>(serviceImpl.CancelBackupSetSchedule));
+        binder.AddMethod(methods.RemoveBackupSetSchedule, new UnaryServerMethod<BackupSetScheduleRemoveRequestMessage, BackupSetScheduleActionResponse>(serviceImpl.RemoveBackupSetSchedule));
+        binder.AddMethod(methods.GetBackupSetScheduleStatus, new UnaryServerMethod<BackupSetScheduleNameRequestMessage, BackupSetScheduleStatusResponse>(serviceImpl.GetBackupSetScheduleStatus));
+        binder.AddMethod(methods.ListBackupSetSchedules, new UnaryServerMethod<BackupSetScheduleListRequestMessage, BackupSetScheduleListResponse>(serviceImpl.ListBackupSetSchedules));
+        binder.AddMethod(methods.RunBackupSetScheduleNow, new UnaryServerMethod<BackupSetScheduleNameRequestMessage, BackupSetScheduleActionResponse>(serviceImpl.RunBackupSetScheduleNow));
+        binder.AddMethod(methods.GetBackupSetScheduleProgress, new UnaryServerMethod<BackupSetScheduleNameRequestMessage, BackupSetScheduleProgressResponse>(serviceImpl.GetBackupSetScheduleProgress));
     }
 }
 
@@ -318,6 +353,84 @@ internal sealed class LatticeBackupGrpcService : LatticeBackupGrpcServiceBase
             var status = await control.GetScopeStatusAsync(req.Scope, ct).ConfigureAwait(false);
             return status is null ? new BackupScopeStatusResponse { Found = false } : ToScopeStatusResponse(status);
         });
+
+    /// <inheritdoc />
+    public override Task<BackupSetScheduleStatusResponse> ScheduleBackupSet(BackupSetScheduleRequestMessage request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => InvokeSetScheduleAsync(control, req, ct, static async (c, r, t) =>
+        {
+            var status = await c.ScheduleBackupSetAsync(r.Request, t).ConfigureAwait(false);
+            return new BackupSetScheduleStatusResponse { Found = true, Status = status };
+        }));
+
+    /// <inheritdoc />
+    public override Task<BackupSetScheduleActionResponse> CancelBackupSetSchedule(BackupSetScheduleNameRequestMessage request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => InvokeSetScheduleAsync(control, req, ct, static async (c, r, t) =>
+            new BackupSetScheduleActionResponse { Result = await c.CancelBackupSetScheduleAsync(r.Name, t).ConfigureAwait(false) }));
+
+    /// <inheritdoc />
+    public override Task<BackupSetScheduleActionResponse> RemoveBackupSetSchedule(BackupSetScheduleRemoveRequestMessage request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => InvokeSetScheduleAsync(control, req, ct, static async (c, r, t) =>
+            new BackupSetScheduleActionResponse
+            {
+                Result = await c.RemoveBackupSetScheduleAsync(r.Name, r.DeleteRetainedSets, t).ConfigureAwait(false),
+            }));
+
+    /// <inheritdoc />
+    public override Task<BackupSetScheduleStatusResponse> GetBackupSetScheduleStatus(BackupSetScheduleNameRequestMessage request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => InvokeSetScheduleAsync(control, req, ct, static async (c, r, t) =>
+        {
+            var status = await c.GetBackupSetScheduleStatusAsync(r.Name, t).ConfigureAwait(false);
+            return new BackupSetScheduleStatusResponse { Found = status is not null, Status = status };
+        }));
+
+    /// <inheritdoc />
+    public override Task<BackupSetScheduleListResponse> ListBackupSetSchedules(BackupSetScheduleListRequestMessage request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => InvokeSetScheduleAsync(control, req, ct, static async (c, _, t) =>
+            new BackupSetScheduleListResponse { Schedules = await c.ListBackupSetSchedulesAsync(t).ConfigureAwait(false) }));
+
+    /// <inheritdoc />
+    public override Task<BackupSetScheduleActionResponse> RunBackupSetScheduleNow(BackupSetScheduleNameRequestMessage request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => InvokeSetScheduleAsync(control, req, ct, static async (c, r, t) =>
+            new BackupSetScheduleActionResponse { Result = await c.RunBackupSetScheduleNowAsync(r.Name, t).ConfigureAwait(false) }));
+
+    /// <inheritdoc />
+    public override Task<BackupSetScheduleProgressResponse> GetBackupSetScheduleProgress(BackupSetScheduleNameRequestMessage request, ServerCallContext context)
+        => InvokeAsync(request, context, static (control, req, ct) => InvokeSetScheduleAsync(control, req, ct, static async (c, r, t) =>
+        {
+            try
+            {
+                var progress = await c.GetBackupSetScheduleProgressAsync(r.Name, t).ConfigureAwait(false);
+                return new BackupSetScheduleProgressResponse { Found = true, Progress = progress };
+            }
+            catch (KeyNotFoundException)
+            {
+                // A missing schedule answers Found = false, as the status read does.
+                return new BackupSetScheduleProgressResponse { Found = false };
+            }
+        }));
+
+    /// <summary>
+    /// Runs one backup-set schedule verb, surfacing a facade that does not support
+    /// backup-set schedules (the interface default throws
+    /// <see cref="NotSupportedException"/>) as <see cref="StatusCode.Unimplemented"/>
+    /// rather than the opaque <see cref="StatusCode.Internal"/>. Every other
+    /// exception reaches the shared mapping in <c>InvokeAsync</c> unchanged.
+    /// </summary>
+    private static async Task<TResponse> InvokeSetScheduleAsync<TRequest, TResponse>(
+        ILatticeBackupControl control,
+        TRequest request,
+        CancellationToken cancellationToken,
+        Func<ILatticeBackupControl, TRequest, CancellationToken, Task<TResponse>> call)
+    {
+        try
+        {
+            return await call(control, request, cancellationToken).ConfigureAwait(false);
+        }
+        catch (NotSupportedException ex)
+        {
+            throw new RpcException(new Status(StatusCode.Unimplemented, ex.Message));
+        }
+    }
 
     /// <inheritdoc />
     public override Task<BackupCatalogPage> ListBackups(BackupCatalogRequest request, ServerCallContext context)

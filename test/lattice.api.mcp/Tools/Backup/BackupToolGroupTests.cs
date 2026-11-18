@@ -8,7 +8,7 @@ namespace Orleans.Lattice.Api.Mcp.Tests;
 /// Unit tests for <see cref="BackupToolGroup"/> and its
 /// <c>AddBackupTools</c> registration: proves the group belongs to the backup
 /// facade group, that backup control gates the mutating tools (inspect-only by
-/// default, all ten tools when opted in), that every tool carries the correct
+/// default, every control tool when opted in), that every tool carries the correct
 /// read-only / destructive annotation, and that the registration wires the group
 /// and the option flags. All deterministic - no cluster, no ordering assumptions.
 /// </summary>
@@ -24,6 +24,8 @@ public sealed class BackupToolGroupTests
         "lattice_backup_export_artifact",
         "lattice_backup_operation_status",
         "lattice_backup_operation_list",
+        "lattice_backup_set_schedule_get",
+        "lattice_backup_set_schedule_list",
     };
 
     private static readonly string[] ControlToolNames =
@@ -38,6 +40,10 @@ public sealed class BackupToolGroupTests
         "lattice_backup_operation_cancel",
         "lattice_backup_revert_restore",
         "lattice_backup_delete",
+        "lattice_backup_set_schedule_set",
+        "lattice_backup_set_schedule_cancel",
+        "lattice_backup_set_schedule_remove",
+        "lattice_backup_set_schedule_run_now",
     };
 
     private static BackupToolGroup CreateGroup(bool enableControl)

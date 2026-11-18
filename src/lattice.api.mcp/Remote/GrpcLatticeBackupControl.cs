@@ -92,4 +92,32 @@ internal sealed class GrpcLatticeBackupControl : ILatticeBackupControl
     /// <inheritdoc />
     public Task<BackupHealthConfig?> GetBackupHealthConfigAsync(string backupId, CancellationToken cancellationToken = default)
         => _client.GetBackupHealthConfigAsync(backupId, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<BackupSetScheduleStatus> ScheduleBackupSetAsync(LatticeBackupSetScheduleRequest request, CancellationToken cancellationToken = default)
+        => _client.ScheduleBackupSetAsync(request, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<bool> CancelBackupSetScheduleAsync(string name, CancellationToken cancellationToken = default)
+        => _client.CancelBackupSetScheduleAsync(name, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<bool> RemoveBackupSetScheduleAsync(string name, bool deleteRetainedSets, CancellationToken cancellationToken = default)
+        => _client.RemoveBackupSetScheduleAsync(name, deleteRetainedSets, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<BackupSetScheduleStatus?> GetBackupSetScheduleStatusAsync(string name, CancellationToken cancellationToken = default)
+        => _client.GetBackupSetScheduleStatusAsync(name, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<BackupSetScheduleStatus>> ListBackupSetSchedulesAsync(CancellationToken cancellationToken = default)
+        => _client.ListBackupSetSchedulesAsync(cancellationToken);
+
+    /// <inheritdoc />
+    public Task<bool> RunBackupSetScheduleNowAsync(string name, CancellationToken cancellationToken = default)
+        => _client.RunBackupSetScheduleNowAsync(name, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<BackupSetScheduleRunProgress?> GetBackupSetScheduleProgressAsync(string name, CancellationToken cancellationToken = default)
+        => _client.GetBackupSetScheduleProgressAsync(name, cancellationToken);
 }

@@ -4,7 +4,8 @@ namespace Orleans.Lattice.Api.Backup.Grpc.Tests;
 
 /// <summary>
 /// A <see cref="CallInvoker"/> test double whose unary calls complete
-/// synchronously with a caller-supplied response object, so the client's
+/// synchronously with a caller-supplied response object (or fault with it, when
+/// it is an <see cref="Exception"/>), so the client's
 /// request-shaping and response-mapping logic can be exercised deterministically
 /// without a live gRPC server. Only the unary path is supported; the streaming
 /// paths throw, so a test that reaches them fails loudly.
@@ -30,7 +31,7 @@ internal sealed class UnaryResponseCallInvoker : CallInvoker
         LastRequest = request;
         LastMethodName = method.Name;
         return new AsyncUnaryCall<TResponse>(
-            Task.FromResult((TResponse)_response),
+            _response is Exception fault ? Task.FromException<TResponse>(fault) : Task.FromResult((TResponse)_response),
             Task.FromResult(new global::Grpc.Core.Metadata()),
             static () => Status.DefaultSuccess,
             static () => new global::Grpc.Core.Metadata(),

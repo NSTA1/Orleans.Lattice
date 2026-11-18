@@ -1353,6 +1353,103 @@
         }
       ],
       "source": "src/lattice.api.backup.grpc/Model/BackupCatalogScrubRequestMessage.cs#BackupCatalogScrubRequestMessage"
+    },
+    "BackupSetScheduleRequestMessage": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Request",
+          "type": "LatticeBackupSetScheduleRequest",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.backup.grpc/Model/BackupSetScheduleRequestMessage.cs#BackupSetScheduleRequestMessage"
+    },
+    "BackupSetScheduleStatusResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Found",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "Status",
+          "type": "BackupSetScheduleStatus?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.backup.grpc/Model/BackupSetScheduleStatusResponse.cs#BackupSetScheduleStatusResponse"
+    },
+    "BackupSetScheduleNameRequestMessage": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Name",
+          "type": "string",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.backup.grpc/Model/BackupSetScheduleNameRequestMessage.cs#BackupSetScheduleNameRequestMessage"
+    },
+    "BackupSetScheduleRemoveRequestMessage": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Name",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "DeleteRetainedSets",
+          "type": "bool",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.backup.grpc/Model/BackupSetScheduleRemoveRequestMessage.cs#BackupSetScheduleRemoveRequestMessage"
+    },
+    "BackupSetScheduleActionResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Result",
+          "type": "bool",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.backup.grpc/Model/BackupSetScheduleActionResponse.cs#BackupSetScheduleActionResponse"
+    },
+    "BackupSetScheduleListRequestMessage": {
+      "kind": "record",
+      "fields": [],
+      "source": "src/lattice.api.backup.grpc/Model/BackupSetScheduleListRequestMessage.cs#BackupSetScheduleListRequestMessage"
+    },
+    "BackupSetScheduleListResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Schedules",
+          "type": "IReadOnlyList<BackupSetScheduleStatus>",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.backup.grpc/Model/BackupSetScheduleListResponse.cs#BackupSetScheduleListResponse"
+    },
+    "BackupSetScheduleProgressResponse": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Found",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "Progress",
+          "type": "BackupSetScheduleRunProgress?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.backup.grpc/Model/BackupSetScheduleProgressResponse.cs#BackupSetScheduleProgressResponse"
     }
   },
   "operations": [
@@ -1402,6 +1499,63 @@
       "sources": [
         "src/lattice.api.abstractions/Operations/ILatticeOperations.cs#CancelOperationAsync",
         "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#CancelBackupOperation"
+      ]
+    },
+    {
+      "id": "cancel-backup-set-schedule",
+      "in_process": "ILatticeBackupControl.CancelBackupSetScheduleAsync",
+      "grpc_method": "/orleans.lattice.api.backup/CancelBackupSetSchedule",
+      "transport_scope": "both",
+      "request": "BackupSetScheduleNameRequestMessage",
+      "response": "BackupSetScheduleActionResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "The caller has no valid active tenant or may not act as the one it asserted."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "The server's backup control does not implement backup-set schedules."
+        },
+        {
+          "error_id": "transient-reminder",
+          "condition": "A transient reminder-registry or storage failure leaked past the scheduler bounded retry; surfaced as Unavailable with a correlation id."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CancelBackupSetScheduleAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Pausing is idempotent; false means no schedule has the name. Retained sets stay restorable.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CancelBackupSetScheduleAsync"
+      },
+      "concurrency": {
+        "rule": "Authorized like schedule-backup-set, against the schedule's recorded member trees.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CancelBackupSetScheduleAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#CancelBackupSetScheduleAsync",
+        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#CancelBackupSetSchedule",
+        "src/lattice.api.backup/LatticeBackupControl.SetSchedules.cs#LatticeBackupControl.CancelBackupSetScheduleAsync"
       ]
     },
     {
@@ -1831,6 +1985,116 @@
       ]
     },
     {
+      "id": "get-backup-set-schedule-progress",
+      "in_process": "ILatticeBackupControl.GetBackupSetScheduleProgressAsync",
+      "grpc_method": "/orleans.lattice.api.backup/GetBackupSetScheduleProgress",
+      "transport_scope": "both",
+      "request": "BackupSetScheduleNameRequestMessage",
+      "response": "BackupSetScheduleProgressResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "The caller has no valid active tenant or may not act as the one it asserted."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "The server's backup control does not implement backup-set schedules, or predates the progress read."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#GetBackupSetScheduleProgressAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only run progress. An unknown schedule answers Found false over gRPC (KeyNotFoundException in process); a schedule with no run in flight answers a null Progress.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#GetBackupSetScheduleProgressAsync"
+      },
+      "concurrency": {
+        "rule": "Authorized like get-backup-set-schedule-status; the lightweight read for polling an in-flight run, carrying no members, runs or retained sets.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#GetBackupSetScheduleProgressAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#GetBackupSetScheduleProgressAsync",
+        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#GetBackupSetScheduleProgress",
+        "src/lattice.api.backup/LatticeBackupControl.SetSchedules.cs#LatticeBackupControl.GetBackupSetScheduleProgressAsync"
+      ]
+    },
+    {
+      "id": "get-backup-set-schedule-status",
+      "in_process": "ILatticeBackupControl.GetBackupSetScheduleStatusAsync",
+      "grpc_method": "/orleans.lattice.api.backup/GetBackupSetScheduleStatus",
+      "transport_scope": "both",
+      "request": "BackupSetScheduleNameRequestMessage",
+      "response": "BackupSetScheduleStatusResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "The caller has no valid active tenant or may not act as the one it asserted."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "The server's backup control does not implement backup-set schedules."
+        },
+        {
+          "error_id": "transient-reminder",
+          "condition": "A transient reminder-registry or storage failure leaked past the scheduler bounded retry; surfaced as Unavailable with a correlation id."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#GetBackupSetScheduleStatusAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only schedule status.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#GetBackupSetScheduleStatusAsync"
+      },
+      "concurrency": {
+        "rule": "Authorized like schedule-backup-set, against the schedule's recorded member trees.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#GetBackupSetScheduleStatusAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#GetBackupSetScheduleStatusAsync",
+        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#GetBackupSetScheduleStatus",
+        "src/lattice.api.backup/LatticeBackupControl.SetSchedules.cs#LatticeBackupControl.GetBackupSetScheduleStatusAsync"
+      ]
+    },
+    {
       "id": "get-inventory",
       "in_process": "ILatticeBackupControl.GetInventoryAsync",
       "grpc_method": null,
@@ -2012,6 +2276,63 @@
       ]
     },
     {
+      "id": "list-backup-set-schedules",
+      "in_process": "ILatticeBackupControl.ListBackupSetSchedulesAsync",
+      "grpc_method": "/orleans.lattice.api.backup/ListBackupSetSchedules",
+      "transport_scope": "both",
+      "request": "BackupSetScheduleListRequestMessage",
+      "response": "BackupSetScheduleListResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "The caller has no valid active tenant or may not act as the one it asserted."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "The server's backup control does not implement backup-set schedules."
+        },
+        {
+          "error_id": "transient-reminder",
+          "condition": "A transient reminder-registry or storage failure leaked past the scheduler bounded retry; surfaced as Unavailable with a correlation id."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ListBackupSetSchedulesAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Read-only listing of the caller's tenant; a schedule the caller may not read is omitted rather than failing the listing.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ListBackupSetSchedulesAsync"
+      },
+      "concurrency": {
+        "rule": "No operation-specific concurrency rule is stated beyond facade authorization.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ListBackupSetSchedulesAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ListBackupSetSchedulesAsync",
+        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#ListBackupSetSchedules",
+        "src/lattice.api.backup/LatticeBackupControl.SetSchedules.cs#LatticeBackupControl.ListBackupSetSchedulesAsync"
+      ]
+    },
+    {
       "id": "list-backups",
       "in_process": "ILatticeBackupControl.ListBackupsAsync",
       "grpc_method": "/orleans.lattice.api.backup/ListBackups",
@@ -2100,6 +2421,63 @@
       ]
     },
     {
+      "id": "remove-backup-set-schedule",
+      "in_process": "ILatticeBackupControl.RemoveBackupSetScheduleAsync",
+      "grpc_method": "/orleans.lattice.api.backup/RemoveBackupSetSchedule",
+      "transport_scope": "both",
+      "request": "BackupSetScheduleRemoveRequestMessage",
+      "response": "BackupSetScheduleActionResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "The caller has no valid active tenant or may not act as the one it asserted."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "The server's backup control does not implement backup-set schedules."
+        },
+        {
+          "error_id": "transient-reminder",
+          "condition": "A transient reminder-registry or storage failure leaked past the scheduler bounded retry; surfaced as Unavailable with a correlation id."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request; a retry after the schedule was removed returns false.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#RemoveBackupSetScheduleAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Removal converges: false means no schedule had the name, including one an earlier attempt already removed. With deleteRetainedSets, only retained-set backups that no other schedule holds are deleted.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#RemoveBackupSetScheduleAsync"
+      },
+      "concurrency": {
+        "rule": "Authorized like schedule-backup-set, against the schedule's recorded member trees.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#RemoveBackupSetScheduleAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#RemoveBackupSetScheduleAsync",
+        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#RemoveBackupSetSchedule",
+        "src/lattice.api.backup/LatticeBackupControl.SetSchedules.cs#LatticeBackupControl.RemoveBackupSetScheduleAsync"
+      ]
+    },
+    {
       "id": "revert-restore",
       "in_process": "ILatticeBackupControl.RevertRestoreAsync",
       "grpc_method": "/orleans.lattice.api.backup/RevertRestore",
@@ -2161,6 +2539,67 @@
       ]
     },
     {
+      "id": "run-backup-set-schedule-now",
+      "in_process": "ILatticeBackupControl.RunBackupSetScheduleNowAsync",
+      "grpc_method": "/orleans.lattice.api.backup/RunBackupSetScheduleNow",
+      "transport_scope": "both",
+      "request": "BackupSetScheduleNameRequestMessage",
+      "response": "BackupSetScheduleActionResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "not-found",
+          "condition": "No backup-set schedule has the name."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "The caller has no valid active tenant or may not act as the one it asserted."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "The server's backup control does not implement backup-set schedules."
+        },
+        {
+          "error_id": "transient-reminder",
+          "condition": "A transient reminder-registry or storage failure leaked past the scheduler bounded retry; surfaced as Unavailable with a correlation id."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request: a retry while the run is in flight joins it and returns false rather than stacking a second run.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#RunBackupSetScheduleNowAsync"
+      },
+      "idempotency": {
+        "idempotent": false,
+        "basis": "Each call while no run is in flight starts a new run; a call while one is in flight joins it and returns false.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#RunBackupSetScheduleNowAsync"
+      },
+      "concurrency": {
+        "rule": "At most one run of a schedule is in flight; follow it through get-backup-set-schedule-status.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#RunBackupSetScheduleNowAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#RunBackupSetScheduleNowAsync",
+        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#RunBackupSetScheduleNow",
+        "src/lattice.api.backup/LatticeBackupControl.SetSchedules.cs#LatticeBackupControl.RunBackupSetScheduleNowAsync"
+      ]
+    },
+    {
       "id": "schedule-backup",
       "in_process": "ILatticeBackupControl.ScheduleBackupAsync",
       "grpc_method": "/orleans.lattice.api.backup/ScheduleBackup",
@@ -2206,6 +2645,63 @@
       "sources": [
         "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ScheduleBackupAsync",
         "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#ScheduleBackup"
+      ]
+    },
+    {
+      "id": "schedule-backup-set",
+      "in_process": "ILatticeBackupControl.ScheduleBackupSetAsync",
+      "grpc_method": "/orleans.lattice.api.backup/ScheduleBackupSet",
+      "transport_scope": "both",
+      "request": "BackupSetScheduleRequestMessage",
+      "response": "BackupSetScheduleStatusResponse",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Request validation failed."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Authorization denied the caller."
+        },
+        {
+          "error_id": "tenant-access-denied",
+          "condition": "The caller has no valid active tenant or may not act as the one it asserted."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "The server's backup control does not implement backup-set schedules."
+        },
+        {
+          "error_id": "transient-reminder",
+          "condition": "A transient reminder-registry or storage failure leaked past the scheduler bounded retry; surfaced as Unavailable with a correlation id."
+        },
+        {
+          "error_id": "cancelled",
+          "condition": "Call cancellation."
+        },
+        {
+          "error_id": "internal",
+          "condition": "Unhandled server failure."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Retry by reissuing the same request.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ScheduleBackupSetAsync"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Register or update is idempotent: re-registering an unchanged request leaves the schedule as it was, and an unchanged interval keeps the timing of the next run.",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ScheduleBackupSetAsync"
+      },
+      "concurrency": {
+        "rule": "The caller must hold the backup grant over every tree the set captures; a schedule over all trees that also captures trees created later needs the grant over the whole tenant (or, for the default tenant, the whole cluster).",
+        "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ScheduleBackupSetAsync"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#ScheduleBackupSetAsync",
+        "src/lattice.api.backup.grpc/LatticeBackupGrpcMethods.cs#ScheduleBackupSet",
+        "src/lattice.api.backup/LatticeBackupControl.SetSchedules.cs#LatticeBackupControl.ScheduleBackupSetAsync"
       ]
     },
     {

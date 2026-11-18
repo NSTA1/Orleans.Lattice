@@ -253,4 +253,131 @@ public interface ILatticeBackupControl
     Task<BackupHealthConfig?> GetBackupHealthConfigAsync(
         string backupId,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Registers (or updates) a named, recurring backup-set schedule and returns
+    /// its status (issue #6067). Every interval one backup set is captured over
+    /// the schedule's trees - cross-tree consistent by default - and the
+    /// schedule's own retention prunes whole sets. Re-registering with an
+    /// unchanged interval keeps the timing of the next run. The name is tenant
+    /// local, and the caller must hold the backup grant over every tree the set
+    /// captures; a schedule over all trees that also captures trees created
+    /// later requires the backup grant over the whole tenant (or, for the default
+    /// tenant, the whole cluster), because a reminder runs with no caller to
+    /// authorize a new tree against.
+    /// </summary>
+    /// <param name="request">The schedule request. Must not be <c>null</c>.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The schedule's status.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="request"/> is <c>null</c>.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to back up a tree the set captures.</exception>
+    /// <exception cref="NotSupportedException">The implementation does not support backup-set schedules.</exception>
+    Task<BackupSetScheduleStatus> ScheduleBackupSetAsync(
+        LatticeBackupSetScheduleRequest request,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This backup control does not support backup-set schedules.");
+
+    /// <summary>
+    /// Pauses a backup-set schedule: no further run starts until it is scheduled
+    /// again, while its retained sets stay restorable and held from per-tree
+    /// retention. Authorized like <see cref="ScheduleBackupSetAsync"/>. Idempotent.
+    /// </summary>
+    /// <param name="name">The schedule's name. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns><see langword="true"/> when the schedule exists; otherwise <see langword="false"/>.</returns>
+    /// <exception cref="ArgumentException"><paramref name="name"/> is not a valid schedule name.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to back up a tree the set captures.</exception>
+    /// <exception cref="NotSupportedException">The implementation does not support backup-set schedules.</exception>
+    Task<bool> CancelBackupSetScheduleAsync(
+        string name,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This backup control does not support backup-set schedules.");
+
+    /// <summary>
+    /// Removes a backup-set schedule: stops it, lifts its retention holds and
+    /// forgets it. With <paramref name="deleteRetainedSets"/> set it first deletes
+    /// the backups of its retained sets that no other schedule holds and no other
+    /// capture has since taken over; otherwise those backups stay catalogued as
+    /// ordinary backups. Authorized like <see cref="ScheduleBackupSetAsync"/>.
+    /// </summary>
+    /// <param name="name">The schedule's name. Must not be <c>null</c> or empty.</param>
+    /// <param name="deleteRetainedSets">Whether to delete the retained sets' backups.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns><see langword="true"/> when a schedule was removed; otherwise <see langword="false"/>.</returns>
+    /// <exception cref="ArgumentException"><paramref name="name"/> is not a valid schedule name.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to back up a tree the set captures.</exception>
+    /// <exception cref="NotSupportedException">The implementation does not support backup-set schedules.</exception>
+    Task<bool> RemoveBackupSetScheduleAsync(
+        string name,
+        bool deleteRetainedSets,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This backup control does not support backup-set schedules.");
+
+    /// <summary>
+    /// Reads a backup-set schedule's status - configuration, member trees, next
+    /// run, recent runs and retained sets - or <see langword="null"/> when no
+    /// schedule has the name. Authorized like <see cref="ScheduleBackupSetAsync"/>.
+    /// </summary>
+    /// <param name="name">The schedule's name. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The schedule's status, or <see langword="null"/>.</returns>
+    /// <exception cref="ArgumentException"><paramref name="name"/> is not a valid schedule name.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to back up a tree the set captures.</exception>
+    /// <exception cref="NotSupportedException">The implementation does not support backup-set schedules.</exception>
+    Task<BackupSetScheduleStatus?> GetBackupSetScheduleStatusAsync(
+        string name,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This backup control does not support backup-set schedules.");
+
+    /// <summary>
+    /// Reads only the live progress of a backup-set schedule's in-flight run - the
+    /// lightweight counterpart of <see cref="GetBackupSetScheduleStatusAsync"/> for
+    /// polling a run, which omits the schedule's member trees, recent runs and
+    /// retained sets. Authorized like <see cref="ScheduleBackupSetAsync"/>.
+    /// </summary>
+    /// <param name="name">The schedule's name. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>
+    /// The in-flight run's progress, or <see langword="null"/> when the schedule
+    /// exists but no run is in flight (read the status for the run it recorded).
+    /// </returns>
+    /// <exception cref="ArgumentException"><paramref name="name"/> is not a valid schedule name.</exception>
+    /// <exception cref="KeyNotFoundException">No schedule has the name.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to back up a tree the set captures.</exception>
+    /// <exception cref="NotSupportedException">The implementation does not support backup-set schedule progress reads.</exception>
+    Task<BackupSetScheduleRunProgress?> GetBackupSetScheduleProgressAsync(
+        string name,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This backup control does not support backup-set schedules.");
+
+    /// <summary>
+    /// Lists the backup-set schedules of the caller's tenant that the caller is
+    /// authorized to read, in name order. A schedule the caller may not read is
+    /// omitted rather than failing the listing.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The schedules' statuses.</returns>
+    /// <exception cref="NotSupportedException">The implementation does not support backup-set schedules.</exception>
+    Task<IReadOnlyList<BackupSetScheduleStatus>> ListBackupSetSchedulesAsync(
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This backup control does not support backup-set schedules.");
+
+    /// <summary>
+    /// Starts one run of a backup-set schedule now, without waiting for it.
+    /// Returns <see langword="false"/> when a run is already in flight, which the
+    /// request joins rather than stacking a second. Authorized like
+    /// <see cref="ScheduleBackupSetAsync"/>; follow the run through
+    /// <see cref="GetBackupSetScheduleStatusAsync"/>.
+    /// </summary>
+    /// <param name="name">The schedule's name. Must not be <c>null</c> or empty.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns><see langword="true"/> when a run was started.</returns>
+    /// <exception cref="ArgumentException"><paramref name="name"/> is not a valid schedule name.</exception>
+    /// <exception cref="KeyNotFoundException">No schedule has the name.</exception>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller is not authorized to back up a tree the set captures.</exception>
+    /// <exception cref="NotSupportedException">The implementation does not support backup-set schedules.</exception>
+    Task<bool> RunBackupSetScheduleNowAsync(
+        string name,
+        CancellationToken cancellationToken = default) =>
+        throw new NotSupportedException("This backup control does not support backup-set schedules.");
 }

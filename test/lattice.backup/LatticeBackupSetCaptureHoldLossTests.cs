@@ -207,15 +207,14 @@ public sealed class LatticeBackupSetCaptureHoldLossTests
     }
 
     [Test]
-    public async Task A_discarded_attempt_lists_its_members_unstamped_beside_the_stamped_ones()
+    public async Task A_discarded_attempt_writes_no_backups()
     {
-        // Issue #5449. A fenced set member's catalog row waits for the set's
-        // membership stamp, which only the accepted attempt reaches. The members of
-        // a discarded attempt are therefore registered unstamped when it is
-        // discarded, as ordinary per-tree backups; otherwise they would stay in the
-        // sink with no catalog row, unlisted, once a later attempt succeeds. Each
-        // tree changes again before the second attempt, so that attempt's members
-        // have content - and so content-addressed ids - of their own.
+        // Issue #6067. A fenced attempt only pins its members' snapshots while the
+        // gate is held; nothing is written until the attempt is accepted. So a
+        // discarded attempt leaves no backup behind - before #6067 its members had
+        // already been written and were catalogued unstamped (#5449). Each tree
+        // changes again before the second attempt, so that attempt's content
+        // differs from what the first attempt pinned.
         var (treeA, treeB, suffix) = await SeedAsync("discarded");
         HoldLossFilter.Arm(async (mode, ordinal, token, grainFactory) =>
         {
@@ -257,9 +256,7 @@ public sealed class LatticeBackupSetCaptureHoldLossTests
             Assert.That(result.SetManifest.Fence!.Attempts, Is.EqualTo(2), "the first attempt must have been discarded");
             Assert.That(listed.Where(m => stampedIds.Contains(m.Id)).Select(m => m.SetId).ToList(),
                 Has.Count.EqualTo(2).And.All.EqualTo(result.SetManifest.SetId), "the accepted attempt's members are listed, stamped");
-            Assert.That(unstamped.Select(m => m.Scope.TreeId), Is.EquivalentTo(new[] { treeA, treeB }),
-                "the discarded attempt's members are listed beside them");
-            Assert.That(unstamped.Select(m => m.SetId), Has.All.Null, "a discarded attempt's members are listed unstamped");
+            Assert.That(unstamped, Is.Empty, "a discarded attempt wrote nothing");
         });
     }
 

@@ -11,7 +11,9 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Backups;
 /// <summary>
 /// A tree's recurring backup schedules at <c>/backups/schedules?tree=</c>:
 /// its schedule status, and - when the capability probe allows capture of the
-/// kind - registering, changing and cancelling a schedule.
+/// kind - registering, changing and cancelling a schedule. Below them the page
+/// hosts <see cref="BackupSetSchedulesSection"/>, the tenant's backup-set
+/// schedules, which need no tree.
 /// </summary>
 public partial class BackupSchedulesPage : IDisposable
 {
