@@ -101,7 +101,11 @@ internal static class SystemLatticeScanExtensions
         var reassertCredential = LatticeCredentialContext.Current;
 
         string? lastKey = null;
-        var attempt = 0;
+
+        // See LatticeExtensions.ScanKeysAsyncCore: abort reopens use a
+        // consecutive, progress-reset counter and a monotonic total (issue 6080).
+        var abortAttempt = 0;
+        var abortTotal = 0;
 
         while (true)
         {
@@ -124,9 +128,10 @@ internal static class SystemLatticeScanExtensions
                     {
                         hasNext = await enumerator.MoveNextAsync().ConfigureAwait(false);
                     }
-                    catch (EnumerationAbortedException) when (attempt < budget)
+                    catch (EnumerationAbortedException) when (ResilientScanResume.MayReopenAfterAbort(abortAttempt, abortTotal, budget))
                     {
-                        attempt++;
+                        abortAttempt++;
+                        abortTotal++;
                         shouldReopen = true;
                         break;
                     }
@@ -149,6 +154,7 @@ internal static class SystemLatticeScanExtensions
                         break;
                     }
 
+                    abortAttempt = 0;
                     lastKey = enumerator.Current;
                     yield return enumerator.Current;
                 }
@@ -165,7 +171,7 @@ internal static class SystemLatticeScanExtensions
 
             if (shouldReopen)
             {
-                var delayMs = ResilientScanResume.ReconnectDelayMs(attempt);
+                var delayMs = ResilientScanResume.ReconnectDelayMs(abortTotal);
                 if (delayMs > 0)
                 {
                     await Task.Delay(TimeSpan.FromMilliseconds(delayMs), cancellationToken).ConfigureAwait(false);
@@ -226,7 +232,11 @@ internal static class SystemLatticeScanExtensions
         var reassertCredential = LatticeCredentialContext.Current;
 
         string? lastKey = null;
-        var attempt = 0;
+
+        // See LatticeExtensions.ScanKeysAsyncCore: abort reopens use a
+        // consecutive, progress-reset counter and a monotonic total (issue 6080).
+        var abortAttempt = 0;
+        var abortTotal = 0;
 
         while (true)
         {
@@ -249,9 +259,10 @@ internal static class SystemLatticeScanExtensions
                     {
                         hasNext = await enumerator.MoveNextAsync().ConfigureAwait(false);
                     }
-                    catch (EnumerationAbortedException) when (attempt < budget)
+                    catch (EnumerationAbortedException) when (ResilientScanResume.MayReopenAfterAbort(abortAttempt, abortTotal, budget))
                     {
-                        attempt++;
+                        abortAttempt++;
+                        abortTotal++;
                         shouldReopen = true;
                         break;
                     }
@@ -271,6 +282,7 @@ internal static class SystemLatticeScanExtensions
                         break;
                     }
 
+                    abortAttempt = 0;
                     lastKey = enumerator.Current.Key;
                     yield return enumerator.Current;
                 }
@@ -287,7 +299,7 @@ internal static class SystemLatticeScanExtensions
 
             if (shouldReopen)
             {
-                var delayMs = ResilientScanResume.ReconnectDelayMs(attempt);
+                var delayMs = ResilientScanResume.ReconnectDelayMs(abortTotal);
                 if (delayMs > 0)
                 {
                     await Task.Delay(TimeSpan.FromMilliseconds(delayMs), cancellationToken).ConfigureAwait(false);

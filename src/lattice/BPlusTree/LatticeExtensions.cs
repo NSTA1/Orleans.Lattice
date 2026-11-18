@@ -17,8 +17,34 @@ public static class LatticeExtensions
     /// mid-scan (per-message stateless-worker mis-routing - the load-proportional
     /// cause - plus silo failover, cold start, idle expiry, scale-down).
     /// Overridable per call via the <c>maxAttempts</c> parameter.
+    /// <para>
+    /// The budget counts <em>consecutive</em> reopens: it is replenished every
+    /// time the scan yields a record, so it bounds a walk that keeps aborting
+    /// without progress, not the length of a walk that aborts now and then.
+    /// A lifetime backstop, <see cref="DefaultScanReconnectCeiling"/>, bounds
+    /// the total.
+    /// </para>
     /// </summary>
     public const int DefaultScanReconnectAttempts = 8;
+
+    /// <summary>
+    /// Lifetime ceiling on the number of times one resilient scan
+    /// (<see cref="ScanKeysAsync"/>, <see cref="ScanEntriesAsync"/>, and the
+    /// view and system-tree wrappers) reopens after an
+    /// <see cref="EnumerationAbortedException"/>, however much progress it
+    /// makes between aborts.
+    /// <para>
+    /// The per-call <c>maxAttempts</c> budget is consecutive and replenished on
+    /// every yielded record, so it cannot by itself stop a walk that progresses
+    /// by one record per abort for ever. This ceiling is that backstop, set far
+    /// above any plausible count for a progressing walk under rolling-deploy or
+    /// failover churn. A caller that passes a larger <c>maxAttempts</c> gets
+    /// that value as the ceiling instead, so raising the budget never lowers a
+    /// scan's tolerance. Reaching it rethrows the last
+    /// <see cref="EnumerationAbortedException"/> verbatim.
+    /// </para>
+    /// </summary>
+    public const int DefaultScanReconnectCeiling = 1024;
 
     /// <summary>
     /// Default resume budget for <see cref="ScanKeysAsync"/> and
@@ -602,8 +628,11 @@ public static class LatticeExtensions
     /// <para>
     /// The first reconnect is immediate; subsequent attempts apply a small
     /// linear backoff (10&#160;ms × attempt, capped at 100&#160;ms) to avoid
-    /// a tight loop against a persistently-faulting orchestrator. If the
-    /// retry budget is exhausted the last <c>EnumerationAbortedException</c>
+    /// a tight loop against a persistently-faulting orchestrator. The retry
+    /// budget counts consecutive reopens and is replenished every time a key
+    /// is yielded, so a long walk that progresses between aborts is not capped
+    /// by its length; <see cref="DefaultScanReconnectCeiling"/> bounds the
+    /// lifetime total. If either is exhausted the last <c>EnumerationAbortedException</c>
     /// is rethrown verbatim. This is the recommended client API for long-running
     /// scans - <see cref="ILattice.KeysAsync"/> is retained for short,
     /// single-page reads and for internal orchestration.
@@ -681,7 +710,14 @@ public static class LatticeExtensions
         var reassertViewRead = ViewReadContext.IsAuthorised;
 
         string? lastKey = null;
-        var attempt = 0;
+
+        // Abort reopens are split by purpose exactly like the stall counters
+        // below (issue 6080): abortAttempt is consecutive futility accounting,
+        // reset on every yielded record and gated by `budget`; abortTotal is
+        // monotonic, drives the reconnect backoff and is gated only by the
+        // lifetime ceiling. See ResilientScanResume.MayReopenAfterAbort.
+        var abortAttempt = 0;
+        var abortTotal = 0;
 
         // Stall resumption. A ScanPageStalledException is a different fault from
         // an EnumerationAbortedException and is resumed on its own budget and its
@@ -722,9 +758,10 @@ public static class LatticeExtensions
                     {
                         hasNext = await enumerator.MoveNextAsync().ConfigureAwait(false);
                     }
-                    catch (EnumerationAbortedException) when (attempt < budget)
+                    catch (EnumerationAbortedException) when (ResilientScanResume.MayReopenAfterAbort(abortAttempt, abortTotal, budget))
                     {
-                        attempt++;
+                        abortAttempt++;
+                        abortTotal++;
                         shouldReopen = true;
                         break;
                     }
@@ -921,12 +958,13 @@ public static class LatticeExtensions
                     // flattening an escalating backoff into a permanent minimum
                     // aimed at a server whose defining symptom is timeouts.
                     //
-                    // `attempt` is deliberately NOT reset, and is NOT an unfixed
-                    // instance of this defect. It governs a different fault and
-                    // drives the reconnect backoff, so it is congestion
-                    // accounting like stallTotal and CORRECTLY has monotonic
-                    // semantics. Do not "finish the job" by resetting it.
+                    // The abort counters follow the same split (issue 6080):
+                    // abortAttempt is futility accounting and is reset here, so
+                    // a long walk that progresses between aborts is no longer
+                    // capped by its length; abortTotal stays monotonic because
+                    // it drives the reconnect backoff and the lifetime ceiling.
                     stallAttempt = 0;
+                    abortAttempt = 0;
                     lastKey = enumerator.Current;
 
                     // A record from this source resolves any watch opened when a
@@ -949,9 +987,9 @@ public static class LatticeExtensions
             if (shouldReopen)
             {
 #if LATTICE_DIAG
-                Orleans.Lattice.BPlusTree.Grains.DiagSink.Write($"[DIAG scan-reopen] lastKey={lastKey ?? "-"} attempt={attempt}");
+                Orleans.Lattice.BPlusTree.Grains.DiagSink.Write($"[DIAG scan-reopen] lastKey={lastKey ?? "-"} abortAttempt={abortAttempt} abortTotal={abortTotal}");
 #endif
-                var delayMs = stallDelayMs > 0 ? stallDelayMs : ResilientScanResume.ReconnectDelayMs(attempt);
+                var delayMs = stallDelayMs > 0 ? stallDelayMs : ResilientScanResume.ReconnectDelayMs(abortTotal);
                 stallDelayMs = 0;
                 if (delayMs > 0)
                 {
@@ -1053,7 +1091,11 @@ public static class LatticeExtensions
         var reassertViewRead = ViewReadContext.IsAuthorised;
 
         string? lastKey = null;
-        var attempt = 0;
+
+        // See ScanKeysAsyncCore: abort reopens use a consecutive, progress-reset
+        // counter and a monotonic total (issue 6080).
+        var abortAttempt = 0;
+        var abortTotal = 0;
 
         // See ScanKeysAsyncCore: stalls resume on their own budget and their own
         // backoff, gated by that budget alone.
@@ -1092,9 +1134,10 @@ public static class LatticeExtensions
                     {
                         hasNext = await enumerator.MoveNextAsync().ConfigureAwait(false);
                     }
-                    catch (EnumerationAbortedException) when (attempt < budget)
+                    catch (EnumerationAbortedException) when (ResilientScanResume.MayReopenAfterAbort(abortAttempt, abortTotal, budget))
                     {
-                        attempt++;
+                        abortAttempt++;
+                        abortTotal++;
                         shouldReopen = true;
                         break;
                     }
@@ -1131,12 +1174,12 @@ public static class LatticeExtensions
                         break;
                     }
 
-                    // Progress replenishes the consecutive stall budget only;
-                    // stallTotal stays monotonic because it feeds both the
-                    // ceiling and the backoff, and `attempt` is deliberately not
-                    // reset and is not an unfixed instance of this defect (issue
-                    // 2539). See ScanKeysAsyncCore's yield site for all three.
+                    // Progress replenishes the consecutive stall and abort
+                    // budgets only; stallTotal and abortTotal stay monotonic
+                    // because they feed the ceilings and the backoffs (issues
+                    // 2539 and 6080). See ScanKeysAsyncCore's yield site.
                     stallAttempt = 0;
+                    abortAttempt = 0;
                     lastKey = enumerator.Current.Key;
                     NoteScanProgress(lattice, enumerator.Current.Key);
                     yield return enumerator.Current;
@@ -1155,9 +1198,9 @@ public static class LatticeExtensions
             if (shouldReopen)
             {
 #if LATTICE_DIAG
-                Orleans.Lattice.BPlusTree.Grains.DiagSink.Write($"[DIAG scan-reopen] lastKey={lastKey ?? "-"} attempt={attempt}");
+                Orleans.Lattice.BPlusTree.Grains.DiagSink.Write($"[DIAG scan-reopen] lastKey={lastKey ?? "-"} abortAttempt={abortAttempt} abortTotal={abortTotal}");
 #endif
-                var delayMs = stallDelayMs > 0 ? stallDelayMs : ResilientScanResume.ReconnectDelayMs(attempt);
+                var delayMs = stallDelayMs > 0 ? stallDelayMs : ResilientScanResume.ReconnectDelayMs(abortTotal);
                 stallDelayMs = 0;
                 if (delayMs > 0)
                 {
