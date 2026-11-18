@@ -110,6 +110,7 @@ public partial class TreeMergeGrainTests
         SetupKeepalive(reminderRegistry);
 
         var registry = StubSourceEntry(grainFactory, sourcePhysical, ShardMap.CreateDefault(4, 2));
+        // The pass back-fills a legacy (pre-TargetPhysicalTreeId) state through ResolveAsync.
         registry.ResolveAsync(TargetTreeId).Returns(targetPhysical);
         registry.GetShardMapAsync(TargetTreeId)
             .Returns(Task.FromResult<ShardMap?>(ShardMap.CreateDefault(4, 2)));

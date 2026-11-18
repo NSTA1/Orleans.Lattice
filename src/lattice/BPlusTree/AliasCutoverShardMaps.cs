@@ -360,8 +360,10 @@ internal static class AliasCutoverShardMaps
 
         // Re-stamp the lineage before the swap (#4537): a crash in between leaves
         // only a spurious re-stamp over the old contents, which is conservative,
-        // never the new contents under the old lineage.
-        if (await registry.GetEntryAsync(logicalTreeId) is { } moving)
+        // never the new contents under the old lineage. The row the pair read
+        // returned is the base: a re-read here would be just as stale by the time
+        // the upsert lands, so it bought nothing but a registry hop.
+        if (logicalBefore is { } moving)
         {
             await registry.UpdateAsync(logicalTreeId, moving with { Lineage = Guid.NewGuid() });
         }

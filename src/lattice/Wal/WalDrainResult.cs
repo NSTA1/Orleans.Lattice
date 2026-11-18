@@ -41,4 +41,13 @@ internal sealed class WalDrainResult
     /// </summary>
     public IReadOnlyDictionary<int, long> AdvancedOffsets { get; init; } =
         new Dictionary<int, long>();
+
+    /// <summary>
+    /// The readable head this pass probed for every partition, indexed by
+    /// partition, or <see langword="null"/> when the pass fell off the log. A
+    /// consumer whose pass read nothing may compute its lag from these instead of
+    /// re-probing every partition: the heads are the ones the idle decision was
+    /// taken on.
+    /// </summary>
+    public IReadOnlyList<long>? PartitionHeads { get; init; }
 }

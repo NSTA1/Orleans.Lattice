@@ -17,6 +17,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 ### Changed
 
 - **Performance - Paired registry reads share one call.** Cutover prepare, explicit-alias carry-across and the resize alias swap read both registry rows in one batched call instead of two serial grain hops. ([#6082](https://github.com/NSTA1/Orleans.Lattice/pull/6082)) (`Orleans.Lattice`)
+- **Performance - Fewer registry hops on merge and alias changes.** Merge initiation reads both trees in one batched call, a moving alias carry-across drops a repeated row read, and the admin alias set answers its resolved tree from the alias it just wrote. ([#6094](https://github.com/NSTA1/Orleans.Lattice/pull/6094)) (`Orleans.Lattice`, `Orleans.Lattice.Api.TreeAdmin`)
+- **Performance - View drain ticks probe WAL heads once.** A drain probes every partition's readable head in one overlapped wave, and an idle view-maintainer tick computes its lag from those heads instead of probing every partition again. ([#6094](https://github.com/NSTA1/Orleans.Lattice/pull/6094)) (`Orleans.Lattice`)
 
 ### Fixed
 - **Shard - Healing an aliased tree folds both its routing maps.** Shard healing on a restored, resized or remediated tree commits each fold to the tree's map and mirrors it onto its copy's, which views read; maps a pre-fix fold left behind are repaired on the next sweep or read. ([#6083](https://github.com/NSTA1/Orleans.Lattice/issues/6083), [#6089](https://github.com/NSTA1/Orleans.Lattice/issues/6089)) (`Orleans.Lattice`)

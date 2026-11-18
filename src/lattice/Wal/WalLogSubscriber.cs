@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
 
@@ -67,6 +68,13 @@ internal sealed class WalLogSubscriber(
         // advanced past our next-to-read position, the entries we need were
         // trimmed and the consumer must rebuild from current source state rather
         // than tail-replay. Surface nothing and advance nothing on this pass.
+        //
+        // The head probes target distinct WAL partitions and only read, so no
+        // probe can observe another's effect: they overlap in one bounded wave
+        // rather than paying one round trip per partition in series. Each probe
+        // is still a point-in-time read of its own partition, exactly as before.
+        cancellationToken.ThrowIfCancellationRequested();
+        var heads = await ProbeHeadsAsync(sourceTreeId, partitions, cancellationToken).ConfigureAwait(false);
         for (var partition = 0; partition < partitions; partition++)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -82,9 +90,7 @@ internal sealed class WalLogSubscriber(
             // Storage); skipping it here removes the per-partition read that
             // otherwise fires on every idle drain tick - the dominant idle load,
             // since each maintainer polls every partition on a fixed cadence.
-            var head = await commitLogReader
-                .GetHeadOffsetAsync(sourceTreeId, partition, cancellationToken)
-                .ConfigureAwait(false);
+            var head = heads[partition];
             if (checkpoint + 1 >= head)
             {
                 ClearEmptyBacklogStreak(context, partition);
@@ -284,7 +290,26 @@ internal sealed class WalLogSubscriber(
             EntriesSurfaced = entriesSurfaced,
             HighestTimestamp = highest,
             AdvancedOffsets = advancedOffsets,
+            PartitionHeads = heads,
         };
+    }
+
+    private Task<long[]> ProbeHeadsAsync(string sourceTreeId, int partitions, CancellationToken cancellationToken)
+    {
+        // Single-partition logs have nothing to overlap; skip the fan-out machinery.
+        if (partitions == 1)
+        {
+            return ProbeSingleAsync();
+        }
+
+        return BoundedFanOut.RunAsync(
+            partitions,
+            BoundedFanOut.DefaultWidth,
+            partition => commitLogReader.GetHeadOffsetAsync(sourceTreeId, partition, cancellationToken),
+            cancellationToken);
+
+        async Task<long[]> ProbeSingleAsync() =>
+            [await commitLogReader.GetHeadOffsetAsync(sourceTreeId, 0, cancellationToken).ConfigureAwait(false)];
     }
 
     /// <summary>

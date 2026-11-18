@@ -159,7 +159,8 @@ public partial class ViewMaintainerAggregationDrainTests
         Func<LatticeMutation, IEnumerable<AggregationContribution>>? projector = null,
         LatticeViewOptions? options = null,
         TimeSpan? sourceWalRetention = null,
-        IReminderRegistry? reminderRegistry = null)
+        IReminderRegistry? reminderRegistry = null,
+        ICommitLogReader? commitLogReader = null)
     {
         var catalog = new ArmableViewCatalog();
         catalog.Register(new ViewRegistration(
@@ -272,7 +273,7 @@ public partial class ViewMaintainerAggregationDrainTests
             reminderRegistry: reminderRegistry!,
             NullLogger<ViewMaintainerGrain>.Instance,
             catalog,
-            commitLogReader: Substitute.For<ICommitLogReader>(),
+            commitLogReader: commitLogReader ?? Substitute.For<ICommitLogReader>(),
             subscriber: subscriber,
             cursorRegistry: cursorRegistry,
             optionsResolver: TestOptionsResolver.ForFactory(factory, new LatticeOptions()),

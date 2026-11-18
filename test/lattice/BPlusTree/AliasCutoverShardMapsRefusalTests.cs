@@ -225,6 +225,25 @@ public sealed class AliasCutoverShardMapsRefusalTests
         await _registry.Received(1).SetAliasAsync(Logical, Destination);
     }
 
+    [Test]
+    public async Task CarryAcrossExplicitAliasAsync_moving_restamps_lineage_from_the_pair_read_without_a_reread()
+    {
+        var lineage = Guid.NewGuid();
+        StubEntry(Logical, new TreeRegistryEntry { ShardCount = 2, Lineage = lineage });
+        StubEntry(Destination, new TreeRegistryEntry { ShardCount = 3 });
+
+        await AliasCutoverShardMaps.CarryAcrossExplicitAliasAsync(_grains, Logical, Destination);
+
+        await _registry.Received(1).GetEntriesAsync(
+            Arg.Is<IReadOnlyList<string>>(ids => ids.SequenceEqual(new[] { Logical, Destination })));
+        await _registry.DidNotReceive().GetEntryAsync(Logical);
+        await _registry.Received(1).UpdateAsync(
+            Logical,
+            Arg.Is<TreeRegistryEntry>(e => e.Lineage != lineage && e.ShardCount == 2));
+        await _registry.Received(1).SwapAliasAsync(
+            Logical, Destination, Arg.Any<ShardMap>(), Arg.Any<int?>(), Logical);
+    }
+
     private void StubEntry(string treeId, TreeRegistryEntry entry)
     {
         _entries[treeId] = entry;

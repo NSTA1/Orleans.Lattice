@@ -85,9 +85,11 @@ internal sealed class TreeMergeGrain(
                 $"A merge is already in progress for tree '{TargetTreeId}' from source '{state.State.SourceTreeId}'.");
         }
 
-        // Validate source tree exists.
+        // Validate source tree exists. The source and target rows are read in one
+        // registry round trip: the target's alias is a projection of its row, so
+        // the batched read replaces a separate ResolveAsync hop.
         var registry = grainFactory.GetLatticeRegistry();
-        var sourceEntry = await registry.GetEntryAsync(sourceTreeId);
+        var (sourceEntry, targetEntry) = await AliasCutoverShardMaps.GetEntryPairAsync(registry, sourceTreeId, TargetTreeId);
         if (sourceEntry is null)
             throw new InvalidOperationException(
                 $"Source tree '{sourceTreeId}' does not exist.");
@@ -100,10 +102,10 @@ internal sealed class TreeMergeGrain(
         else
         {
             sourceResolvedOpts = await optionsResolver.ResolveAsync(sourceTreeId);
-            sourceEntry = await registry.GetEntryAsync(sourceTreeId);
+            (sourceEntry, targetEntry) = await AliasCutoverShardMaps.GetEntryPairAsync(registry, sourceTreeId, TargetTreeId);
         }
 
-        await InitiateMergeStateAsync(sourceTreeId, sourceResolvedOpts.ShardCount, sourceEntry);
+        await InitiateMergeStateAsync(sourceTreeId, sourceResolvedOpts.ShardCount, sourceEntry, targetEntry);
         await StartMergeAsync();
     }
 
@@ -113,20 +115,22 @@ internal sealed class TreeMergeGrain(
     internal async Task InitiateMergeStateAsync(string sourceTreeId, int sourceShardCount)
     {
         var registry = grainFactory.GetLatticeRegistry();
-        await InitiateMergeStateAsync(sourceTreeId, sourceShardCount, await registry.GetEntryAsync(sourceTreeId));
+        var (sourceEntry, targetEntry) = await AliasCutoverShardMaps.GetEntryPairAsync(registry, sourceTreeId, TargetTreeId);
+        await InitiateMergeStateAsync(sourceTreeId, sourceShardCount, sourceEntry, targetEntry);
     }
 
-    private async Task InitiateMergeStateAsync(string sourceTreeId, int sourceShardCount, TreeRegistryEntry? sourceEntry)
+    private async Task InitiateMergeStateAsync(
+        string sourceTreeId, int sourceShardCount, TreeRegistryEntry? sourceEntry, TreeRegistryEntry? targetEntry)
     {
         // Resolve both aliases and the source's current physical shard list
         // from the registry so that mid-merge map mutations (e.g. adaptive
         // splits on either side) can't mis-route subsequent ticks (audit bug #5).
+        // The alias and the map are projections of the registry entry, so the
+        // rows the caller already read serve both without another hop.
         var registry = grainFactory.GetLatticeRegistry();
-        // ResolveAsync and GetShardMapAsync are projections of the registry
-        // entry, so one entry read per tree serves the alias and the map.
-        var targetResolved = await registry.ResolveAsync(TargetTreeId);
         var sourcePhysicalTreeId = sourceEntry?.PhysicalTreeId is { Length: > 0 } sourcePhysical ? sourcePhysical : sourceTreeId;
-        var targetPhysicalTreeId = string.IsNullOrEmpty(targetResolved) ? TargetTreeId : targetResolved;
+        // Exactly ResolveAsync's projection of the row (PhysicalTreeId ?? id).
+        var targetPhysicalTreeId = targetEntry?.PhysicalTreeId ?? TargetTreeId;
 
         var sourceMap = await RegistryEntryShardMap.ResolveAsync(registry, optionsResolver, sourceTreeId, sourceEntry);
         var sourcePhysicalShards = sourceMap.GetPhysicalShardIndices();

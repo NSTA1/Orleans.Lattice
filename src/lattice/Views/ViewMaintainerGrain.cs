@@ -801,7 +801,7 @@ internal sealed partial class ViewMaintainerGrain(
             await ReportDrainCheckpointsAsync(walTreeId, highest, cancellationToken);
         }
 
-        ApplyLag.Record(await ComputeLagAsync(walTreeId, partitions, cancellationToken), ViewTag, ViewTenantTag);
+        ApplyLag.Record(await DrainLagAsync(drain, appliedCount, walTreeId, partitions, cancellationToken), ViewTag, ViewTenantTag);
         BacklogDepth.Record(backlogRead, ViewTag, ViewTenantTag);
         if (appliedCount > 0)
         {
@@ -1470,6 +1470,37 @@ internal sealed partial class ViewMaintainerGrain(
     }
 
     /// <summary>
+    /// The lag a drain pass records. A pass that read nothing and applied nothing
+    /// is the idle tick every maintainer pays on its fixed cadence, and its drain
+    /// already probed every partition's readable head moments earlier; folding the
+    /// lag from those heads elides a second probe per partition per idle tick. A
+    /// pass that did work re-probes, so arrivals during the apply are counted.
+    /// </summary>
+    private Task<long> DrainLagAsync(
+        WalDrainResult drain, int applied, string walTreeId, int partitions, CancellationToken cancellationToken)
+    {
+        if (drain.EntriesRead == 0 && applied == 0 && drain.PartitionHeads is { } heads && heads.Count == partitions)
+        {
+            long lag = 0;
+            for (var partition = 0; partition < partitions; partition++)
+            {
+                lag += PartitionLagFrom(heads[partition], partition, fromLogStart: false);
+            }
+
+            return Task.FromResult(lag);
+        }
+
+        return ComputeLagAsync(walTreeId, partitions, cancellationToken);
+    }
+
+    private long PartitionLagFrom(long head, int partition, bool fromLogStart)
+    {
+        var checkpoint = fromLogStart ? -1 : state.State.AppliedOffsets.GetValueOrDefault(partition, -1);
+        var partitionLag = head - (checkpoint + 1);
+        return partitionLag > 0 ? partitionLag : 0;
+    }
+
+    /// <summary>
     /// Sums the per-partition tail lag. Every probe targets a <b>distinct</b> WAL
     /// partition and only reads, so no probe can observe another's effect, and the
     /// reduction is addition - commutative and associative. The serial walk
@@ -1517,12 +1548,7 @@ internal sealed partial class ViewMaintainerGrain(
 
         return lag;
 
-        long PartitionLag(long head, int partition)
-        {
-            var checkpoint = fromLogStart ? -1 : state.State.AppliedOffsets.GetValueOrDefault(partition, -1);
-            var partitionLag = head - (checkpoint + 1);
-            return partitionLag > 0 ? partitionLag : 0;
-        }
+        long PartitionLag(long head, int partition) => PartitionLagFrom(head, partition, fromLogStart);
     }
 
     private async Task<int> ApplySurvivorsAsync(ILattice viewTree, IReadOnlyList<ViewWrite> survivors, CancellationToken cancellationToken)

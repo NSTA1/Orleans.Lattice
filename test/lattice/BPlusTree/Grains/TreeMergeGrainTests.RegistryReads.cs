@@ -9,8 +9,9 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 
 /// <summary>
 /// Initiating a merge reads the source's alias and shard map from one registry
-/// entry: <c>ResolveAsync</c> and <c>GetShardMapAsync</c> are projections of
-/// that entry, so asking for them separately paid extra serial registry turns.
+/// entry, and the source and target rows in one batched round trip: the alias
+/// (<c>ResolveAsync</c>) and map (<c>GetShardMapAsync</c>) are projections of
+/// those rows, so asking for them separately paid extra serial registry turns.
 /// </summary>
 public partial class TreeMergeGrainTests
 {
@@ -22,7 +23,7 @@ public partial class TreeMergeGrainTests
             new ServiceCollection().AddSingleton(Substitute.For<ITimerRegistry>()).BuildServiceProvider());
         SetupKeepalive(reminders);
         var registry = StubSourceEntry(factory, "source-copy", new ShardMap { Slots = [0, 4], Version = 2 });
-        registry.ResolveAsync(TargetTreeId).Returns("target-copy");
+        StubTargetAlias(registry, "target-copy");
         registry.ClearReceivedCalls();
 
         await grain.MergeAsync(SourceTreeId);
@@ -33,9 +34,14 @@ public partial class TreeMergeGrainTests
             Assert.That(state.State.TargetPhysicalTreeId, Is.EqualTo("target-copy"));
             Assert.That(state.State.SourceShardCount, Is.EqualTo(ShardCount));
             Assert.That(state.State.SourcePhysicalShards, Is.EqualTo(new[] { 0, 4 }));
-            Assert.That(registry.ReceivedCalls().Count(), Is.EqualTo(2));
+
+            // One registry round trip in total: the batched pair read.
+            Assert.That(CallsTo(registry, nameof(ILatticeRegistry.GetEntriesAsync)), Is.EqualTo(1));
+            Assert.That(CallsTo(registry, nameof(ILatticeRegistry.ResolveAsync)), Is.Zero);
+            Assert.That(CallsTo(registry, nameof(ILatticeRegistry.GetShardMapAsync)), Is.Zero);
         });
-        await registry.Received(1).GetEntryAsync(SourceTreeId);
+        await registry.Received(1).GetEntriesAsync(Arg.Is<IReadOnlyList<string>>(
+            ids => ids.SequenceEqual(new[] { SourceTreeId, TargetTreeId })));
         await registry.DidNotReceive().ExistsAsync(Arg.Any<string>());
         await registry.DidNotReceive().RegisterAsync(Arg.Any<string>(), Arg.Any<TreeRegistryEntry?>());
         await registry.DidNotReceiveWithAnyArgs().RegisterAndGetEntryAsync(default!);
@@ -53,7 +59,8 @@ public partial class TreeMergeGrainTests
 
         registry.DidNotReceive().RegisterAsync(Arg.Any<string>(), Arg.Any<TreeRegistryEntry?>());
         registry.DidNotReceiveWithAnyArgs().RegisterAndGetEntryAsync(default!);
-        Assert.That(registry.ReceivedCalls().Count(), Is.EqualTo(1));
+        Assert.That(CallsTo(registry, nameof(ILatticeRegistry.GetEntriesAsync)), Is.EqualTo(1));
+        Assert.That(CallsTo(registry, nameof(ILatticeRegistry.ResolveAsync)), Is.Zero);
     }
 
     [Test]
@@ -73,7 +80,10 @@ public partial class TreeMergeGrainTests
 
         await registry.Received(1).RegisterAndGetEntryAsync(SourceTreeId, entry);
         await registry.DidNotReceiveWithAnyArgs().RegisterAsync(default!);
-        await registry.Received(3).GetEntryAsync(SourceTreeId);
+
+        // The pair is re-read after lazy seeding so the topology is fresh.
+        Assert.That(CallsTo(registry, nameof(ILatticeRegistry.GetEntriesAsync)), Is.EqualTo(2));
+        Assert.That(CallsTo(registry, nameof(ILatticeRegistry.ResolveAsync)), Is.Zero);
         Assert.That(state.State.SourcePhysicalShards, Is.EqualTo(new[] { 0, 4 }));
     }
 
@@ -83,7 +93,7 @@ public partial class TreeMergeGrainTests
         var (grain, state, reminderRegistry, grainFactory, _) = CreateGrain();
         SetupKeepalive(reminderRegistry);
         var registry = StubSourceEntry(grainFactory, "source-physical", new ShardMap { Slots = [0, 0, 4, 4], Version = 2 });
-        registry.ResolveAsync(TargetTreeId).Returns("target-physical");
+        StubTargetAlias(registry, "target-physical");
         registry.ClearReceivedCalls();
 
         await grain.InitiateMergeStateAsync(SourceTreeId, ShardCount);
@@ -93,13 +103,25 @@ public partial class TreeMergeGrainTests
             Assert.That(state.State.SourcePhysicalTreeId, Is.EqualTo("source-physical"));
             Assert.That(state.State.TargetPhysicalTreeId, Is.EqualTo("target-physical"));
             Assert.That(state.State.SourcePhysicalShards, Is.EqualTo(new[] { 0, 4 }));
-            Assert.That(registry.ReceivedCalls().Count(c =>
-                c.GetMethodInfo().Name == nameof(ILatticeRegistry.ResolveAsync)
-                && (string)c.GetArguments()[0]! == SourceTreeId), Is.Zero);
-            Assert.That(registry.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(ILatticeRegistry.GetShardMapAsync)), Is.Zero);
-            // One source entry read plus the target alias.
-            Assert.That(registry.ReceivedCalls().Count(), Is.EqualTo(2));
+            Assert.That(CallsTo(registry, nameof(ILatticeRegistry.ResolveAsync)), Is.Zero);
+            Assert.That(CallsTo(registry, nameof(ILatticeRegistry.GetShardMapAsync)), Is.Zero);
+
+            // One batched read of the source and target rows.
+            Assert.That(CallsTo(registry, nameof(ILatticeRegistry.GetEntriesAsync)), Is.EqualTo(1));
         });
+    }
+
+    [Test]
+    public async Task InitiateMergeState_unaliased_target_records_its_own_id()
+    {
+        var (grain, state, reminderRegistry, grainFactory, _) = CreateGrain();
+        SetupKeepalive(reminderRegistry);
+        var registry = StubSourceEntry(grainFactory, null, null);
+        registry.GetEntryAsync(TargetTreeId).Returns(Task.FromResult<TreeRegistryEntry?>(null));
+
+        await grain.InitiateMergeStateAsync(SourceTreeId, ShardCount);
+
+        Assert.That(state.State.TargetPhysicalTreeId, Is.EqualTo(TargetTreeId));
     }
 
     [Test]

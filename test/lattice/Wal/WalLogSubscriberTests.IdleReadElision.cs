@@ -26,6 +26,37 @@ public sealed partial class WalLogSubscriberTests
     }
 
     [Test]
+    public async Task DrainAsync_overlaps_partition_head_probes_and_reports_them()
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var wal = Substitute.For<IWalShardGrain>();
+        var gate = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var issued = 0;
+        wal.GetReadableHeadAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+        {
+            Interlocked.Increment(ref issued);
+            return new ValueTask<long>(gate.Task);
+        });
+        factory.GetGrain<IWalShardGrain>(Arg.Any<string>()).Returns(wal);
+        var subscriber = new WalLogSubscriber(new WalCommitLogReader(factory), new InMemoryWalCursorRegistry());
+        var checkpoints = Enumerable.Range(0, 4).ToDictionary(p => p, _ => 4L);
+
+        var drain = subscriber.DrainAsync(Context(4, checkpoints, pinWal: false), new CollectingHandler());
+        var deadline = DateTime.UtcNow.AddSeconds(10);
+        while (Volatile.Read(ref issued) < 4 && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(5);
+        }
+
+        Assert.That(Volatile.Read(ref issued), Is.EqualTo(4), "every partition's head probe is in flight before any returns");
+        gate.SetResult(5L);
+        var result = await drain;
+
+        Assert.That(result.PartitionHeads, Is.EqualTo(new[] { 5L, 5L, 5L, 5L }));
+        Assert.That(result.EntriesRead, Is.Zero);
+    }
+
+    [Test]
     public async Task DrainAsync_skips_only_idle_partitions_and_rechecks_them_on_the_next_drain()
     {
         var (subscriber, reader, _) = Create();
