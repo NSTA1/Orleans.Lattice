@@ -95,7 +95,8 @@ public sealed class PrometheusQueryClient : IPrometheusQueryClient
             .Append("&start=").Append(FormatTimestamp(start))
             .Append("&end=").Append(FormatTimestamp(end))
             .Append("&step=").Append(
-                step.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture));
+                (TelemetryRangeGuardrails.ToWireMilliseconds(step) / 1000m)
+                    .ToString("0.###", CultureInfo.InvariantCulture));
 
         using var document = await SendAsync(uri.ToString(), cancellationToken).ConfigureAwait(false);
         return ReadQueryEnvelope(document);

@@ -210,6 +210,39 @@ public sealed class TelemetryRangeGuardrailsTests
         Assert.Multiple(() =>
         {
             Assert.That(admitted, Is.False);
+            Assert.That(message, Is.EqualTo("The range step must be at least one millisecond."));
+        });
+    }
+
+    [Test]
+    public void A_sub_millisecond_step_is_rejected_even_when_the_point_budget_fits()
+    {
+        // 0.5ms over 1s is 2,001 points - inside the budget - but the wire format
+        // carries whole milliseconds, so it would reach the backend as step=0.
+        var admitted = TelemetryRangeGuardrails.TryValidateRange(
+            Budgets(), Start, Start.AddSeconds(1), TimeSpan.FromTicks(5_000), out var message);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(admitted, Is.False);
+            Assert.That(message, Is.EqualTo("The range step must be at least one millisecond."));
+        });
+    }
+
+    [Test]
+    public void A_fractional_millisecond_step_is_budgeted_at_the_step_actually_sent()
+    {
+        // 1.9ms over ~20.9s is exactly the inclusive 11,000-point budget at the
+        // raw step, but the backend is sent 1ms and would evaluate ~20,899 points.
+        var step = TimeSpan.FromTicks(19_000);
+        var end = Start + (step * (TelemetryRangeGuardrails.MaxEvaluationPoints - 1));
+
+        var admitted = TelemetryRangeGuardrails.TryValidateRange(
+            Budgets(), Start, end, step, out var message);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(admitted, Is.False);
             Assert.That(message, Does.Contain("evaluation points"));
         });
     }

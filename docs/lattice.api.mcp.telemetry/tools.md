@@ -46,9 +46,9 @@ Returns a `TelemetryQueryResult`: on success, the backend `ResultType` (`vector`
 | `query` | `string` | The PromQL expression to evaluate across the range. |
 | `start` | `DateTimeOffset` | The inclusive start of the range. |
 | `end` | `DateTimeOffset` | The inclusive end of the range; must be at or after `start`. |
-| `step` | `TimeSpan` | The resolution step between evaluation points, as a duration (for example `00:00:30` for 30 seconds). Must be strictly positive. |
+| `step` | `TimeSpan` | The resolution step between evaluation points, as a duration (for example `00:00:30` for 30 seconds). Must be at least one millisecond; a fractional millisecond is truncated. |
 
-Returns a `TelemetryQueryResult` (a `matrix`). The call is rejected with a clean `Success = false` result - without ever hitting the backend - when `end < start`, when `step <= 0`, when `end - start` exceeds `MaxRange`, when `step` exceeds `MaxStep`, or when the window and step yield more than 11,000 evaluation points.
+Returns a `TelemetryQueryResult` (a `matrix`). The call is rejected with a clean `Success = false` result - without ever hitting the backend - when `end < start`, when `step <= 0`, when `step` is below one millisecond (the step is sent to the backend as whole milliseconds, truncated, and the point budget is judged against that value), when `end - start` exceeds `MaxRange`, when `step` exceeds `MaxStep`, or when the window and step yield more than 11,000 evaluation points.
 
 ### `lattice_telemetry_list_metrics`
 
