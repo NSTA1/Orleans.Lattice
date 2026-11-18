@@ -20,7 +20,9 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 - **Atomic - Partial storage reports no longer loosen cross-tree admission.** A partial report can only raise a participant's held admission sample, never lower it, so a tree near its live-key or byte budget is no longer admitted past it. ([#6070](https://github.com/NSTA1/Orleans.Lattice/issues/6070)) (`Orleans.Lattice`)
 - **Observability - WAL bytes publish after a partial deep report.** A fresh WAL report now replaces a held partial deep report instead of inheriting its partial flag, so the WAL-bytes series no longer stays dark until the next complete report. ([#6071](https://github.com/NSTA1/Orleans.Lattice/issues/6071)) (`Orleans.Lattice`)
 - **Storage - One tree's placement failure no longer blanks scaling pressure.** A failed WAL placement read now drops only that tree's account attribution, instead of discarding the whole sample and reporting zero storage pressure for every account. ([#6072](https://github.com/NSTA1/Orleans.Lattice/issues/6072)) (`Orleans.Lattice.Scaling`)
-
+- **Explorer - Rule shadowing checks use the shown tenant's rules.** A rules list answered for a tenant the rule detail view has left is dropped, so the editor no longer warns about shadowing against another tenant's rules. ([#6074](https://github.com/NSTA1/Orleans.Lattice/issues/6074)) (`Orleans.Lattice.Explorer.UI`)
+- **Explorer - The tenant rule cap shows the shown tenant's quota.** A quota posture answered for a tenant the rules view has left is dropped instead of replacing the cap text and at-cap gating. ([#6075](https://github.com/NSTA1/Orleans.Lattice/issues/6075)) (`Orleans.Lattice.Explorer.UI`)
+- **Explorer - Late read failures no longer replace tenant Access pages.** A read for a tenant, rule or group the view has left no longer shows an error or a not-found over the page now displayed. ([#6076](https://github.com/NSTA1/Orleans.Lattice/issues/6076)) (`Orleans.Lattice.Explorer.UI`)
 ## Released
 
 ## [2026-11-17]

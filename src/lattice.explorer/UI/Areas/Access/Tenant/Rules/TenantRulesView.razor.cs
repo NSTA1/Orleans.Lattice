@@ -162,7 +162,11 @@ public partial class TenantRulesView
         }
         catch (Exception exception) when (TenantAccessFailure.From(exception, tenant) is { } failure)
         {
-            _failure = failure;
+            if (!Lifetime.IsLeft && string.Equals(tenant, Tenant, StringComparison.Ordinal))
+            {
+                _failure = failure;
+            }
+
             return;
         }
 
@@ -210,7 +214,13 @@ public partial class TenantRulesView
         try
         {
             var state = await Access.GetStateAsync(tenant, Lifetime.Token).ConfigureAwait(true);
-            _posture = string.Equals(tenant, Tenant, StringComparison.Ordinal) ? state.Posture : null;
+
+            // A posture for a tenant the view has since left is dropped, not
+            // written as "no posture" over the tenant it now shows.
+            if (!Lifetime.IsLeft && string.Equals(tenant, Tenant, StringComparison.Ordinal))
+            {
+                _posture = state.Posture;
+            }
         }
         catch (OperationCanceledException) when (Lifetime.IsLeft)
         {

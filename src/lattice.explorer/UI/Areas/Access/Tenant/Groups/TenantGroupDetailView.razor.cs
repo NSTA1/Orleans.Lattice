@@ -186,11 +186,17 @@ public partial class TenantGroupDetailView
         catch (ArgumentException exception) when (!Lifetime.IsLeft && exception is not TenantAccessConfinementException)
         {
             // A name that is no valid local group name names no group.
-            Navigation.NotFound();
+            if (tenant == Tenant && name == Name)
+            {
+                Navigation.NotFound();
+            }
         }
         catch (Exception exception) when (TenantAccessFailure.From(exception, tenant) is { } failure)
         {
-            _failure = failure;
+            if (!Lifetime.IsLeft && tenant == Tenant && name == Name)
+            {
+                _failure = failure;
+            }
         }
     }
 

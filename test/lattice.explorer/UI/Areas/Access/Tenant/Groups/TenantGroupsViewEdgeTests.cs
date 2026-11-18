@@ -173,6 +173,27 @@ public sealed class TenantGroupsViewEdgeTests : TenantAccessPagesTestContext
     }
 
     [Test]
+    public async Task A_read_failing_for_a_tenant_the_view_has_left_does_not_replace_it_with_an_error()
+    {
+        TenantFacades.AsTenantAdmin();
+        var acme = new TaskCompletionSource<TenantGroupPage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var directory = Substitute.For<ILatticeTenantDirectoryAdmin>();
+        directory.ListGroupsAsync("acme", Arg.Any<TenantAccessPageRequest>(), Arg.Any<CancellationToken>()).Returns(acme.Task);
+        directory.ListGroupsAsync("globex", Arg.Any<TenantAccessPageRequest>(), Arg.Any<CancellationToken>())
+            .Returns(new TenantGroupPage { Entries = [Group("finance")] });
+        UseDirectory(directory);
+        var cut = Render<TenantGroupsView>(parameters => parameters.Add(view => view.Tenant, "acme"));
+        cut.WaitUntil(() => Assert.That(directory.ReceivedCalls(), Is.Not.Empty));
+
+        cut.Render(parameters => parameters.Add(view => view.Tenant, "globex"));
+        cut.WaitUntil(() => Assert.That(cut.Markup, Does.Contain("finance")));
+        acme.SetException(new InvalidOperationException("down"));
+
+        Assert.That(await TestPoll.TryUntilAsync(() =>         cut.Markup.Contains("Groups could not be read", StringComparison.Ordinal), TimeSpan.FromSeconds(1)), Is.False);
+        Assert.That(cut.Markup, Does.Contain("finance"));
+    }
+
+    [Test]
     public async Task A_read_cancelled_by_leaving_the_view_is_dropped()
     {
         TenantFacades.AsTenantAdmin();

@@ -1,8 +1,11 @@
 using Bunit;
+using NSubstitute;
 using Orleans.Lattice.Explorer.Tests.UI.Navigation;
 using Orleans.Lattice.Api.TenantAdmin;
 using Orleans.Lattice.Explorer.UI.Areas.Access;
 using Orleans.Lattice.Explorer.UI.Areas.Access.Tenant;
+using Orleans.Lattice.Explorer.UI.Areas.Access.Tenant.Rules;
+using Orleans.Lattice.Testing;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Access.Tenant.Rules;
 
@@ -33,6 +36,36 @@ public sealed class TenantRulesViewTests : TenantRulesTestContext
             Assert.That(platform.QuerySelector("tbody")!.TextContent, Does.Contain("guard"));
             Assert.That(platform.QuerySelectorAll("button").Select(button => button.TextContent.Trim()), Has.None.Contains("Edit").And.None.Contains("Delete"));
         });
+    }
+
+    [Test]
+    public async Task A_posture_answered_for_a_tenant_the_view_has_left_does_not_replace_the_current_cap()
+    {
+        const string Globex = "globex";
+        var policy = Substitute.For<ILatticeTenantPolicyAdmin>();
+        var acmePosture = new TaskCompletionSource<TenantAccessPosture>(TaskCreationOptions.RunContinuationsAsynchronously);
+        policy.GetPostureAsync(Acme, Arg.Any<CancellationToken>()).Returns(acmePosture.Task);
+        policy.GetPostureAsync(Globex, Arg.Any<CancellationToken>()).Returns(Task.FromResult(new TenantAccessPosture
+            {
+                TenantId = Globex,
+                Enabled = true,
+                CallerIsTenantAdmin = true,
+                TenantRules = new TenantQuotaDimensionUsage { Usage = 1, Limit = 5 },
+            }));
+        policy.ListRulesAsync(default!, default!, default).ReturnsForAnyArgs(Task.FromResult(new TenantRulePage()));
+        TenantFacades.PolicyOverride = policy;
+        var cut = Render<TenantRulesView>(parameters => parameters.Add(view => view.Tenant, Acme));
+        cut.WaitUntil(() => policy.Received(1).GetPostureAsync(Acme, Arg.Any<CancellationToken>()));
+
+        cut.Render(parameters => parameters.Add(view => view.Tenant, Globex));
+        cut.WaitUntil(() => Assert.That(cut.Find("[data-lt-rule-cap]").TextContent, Is.EqualTo("1 of 5 tenant rules used.")));
+        acmePosture.SetResult(new TenantAccessPosture { TenantId = Acme, Enabled = true, CallerIsTenantAdmin = true });
+
+        Assert.That(
+            await TestPoll.TryUntilAsync(() => cut.FindAll("[data-lt-rule-cap]").Count == 0, TimeSpan.FromMilliseconds(500)),
+            Is.False,
+            "acme's late posture must not erase globex's rule cap");
+        Assert.That(cut.Find("[data-lt-rule-cap]").TextContent, Is.EqualTo("1 of 5 tenant rules used."));
     }
 
     [Test]

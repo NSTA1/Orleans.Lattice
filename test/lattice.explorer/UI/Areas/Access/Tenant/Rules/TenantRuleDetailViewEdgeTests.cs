@@ -153,6 +153,51 @@ public sealed class TenantRuleDetailViewEdgeTests : TenantRulesTestContext
     }
 
     [Test]
+    public async Task A_read_failing_after_the_view_moved_to_another_rule_does_not_replace_it_with_an_error()
+    {
+        var first = new TaskCompletionSource<TenantRuleView?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _policy.GetRuleAsync(Acme, "r", Arg.Any<CancellationToken>()).Returns(first.Task);
+        Serve(Rule("s", subject: "second"));
+        var cut = RenderView("r");
+
+        cut.Render(parameters => parameters.Add(view => view.Tenant, Acme).Add(view => view.RuleId, "s"));
+        cut.WaitUntil(() => Assert.That(cut.Find("[data-lt-tenant-view=rule]").TextContent, Does.Contain("tenant-group:second")));
+        first.SetException(new InvalidOperationException("down"));
+
+        Assert.That(
+            await TestPoll.TryUntilAsync(() => cut.Find("[data-lt-tenant-view=rule]").TextContent.Contains("could not be read", StringComparison.Ordinal), TimeSpan.FromMilliseconds(500)),
+            Is.False,
+            "the superseded read's fault must not replace the rule the view now shows");
+        Assert.That(cut.Find("[data-lt-tenant-view=rule]").TextContent, Does.Contain("tenant-group:second"));
+    }
+
+    [Test]
+    public async Task Rules_read_for_a_tenant_the_view_has_left_do_not_reach_the_editor()
+    {
+        const string Globex = "globex";
+        Serve(Rule("r"));
+        _policy.GetRuleAsync(Globex, "r", Arg.Any<CancellationToken>()).Returns(Task.FromResult<TenantRuleView?>(Rule("r", subject: "globex-eng")));
+        var acmeRules = new TaskCompletionSource<TenantRulePage>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _policy.ListRulesAsync(Acme, Arg.Any<TenantAccessPageRequest>(), Arg.Any<CancellationToken>()).Returns(acmeRules.Task);
+        _policy.ListRulesAsync(Globex, Arg.Any<TenantAccessPageRequest>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new TenantRulePage { Entries = [Rule("globex-guard", editable: false)] }));
+        var cut = RenderView("r");
+        cut.WaitUntil(() => _policy.ReceivedWithAnyArgs(1).ListRulesAsync(default!, default!, default));
+
+        cut.Render(parameters => parameters.Add(view => view.Tenant, Globex).Add(view => view.RuleId, "r"));
+        cut.WaitUntil(() => Assert.That(cut.Find("[data-lt-tenant-view=rule]").TextContent, Does.Contain("tenant-group:globex-eng")));
+        cut.WaitUntil(() => _policy.Received(1).ListRulesAsync(Globex, Arg.Any<TenantAccessPageRequest>(), Arg.Any<CancellationToken>()));
+        AccessForms.Button(cut, "Edit rule").Click();
+        cut.WaitUntil(() => Assert.That(cut.FindComponent<TenantRuleEditor>().Instance.Rules.Select(rule => rule.RuleId), Is.EqualTo(new[] { "globex-guard" })));
+        acmeRules.SetResult(new TenantRulePage { Entries = [Rule("acme-guard", editable: false)] });
+
+        Assert.That(
+            await TestPoll.TryUntilAsync(() => cut.FindComponent<TenantRuleEditor>().Instance.Rules.Any(rule => rule.RuleId == "acme-guard"), TimeSpan.FromMilliseconds(500)),
+            Is.False,
+            "acme's late rules must not become globex's shadow-check context");
+    }
+
+    [Test]
     public async Task A_read_answered_after_the_view_was_left_is_dropped()
     {
         var pending = new TaskCompletionSource<TenantRuleView?>(TaskCreationOptions.RunContinuationsAsynchronously);
