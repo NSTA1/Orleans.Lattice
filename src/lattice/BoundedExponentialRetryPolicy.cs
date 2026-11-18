@@ -119,7 +119,7 @@ public sealed class BoundedExponentialRetryPolicy : ILatticeRetryPolicy
                 {
                     break;
                 }
-                var delay = ComputeBackoff(attempt);
+                var delay = BoundedExponentialBackoff.Compute(attempt, _initialDelay, _maxDelay);
                 if (delay > TimeSpan.Zero)
                 {
                     await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
@@ -129,18 +129,5 @@ public sealed class BoundedExponentialRetryPolicy : ILatticeRetryPolicy
         captured!.Throw();
         // Unreachable: ExceptionDispatchInfo.Throw never returns.
         throw new InvalidOperationException("Unreachable.");
-    }
-
-    private TimeSpan ComputeBackoff(int attempt)
-    {
-        // attempt is 1-based; first retry uses initial delay, doubling thereafter.
-        var shift = attempt - 1;
-        if (shift >= 31)
-            return _maxDelay;
-        var multiplier = 1L << shift;
-        var ticks = _initialDelay.Ticks * multiplier;
-        if (ticks < 0 || ticks > _maxDelay.Ticks)
-            return _maxDelay;
-        return TimeSpan.FromTicks(ticks);
     }
 }

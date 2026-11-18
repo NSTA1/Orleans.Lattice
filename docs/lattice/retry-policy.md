@@ -160,7 +160,10 @@ Trees that are not replicated never raise it.
 The shipped `BoundedExponentialRetryPolicy` makes up to `MaxAttempts`
 attempts in total (the first call counts as one), waiting
 `min(MaxDelay, InitialDelay * 2^(attempt-1))` after failed attempt number
-`attempt` before the next. Its defaults (on both
+`attempt` before the next. Every wait is also held to about 49.7 days
+(`0xFFFFFFFE` milliseconds), the longest delay a timer accepts, so a
+larger `MaxDelay` such as `TimeSpan.MaxValue` leaves the doubling
+uncapped up to that ceiling. Its defaults (on both
 `BoundedExponentialRetryPolicyOptions` and the constructor) are
 `MaxAttempts = 4`, `InitialDelay = 50 ms`, `MaxDelay = 2 s`, and a null
 `RetryableExceptionClassifier`. Wire it via DI:

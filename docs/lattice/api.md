@@ -2341,7 +2341,7 @@ guidance, and code examples.
 | `LatticeIdempotencyContext` | `static IDisposable NewScope()` | Shorthand for `With(LatticeIdempotencyKey.Fresh())`. |
 | `ILatticeRetryPolicy` | `Task ExecuteAsync(Func<CancellationToken, Task> operation, CancellationToken cancellationToken)` | Re-invokes `operation` on transient failure under the same ambient scope; rethrows on exhaustion. |
 | `ILatticeRetryPolicy` | `Task<T> ExecuteAsync<T>(Func<CancellationToken, Task<T>> operation, CancellationToken cancellationToken)` | Typed overload. |
-| `BoundedExponentialRetryPolicy` | `ctor(int maxAttempts = 4, TimeSpan? initialDelay = null, TimeSpan? maxDelay = null, Func<Exception, bool>? retryableExceptionClassifier = null)` | Shipped default. Delay between attempts: `min(MaxDelay, InitialDelay * 2^(attempt-1))`. No jitter. |
+| `BoundedExponentialRetryPolicy` | `ctor(int maxAttempts = 4, TimeSpan? initialDelay = null, TimeSpan? maxDelay = null, Func<Exception, bool>? retryableExceptionClassifier = null)` | Shipped default. Delay between attempts: `min(MaxDelay, InitialDelay * 2^(attempt-1))`, held to the timer ceiling (about 49.7 days). No jitter. |
 | `BoundedExponentialRetryPolicy` | `ctor(BoundedExponentialRetryPolicyOptions options)` | Options-based constructor used by the DI extension. |
 | `BoundedExponentialRetryPolicyOptions` | `int MaxAttempts { get; set; }` (default 4) | Total attempts, including the first. |
 | `BoundedExponentialRetryPolicyOptions` | `TimeSpan InitialDelay { get; set; }` (default 50 ms) | First retry backoff. |

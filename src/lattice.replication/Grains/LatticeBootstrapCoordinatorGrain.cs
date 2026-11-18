@@ -1115,21 +1115,8 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
     /// observes the documented doubling cadence regardless of which
     /// loop drives the retry.
     /// </summary>
-    private static TimeSpan ComputeBackoff(int attempt, TimeSpan initial, TimeSpan max)
-    {
-        var shift = attempt - 1;
-        if (shift >= 31)
-        {
-            return max;
-        }
-        var multiplier = 1L << shift;
-        var ticks = initial.Ticks * multiplier;
-        if (ticks < 0 || ticks > max.Ticks)
-        {
-            return max;
-        }
-        return TimeSpan.FromTicks(ticks);
-    }
+    private static TimeSpan ComputeBackoff(int attempt, TimeSpan initial, TimeSpan max) =>
+        BoundedExponentialBackoff.Compute(attempt, initial, max);
 
     /// <summary>
     /// Performs a single attempt of the snapshot export + apply
