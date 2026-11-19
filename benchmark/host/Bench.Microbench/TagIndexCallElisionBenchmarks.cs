@@ -24,9 +24,10 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// straight after it could only answer "registered".
 /// </para>
 /// <para>
-/// (3) <b>Replacing a key's tags overlaps its add and its removal.</b>
-/// <c>SetAsync</c> awaited the batched add before issuing the removal deletes.
-/// The two touch disjoint rows, so after validation they now go out together.
+/// (3) <b>The covered-tree marker rides in the first add's row batch.</b>
+/// The first add to a tree wrote its rows with <c>SetManyAsync</c> and then the
+/// marker with a separate <c>SetAsync</c>; the marker is now one more row in
+/// that batch.
 /// </para>
 /// <para>
 /// Run via <c>--suite tagindexcallelision</c>. No silo is needed.
@@ -42,19 +43,14 @@ public class TagIndexCallElisionBenchmarks
     [Params(8)]
     public int Writes { get; set; }
 
-    /// <summary>Tags a replacement removes (each costs a tag-major and a key-major delete).</summary>
-    [Params(2)]
-    public int RemovedTags { get; set; }
-
     /// <summary>Prints the per-lane hop counts once.</summary>
     [GlobalSetup]
     public void Setup()
     {
         Console.WriteLine(
-            $"[tagindexcallelision] {Writes} handle writes: per-handle caches={Writes * 4} hops, shared caches={Writes + 3} hops");
+            $"[tagindexcallelision] {Writes} handle writes: per-handle caches={Writes * 4} hops, shared caches={Writes + 2} hops");
         Console.WriteLine("[tagindexcallelision] eventual value+tags: with probe=3 hops, without=2 hops");
-        Console.WriteLine(
-            $"[tagindexcallelision] set with {RemovedTags} removed tags: serial critical path=4 hops, overlapped=3 hops");
+        Console.WriteLine("[tagindexcallelision] first add to a tree: separate marker=4 hops, marker in batch=3 hops");
     }
 
     /// <summary>Old: every handle pays existence, marker, schedule and the row write.</summary>
@@ -71,12 +67,12 @@ public class TagIndexCallElisionBenchmarks
         return hops;
     }
 
-    /// <summary>Shipped: the first handle pays them, the rest only write rows.</summary>
+    /// <summary>Shipped: the first handle pays them (marker in its batch), the rest only write rows.</summary>
     [Benchmark]
     [BenchmarkCategory("handles")]
     public async Task<int> Handles_SharedCaches()
     {
-        var hops = await FirstWriteToTree();
+        var hops = await FirstWriteToTreeMarkerFolded();
         for (var i = 1; i < Writes; i++)
         {
             await Hop();
@@ -107,32 +103,19 @@ public class TagIndexCallElisionBenchmarks
         return 2;
     }
 
-    /// <summary>Old: read, existence, batched add, then the removal deletes.</summary>
+    /// <summary>Old: existence probe, row batch, separate covered-marker write, reconcile schedule.</summary>
     [Benchmark]
-    [BenchmarkCategory("set")]
-    public async Task<int> Set_AddThenRemove()
-    {
-        await Hop();
-        await Hop();
-        await Hop();
-        await Removals();
-        return 3 + (2 * RemovedTags);
-    }
+    [BenchmarkCategory("firstadd")]
+    public Task<int> FirstAdd_SeparateMarker() => FirstWriteToTree();
 
-    /// <summary>Shipped: read, existence, then the batched add and the removal deletes together.</summary>
+    /// <summary>Shipped: existence probe, row batch carrying the marker, reconcile schedule.</summary>
     [Benchmark]
-    [BenchmarkCategory("set")]
-    public async Task<int> Set_AddAndRemoveOverlapped()
-    {
-        await Hop();
-        await Hop();
-        await Task.WhenAll(Hop(), Removals());
-        return 3 + (2 * RemovedTags);
-    }
+    [BenchmarkCategory("firstadd")]
+    public Task<int> FirstAdd_MarkerInBatch() => FirstWriteToTreeMarkerFolded();
 
     private static Task Hop() => SimulatedHop.Wait(HopMicroseconds);
 
-    // Existence probe, covered marker write, reconcile schedule, row write.
+    // Existence probe, row write, covered marker write, reconcile schedule.
     private static async Task<int> FirstWriteToTree()
     {
         await Hop();
@@ -142,16 +125,13 @@ public class TagIndexCallElisionBenchmarks
         return 4;
     }
 
-    // The removal deletes already overlap one another (a stateless-worker router).
-    private Task Removals()
+    // Existence probe, row write carrying the covered marker, reconcile schedule.
+    private static async Task<int> FirstWriteToTreeMarkerFolded()
     {
-        var deletes = new Task[2 * RemovedTags];
-        for (var i = 0; i < deletes.Length; i++)
-        {
-            deletes[i] = Hop();
-        }
-
-        return Task.WhenAll(deletes);
+        await Hop();
+        await Hop();
+        await Hop();
+        return 3;
     }
 
     /// <summary>A fixed-duration simulated grain hop that does not depend on timer resolution.</summary>

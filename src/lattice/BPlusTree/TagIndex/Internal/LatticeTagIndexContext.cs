@@ -805,7 +805,16 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
             // writes it could reject tag i after tags 0..i-1 had already been
             // durably written; hoisting it means an invalid tag rejects the
             // whole add before anything is written.
-            var rows = new List<KeyValuePair<string, byte[]>>(tags.Count * 2);
+            // The covered-tree marker is one more constant-presence row, so the
+            // first add to a tree this index has not yet marked carries it in
+            // the same batch instead of writing it in a separate round trip
+            // afterwards. The batch is non-atomic exactly as the separate write
+            // was ordered-but-independent: a marker that lands without its rows
+            // only names a tree the reconciler would scan anyway, and a marker
+            // that fails is retried by the next add, because the hint is
+            // recorded only once the batch has succeeded.
+            var needsMarker = !IsHinted(treeId);
+            var rows = new List<KeyValuePair<string, byte[]>>((tags.Count * 2) + (needsMarker ? 1 : 0));
             for (var i = 0; i < tags.Count; i++)
             {
                 ValidateTag(tags[i]);
@@ -816,7 +825,16 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
                 rows.Add(new KeyValuePair<string, byte[]>(RowKey(tag, treeId, key), Flag));
                 rows.Add(new KeyValuePair<string, byte[]>(KeyRowKey(treeId, key, tag), Flag));
             }
+            if (needsMarker)
+            {
+                rows.Add(new KeyValuePair<string, byte[]>(CoveredMarkerKey(treeId), Flag));
+            }
             await _indexTree.SetManyAsync(rows, cancellationToken).ConfigureAwait(false);
+            if (needsMarker)
+            {
+                await RecordHintedAsync(treeId).ConfigureAwait(false);
+            }
+            return;
         }
 
         await EnsureHintAsync(treeId, cancellationToken).ConfigureAwait(false);
@@ -888,34 +906,6 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
         var current = await GetTagsForKeyAsync(treeId, key, cancellationToken).ConfigureAwait(false);
 
         ReconcileTagSet(tags, current, out var toAdd, out var toRemove);
-
-        if (toAdd is not null && toRemove is not null)
-        {
-            // The add and the removal touch disjoint tags, so they write
-            // disjoint membership rows and need not run one after the other.
-            // Everything that could reject the add is checked first, so a
-            // rejection still lands before either side has written anything,
-            // exactly as when the add ran (and threw) ahead of the removal. The
-            // removed tags came from the stored rows, but they are validated
-            // too, as RemoveTagsForKeyAsync does. The operation was never
-            // atomic: a mid-flight fault leaves a partial reconcile either way,
-            // and a retry re-reads the stored tags and converges.
-            CheckAllowlist(treeId);
-            await EnsureExistsAsync(treeId, cancellationToken).ConfigureAwait(false);
-            for (var i = 0; i < toAdd.Count; i++)
-            {
-                ValidateTag(toAdd[i]);
-            }
-            for (var i = 0; i < toRemove.Count; i++)
-            {
-                ValidateTag(toRemove[i]);
-            }
-
-            await Task.WhenAll(
-                AddTagsForKeyAsync(treeId, key, toAdd, cancellationToken),
-                RemoveTagsForKeyAsync(treeId, key, toRemove, cancellationToken)).ConfigureAwait(false);
-            return;
-        }
 
         if (toAdd is not null)
         {
@@ -1718,13 +1708,22 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
         // The cache is only a write-dedup memo here (reads go to GetCoveredTrees-
         // Async, which is authoritative): a stale cache at worst issues a
         // redundant idempotent marker write, never a missed one.
-        var hinted = Volatile.Read(ref _caches.HintedTrees);
-        if (hinted is not null && hinted.ContainsKey(treeId))
+        if (IsHinted(treeId))
         {
             return;
         }
         await WriteRowAsync(CoveredMarkerKey(treeId), cancellationToken).ConfigureAwait(false);
-        hinted = Volatile.Read(ref _caches.HintedTrees);
+        await RecordHintedAsync(treeId).ConfigureAwait(false);
+    }
+
+    private bool IsHinted(string treeId) =>
+        Volatile.Read(ref _caches.HintedTrees) is { } hinted && hinted.ContainsKey(treeId);
+
+    // Records that this tree's covered marker has been written, then ensures the
+    // reconcile schedule, which the first marker write for a tree triggers.
+    private Task RecordHintedAsync(string treeId)
+    {
+        var hinted = Volatile.Read(ref _caches.HintedTrees);
         if (hinted is null)
         {
             hinted = Interlocked.CompareExchange(
@@ -1739,7 +1738,7 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
         // and best-effort - a tagging write must never fail because the
         // coordinator could not be scheduled (on-demand ReconcileAsync still
         // works, and the next covered-tree write retries).
-        await EnsureReconcileScheduleAsync().ConfigureAwait(false);
+        return EnsureReconcileScheduleAsync();
     }
 
     private async Task EnsureReconcileScheduleAsync()

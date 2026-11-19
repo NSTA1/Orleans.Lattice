@@ -15,7 +15,7 @@ public partial class LatticeTagIndexRoundTripBatchingTests
         return (counting, LatticeTagIndexContext.CreateMultiTree(grainFactory, IndexName, allowlist: null), coordinator);
     }
 
-    // ── Per-tree handles share the multi-tree index's caches ──
+    // -- Per-tree handles share the multi-tree index's caches --
 
     [Test]
     public async Task Multi_tree_handles_share_existence_and_marker_caches()
@@ -32,8 +32,8 @@ public partial class LatticeTagIndexRoundTripBatchingTests
             // handle re-probed existence, rewrote the covered marker and
             // re-ensured the reconcile schedule: three of each here.
             Assert.That(tree.TreeExistsAsyncCalls, Is.EqualTo(1));
-            Assert.That(tree.SetAsyncCalls, Is.EqualTo(1), "the covered marker is written once");
-            Assert.That(tree.SetManyAsyncCalls, Is.EqualTo(3));
+            Assert.That(tree.SetAsyncCalls, Is.Zero, "the covered marker rides in the first batch");
+            Assert.That(tree.SetManyWidths, Is.EqualTo(new[] { 3, 2, 2 }), "the covered marker is written once");
         });
         await coordinator.Received(1).EnsureScheduleAsync();
     }
@@ -51,7 +51,7 @@ public partial class LatticeTagIndexRoundTripBatchingTests
         Assert.Multiple(() =>
         {
             Assert.That(tree.TreeExistsAsyncCalls, Is.EqualTo(2));
-            Assert.That(tree.SetAsyncCalls, Is.EqualTo(2), "one covered marker per distinct tree");
+            Assert.That(tree.SetManyWidths, Is.EqualTo(new[] { 3, 3, 2, 2 }), "one covered marker per distinct tree");
         });
     }
 
@@ -71,7 +71,7 @@ public partial class LatticeTagIndexRoundTripBatchingTests
         Assert.That(tree.TreeExistsAsyncCalls, Is.EqualTo(2), "a refused tree must be probed again");
     }
 
-    // ── An eventual value+tags write needs no existence probe ──
+    // -- An eventual value+tags write needs no existence probe --
 
     [Test]
     public async Task Eventual_value_with_tags_write_skips_the_existence_probe()
@@ -109,35 +109,48 @@ public partial class LatticeTagIndexRoundTripBatchingTests
         Assert.That(tree.TreeExistsAsyncCalls, Is.EqualTo(1));
     }
 
-    // ── SetAsync overlaps its add and its removal ──
+    // -- The covered marker rides in the first add's batch --
 
     [Test]
-    public async Task Set_issues_its_add_and_its_removal_concurrently()
+    public async Task First_add_folds_the_covered_marker_into_its_batch()
     {
         var (tree, index) = Create();
-        await index.Key("k1").AddAsync(["red", "green"]);
 
-        // The add's batched write does not complete until a removal delete has
-        // arrived. Run one after the other, the add would wait forever for a
-        // removal that is only issued once it finishes.
-        var deleteArrived = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        tree.DeleteGate = () =>
+        await index.Key("k1").AddAsync(["red"]);
+        await index.Key("k2").AddAsync(["red"]);
+
+        Assert.Multiple(() =>
         {
-            deleteArrived.TrySetResult();
-            return Task.CompletedTask;
-        };
-        tree.SetManyGate = () => deleteArrived.Task;
-
-        var set = index.Key("k1").SetAsync(["green", "blue"]);
-        var finished = await Task.WhenAny(set, Task.Delay(TimeSpan.FromSeconds(30)));
-
-        Assert.That(finished, Is.SameAs(set), "the add and the removal did not overlap");
-        await set;
-        tree.SetManyGate = null;
-        tree.DeleteGate = null;
-
-        Assert.That(await index.Key("k1").GetAsync(), Is.EquivalentTo(new[] { "green", "blue" }));
+            // The marker used to be a separate SetAsync after the batch.
+            Assert.That(tree.SetAsyncCalls, Is.Zero);
+            Assert.That(tree.SetManyWidths, Is.EqualTo(new[] { 3, 2 }));
+            Assert.That(tree.Data.Keys, Has.Some.StartsWith("\0covered\0"));
+        });
     }
+
+    [Test]
+    public async Task Failed_first_add_leaves_the_marker_to_be_written_by_the_next_add()
+    {
+        var (tree, index, coordinator) = CreateMultiTree();
+        tree.FailSetMany = new InvalidOperationException("batch failed");
+
+        Assert.That(
+            async () => await index.Tree(TreeId).Key("k1").AddAsync(["red"]),
+            Throws.InvalidOperationException.With.Message.EqualTo("batch failed"));
+        await coordinator.DidNotReceive().EnsureScheduleAsync();
+
+        tree.FailSetMany = null;
+        await index.Tree(TreeId).Key("k1").AddAsync(["red"]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(tree.SetManyWidths, Is.EqualTo(new[] { 3, 3 }), "the retry still carries the marker");
+            Assert.That(tree.Data.Keys, Has.Member("\0covered\0" + TreeId));
+        });
+        await coordinator.Received(1).EnsureScheduleAsync();
+    }
+
+    // -- SetAsync still validates the add before removing anything --
 
     [Test]
     public async Task Set_rejects_an_invalid_new_tag_before_removing_any_row()
