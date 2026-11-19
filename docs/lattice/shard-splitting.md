@@ -149,7 +149,10 @@ tree resolves to keeps a row of its own that no router reads. A split or fold
 keyed by a resize, restore or remediation copy's own id while its owner routes
 through it is refused before its window opens, and the registry refuses its
 slot diff, and the hot-shard monitor and the healing orchestrator a copy's own
-router arms stand down. Before issue #6083 was fixed, automatic healing keyed
+router arms stand down. The stand-down is recorded with each of them, so the
+copy's next router activation re-checks with a single pass instead of
+re-registering their reminders (issue #6097). Before issue #6083 was fixed,
+automatic healing keyed
 its folds by the copy, so a fold of an aliased tree retired its donor while the
 logical map still routed the folded slots there. A healing sweep, or a router
 whose refreshed map is the one a shard just refused, now repairs such a tree by

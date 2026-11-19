@@ -185,8 +185,8 @@ public class ViewMaintainerDecommissionTests
     [Test]
     public async Task Decommission_also_deletes_a_generation_awaiting_reclamation()
     {
-        // A generation awaiting reclamation still holds shard state - reclamation
-        // only clears its keys - so teardown must delete it too.
+        // A generation awaiting reclamation still holds shard state until the
+        // reclaim sweep deletes it, so teardown must delete it too.
         var h = Create(activeGeneration: 1, hasPendingReclaim: true, pendingReclaimGeneration: 5);
 
         await h.Grain.DecommissionAsync();

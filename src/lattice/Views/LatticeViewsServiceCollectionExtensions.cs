@@ -76,6 +76,7 @@ public static class LatticeViewsServiceCollectionExtensions
             ServiceDescriptor.Singleton<IValidateOptions<LatticeViewOptions>, LatticeViewOptionsValidator>());
 
         builder.Services.TryAddSingleton<HistoryRowCodec>();
+        builder.Services.TryAddSingleton<ViewGenerationReclaimPacer>();
         builder.Services.TryAddSingleton<PredicateRuntimeViewProjectionCodec>();
         builder.Services.TryAddSingleton(
             static sp => new HistoryLatticeViewProjection(sp.GetRequiredService<HistoryRowCodec>()));

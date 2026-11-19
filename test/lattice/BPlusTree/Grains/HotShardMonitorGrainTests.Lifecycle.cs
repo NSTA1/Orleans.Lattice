@@ -45,7 +45,8 @@ public partial class HotShardMonitorGrainTests
         int physicalShardCount = 2,
         int virtualShardCount = 16,
         LatticeOptions? options = null,
-        FakePersistentState<HotShardMonitorState>? state = null)
+        FakePersistentState<HotShardMonitorState>? state = null,
+        Func<string, TreeRegistryEntry, TreeRegistryEntry>? shapeEntry = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("monitor", TreeId));
@@ -87,14 +88,17 @@ public partial class HotShardMonitorGrainTests
         var registry = Substitute.For<ILatticeRegistry>();
         registry.ResolveAsync(TreeId).Returns(TreeId);
         registry.GetShardMapAsync(TreeId).Returns(ShardMap.CreateDefault(virtualShardCount, physicalShardCount));
-        registry.GetEntryAsync(Arg.Any<string>()).Returns(Task.FromResult<TreeRegistryEntry?>(
-            new TreeRegistryEntry
+        registry.GetEntryAsync(Arg.Any<string>()).Returns(ci =>
+        {
+            var row = new TreeRegistryEntry
             {
                 MaxLeafKeys = 128,
                 MaxInternalChildren = 128,
                 ShardCount = physicalShardCount,
                 ShardMap = ShardMap.CreateDefault(virtualShardCount, physicalShardCount),
-            }));
+            };
+            return Task.FromResult<TreeRegistryEntry?>(shapeEntry is null ? row : shapeEntry((string)ci[0], row));
+        });
         grainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).Returns(registry);
         var optionsResolver = TestOptionsResolver.ForFactory(grainFactory, options);
 

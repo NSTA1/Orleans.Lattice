@@ -85,6 +85,21 @@ internal sealed class ShardHealingOrchestratorGrain(
     /// </summary>
     private long? _aliasRoutingSettledVersion;
 
+    /// <summary>
+    /// How long an activation that stood down for an alias target answers arming
+    /// calls without re-checking (issue #6097). The tree's routers are stateless
+    /// workers whose every new activation arms this orchestrator, so without the
+    /// latch each one would cost a sweep.
+    /// </summary>
+    internal static readonly TimeSpan AliasStandDownRecheckInterval = TimeSpan.FromMinutes(15);
+
+    /// <summary>
+    /// UTC instant before which an arming call on a stood-down alias target
+    /// returns at once. <see cref="DateTime.MinValue"/> on a fresh activation, so
+    /// its first arming call re-checks.
+    /// </summary>
+    private DateTime _aliasStandDownRecheckAfterUtc = DateTime.MinValue;
+
     /// <inheritdoc />
     public async Task EnsureRunningAsync()
     {
@@ -102,8 +117,14 @@ internal sealed class ShardHealingOrchestratorGrain(
         // property and so introduces no turn boundary; a call admitted while a
         // healing sweep holds the turn must observe `_running == true` and return
         // at the guard. Introducing an await here would admit a second caller
-        // into the body.
+        // into the body. The alias stand-down check below is synchronous for the
+        // same reason.
         if (!Options.ShardHealingEnabled) return;
+
+        // A copy its owner aliases stays stood down (issue #6097): until the
+        // recheck latch lapses an arming call does nothing at all.
+        var standingDown = state.State.AliasStandDownOwner is not null;
+        if (standingDown && TimeProvider.GetUtcNow().UtcDateTime < _aliasStandDownRecheckAfterUtc) return;
 
         _running = true;
 
@@ -117,6 +138,11 @@ internal sealed class ShardHealingOrchestratorGrain(
         // The keepalive only re-activates the orchestrator after collection;
         // the timer is the work, so it must not depend on the keepalive.
         if (_timer is null) StartTimer();
+
+        // A stood-down alias target only re-checks: its next sweep either stands
+        // down again or clears the record, and only then is the keepalive
+        // registered (see OnTimerTickAsync).
+        if (standingDown) return;
 
         try
         {
@@ -165,6 +191,85 @@ internal sealed class ShardHealingOrchestratorGrain(
         this.DeactivateOnIdle();
     }
 
+    /// <summary>
+    /// Stands down for a tree its <paramref name="owner"/> aliases (issues #6083,
+    /// #6097). Unlike <see cref="StopAsync"/> the stand-down is recorded durably
+    /// and the activation is kept, so neither a later arming call on this
+    /// activation nor a fresh activation re-registers the keepalive: each
+    /// re-checks with one sweep at most once per
+    /// <see cref="AliasStandDownRecheckInterval"/>, and the reminder is only
+    /// touched when one may exist.
+    /// </summary>
+    private async Task StandDownForAliasOwnerAsync(string owner)
+    {
+        _timer?.Dispose();
+        _timer = null;
+        _running = false;
+        _aliasStandDownRecheckAfterUtc = TimeProvider.GetUtcNow().UtcDateTime + AliasStandDownRecheckInterval;
+
+        var firstStandDown = !string.Equals(state.State.AliasStandDownOwner, owner, StringComparison.Ordinal);
+        var reminderMayExist = firstStandDown || _keepaliveRegistered;
+        _keepaliveRegistered = false;
+
+        if (firstStandDown)
+        {
+            logger.LogInformation(
+                "Standing the shard-healing orchestrator for tree {TreeId} down: tree {Owner} routes through it, so its shards are healed through that tree.",
+                TreeId, owner);
+
+            var previous = state.State.AliasStandDownOwner;
+            state.State.AliasStandDownOwner = owner;
+            try
+            {
+                await state.WriteStateAsync();
+            }
+            catch (Exception ex)
+            {
+                // Reverted so the next stand-down retries the write; this
+                // activation's latch still holds meanwhile.
+                state.State.AliasStandDownOwner = previous;
+                logger.LogWarning(ex, "Failed to record the alias stand-down of the shard-healing orchestrator for tree {TreeId}", TreeId);
+            }
+        }
+
+        if (!reminderMayExist) return;
+
+        try
+        {
+            var reminder = await reminderRegistry.GetReminder(context.GrainId, KeepaliveReminderName);
+            if (reminder is not null)
+                await reminderRegistry.UnregisterReminder(context.GrainId, reminder);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(ex, "Failed to unregister shard-healing reminder for tree {TreeId}", TreeId);
+        }
+    }
+
+    /// <summary>
+    /// Clears the alias stand-down once the tree is no longer an alias target,
+    /// so the sweep that observed it registers the keepalive again.
+    /// </summary>
+    private async Task ClearAliasStandDownAsync()
+    {
+        var previous = state.State.AliasStandDownOwner;
+        state.State.AliasStandDownOwner = null;
+        try
+        {
+            await state.WriteStateAsync();
+        }
+        catch
+        {
+            state.State.AliasStandDownOwner = previous;
+            throw;
+        }
+
+        _aliasStandDownRecheckAfterUtc = DateTime.MinValue;
+        logger.LogInformation(
+            "Tree {TreeId} is no longer routed through by tree {Owner}; its shard-healing orchestrator resumes.",
+            TreeId, previous);
+    }
+
     /// <inheritdoc />
     public async Task ReceiveReminder(string reminderName, TickStatus status)
     {
@@ -211,8 +316,10 @@ internal sealed class ShardHealingOrchestratorGrain(
         }
 
         // After the pass, not before it: a registration inside the reminder
-        // service's startup window can wait ~20s, and the sweep must not.
-        if (_keepaliveRegistered) return;
+        // service's startup window can wait ~20s, and the sweep must not. A pass
+        // that stood the orchestrator down, or found the tree still an alias
+        // target, must not leave a keepalive behind (issue #6097).
+        if (_keepaliveRegistered || !_running || state.State.AliasStandDownOwner is not null) return;
         try
         {
             await RegisterKeepaliveAsync();
@@ -280,15 +387,17 @@ internal sealed class ShardHealingOrchestratorGrain(
         // A copy another tree aliases is healed through that tree, whose row is
         // the routing map. This orchestrator is armed when a restore or resize
         // activates the copy's own router, and folding under the copy's id would
-        // commit onto a row nothing routes by (issue #6083), so it stands down.
+        // commit onto a row nothing routes by (issue #6083), so it stands down -
+        // durably, so the copy's next router activation does not re-arm it
+        // (issue #6097).
         if (await ShardMapCommitFence.IsAliasTargetAsync(grainFactory.GetLatticeRegistry(), entry, TreeId))
         {
-            logger.LogInformation(
-                "Stopping the shard-healing orchestrator for tree {TreeId}: tree {Owner} routes through it, so its shards are healed through that tree.",
-                TreeId, entry!.DerivedFrom);
-            await StopAsync();
+            await StandDownForAliasOwnerAsync(entry!.DerivedFrom!);
             return;
         }
+
+        if (state.State.AliasStandDownOwner is not null)
+            await ClearAliasStandDownAsync();
 
         // Repair routing left behind by a fold that, before #6083 was fixed,
         // committed onto the alias target's row instead of this one. Settled once

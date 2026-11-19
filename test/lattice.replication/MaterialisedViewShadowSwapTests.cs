@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Views;
 
 namespace Orleans.Lattice.Replication.Tests;
@@ -132,14 +133,11 @@ public class MaterialisedViewShadowSwapTests
         Assert.That(await latticeView.CountAsync(), Is.EqualTo(n));
     }
 
-    // (b) The swapped-out generation tree is reclaimed after the post-swap grace.
+    // (b) The swapped-out generation tree is deleted - not merely emptied - after
+    // the post-swap grace, so it stops carrying per-tree background work (#6097).
     [Test]
-    public async Task Rebuild_reclaims_the_old_generation_tree()
+    public async Task Rebuild_deletes_the_old_generation_tree()
     {
-        // White-box reads of a view's backing tree run under an authorised
-        // ViewReadContext scope (as the maintainer and ILatticeView handle do);
-        // the public read-guard otherwise rejects direct view-tree reads.
-        using var viewReadScope = ViewReadContext.BeginScope();
         const string tree = "ss-reclaim-src";
         const string view = "ss-reclaim-view";
         var source = _fixture.Cluster.Client.GetGrain<ILattice>(tree);
@@ -150,29 +148,35 @@ public class MaterialisedViewShadowSwapTests
         await source.SetAsync("b", Person(40, "b"));
         await DrainToZeroAsync(view);
 
+        // Two rebuilds within one grace: both superseded generations are retired.
         var oldTreeId = await maintainer.GetActiveTreeIdAsync();
-        Assert.That(await ViewGrain(oldTreeId).CountAsync(), Is.EqualTo(2));
-
         await latticeView.RebuildAsync();
-
+        var middleTreeId = await maintainer.GetActiveTreeIdAsync();
+        await latticeView.RebuildAsync();
         var newTreeId = await maintainer.GetActiveTreeIdAsync();
-        Assert.That(newTreeId, Is.Not.EqualTo(oldTreeId), "Active generation must advance after a rebuild.");
+        Assert.That(new[] { oldTreeId, middleTreeId, newTreeId }, Is.Unique, "Active generation must advance after a rebuild.");
 
         // Reclaim runs on the drain cadence once the grace (200 ms in the fixture)
-        // elapses; poll a few drains to let it fire.
-        for (var attempt = 0; attempt < 20; attempt++)
+        // elapses, one paced deletion at a time; poll drains to let it fire.
+        var oldDeletion = _fixture.Cluster.Client.GetGrain<ITreeDeletionGrain>(oldTreeId);
+        var middleDeletion = _fixture.Cluster.Client.GetGrain<ITreeDeletionGrain>(middleTreeId);
+        for (var attempt = 0; attempt < 300; attempt++)
         {
-            await Task.Delay(50);
             await maintainer.DrainAsync();
-            if (await ViewGrain(oldTreeId).CountAsync() == 0)
+            if (await oldDeletion.HoldsDeletionAsync() && await middleDeletion.HoldsDeletionAsync())
             {
                 break;
             }
+
+            await Task.Delay(100);
         }
 
         await Assert.MultipleAsync(async () =>
         {
-            Assert.That(await ViewGrain(oldTreeId).CountAsync(), Is.EqualTo(0), "Old generation tree was not reclaimed.");
+            Assert.That(await oldDeletion.HoldsDeletionAsync(), Is.True, "Oldest generation tree was not deleted.");
+            Assert.That(await middleDeletion.HoldsDeletionAsync(), Is.True, "Superseded generation tree was not deleted.");
+            Assert.That(await _fixture.Cluster.Client.GetGrain<ITreeDeletionGrain>(newTreeId).HoldsDeletionAsync(), Is.False,
+                "The active generation must never be deleted.");
             Assert.That(await latticeView.CountAsync(), Is.EqualTo(2), "Active view must still serve every entry.");
         });
     }

@@ -2145,7 +2145,7 @@ siloBuilder.ConfigureLatticeView("adults", options =>
 | `MaxStagedTransactions` | 1024 | Maximum in-flight atomic-write transactions buffered before the backstop forces a rebuild. Must be at least 1. |
 | `MaxStagedBytes` | 64 MiB | Maximum buffered prepared-entry payload before the backstop forces a rebuild. Must be at least 1. |
 | `ReadHandleCacheTtl` | 1 s | How long an `ILatticeView` handle caches the resolved live view tree id. Bounds the post-swap read-staleness window. A handle that itself rebuilt, reconciled or waited on a read-your-writes barrier drops its cached id, so its next read re-resolves. Must be greater than zero. |
-| `OldGenerationReclaimGrace` | 5 s | How long a swapped-out view tree is retained before reclamation. Must exceed `ReadHandleCacheTtl`. |
+| `OldGenerationReclaimGrace` | 5 s | How long a swapped-out view tree is retained before it is deleted. Must exceed `ReadHandleCacheTtl`. |
 | `CrossTreeReadinessTimeout` | 5 s | Cross-tree atomic visibility only: how long a completed cross-tree batch waits for every present participant view before degrading to per-tree atomicity. Must be greater than zero. |
 | `ReplicationMode` | `DeriveLocally` | How the view tree is made available across clusters. `ShipView` requires the replication package. |
 | `ShipViewProducerClusterId` | `null` | Required only when `ShipView` replicates both source and view trees. The stable, case-sensitive replication cluster id of the single producer. When set it must be non-empty and `ReplicationMode` must be `ShipView` (enforced by the options validator); the replication topology guards also reject a value on a view whose source tree is not replicated. |

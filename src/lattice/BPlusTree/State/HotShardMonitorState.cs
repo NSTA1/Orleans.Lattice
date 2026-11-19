@@ -22,4 +22,13 @@ internal sealed class HotShardMonitorState
     /// consistently across silo restarts.
     /// </summary>
     [Id(0)] public DateTime? ActivationUtc { get; set; }
+
+    /// <summary>
+    /// The owner tree this tree was last found to be an alias target of, or
+    /// <see langword="null"/> while it is not one (issue #6097). While set, an
+    /// arming call registers no keepalive: the monitor only runs one sampling
+    /// pass to re-check, so a copy its owner aliases stays stood down across
+    /// reactivations instead of re-registering its reminder every minute.
+    /// </summary>
+    [Id(1)] public string? AliasStandDownOwner { get; set; }
 }
