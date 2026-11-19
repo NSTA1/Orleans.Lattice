@@ -651,7 +651,7 @@ reason as the one above.
   activation's checkpoint and the GC trims past it. Production's response is the
   existing #3477 path: the replay throws `LeafProjectionStaleException`, the warm rescue
   (`BPlusLeafGrain.TryRescueWarmStaleLeafAsync`) declines, and the partition is latched
-  stale (`BPlusLeafGrain.LatchProjectionStaleDrive`). The latch
+  stale (`BPlusLeafGrain.LatchProjectionStaleDriveAsync`). The latch
   (`BPlusLeafGrain.IsPartitionStaleLatched`) refuses checkpoint hints and the live advance
   until deactivation, and the reactivation rehydrates from the newer snapshot. No
   progress is owed meanwhile. The path is driven end to end, with the real WAL store, pin
@@ -668,7 +668,7 @@ reason as the one above.
   rehydrating from a newer snapshot is pinned by
   `BPlusLeafGrainTests.Activation_rehydrates_cache_from_snapshot_when_offset_exceeds_checkpoint`
   and `LeafSnapshotRehydrateIntegrationTests.Snapshot_capture_persists_blob_and_rehydrate_serves_keys_after_deactivation`.
-  Production symbols: `WalMaterialiserPinGrain`, `LeafProjectionStaleException`, `BPlusLeafGrain.TryRescueWarmStaleLeafAsync`, `BPlusLeafGrain.LatchProjectionStaleDrive`, `BPlusLeafGrain.IsPartitionStaleLatched`.
+  Production symbols: `WalMaterialiserPinGrain`, `LeafProjectionStaleException`, `BPlusLeafGrain.TryRescueWarmStaleLeafAsync`, `BPlusLeafGrain.LatchProjectionStaleDriveAsync`, `BPlusLeafGrain.IsPartitionStaleLatched`.
 - **CI does not check a purge's unclaimed survivor with both a hand-off window and a 10.2.0 silo.**
   When the purge finds the born activation unclaimed, it may claim afterwards as the
   re-created incarnation's. That slice with every other environment of `Recreate` was

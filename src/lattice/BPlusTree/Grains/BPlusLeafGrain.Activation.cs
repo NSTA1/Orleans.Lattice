@@ -2504,7 +2504,7 @@ internal sealed partial class BPlusLeafGrain
     /// <see cref="LeafProjectionStaleException"/> on this activation, or
     /// <c>-1</c> when unknown. Stamped immediately before each stale throw in
     /// the replay core and reset at the start of each starvation drive, so
-    /// <see cref="LatchProjectionStaleDrive"/> can record which partition the
+    /// <see cref="LatchProjectionStaleDriveAsync"/> can record which partition the
     /// verdict is about (issue #3477). The exception carries no partition of its
     /// own, and adding one would widen the public surface.
     /// </summary>
@@ -2587,7 +2587,7 @@ internal sealed partial class BPlusLeafGrain
     /// fault after this point, so this line is what names the leaf and the
     /// remedy.
     /// </summary>
-    private void LatchProjectionStaleDrive(int partitionCount, LeafProjectionStaleException fault)
+    private async Task LatchProjectionStaleDriveAsync(int partitionCount, LeafProjectionStaleException fault)
     {
         var signature = ComputePersistedCheckpointSignature(partitionCount);
         if (_projectionStaleDriveLatch is { } existing
@@ -2603,11 +2603,137 @@ internal sealed partial class BPlusLeafGrain
             stalePartition >= 0 ? GetPersistedCheckpointForPartition(stalePartition) : 0L,
             partitionCount,
             fault);
+
+        // Issue #6058. A retired physical tree - superseded by a resize, or
+        // discarded by an undone one - has its WAL released on purpose, so a stale
+        // verdict on one of its leaves is the expected end state, not data loss.
+        // The latch and the rethrown fault are unchanged; only the operator signal
+        // is downgraded, and only on positive evidence that the tree is retired.
+        var retention = await ProbePhysicalTreeRetentionAsync();
+        if (retention != PhysicalTreeRetention.Live)
+        {
+            ResolveLogger()?.LogInformation(
+                "Leaf {Leaf} on tree {Tree} cannot advance its projection checkpoint because the WAL was trimmed past it, but the physical tree is {Retention}: its WAL was released when the tree was retired, so this is expected and is not data loss. No action is needed.",
+                context.GrainId,
+                state.State.TreeId,
+                retention);
+            return;
+        }
+
         ResolveLogger()?.LogError(
             fault,
             "Leaf {Leaf} on tree {Tree} cannot advance its durable projection checkpoint: the WAL has been trimmed past an offset its persisted checkpoint still needs and no snapshot covers the gap. Replaying that checkpoint cannot converge, so further starvation drives on this activation are suppressed until a persisted checkpoint changes. This leaf keeps its WAL retention pin and nothing automatic will repair it. The live activation may hold the only copy of writes in the trimmed range: capture a logical backup or export of the tree BEFORE this activation is recycled or the silo restarts, then rebuild or restore the tree. See docs/lattice/projection-rebuild.md.",
             context.GrainId,
             state.State.TreeId);
+    }
+
+    /// <summary>
+    /// Whether <see cref="PhysicalTreeRetention.Discarded"/> has been observed
+    /// for this leaf's physical tree. Only a discard is cached: an undone
+    /// resize's destination is never made live again, whereas a
+    /// <see cref="PhysicalTreeRetention.Deleted"/> tree can still be recovered,
+    /// so that verdict is re-read on every probe (issue #6058).
+    /// </summary>
+    private bool _physicalTreeDiscarded;
+
+    /// <summary>
+    /// How long <see cref="ProbePhysicalTreeRetentionAsync"/> waits for the tree
+    /// deletion grain before failing open. The probe can run while the drive
+    /// still holds a replay permit, so it is bounded well inside the response
+    /// timeout.
+    /// </summary>
+    private static readonly TimeSpan PhysicalRetentionProbeBudget = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Asks the tree deletion grain whether this leaf's physical tree is still
+    /// live, reusing the liveness verdict the WAL GC sweep already consults
+    /// before driving a leaf (<see cref="ITreeDeletionGrain.GetPhysicalRetentionAsync"/>).
+    /// A discard is cached for the activation (<see cref="_physicalTreeDiscarded"/>).
+    /// The probe is one in-memory, always-interleaved read on the deletion grain,
+    /// and runs only where a drive or a latch is already about to happen, never
+    /// on a read or write path. It fails open to
+    /// <see cref="PhysicalTreeRetention.Live"/> on any fault, as the sweep does,
+    /// so an unreachable deletion grain can only leave behaviour as it was
+    /// before this check existed, never suppress a drive or an alarm on a live
+    /// tree.
+    /// </summary>
+    private async Task<PhysicalTreeRetention> ProbePhysicalTreeRetentionAsync()
+    {
+        if (_physicalTreeDiscarded)
+        {
+            return PhysicalTreeRetention.Discarded;
+        }
+
+        var treeId = state.State.TreeId;
+        if (string.IsNullOrEmpty(treeId))
+        {
+            return PhysicalTreeRetention.Live;
+        }
+
+        try
+        {
+            var probe = grainFactory.GetGrain<ITreeDeletionGrain>(treeId).GetPhysicalRetentionAsync();
+            PhysicalTreeRetention retention;
+            if (probe.IsCompleted)
+            {
+                retention = await probe;
+            }
+            else
+            {
+                try
+                {
+                    retention = await probe.WaitAsync(PhysicalRetentionProbeBudget);
+                }
+                finally
+                {
+                    if (!probe.IsCompleted)
+                    {
+                        // Abandoned on the budget: observe its eventual fault so it
+                        // is never reported as an unobserved task exception.
+                        _ = probe.ContinueWith(
+                            static t => _ = t.Exception,
+                            CancellationToken.None,
+                            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                            TaskScheduler.Default);
+                    }
+                }
+            }
+
+            if (retention == PhysicalTreeRetention.Discarded)
+            {
+                _physicalTreeDiscarded = true;
+            }
+
+            return retention;
+        }
+        catch (Exception ex)
+        {
+            ResolveLogger()?.LogDebug(
+                ex,
+                "Could not read the physical retention of tree {Tree} for leaf {Leaf}; treating it as live.",
+                treeId,
+                context.GrainId);
+            return PhysicalTreeRetention.Live;
+        }
+    }
+
+    /// <summary>
+    /// Stands a leaf of a retired physical tree down (issue #6058): stops the
+    /// coverage-lag timer, so the leaf stops driving a replay against a WAL its
+    /// tree's retirement released, and asks to be deactivated, because nothing
+    /// can route to a retired tree and its leaf has no reason to stay resident.
+    /// </summary>
+    private void StandDownRetiredTreeLeaf()
+    {
+        System.Threading.Interlocked.Exchange(ref _coverageLagTimer, null)?.Dispose();
+        try
+        {
+            this.DeactivateOnIdle();
+        }
+        catch (Exception ex)
+        {
+            ResolveLogger()?.LogDebug(ex, "Could not request deactivation of retired-tree leaf {Leaf}.", context.GrainId);
+        }
     }
 
     /// <summary>
@@ -2618,7 +2744,7 @@ internal sealed partial class BPlusLeafGrain
     /// A stale projection (issue #3450). The WAL GC's blocked-leaf sweep still
     /// receives the fault from <see cref="DriveStarvedCheckpointAsync()"/> and
     /// classifies it as it always has. The fault has already been logged once by
-    /// <see cref="LatchProjectionStaleDrive"/>. A leaf already latched is not
+    /// <see cref="LatchProjectionStaleDriveAsync"/>. A leaf already latched is not
     /// driven at all, so a stale leaf costs a timer tick nothing beyond the
     /// signature comparison.
     /// </para>
@@ -2655,6 +2781,12 @@ internal sealed partial class BPlusLeafGrain
             {
                 _timerDriveDeferrals--;
                 ObserveDriverDecline(LatticeMetrics.DriverDeclineRecheckDriveDeferred);
+                return;
+            }
+
+            if (await ProbePhysicalTreeRetentionAsync() != PhysicalTreeRetention.Live)
+            {
+                StandDownRetiredTreeLeaf();
                 return;
             }
 
@@ -3066,7 +3198,7 @@ internal sealed partial class BPlusLeafGrain
         }
         catch (LeafProjectionStaleException ex)
         {
-            LatchProjectionStaleDrive(partitionCount, ex);
+            await LatchProjectionStaleDriveAsync(partitionCount, ex);
             throw;
         }
         catch (Exception ex) when (IsReadMemoryPressure(ex))
