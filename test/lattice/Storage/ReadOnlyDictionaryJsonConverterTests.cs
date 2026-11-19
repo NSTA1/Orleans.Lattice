@@ -14,7 +14,7 @@ public sealed class ReadOnlyDictionaryJsonConverterTests
     private SiloJsonGrainStorage storage = null!;
 
     [SetUp]
-    public void SetUp() => this.storage = new SiloJsonGrainStorage();
+    public void SetUp() => this.storage = new SiloJsonGrainStorage(typeof(Holder));
 
     [TearDown]
     public void TearDown() => this.storage.Dispose();
@@ -59,6 +59,16 @@ public sealed class ReadOnlyDictionaryJsonConverterTests
         var reloaded = this.storage.Json.Deserialize<Holder>(payload);
 
         Assert.That(reloaded.ImmutableBehindInterface, Is.SameAs(reloaded.BehindInterface));
+    }
+
+    [Test]
+    public void An_unregistered_holder_is_rejected_by_the_type_allow_list()
+    {
+        using var unregisteredStorage = new SiloJsonGrainStorage();
+        var payload = unregisteredStorage.Json.Serialize(new Holder());
+
+        Assert.Throws<Newtonsoft.Json.JsonSerializationException>(
+            () => unregisteredStorage.Json.Deserialize<Holder>(payload));
     }
 
     [Test]

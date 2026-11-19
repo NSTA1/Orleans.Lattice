@@ -29,6 +29,13 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Host;
 /// <c>RepoContextActivationCensusInstrumentNameTests</c> pins the assumption that
 /// Orleans still publishes it.
 /// </para>
+/// <para>
+/// <b>A sample is the sum of one observation.</b> From Orleans 10.4 the gauge reports
+/// one measurement per grain type (tagged <c>grain_type</c>) rather than a single
+/// silo-wide value, so each sample sums every measurement a single observation
+/// yields. A published instrument that yields no measurements - a silo with no grain
+/// type activated yet - is a residency of zero, not an unreadable one.
+/// </para>
 /// </remarks>
 public sealed class RepoContextActivationCensus : IDisposable
 {
@@ -40,7 +47,8 @@ public sealed class RepoContextActivationCensus : IDisposable
 
     private readonly MeterListener _listener;
     private readonly Lock _gate = new();
-    private long? _latest;
+    private long _sum;
+    private bool _instrumentEnabled;
     private bool _disposed;
 
     /// <summary>Initializes the census and begins listening.</summary>
@@ -62,6 +70,7 @@ public sealed class RepoContextActivationCensus : IDisposable
                 if (string.Equals(instrument.Name, name, StringComparison.Ordinal))
                 {
                     listener.EnableMeasurementEvents(instrument);
+                    Volatile.Write(ref _instrumentEnabled, true);
                 }
             },
         };
@@ -90,20 +99,29 @@ public sealed class RepoContextActivationCensus : IDisposable
             return null;
         }
 
-        try
-        {
-            _listener.RecordObservableInstruments();
-        }
-        catch (Exception)
-        {
-            // Deliberately broad: the callback is another component's code and the
-            // caller is either shutting down or polling for diagnostics.
-            return null;
-        }
-
+        // Held across the observation so concurrent samples cannot interleave their
+        // sums. The observable callbacks run synchronously on this thread and Lock
+        // is re-entrant, so Record taking the same gate does not deadlock.
         lock (_gate)
         {
-            return _latest is { } latest && latest >= 0 && latest <= int.MaxValue ? (int)latest : null;
+            if (!Volatile.Read(ref _instrumentEnabled))
+            {
+                return null;
+            }
+
+            _sum = 0;
+            try
+            {
+                _listener.RecordObservableInstruments();
+            }
+            catch (Exception)
+            {
+                // Deliberately broad: the callback is another component's code and the
+                // caller is either shutting down or polling for diagnostics.
+                return null;
+            }
+
+            return _sum is >= 0 and <= int.MaxValue ? (int)_sum : null;
         }
     }
 
@@ -123,7 +141,7 @@ public sealed class RepoContextActivationCensus : IDisposable
     {
         lock (_gate)
         {
-            _latest = measurement;
+            _sum += measurement;
         }
     }
 }

@@ -28,9 +28,11 @@ internal interface IReplicationTreeFrontierGrain : IGrainWithStringKey
     /// </summary>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <param name="preserveBootstrapFloor">Whether this is a bootstrap shadow cutover whose destination retains the floored contents.</param>
+#pragma warning disable ORLEANS0113 // Token position and [Id] pin the pre-10.4 wire format.
     Task OnContentsReplacingAsync(
         CancellationToken cancellationToken = default,
-        bool preserveBootstrapFloor = false);
+        [Id(1)] bool preserveBootstrapFloor = false);
+#pragma warning restore ORLEANS0113
 
     /// <summary>
     /// The tree registry is about to persist <paramref name="nextLineage"/> as

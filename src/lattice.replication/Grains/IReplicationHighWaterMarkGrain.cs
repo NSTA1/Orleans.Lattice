@@ -188,9 +188,11 @@ internal interface IReplicationHighWaterMarkGrain : IGrainWithStringKey
     /// </summary>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <param name="preserveBootstrapFloor">Whether the replacement retains the imported contents vouched for by the floor.</param>
+#pragma warning disable ORLEANS0113 // Token position and [Id] pin the pre-10.4 wire format.
     Task ResetAppliedIdentitiesAsync(
         CancellationToken cancellationToken = default,
-        bool preserveBootstrapFloor = false);
+        [Id(1)] bool preserveBootstrapFloor = false);
+#pragma warning restore ORLEANS0113
 
     /// <summary>
     /// The origin's high-water mark together with the tree's bootstrap drop

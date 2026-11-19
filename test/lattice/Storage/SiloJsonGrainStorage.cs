@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Orleans.GrainReferences;
 using Orleans.Serialization;
+using Orleans.Serialization.Configuration;
 using Orleans.Storage;
 
 namespace Orleans.Lattice.Tests.Storage;
@@ -19,10 +20,17 @@ internal sealed class SiloJsonGrainStorage : IDisposable
 {
     private readonly ServiceProvider provider;
 
-    public SiloJsonGrainStorage()
+    public SiloJsonGrainStorage(params Type[] allowedTypes)
     {
         var services = new ServiceCollection();
         services.AddSerializer();
+        services.Configure<TypeManifestOptions>(options =>
+        {
+            foreach (var type in allowedTypes)
+            {
+                options.AddAllowedType(type);
+            }
+        });
         services.AddOptions();
         services.AddSingleton<GrainReferenceActivator>();
         services.AddSingleton<IPostConfigureOptions<OrleansJsonSerializerOptions>, ConfigureOrleansJsonSerializerOptions>();

@@ -2046,12 +2046,14 @@ internal interface IShardRootGrain : IGrainWithStringKey
     /// (single-node / unit-test path), because there is nothing for
     /// the caller to persist.
     /// </returns>
+#pragma warning disable ORLEANS0113 // Token position and [Id] pin the pre-10.4 wire format.
     Task<WalRecord?> AppendTxTerminalAsync(
         Guid transactionId,
         bool committed,
         IReadOnlyDictionary<string, byte[]>? committedValues = null,
         CancellationToken cancellationToken = default,
-        bool inlineWalAppend = true);
+        [Id(4)] bool inlineWalAppend = true);
+#pragma warning restore ORLEANS0113
 
     /// <summary>
     /// Returns this shard's transitive split-forward destination set -

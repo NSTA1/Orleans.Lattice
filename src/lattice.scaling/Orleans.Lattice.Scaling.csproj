@@ -25,7 +25,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\lattice\Orleans.Lattice.csproj" />
-    <PackageReference Include="Microsoft.Orleans.Sdk" Version="10.2.2" />
+    <PackageReference Include="Microsoft.Orleans.Sdk" Version="10.4.2" />
   </ItemGroup>
 
   <!-- ASP.NET Core endpoint routing (IEndpointRouteBuilder / MapGet /

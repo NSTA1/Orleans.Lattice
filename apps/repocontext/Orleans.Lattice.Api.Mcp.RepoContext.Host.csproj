@@ -60,15 +60,15 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Orleans.Server" Version="10.2.2" />
+    <PackageReference Include="Microsoft.Orleans.Server" Version="10.4.2" />
     <!-- Durability provider assemblies bundled in the single image; zero runtime
          cost when a profile does not select them. -->
-    <PackageReference Include="Microsoft.Orleans.Persistence.AdoNet" Version="10.2.2" />
-    <PackageReference Include="Microsoft.Orleans.Reminders.AdoNet" Version="10.2.2" />
-    <PackageReference Include="Microsoft.Orleans.Clustering.AzureStorage" Version="10.2.2" />
-    <PackageReference Include="Microsoft.Orleans.Persistence.AzureStorage" Version="10.2.2" />
-    <PackageReference Include="Microsoft.Orleans.Reminders.AzureStorage" Version="10.2.2" />
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Orleans.Persistence.AdoNet" Version="10.4.2" />
+    <PackageReference Include="Microsoft.Orleans.Reminders.AdoNet" Version="10.4.2" />
+    <PackageReference Include="Microsoft.Orleans.Clustering.AzureStorage" Version="10.4.2" />
+    <PackageReference Include="Microsoft.Orleans.Persistence.AzureStorage" Version="10.4.2" />
+    <PackageReference Include="Microsoft.Orleans.Reminders.AzureStorage" Version="10.4.2" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.15" />
     <!-- Security pin: Microsoft.Data.Sqlite 10.0.0 pulls SQLitePCLRaw 2.1.11
          transitively, whose bundled native e_sqlite3 carries a known high-severity
          advisory (GHSA-2m69-gcr7-jv3q). Pin the bundle forward to 3.0.5 so the

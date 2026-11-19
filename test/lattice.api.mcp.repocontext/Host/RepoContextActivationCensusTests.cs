@@ -79,6 +79,39 @@ public sealed class RepoContextActivationCensusTests
     }
 
     [Test]
+    public void Per_grain_type_measurements_are_summed_into_the_silo_wide_residency()
+    {
+        // Orleans 10.4 reports the working set once per grain type. Keeping only the
+        // last measurement would report one grain type's residency as the silo's.
+        var probe = ProbeName();
+        using var meter = new Meter("probe." + Guid.NewGuid().ToString("N"));
+        meter.CreateObservableGauge(probe, () => new[]
+        {
+            new Measurement<int>(3, new KeyValuePair<string, object?>("grain_type", "a")),
+            new Measurement<int>(5, new KeyValuePair<string, object?>("grain_type", "b")),
+        });
+
+        using var census = new RepoContextActivationCensus(probe);
+
+        Assert.That(census.TrySample(), Is.EqualTo(8));
+        Assert.That(census.TrySample(), Is.EqualTo(8), "each sample must start from zero, not accumulate");
+    }
+
+    [Test]
+    public void A_published_instrument_with_no_grain_types_yet_samples_as_zero()
+    {
+        // A silo that has activated no grain type yields no per-type measurement.
+        // The instrument exists, so this is an empty silo, not a lost signal.
+        var probe = ProbeName();
+        using var meter = new Meter("probe." + Guid.NewGuid().ToString("N"));
+        meter.CreateObservableGauge(probe, Array.Empty<Measurement<int>>);
+
+        using var census = new RepoContextActivationCensus(probe);
+
+        Assert.That(census.TrySample(), Is.EqualTo(0));
+    }
+
+    [Test]
     public void An_absent_instrument_samples_as_unavailable_rather_than_as_an_empty_silo()
     {
         // The distinction the whole design rests on. Orleans owns this instrument

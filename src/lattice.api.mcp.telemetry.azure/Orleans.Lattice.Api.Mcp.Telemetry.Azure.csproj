@@ -30,7 +30,7 @@
       AzureTelemetryPackageGraphTests pins this.
     -->
     <ProjectReference Include="..\lattice.api.telemetry\Orleans.Lattice.Api.Telemetry.csproj" />
-    <PackageReference Include="Azure.Core" Version="1.62.0" />
+    <PackageReference Include="Azure.Core" Version="1.65.0" />
   </ItemGroup>
 
 </Project>

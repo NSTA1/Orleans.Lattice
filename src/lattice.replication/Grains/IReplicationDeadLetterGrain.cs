@@ -52,13 +52,14 @@ internal interface IReplicationDeadLetterGrain : IGrainWithStringKey
     /// drained by then. <see langword="null"/> for an unstamped entry.
     /// </para>
     /// </summary>
+#pragma warning disable ORLEANS0113 // Token position and [Id]s pin the pre-10.4 wire format.
     Task<long> EnqueueAsync(
         WalRecord entry,
         string failureReason,
         int retryCount,
         string reasonTag,
         CancellationToken cancellationToken,
-        ReplicationSourceLineageStamp? sourceLineage = null);
+        [Id(5)] ReplicationSourceLineageStamp? sourceLineage = null);
 
     /// <summary>
     /// Parks an entry together with its authenticated direct sender and optional
@@ -71,8 +72,9 @@ internal interface IReplicationDeadLetterGrain : IGrainWithStringKey
         int retryCount,
         string reasonTag,
         CancellationToken cancellationToken,
-        string? authenticatedSenderClusterId,
-        ReplicationSourceLineageStamp? sourceLineage);
+        [Id(5)] string? authenticatedSenderClusterId,
+        [Id(6)] ReplicationSourceLineageStamp? sourceLineage);
+#pragma warning restore ORLEANS0113
 
     /// <summary>Returns every parked entry in ascending entry-id order. Empty list when the queue is empty.</summary>
     Task<IReadOnlyList<DeadLetterEntry>> ListAsync(CancellationToken cancellationToken);

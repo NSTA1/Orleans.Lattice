@@ -13,7 +13,7 @@
     <InternalsVisibleTo Include="Orleans.Lattice.Api.Apps.Grpc.Tests" />
     <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
     <ProjectReference Include="..\lattice.api.abstractions\Orleans.Lattice.Api.Abstractions.csproj" />
-    <PackageReference Include="Grpc.AspNetCore" Version="2.83.0" />
-    <PackageReference Include="Grpc.Net.ClientFactory" Version="2.83.0" />
+    <PackageReference Include="Grpc.AspNetCore" Version="2.85.0" />
+    <PackageReference Include="Grpc.Net.ClientFactory" Version="2.85.0" />
   </ItemGroup>
 </Project>
