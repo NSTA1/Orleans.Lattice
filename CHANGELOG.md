@@ -24,6 +24,7 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 - **Performance - Fewer view and tag-index read hops.** Numeric, min / max / set-union and fold view contributions overlap their membership and shard reads, a buffered batch caches the rows it has read, and a tag-index fingerprint reads each shard directly in one wave. ([#6096](https://github.com/NSTA1/Orleans.Lattice/pull/6096), [#6098](https://github.com/NSTA1/Orleans.Lattice/pull/6098)) (`Orleans.Lattice`)
 - **Performance - Fewer digest probe and backup topology hops.** The replication digest probe resolves routing once per pass and reads each shard root directly, and a backup capture overlaps its per-shard digest reads instead of awaiting them in turn. ([#6098](https://github.com/NSTA1/Orleans.Lattice/pull/6098)) (`Orleans.Lattice.Replication`, `Orleans.Lattice.Backup`)
+- **Performance - Fewer tag-index existence and marker calls.** A multi-tree index's per-tree handles share their existence, marker and schedule caches, an eventual value-and-tags write no longer re-probes tree existence, and replacing a key's tags overlaps its add and removal. ([#6100](https://github.com/NSTA1/Orleans.Lattice/pull/6100)) (`Orleans.Lattice`)
 
 ### Fixed
 - **Backup - Scheduled set names use a Gregorian UTC stamp.** A scheduled backup set is named with an invariant-culture timestamp, so a silo running under a Thai or Saudi culture no longer names sets with a Buddhist or Hijri year. ([#6099](https://github.com/NSTA1/Orleans.Lattice/pull/6099)) (`Orleans.Lattice.Backup`)
