@@ -198,9 +198,19 @@ public sealed class LatticeTelemetry : ILatticeTelemetry
             ? descriptor.Bounds.EffectiveStep(requested.Step)
             : descriptor.Bounds.EffectiveStep(TimeSpan.Zero);
 
-        var start = requested.StartUtc == default
-            ? end - DefaultSpan(descriptor.Bounds, step, deploymentMaxRange)
-            : requested.StartUtc;
+        // The defaulted start saturates at the earliest representable instant, so an
+        // end near DateTimeOffset.MinValue is judged by the entry's bounds (and
+        // rejected as too old where a lookback applies) instead of throwing.
+        DateTimeOffset start;
+        if (requested.StartUtc != default)
+        {
+            start = requested.StartUtc;
+        }
+        else
+        {
+            var span = DefaultSpan(descriptor.Bounds, step, deploymentMaxRange);
+            start = span >= end - DateTimeOffset.MinValue ? DateTimeOffset.MinValue : end - span;
+        }
 
         return TelemetryTimeRange.Between(start, end, step);
     }

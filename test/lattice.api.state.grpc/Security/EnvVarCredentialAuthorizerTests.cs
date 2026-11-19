@@ -345,6 +345,26 @@ public class EnvVarCredentialAuthorizerTests
     }
 
     [Test]
+    public void Authorize_unboundedLockoutDuration_locksTheCredentialInsteadOfThrowing()
+    {
+        var options = new EnvVarCredentialAuthorizerOptions
+        {
+            MaxFailedAttempts = 2,
+            LockoutDuration = TimeSpan.MaxValue,
+        };
+        var authorizer = CreateAuthorizer(WithCredential(Username, Password), out var time, options);
+
+        Assert.That(authorizer.Authorize(BasicHeader(Username, "WrongPassword1")), Is.False);
+        Assert.That(() => authorizer.Authorize(BasicHeader(Username, "WrongPassword1")), Throws.Nothing,
+            "a lockout past DateTimeOffset.MaxValue must saturate, not throw before the lock is applied");
+
+        time.Advance(TimeSpan.FromDays(3650));
+
+        Assert.That(authorizer.Authorize(BasicHeader(Username, Password)), Is.False,
+            "the credential stays locked rather than reopening to unlimited guessing");
+    }
+
+    [Test]
     public void Authorize_successResetsFailureCount()
     {
         var options = new EnvVarCredentialAuthorizerOptions { MaxFailedAttempts = 3 };
