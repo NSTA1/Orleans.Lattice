@@ -44,10 +44,10 @@ public class AntiEntropyRemediationGuardChaosTests
     [Test]
     public async Task Skipped_write_drift_is_detected_within_one_probe_cadence()
     {
-        var (grain, _, lattice, transport, _) = CreateProbeGrain();
+        var (grain, _, digests, transport, _) = CreateProbeGrain();
         // Local shard holds four entries; the diverged peer is missing two of
         // them, so the shard hashes differ (the skipped-write signal).
-        lattice.GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>())
+        digests.GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(Digest(new byte[] { 1, 2, 3, 4 })));
         transport.ProbeDigestAsync(Peer, Arg.Any<DigestProbeRequest>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new DigestProbeResponse
@@ -69,10 +69,10 @@ public class AntiEntropyRemediationGuardChaosTests
     [Test]
     public async Task Corrupted_apply_drift_is_detected_within_one_probe_cadence()
     {
-        var (grain, _, lattice, transport, _) = CreateProbeGrain();
+        var (grain, _, digests, transport, _) = CreateProbeGrain();
         // Same entry count on both sides but a different value was applied on
         // the peer, so the content hashes still differ.
-        lattice.GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>())
+        digests.GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(Digest(new byte[] { 1, 2, 3 })));
         transport.ProbeDigestAsync(Peer, Arg.Any<DigestProbeRequest>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new DigestProbeResponse
@@ -92,9 +92,9 @@ public class AntiEntropyRemediationGuardChaosTests
     [Test]
     public async Task Detection_clears_after_the_peer_digest_re_matches_on_heal()
     {
-        var (grain, state, lattice, transport, _) = CreateProbeGrain();
+        var (grain, state, digests, transport, _) = CreateProbeGrain();
         var local = new byte[] { 1, 2, 3 };
-        lattice.GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>())
+        digests.GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(Digest(local)));
 
         using var compared = new MeterCollector<long>(
@@ -311,14 +311,14 @@ public class AntiEntropyRemediationGuardChaosTests
         // Merkle walk localises it, then the master opt-out gate
         // (AutoRemediateOnDigestMismatch=false) suppresses every repair action.
         var leafId = GrainId.Create("leaf", Guid.NewGuid().ToString("N"));
-        var (grain, _, lattice, transport, replicationTransport) = CreateProbeGrain(
+        var (grain, _, digests, transport, replicationTransport) = CreateProbeGrain(
             merkleWalkEnabled: true,
             autoRemediate: false,
             leafRoot: leafId,
             localLeafHash: new byte[] { 1, 2, 3 });
 
         // Detection: the shard digest mismatches.
-        lattice.GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>())
+        digests.GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(Digest(new byte[] { 1, 2, 3 })));
         transport.ProbeDigestAsync(Peer, Arg.Any<DigestProbeRequest>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new DigestProbeResponse { DigestAvailable = true, Digest = Digest(new byte[] { 9, 9, 9 }) }));
@@ -356,7 +356,7 @@ public class AntiEntropyRemediationGuardChaosTests
         // The system-tree default-off / latched path: projection-digest
         // maintenance is off for the tree, so the pass never reads a digest,
         // never probes a peer, and never emits repair traffic.
-        var (grain, _, lattice, transport, replicationTransport) =
+        var (grain, _, digests, transport, replicationTransport) =
             CreateProbeGrain(maintainProjectionDigest: false);
 
         using var skipped = new MeterCollector<long>(
@@ -368,7 +368,7 @@ public class AntiEntropyRemediationGuardChaosTests
 
         await grain.ProcessNextPhaseAsync();
 
-        await lattice.DidNotReceive().GetLeafProjectionDigestAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await digests.DidNotReceive().GetLeafProjectionDigestAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
         await transport.DidNotReceive().ProbeDigestAsync(
             Arg.Any<string>(), Arg.Any<DigestProbeRequest>(), Arg.Any<CancellationToken>());
         await replicationTransport.DidNotReceive().SendAsync(
@@ -386,7 +386,7 @@ public class AntiEntropyRemediationGuardChaosTests
     private static (
         ReplicationDigestProbeGrain Grain,
         FakePersistentState<ReplicationDigestProbeState> State,
-        ILattice Lattice,
+        IShardDigestStub Digests,
         IReplicationDigestProbeTransport Transport,
         IReplicationTransport ReplicationTransport) CreateProbeGrain(
             bool maintainProjectionDigest = true,
@@ -430,8 +430,8 @@ public class AntiEntropyRemediationGuardChaosTests
         var replicationTransport = Substitute.For<IReplicationTransport>();
         var batchEncoder = Substitute.For<IReplicationBatchEncoder>();
         var shardCounts = Substitute.For<IShardCountProvider>();
-        shardCounts.GetShardIndicesAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IReadOnlyList<int>>([0]));
+        shardCounts.GetShardRoutingAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new RoutingInfo("phys", ShardMap.CreateDefault(1, 1))));
 
         var lattice = Substitute.For<ILattice>();
         var grainFactory = Substitute.For<IGrainFactory>();
@@ -439,7 +439,12 @@ public class AntiEntropyRemediationGuardChaosTests
         lattice.GetRoutingAsync(true, Arg.Any<CancellationToken>())
             .Returns(new ValueTask<RoutingInfo>(new RoutingInfo("phys", ShardMap.CreateDefault(1, 1))));
 
+        // The probe reads each shard's digest straight from its shard root, so
+        // the root delegates that read to the per-shard digest stub.
+        var digests = Substitute.For<IShardDigestStub>();
         var shardRoot = Substitute.For<IShardRootGrain>();
+        shardRoot.GetShardProjectionDigestAsync(Arg.Any<CancellationToken>())
+            .Returns(c => digests.GetLeafProjectionDigestAsync(0, c.Arg<CancellationToken>()));
         if (leafRoot is { } leafId)
         {
             shardRoot.GetRootNodeRefAsync()
@@ -464,7 +469,7 @@ public class AntiEntropyRemediationGuardChaosTests
             replicationTransport, batchEncoder, shardCounts, grainFactory, snapshotProvider,
             Substitute.For<ILatticeMergeModeResolver>(), state);
 
-        return (grain, state, lattice, transport, replicationTransport);
+        return (grain, state, digests, transport, replicationTransport);
     }
 
     private static WalRecord Entry(string key, long ticks)

@@ -486,7 +486,16 @@ internal sealed class AggregationApplier(
     {
         var sourceKey = contribution.SourceKey;
         var membershipKey = MembershipKey(sourceKey);
-        var prior = await ReadMembershipAsync(membershipKey, cancellationToken);
+
+        // The target shard's key is a pure function of the contribution's group
+        // and the source key's slot, so its read does not depend on the
+        // membership row and goes out in the same wave rather than after it.
+        // Every key this contribution touches is owned by this applier, so the
+        // only write that could land between the two reads is the retraction
+        // below - and that is guarded by the key comparison before the
+        // prefetched row is used.
+        var targetKey = InverseKey(contribution.GroupKey, Slot(sourceKey, _fanout));
+        var (prior, targetBytes) = await ReadMembershipAndShardAsync(membershipKey, targetKey, cancellationToken);
 
         // Retract the prior contribution first (handles a value change and a
         // re-group to a different group key). The inverse mutation is
@@ -507,13 +516,27 @@ internal sealed class AggregationApplier(
             && _maxGroupEntries <= 0
             && string.Equals(same.GroupKey, contribution.GroupKey, StringComparison.Ordinal);
 
+        var targetFresh = true;
         if (prior is { } old && !fused)
         {
-            await MutateInverseAsync(old.GroupKey, sourceKey, add: null, cancellationToken);
+            var retractKey = InverseKey(old.GroupKey, Slot(sourceKey, _fanout));
+
+            // Only the approximate mode keeping its group retracts from the very
+            // shard it is about to add to. The retraction then consumes the
+            // prefetched row, and the add must re-read the row it just wrote.
+            var sameShard = string.Equals(retractKey, targetKey, StringComparison.Ordinal);
+            await MutateInverseCoreAsync(
+                retractKey,
+                sameShard ? targetBytes : await store.GetAsync(retractKey, cancellationToken),
+                sourceKey,
+                add: null,
+                cancellationToken);
+            targetFresh = !sameShard;
         }
 
-        await MutateInverseAsync(
-            contribution.GroupKey,
+        await MutateInverseCoreAsync(
+            targetKey,
+            targetFresh ? targetBytes : await store.GetAsync(targetKey, cancellationToken),
             sourceKey,
             add: entry,
             cancellationToken,
@@ -542,16 +565,37 @@ internal sealed class AggregationApplier(
             return;
         }
 
-        await MutateInverseAsync(old.GroupKey, sourceKey, add: null, cancellationToken);
+        await MutateInverseAsync(InverseKey(old.GroupKey, Slot(sourceKey, _fanout)), sourceKey, add: null, cancellationToken);
         await store.DeleteAsync(membershipKey, cancellationToken);
         await MaterialiseInverseAsync(old.GroupKey, cancellationToken);
     }
 
-    private async Task MutateInverseAsync(string groupKey, string sourceKey, MemberEntry? add, CancellationToken cancellationToken, bool moveToEnd = false)
+    // Reads a source key's membership head and one shard row in a single
+    // overlapping wave. Both reads are always observed, so a fault on one never
+    // leaves the other unobserved.
+    private async Task<(MembershipHead? Prior, byte[]? Shard)> ReadMembershipAndShardAsync(
+        string membershipKey,
+        string shardKey,
+        CancellationToken cancellationToken)
     {
-        var slot = Slot(sourceKey, _fanout);
-        var key = InverseKey(groupKey, slot);
-        var bytes = await store.GetAsync(key, cancellationToken);
+        var membershipRead = ReadMembershipAsync(membershipKey, cancellationToken);
+        var shardRead = store.GetAsync(shardKey, cancellationToken);
+        try
+        {
+            return (await membershipRead, await shardRead);
+        }
+        catch
+        {
+            await ObserveAsync(shardRead);
+            throw;
+        }
+    }
+
+    private async Task MutateInverseAsync(string key, string sourceKey, MemberEntry? add, CancellationToken cancellationToken)
+        => await MutateInverseCoreAsync(key, await store.GetAsync(key, cancellationToken), sourceKey, add, cancellationToken);
+
+    private async Task MutateInverseCoreAsync(string key, byte[]? bytes, string sourceKey, MemberEntry? add, CancellationToken cancellationToken, bool moveToEnd = false)
+    {
         var absent = bytes is null || IsEmpty(bytes);
 
         // A contribution changes exactly ONE entry of this shard, so splice the
@@ -794,7 +838,13 @@ internal sealed class AggregationApplier(
     {
         var sourceKey = contribution.SourceKey;
         var membershipKey = MembershipKey(sourceKey);
-        var prior = await ReadMembershipAsync(membershipKey, cancellationToken);
+
+        // See ContributeInverseAsync: the target fold-inverse shard is read in
+        // the same wave as the membership row. This path has no approximate
+        // mode, so the retraction below only ever writes a different group's
+        // shard, which the key comparison still guards.
+        var targetKey = FoldInverseKey(contribution.GroupKey, Slot(sourceKey, _fanout));
+        var (prior, targetBytes) = await ReadMembershipAndShardAsync(membershipKey, targetKey, cancellationToken);
 
         // See ContributeInverseAsync: when the source key keeps its group, both
         // mutations address the same fold-inverse shard, so they fuse into one
@@ -804,13 +854,17 @@ internal sealed class AggregationApplier(
         var fused = prior is { } same
             && string.Equals(same.GroupKey, contribution.GroupKey, StringComparison.Ordinal);
 
+        var targetFresh = true;
         if (prior is { } old && !fused)
         {
-            await MutateFoldAsync(old.GroupKey, sourceKey, add: null, cancellationToken);
+            var retractKey = FoldInverseKey(old.GroupKey, Slot(sourceKey, _fanout));
+            await MutateFoldAsync(retractKey, sourceKey, add: null, cancellationToken);
+            targetFresh = !string.Equals(retractKey, targetKey, StringComparison.Ordinal);
         }
 
-        await MutateFoldAsync(
-            contribution.GroupKey,
+        await MutateFoldCoreAsync(
+            targetKey,
+            targetFresh ? targetBytes : await store.GetAsync(targetKey, cancellationToken),
             sourceKey,
             add: new FoldMember(contribution.Value ?? [], contribution.Timestamp),
             cancellationToken,
@@ -857,15 +911,16 @@ internal sealed class AggregationApplier(
             return;
         }
 
-        await MutateFoldAsync(old.GroupKey, sourceKey, add: null, cancellationToken);
+        await MutateFoldAsync(FoldInverseKey(old.GroupKey, Slot(sourceKey, _fanout)), sourceKey, add: null, cancellationToken);
         await store.DeleteAsync(membershipKey, cancellationToken);
         await MaterialiseFoldAsync(old.GroupKey, cancellationToken);
     }
 
-    private async Task MutateFoldAsync(string groupKey, string sourceKey, FoldMember? add, CancellationToken cancellationToken, bool moveToEnd = false)
+    private async Task MutateFoldAsync(string key, string sourceKey, FoldMember? add, CancellationToken cancellationToken)
+        => await MutateFoldCoreAsync(key, await store.GetAsync(key, cancellationToken), sourceKey, add, cancellationToken);
+
+    private async Task MutateFoldCoreAsync(string key, byte[]? bytes, string sourceKey, FoldMember? add, CancellationToken cancellationToken, bool moveToEnd = false)
     {
-        var key = FoldInverseKey(groupKey, Slot(sourceKey, _fanout));
-        var bytes = await store.GetAsync(key, cancellationToken);
         var absent = bytes is null || IsEmpty(bytes);
 
         // See MutateInverseAsync: one entry changes, so the row is spliced rather

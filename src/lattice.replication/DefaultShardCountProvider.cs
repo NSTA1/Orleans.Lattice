@@ -17,11 +17,8 @@ internal sealed class DefaultShardCountProvider(IGrainFactory grainFactory)
         grainFactory ?? throw new ArgumentNullException(nameof(grainFactory));
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<int>> GetShardIndicesAsync(string treeId, CancellationToken cancellationToken = default)
-    {
-        var routing = await ResolveRoutingAsync(treeId, cancellationToken).ConfigureAwait(false);
-        return routing.Map.GetPhysicalShardIndices();
-    }
+    public Task<RoutingInfo> GetShardRoutingAsync(string treeId, CancellationToken cancellationToken = default)
+        => ResolveRoutingAsync(treeId, cancellationToken);
 
     /// <inheritdoc />
     public async Task<IReadOnlyList<string>> GetShardRootKeysAsync(string treeId, CancellationToken cancellationToken = default)

@@ -61,8 +61,6 @@ public partial class LatticeReplicationLocalVcSeederTests
         var resolver = Substitute.For<ILatticeMergeModeResolver>();
         resolver.Resolve(Arg.Any<string>()).Returns(mode);
         var shardCounts = Substitute.For<IShardCountProvider>();
-        shardCounts.GetShardIndicesAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IReadOnlyList<int>>(Enumerable.Range(0, shards?.Count ?? 1).ToArray()));
         IReadOnlyList<string> shardKeys = [.. Enumerable.Range(0, shards?.Count ?? 1).Select(s => $"{Tree}/{s}")];
         shardCounts.GetShardRootKeysAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(shardKeys));
@@ -212,7 +210,7 @@ public partial class LatticeReplicationLocalVcSeederTests
         });
         resolver.Received(1).Resolve(Tree);
         // No leaf walk, no shard lookup, no HWM pin.
-        await shardCounts.DidNotReceive().GetShardIndicesAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await shardCounts.DidNotReceive().GetShardRoutingAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
         await shardCounts.DidNotReceive().GetShardRootKeysAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
         await hwmGrain.DidNotReceive().PinSnapshotAsync(
             Arg.Any<HybridLogicalClock>(), Arg.Any<VersionVector>(), Arg.Any<CancellationToken>());

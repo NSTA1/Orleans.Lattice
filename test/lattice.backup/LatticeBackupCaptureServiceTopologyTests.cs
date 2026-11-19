@@ -99,6 +99,34 @@ public sealed class LatticeBackupCaptureServiceTopologyTests
     }
 
     [Test]
+    public async Task BuildTopologyAsync_overlaps_the_per_shard_digest_reads_and_keeps_shard_order()
+    {
+        var lattice = LatticeOver(FoldedMap());
+        var lastShardStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // Shard 0's read cannot finish until shard 3's read has been issued, so a
+        // serial walk would never complete.
+        lattice.GetLeafProjectionDigestForRangeAsync(
+                0, Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(async _ =>
+            {
+                await lastShardStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+                return new LeafProjectionDigest { Hash = [0], Version = LeafProjectionDigest.CurrentVersion };
+            });
+        lattice.GetLeafProjectionDigestForRangeAsync(
+                3, Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                lastShardStarted.TrySetResult();
+                return Task.FromResult(new LeafProjectionDigest { Hash = [3], Version = LeafProjectionDigest.CurrentVersion });
+            });
+
+        var topology = await LatticeBackupCaptureService.BuildTopologyAsync(lattice, null, null, CancellationToken.None);
+
+        Assert.That(topology.ShardRootDigests, Is.EqualTo(new[] { "00", "02", "03" }));
+    }
+
+    [Test]
     public async Task BuildTopologyAsync_names_a_digest_placeholder_by_its_physical_shard_index()
     {
         var lattice = LatticeOver(FoldedMap());

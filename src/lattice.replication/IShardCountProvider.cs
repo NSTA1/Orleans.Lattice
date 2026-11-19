@@ -2,8 +2,9 @@ namespace Orleans.Lattice.Replication;
 
 /// <summary>
 /// Internal testability seam over the tree's live routing. Replication-package
-/// consumers need either the physical shard indices its routing map reaches
-/// (<see cref="GetShardIndicesAsync"/>) or the shard-root keys of those shards
+/// consumers need either the freshly resolved routing itself - physical tree id
+/// and live shard map (<see cref="GetShardRoutingAsync"/>) - or the shard-root keys
+/// of the shards it reaches
 /// (<see cref="GetShardRootKeysAsync"/>), but resolving routing takes an
 /// <c>IGrainFactory</c> and the tree's <c>ILattice</c> grain - tedious to
 /// substitute in unit tests. This seam exposes only those lookups so the
@@ -25,13 +26,15 @@ namespace Orleans.Lattice.Replication;
 internal interface IShardCountProvider
 {
     /// <summary>
-    /// Returns every physical shard index the tree's live routing map can send a
-    /// key to, in ascending order, for callers that address a shard by index
-    /// through the tree's <c>ILattice</c> grain (the anti-entropy digest probe).
+    /// Returns the tree's freshly resolved routing - the physical tree id behind
+    /// any alias together with the live shard map - for callers that address
+    /// every shard root directly and need both halves from one resolve (the
+    /// anti-entropy digest probe, which would otherwise pay a forced routing
+    /// read per shard through the tree's <c>ILattice</c> grain).
     /// </summary>
     /// <param name="treeId">The logical tree id. Must be non-null and non-empty.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    Task<IReadOnlyList<int>> GetShardIndicesAsync(string treeId, CancellationToken cancellationToken = default);
+    Task<RoutingInfo> GetShardRoutingAsync(string treeId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns the <c>{physicalTreeId}/{shardIndex}</c> grain key of every shard

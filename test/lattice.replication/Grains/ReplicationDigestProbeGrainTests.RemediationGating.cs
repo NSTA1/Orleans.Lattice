@@ -86,8 +86,8 @@ public partial class ReplicationDigestProbeGrainTests
                 : Task.FromException<ReplicationAck>(sendFault));
         var batchEncoder = Substitute.For<IReplicationBatchEncoder>();
         var shardCounts = Substitute.For<IShardCountProvider>();
-        shardCounts.GetShardIndicesAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IReadOnlyList<int>>(Enumerable.Range(0, shardCount).ToArray()));
+        shardCounts.GetShardRoutingAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new RoutingInfo("phys", ShardMap.CreateDefault(shardCount, shardCount))));
 
         var lattice = Substitute.For<ILattice>();
         var grainFactory = Substitute.For<IGrainFactory>();
@@ -97,8 +97,6 @@ public partial class ReplicationDigestProbeGrainTests
 
         // Every shard's local digest mismatches the peer, so each shard localises
         // a divergent range and enters the gated repair stage.
-        lattice.GetLeafProjectionDigestAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(Digest(new byte[] { 1, 2, 3 })));
         transport.ProbeDigestAsync(Peer, Arg.Any<DigestProbeRequest>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new DigestProbeResponse { DigestAvailable = true, Digest = Digest(new byte[] { 9, 9, 9 }) }));
         transport.ProbeMerkleWalkAsync(Peer, Arg.Any<MerkleWalkProbeRequest>(), Arg.Any<CancellationToken>())
@@ -124,6 +122,8 @@ public partial class ReplicationDigestProbeGrainTests
         var leaf = Substitute.For<IBPlusLeafGrain>();
         leaf.GetProjectionDigestAsync().Returns(Task.FromResult(Digest(new byte[] { 1, 2, 3 })));
         grainFactory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(leaf);
+        shardRoot.GetShardProjectionDigestAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Digest(new byte[] { 1, 2, 3 })));
         grainFactory.GetGrain<IShardRootGrain>(Arg.Any<string>()).Returns(shardRoot);
 
         // The WAL retains a single orphan at ticks 100; whether re-replay selects

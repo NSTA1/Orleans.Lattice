@@ -20,9 +20,9 @@ public partial class ReplicationDigestProbeGrainTests
     [Test]
     public async Task ProcessNextPhaseAsync_domain_digest_fault_does_not_permanently_disable_probing()
     {
-        var (grain, state, lattice, transport, _) = CreateProbeGrain();
+        var (grain, state, lattice, transport, _, digests) = CreateProbeGrain();
         var reads = 0;
-        lattice.GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>())
+        digests.GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>())
             .Returns(_ => ++reads == 1
                 ? Task.FromException<LeafProjectionDigest>(new LeafProjectionStaleException("projection unavailable"))
                 : Task.FromResult(Digest([1, 2, 3])));
@@ -39,25 +39,25 @@ public partial class ReplicationDigestProbeGrainTests
     [Test]
     public async Task ProcessNextPhaseAsync_does_not_advance_cadence_when_the_shard_map_cannot_be_resolved()
     {
-        var (grain, state, lattice, _, shardCounts) = CreateProbeGrain();
-        shardCounts.GetShardIndicesAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromException<IReadOnlyList<int>>(new InvalidOperationException("shard map unavailable")));
+        var (grain, state, lattice, _, shardCounts, digests) = CreateProbeGrain();
+        shardCounts.GetShardRoutingAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<RoutingInfo>(new InvalidOperationException("shard map unavailable")));
 
         await grain.ProcessNextPhaseAsync();
 
         // The pass bailed before reading any digest, and the cadence stamp is
         // left at zero so the very next phase tick retries.
-        await lattice.DidNotReceive().GetLeafProjectionDigestAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await digests.DidNotReceive().GetLeafProjectionDigestAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
         Assert.That(state.State.LastProbeTicks, Is.EqualTo(0L));
     }
 
     [Test]
     public async Task ProcessNextPhaseAsync_skips_a_shard_whose_local_digest_read_faults_transiently()
     {
-        var (grain, state, lattice, transport, _) = CreateProbeGrain();
+        var (grain, state, lattice, transport, _, digests) = CreateProbeGrain();
         // A non-InvalidOperationException is a transient read failure (the
         // permanent-latch path is InvalidOperationException, covered elsewhere).
-        lattice.GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>())
+        digests.GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>())
             .Returns(Task.FromException<LeafProjectionDigest>(new TimeoutException("digest read timed out")));
 
         await grain.ProcessNextPhaseAsync();
@@ -72,8 +72,8 @@ public partial class ReplicationDigestProbeGrainTests
     [Test]
     public async Task ProcessNextPhaseAsync_logs_and_continues_when_a_peer_probe_faults()
     {
-        var (grain, state, lattice, transport, _) = CreateProbeGrain();
-        lattice.GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>())
+        var (grain, state, lattice, transport, _, digests) = CreateProbeGrain();
+        digests.GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(Digest(new byte[] { 1, 2, 3 })));
         transport.ProbeDigestAsync("site-b", Arg.Any<DigestProbeRequest>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromException<DigestProbeResponse>(new TimeoutException("peer unreachable")));
@@ -95,7 +95,7 @@ public partial class ReplicationDigestProbeGrainTests
         // Empty peer set routes straight to AdvanceCadenceAsync; the persist then
         // faults, so the in-memory cadence stamp must be rolled back to its prior
         // value (zero) rather than skipping a whole interval.
-        var (grain, state, _, _, _) = CreateProbeGrain(peers: Array.Empty<string>());
+        var (grain, state, _, _, _, digests) = CreateProbeGrain(peers: Array.Empty<string>());
         state.ThrowOnWrite = new InvalidOperationException("storage unavailable");
 
         await grain.ProcessNextPhaseAsync();
@@ -113,8 +113,8 @@ public partial class ReplicationDigestProbeGrainTests
         // A mismatch triggers the (opted-in) Merkle-walk localisation, whose
         // physical-tree-id resolution faults. The best-effort localise stage must
         // swallow it and let the detect-stage cadence advance regardless.
-        var (grain, state, lattice, transport, _) = CreateProbeGrain(merkleWalkEnabled: true);
-        lattice.GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>())
+        var (grain, state, lattice, transport, _, digests) = CreateProbeGrain(merkleWalkEnabled: true);
+        digests.GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(Digest(new byte[] { 1, 2, 3 })));
         transport.ProbeDigestAsync("site-b", Arg.Any<DigestProbeRequest>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new DigestProbeResponse

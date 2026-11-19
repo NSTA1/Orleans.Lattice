@@ -128,12 +128,12 @@ public partial class ReplicationDigestProbeGrainTests
         // 5-minute interval, so ShouldRunCadence returns false and the pump
         // returns without reading any digest or advancing the cadence stamp.
         var recent = DateTime.UtcNow.Ticks;
-        var (grain, state, lattice, transport, _) = CreateProbeGrain(
+        var (grain, state, lattice, transport, _, digests) = CreateProbeGrain(
             seed: new ReplicationDigestProbeState { LastProbeTicks = recent });
 
         await grain.ProcessNextPhaseAsync();
 
-        await lattice.DidNotReceive().GetLeafProjectionDigestAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await digests.DidNotReceive().GetLeafProjectionDigestAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
         await transport.DidNotReceive().ProbeDigestAsync(
             Arg.Any<string>(), Arg.Any<DigestProbeRequest>(), Arg.Any<CancellationToken>());
         Assert.That(state.State.LastProbeTicks, Is.EqualTo(recent));

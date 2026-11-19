@@ -191,10 +191,28 @@ internal sealed class ReplicationDigestProbeGrain(
         // adaptive split or a reshard moves slots to an index above the pin without
         // changing it, and a fold retires indices below it, so 0..ShardCount-1 would
         // skip the shards a split populated and name ones a fold retired (#3753).
+        //
+        // A reserved system tree is never addressable through the public digest
+        // surface, which refused every shard with a domain fault the per-shard
+        // catch below skipped; keep that outcome (no comparison, cadence advances)
+        // without paying for the calls.
+        if (TreeName.StartsWith(LatticeConstants.SystemTreePrefix, StringComparison.Ordinal))
+        {
+            await AdvanceCadenceAsync(nowTicks).ConfigureAwait(true);
+            return;
+        }
+
+        // One forced routing resolve per pass yields both the physical tree id and
+        // the live shard set, so each shard's digest is read straight from its root
+        // rather than through the tree's ILattice forwarder, which repeated a forced
+        // routing read (a registry hop) for every shard (perf run 162).
+        string physicalTreeId;
         IReadOnlyList<int> shardIndices;
         try
         {
-            shardIndices = await _shardCounts.GetShardIndicesAsync(TreeName, CancellationToken.None).ConfigureAwait(true);
+            var routing = await _shardCounts.GetShardRoutingAsync(TreeName, CancellationToken.None).ConfigureAwait(true);
+            physicalTreeId = routing.PhysicalTreeId;
+            shardIndices = routing.Map.GetPhysicalShardIndices();
         }
         catch (Exception ex)
         {
@@ -231,7 +249,10 @@ internal sealed class ReplicationDigestProbeGrain(
             LeafProjectionDigest local;
             try
             {
-                local = await lattice.GetLeafProjectionDigestAsync(shard, CancellationToken.None).ConfigureAwait(true);
+                var shardRoot = _grainFactory.GetGrain<IShardRootGrain>($"{physicalTreeId}/{shard}");
+                local = await ShardActivationRetry.RunAsync(
+                    () => shardRoot.GetShardProjectionDigestAsync(CancellationToken.None),
+                    CancellationToken.None).ConfigureAwait(true);
             }
             catch (InvalidOperationException ex) when (ex is not ILatticeDomainFault)
             {
