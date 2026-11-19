@@ -283,6 +283,15 @@ public sealed class DataExportDialogTests : DataTestContext
         });
     }
 
+    [TestCase(1_048_575L, "1.0 MB")]
+    [TestCase(1_048_525L, "1.0 MB")]
+    [TestCase(1_073_741_823L, "1.00 GB")]
+    [TestCase(1_048_524L, "1,023.9 KB")]
+    public void A_size_that_rounds_up_to_1024_moves_to_the_next_unit(long bytes, string expected)
+    {
+        Assert.That(DataExportDialog.Size(bytes), Is.EqualTo(expected));
+    }
+
     private IRenderedComponent<DataPageHost> OpenDialog(string relative)
     {
         var cut = RenderAt(relative);

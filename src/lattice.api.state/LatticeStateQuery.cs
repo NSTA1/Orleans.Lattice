@@ -2182,12 +2182,15 @@ internal sealed class LatticeStateQuery(
         _ => EntryHistoryBound.WalWindowFallback,
     };
 
-    private int ClampHistoryLimit(int requested) => requested switch
+    // Floored at one so a non-positive MaxHistoryPageSize/DefaultHistoryPageSize
+    // (nothing validates the options) cannot collapse the limit to zero or below,
+    // mirroring the data API's page floor (#1984).
+    private int ClampHistoryLimit(int requested) => Math.Max(1, requested switch
     {
         < 1 => Math.Min(_apiOptions.DefaultHistoryPageSize, _apiOptions.MaxHistoryPageSize),
         _ when requested > _apiOptions.MaxHistoryPageSize => _apiOptions.MaxHistoryPageSize,
         _ => requested,
-    };
+    });
 
     private int ClampHistoryPreviewBudget(int requested) => requested switch
     {
@@ -2553,12 +2556,16 @@ internal sealed class LatticeStateQuery(
         }
     }
 
-    private int ClampPageSize(int requested) => requested switch
+    // Floored at one so a non-positive MaxScanPageSize/DefaultScanPageSize
+    // (nothing validates the options) cannot collapse the page size to zero or
+    // below: the cursor grain rejects zero and the tag-scan loop indexes the
+    // empty page. Mirrors the data API's page floor (#1984).
+    private int ClampPageSize(int requested) => Math.Max(1, requested switch
     {
         < 1 => Math.Min(_apiOptions.DefaultScanPageSize, _apiOptions.MaxScanPageSize),
         _ when requested > _apiOptions.MaxScanPageSize => _apiOptions.MaxScanPageSize,
         _ => requested,
-    };
+    });
 
     private int ClampScanPreviewBudget(int requested) => requested switch
     {
