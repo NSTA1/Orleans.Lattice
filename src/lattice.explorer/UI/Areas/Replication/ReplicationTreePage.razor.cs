@@ -43,7 +43,7 @@ public partial class ReplicationTreePage
 
     private string StatusLine =>
         ReplicationFormat.Count(_links?.Count ?? 0, "link", "links")
-        + $". Read at {_readAt.UtcDateTime:HH:mm:ss} UTC"
+        + $". Read at {ReplicationFormat.ReadAt(_readAt)} UTC"
         + (_loop is { IsRunning: true } ? $", refreshing every {Options.RefreshInterval.TotalSeconds:0} s." : ", paused while the page is hidden.");
 
     /// <inheritdoc />

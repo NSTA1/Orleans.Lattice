@@ -1,3 +1,4 @@
+using System.Globalization;
 using Orleans.Lattice.Api.Telemetry;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Telemetry;
@@ -119,7 +120,7 @@ internal sealed record TelemetryChartRequest(TelemetryQueryRequest? Request, str
             TelemetryBoundsViolation.LookbackTooOld =>
                 $"This chart reaches back at most {TelemetryDurations.Describe(bounds.MaxLookback)}. Choose a more recent window.",
             TelemetryBoundsViolation.TooManyPoints =>
-                $"At this step the window needs {range.PointCount:N0} points and this chart draws at most {bounds.MaxPoints:N0}. Choose a coarser step or a shorter range.",
+                string.Create(CultureInfo.InvariantCulture, $"At this step the window needs {range.PointCount:N0} points and this chart draws at most {bounds.MaxPoints:N0}. Choose a coarser step or a shorter range."),
             TelemetryBoundsViolation.StepBelowMinimum or TelemetryBoundsViolation.StepAboveMaximum =>
                 "This chart cannot be drawn at that step. Choose another step.",
             _ => "This chart cannot be drawn over that window. Choose another range.",

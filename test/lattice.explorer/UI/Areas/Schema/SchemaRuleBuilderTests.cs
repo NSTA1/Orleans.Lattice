@@ -42,6 +42,22 @@ public sealed class SchemaRuleBuilderTests : SchemaRuleBuilderTestBase
     }
 
     [Test]
+    [SetCulture("fi-FI")]
+    public void The_shape_states_list_lengths_with_invariant_separators()
+    {
+        UseTrees("orders");
+        Data.Use("orders", ("order/1", "{\"lines\":[" + string.Join(",", Enumerable.Repeat("0", 1234)) + "]}"));
+        var cut = OpenEditor();
+        StartRule(cut);
+
+        cut.WaitUntil(() =>
+        {
+            var lines = cut.FindAll(".lt-schema-shape__member").Single(member => member.QuerySelector(".lt-schema-shape__name")!.TextContent.Trim() == "lines");
+            Assert.That(lines.QuerySelector(".lt-schema-shape__example")!.TextContent.Trim(), Is.EqualTo("1,234 to 1,234 items"));
+        });
+    }
+
+    [Test]
     public void Picking_a_member_makes_it_the_rule_path_and_seeds_the_gallery_from_it()
     {
         UseOrders();

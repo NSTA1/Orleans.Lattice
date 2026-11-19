@@ -22,6 +22,11 @@ public sealed class ReplicationFormatTests
     public void MergeMode_nullable_value_uses_the_same_label_as_a_nonnullable_value(LatticeMergeMode mode, string expected) =>
         Assert.That(ReplicationFormat.MergeMode((LatticeMergeMode?)mode), Is.EqualTo(expected));
 
+    [Test]
+    [SetCulture("fi-FI")]
+    public void ReadAt_uses_a_colon_whatever_the_host_culture() =>
+        Assert.That(ReplicationFormat.ReadAt(new DateTimeOffset(2026, 5, 4, 15, 7, 9, TimeSpan.FromHours(2))), Is.EqualTo("13:07:09"));
+
     [TestCase(0L, 1024L, "0 entries, 1.0 KB behind")]
     [TestCase(1L, 0L, "1 entry, 0 B behind")]
     [TestCase(-1L, 0L, "Caught up")]

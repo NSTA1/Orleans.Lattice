@@ -1,3 +1,4 @@
+using System.Globalization;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.Operations;
@@ -315,7 +316,7 @@ internal sealed partial class BackupSetSchedulerGrain(
                 throw new InvalidOperationException("The backup-set schedule resolved no trees to capture.");
             }
 
-            var setName = $"{request.Name}-{startedAt:yyyyMMdd'T'HHmmss'Z'}";
+            var setName = SetName(request.Name, startedAt);
             LatticeBackupSetCaptureResult result;
             while (true)
             {
@@ -506,6 +507,14 @@ internal sealed partial class BackupSetSchedulerGrain(
         var periods = (elapsed.Ticks / period.Ticks) + 1;
         return first + TimeSpan.FromTicks(periods * period.Ticks);
     }
+
+    /// <summary>
+    /// The persisted name of a set captured by schedule <paramref name="name"/>
+    /// at <paramref name="startedAt"/>. Formatted with the invariant culture so
+    /// the stamp is Gregorian and identical on every silo whatever its culture.
+    /// </summary>
+    internal static string SetName(string name, DateTimeOffset startedAt) =>
+        string.Create(CultureInfo.InvariantCulture, $"{name}-{startedAt:yyyyMMdd'T'HHmmss'Z'}");
 
     private async Task<bool> HasReminderAsync()
     {

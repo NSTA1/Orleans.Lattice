@@ -86,6 +86,11 @@ internal static class ReplicationFormat
         return ((long)span.TotalDays).ToString(CultureInfo.InvariantCulture) + " d ago";
     }
 
+    /// <summary>A wall-clock read time in UTC, such as <c>13:07:09</c>.</summary>
+    /// <param name="at">The instant the page read the estate.</param>
+    public static string ReadAt(DateTimeOffset at) =>
+        at.UtcDateTime.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
+
     /// <summary>The name of a merge mode as an operator reads it.</summary>
     /// <param name="mode">The merge mode.</param>
     public static string MergeMode(LatticeMergeMode mode) => mode switch
