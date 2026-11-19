@@ -4310,8 +4310,7 @@ internal sealed partial class ReplicationShipperGrain(
             delayMs = Math.Max(0.0, delayMs * (1.0 + spread));
         }
 
-        var delay = TimeSpan.FromMilliseconds(delayMs);
-        _nextRetryAtUtc = DateTime.UtcNow.Add(delay);
+        (var delay, _nextRetryAtUtc) = SaturatingRetryAt(DateTime.UtcNow, delayMs);
 
         // Per-peer error tally: only count failures that are attributable
         // to the peer round-trip (transport throw, receiver ack rejection).
@@ -4337,6 +4336,25 @@ internal sealed partial class ReplicationShipperGrain(
         }
     }
 
+
+    /// <summary>
+    /// Resolves the retry instant <paramref name="delayMs"/> after
+    /// <paramref name="nowUtc"/>, saturating at <see cref="DateTime.MaxValue"/>
+    /// rather than throwing when a large configured
+    /// <see cref="LatticeReplicationOptions.ShipBackoffMax"/> carries the delay past
+    /// the representable range.
+    /// </summary>
+    internal static (TimeSpan Delay, DateTime NextRetryAtUtc) SaturatingRetryAt(DateTime nowUtc, double delayMs)
+    {
+        var headroom = DateTime.MaxValue - nowUtc;
+        if (!(delayMs < headroom.TotalMilliseconds))
+        {
+            return (headroom, DateTime.MaxValue);
+        }
+
+        var delay = TimeSpan.FromMilliseconds(delayMs);
+        return delay >= headroom ? (headroom, DateTime.MaxValue) : (delay, nowUtc + delay);
+    }
 
     private void ParseGrainKey()
     {

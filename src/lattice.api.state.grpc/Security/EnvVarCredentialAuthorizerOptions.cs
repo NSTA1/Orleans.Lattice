@@ -26,6 +26,8 @@ public sealed class EnvVarCredentialAuthorizerOptions
     /// How long a username stays locked out after
     /// <see cref="MaxFailedAttempts"/> consecutive failures, during which every
     /// attempt (even with the correct password) is denied. Defaults to 1 minute.
+    /// A duration reaching past <see cref="DateTimeOffset.MaxValue"/>, such as
+    /// <see cref="TimeSpan.MaxValue"/>, locks the username until the process restarts.
     /// </summary>
     public TimeSpan LockoutDuration { get; set; } = TimeSpan.FromMinutes(1);
 }

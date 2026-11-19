@@ -201,7 +201,12 @@ public sealed class EnvVarCredentialAuthorizer : ILatticeStateApiAuthorizer
             record.Failures++;
             if (record.Failures >= options.MaxFailedAttempts)
             {
-                record.LockedUntil = now + options.LockoutDuration;
+                // Saturate rather than overflow: a "lock for good" duration such as
+                // TimeSpan.MaxValue would otherwise throw here and leave the lockout
+                // unapplied, re-opening the credential to unlimited guessing.
+                record.LockedUntil = options.LockoutDuration >= DateTimeOffset.MaxValue - now
+                    ? DateTimeOffset.MaxValue
+                    : now + options.LockoutDuration;
                 record.Failures = 0;
                 _logger.LogWarning(
                     "Api.State: user locked out for {LockoutSeconds}s after {MaxFailedAttempts} consecutive failures.",

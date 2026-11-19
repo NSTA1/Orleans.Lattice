@@ -299,6 +299,25 @@ public sealed partial class LatticeTelemetryTests
     }
 
     [Test]
+    public void A_defaulted_window_ending_near_the_earliest_instant_is_rejected_by_its_bounds()
+    {
+        var harness = new TelemetryFacadeHarness();
+        var request = new TelemetryQueryRequest
+        {
+            QueryId = ReadRate,
+            Range = new TelemetryTimeRange { EndUtc = DateTimeOffset.MinValue.AddMinutes(1) },
+        };
+
+        // The defaulted start must saturate at DateTimeOffset.MinValue so the window
+        // reaches the bounds check, rather than underflowing into an unmapped fault.
+        Assert.That(
+            async () => await harness.Build().QueryAsync(request),
+            Throws.TypeOf<TelemetryQueryBoundsException>()
+                .With.Property(nameof(TelemetryQueryBoundsException.Violation))
+                .EqualTo(TelemetryBoundsViolation.LookbackTooOld));
+    }
+
+    [Test]
     public async Task A_defaulted_window_honours_the_callers_requested_step()
     {
         var harness = new TelemetryFacadeHarness();

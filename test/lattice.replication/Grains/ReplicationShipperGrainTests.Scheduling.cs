@@ -1,5 +1,6 @@
 using NSubstitute;
 using Orleans.Lattice.Primitives;
+using Orleans.Lattice.Replication.Grains;
 
 namespace Orleans.Lattice.Replication.Tests.Grains;
 
@@ -71,6 +72,32 @@ public partial class ReplicationShipperGrainTests
         await grain.PumpForTestingAsync();
         Assert.That(state.State.Cursor.WallClockTicks, Is.EqualTo(20), "the HLC cursor never rewinds");
         Assert.That(state.State.PartitionCursors[0], Is.EqualTo(2), "partition progress still consumes the lower clock");
+    }
+
+    [Test]
+    public async Task Retry_with_an_unrepresentable_backoff_saturates_instead_of_throwing()
+    {
+        var options = PipelinedOptions(1, 1);
+        options.ShipBackoffInitial = TimeSpan.MaxValue;
+        options.ShipBackoffMax = TimeSpan.MaxValue;
+        options.ShipBackoffJitter = 0.5;
+        var (grain, state, feed, transport, _, _, _) = Create(options);
+        feed.Append(MakeEntry("first", ticks: 20));
+        transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
+            .Returns(new ReplicationAck { Accepted = false });
+
+        Assert.That(async () => await grain.PumpForTestingAsync(), Throws.Nothing,
+            "a backoff past DateTime.MaxValue must park the shipper, not fault the failure path");
+        await grain.PumpForTestingAsync();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(state.State.ConsecutiveFailures, Is.EqualTo(1));
+            Assert.That(SendAsyncCallCount(transport), Is.EqualTo(1), "the saturated backoff still blocks retry");
+            Assert.That(
+                ReplicationShipperGrain.SaturatingRetryAt(DateTime.UtcNow, double.MaxValue).NextRetryAtUtc,
+                Is.EqualTo(DateTime.MaxValue));
+        });
     }
 
     [TestCase(false)]
