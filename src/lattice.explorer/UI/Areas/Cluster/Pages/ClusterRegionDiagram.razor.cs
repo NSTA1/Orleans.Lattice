@@ -12,7 +12,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Cluster.Pages;
 /// report: this region is the marker node at the top, and each peer hangs from it
 /// by a hairline edge. A peer whose every link is stalled is drawn dashed, hollow
 /// and labelled "Stalled" - never by colour alone. It links to the Replication
-/// area for the links themselves.
+/// area for the links themselves, when the directory shows that area.
 /// </summary>
 public partial class ClusterRegionDiagram : IDisposable
 {
@@ -27,7 +27,16 @@ public partial class ClusterRegionDiagram : IDisposable
     [Inject]
     private ExplorerNavigator Navigator { get; set; } = default!;
 
+    [CascadingParameter]
+    internal ExplorerLocation? Location { get; set; }
+
     private string ReplicationHref => Navigator.Canonicalize(ExplorerAddress.ForArea(ReplicationAreaKey)).ToHref();
+
+    /// <summary>
+    /// Whether the directory shows the Replication area as openable, so the link
+    /// never points at an area this host does not serve or this caller cannot see.
+    /// </summary>
+    private bool ReplicationShown => Location?.Shows(ReplicationAreaKey) == true;
 
     /// <inheritdoc />
     public void Dispose()

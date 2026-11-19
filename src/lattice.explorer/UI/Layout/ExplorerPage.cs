@@ -73,6 +73,14 @@ public abstract class ExplorerPage : ComponentBase
     internal ExplorerAddress Address => Location?.Address ?? Navigator.Current ?? ExplorerAddress.Home;
 
     /// <summary>
+    /// Whether the directory shows the area keyed <paramref name="areaKey"/> as openable,
+    /// so a link into it would open. Fails closed outside the layout, with no location.
+    /// </summary>
+    /// <param name="areaKey">The area's key.</param>
+    /// <returns><see langword="true"/> when the area is shown and visible.</returns>
+    internal bool Shows(string areaKey) => Location?.Shows(areaKey) == true;
+
+    /// <summary>
     /// Whether the page accepts a location at any address rather than only at one
     /// of its own routes. Only a page the head renders for every address - the
     /// not-found page - says yes.

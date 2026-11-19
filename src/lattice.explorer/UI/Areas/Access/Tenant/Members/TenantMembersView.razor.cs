@@ -42,6 +42,13 @@ public partial class TenantMembersView
     [Inject]
     internal LtToastService Toasts { get; set; } = default!;
 
+    /// <summary>The layout's location, whose directory decides whether the Tenancy area is linked.</summary>
+    [CascadingParameter]
+    internal Navigation.ExplorerLocation? Location { get; set; }
+
+    /// <summary>Whether the directory shows the Tenancy area, so the administrators link would open.</summary>
+    private bool TenancyShown => Location?.Shows(TenancyRoutes.AreaKey) == true;
+
     private string CountText
     {
         get

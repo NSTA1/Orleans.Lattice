@@ -1,3 +1,5 @@
+using Orleans.Lattice.Explorer.UI.Design.Tokens;
+using Orleans.Lattice.Explorer.UI.Navigation;
 using Bunit;
 using NSubstitute;
 using Orleans.Lattice.Api.Auth;
@@ -92,7 +94,7 @@ public sealed partial class AppReviewPageTests
         UseTenancy("acme");
         SignInAs(Admin, "admins");
         Offer(AppsTestData.TaskBoard());
-        var cut = AtTenantBindRoles();
+        var cut = AtTenantBindRoles(new FakeArea("access", "Access"));
 
         BindBoth(cut, "t/acme/ops");
 
@@ -100,9 +102,9 @@ public sealed partial class AppReviewPageTests
         Assert.That(cut.Find("a[data-lt-join='t/acme/ops']").GetAttribute("href"), Is.EqualTo("t/acme/access/groups/ops"));
     }
 
-    private IRenderedComponent<AppReviewPage> AtTenantBindRoles()
+    private IRenderedComponent<AppReviewPage> AtTenantBindRoles(params IExplorerArea[] shown)
     {
-        var cut = RenderReady(TenantReview);
+        var cut = RenderReady(TenantReview, LtBreakpoint.Expanded, shown);
         Button(cut, "Install...").Click();
         cut.WaitUntil(() => Assert.That(cut.FindAll("section[aria-labelledby=lt-apps-bind]"), Has.Count.EqualTo(1)));
         return cut;

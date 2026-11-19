@@ -1,3 +1,4 @@
+using Orleans.Lattice.Explorer.UI.Design.Tokens;
 using Bunit;
 using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
@@ -23,7 +24,7 @@ public sealed partial class AppsPageTests
         SignInAs("explorer-admin", "admins");
         Control.Install(BoundToOperators(), AppLifecycleState.Enabled);
 
-        var cut = RenderAt<AppsPage>("/t/acme/apps");
+        var cut = RenderAt<AppsPage>("/t/acme/apps", LtBreakpoint.Expanded, new FakeArea("access", "Access"));
 
         cut.WaitUntil(() => Assert.That(cut.FindAll("[data-lt-holding]"), Has.Count.EqualTo(1)));
         var row = cut.Find("section[aria-labelledby=lt-apps-installed] tbody tr.lt-table__row");

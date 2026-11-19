@@ -24,12 +24,16 @@ public sealed partial class AppPageTests
         CallerIn("admins");
         Control.Administer(Admin(), CoveringConsent());
 
-        var cut = RenderAt("apps/crm");
+        var cut = RenderAt("apps/crm", shown: new FakeArea("access", "Access"));
+        var hidden = RenderAt("apps/crm");
 
         cut.WaitUntil(() => Assert.That(cut.FindAll("[data-lt-holding]"), Has.Count.EqualTo(1)));
+        hidden.WaitUntil(() => Assert.That(hidden.FindAll("[data-lt-holding]"), Has.Count.EqualTo(1)));
         var notice = cut.Find("[data-lt-holding]");
         Assert.Multiple(() =>
         {
+            Assert.That(hidden.FindAll("a[data-lt-join]"), Is.Empty, "the Access area is not shown, so joining a group is not offered");
+            Assert.That(hidden.Find("[data-lt-holding]").QuerySelector("a[data-lt-rebind-fix]"), Is.Not.Null);
             Assert.That(notice.GetAttribute("data-lt-holding"), Is.EqualTo("none"));
             Assert.That(notice.TextContent, Does.Contain("You hold no role in CRM, so you cannot open it."));
             Assert.That(notice.TextContent, Does.Contain("Its roles are bound to groups: viewer to grp-crm-viewers, editor to grp-crm-editors."));
@@ -105,7 +109,7 @@ public sealed partial class AppPageTests
         CallerIn("admins");
         Control.Administer(Admin(), CoveringConsent());
 
-        var cut = RenderAt("apps/crm/window");
+        var cut = RenderAt("apps/crm/window", shown: new FakeArea("access", "Access"));
 
         cut.WaitUntil(() => Assert.That(cut.FindAll("[data-lt-holding=none]"), Has.Count.EqualTo(1)));
         Assert.Multiple(() =>

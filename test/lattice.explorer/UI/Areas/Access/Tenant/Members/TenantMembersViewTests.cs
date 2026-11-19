@@ -176,7 +176,7 @@ public sealed class TenantMembersViewTests : TenantAccessPagesTestContext
         TenantAccessAdmin.ListAdminSubjectsAsync("acme", Arg.Any<CancellationToken>())
             .Returns(new TenantAdminSubjectReport { TenantId = "acme", Subjects = ["zed@example.com", "t/acme/ops", "ann@example.com", "t/globex/ops"] });
 
-        var cut = RenderAt<AccessMembersPage>("t/acme/access/members");
+        var cut = RenderAt<AccessMembersPage>("t/acme/access/members", null, new FakeArea("tenancy", "Tenancy"));
 
         cut.WaitUntil(() =>
         {
@@ -191,6 +191,14 @@ public sealed class TenantMembersViewTests : TenantAccessPagesTestContext
                 "only this tenant's own group links to its page");
             Assert.That(admins.QuerySelectorAll("button"), Is.Empty, "the administrators are read-only here");
             Assert.That(admins.QuerySelector("a")!.GetAttribute("href"), Does.EndWith(TenancyRoutes.TenantMembers("acme").Format().TrimStart('/')));
+        });
+
+        var hidden = RenderAt<AccessMembersPage>("t/acme/access/members");
+        hidden.WaitUntil(() =>
+        {
+            var caveat = hidden.Find("[data-lt-implicit-members] .lt-access-caveat");
+            Assert.That(caveat.TextContent, Does.Contain("They are changed in Tenancy, Admins."));
+            Assert.That(caveat.QuerySelector("a"), Is.Null, "the Tenancy area is not shown, so it is named without a link");
         });
     }
 

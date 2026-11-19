@@ -737,7 +737,8 @@ tree, changes nothing, and is described as expensive. It runs on the cluster as 
 offers **Stop re-measuring**, and reads the refreshed shallow summary once it
 succeeds. A re-measure still running is picked up again when the overview opens. The region diagram rolls
 up the replication peer report, draws the local region and peers, marks stalled
-peers without relying on colour alone, and links to Replication.
+peers without relying on colour alone, and links to Replication only when the
+directory shows that area.
 
 The tree list's filter matches a tree's name (which carries its tenant and app), its
 owner as the Owner column reads it ("app crm, tenant acme"), or its state as the State

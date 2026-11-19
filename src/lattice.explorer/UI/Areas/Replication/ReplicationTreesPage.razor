@@ -187,9 +187,13 @@ else
 
     private RenderFragment RenderOwner(ReplicationTreeRow row) => __builder =>
     {
-        if (row.AppSlug is { } slug)
+        if (row.AppSlug is { } slug && Shows(Apps.Catalogue.AppsRoutes.AreaKey))
         {
             <a class="lt-replication-owner" href="@AppHref(slug)">App <span class="lt-shell-mono">@slug</span></a>
+        }
+        else if (row.AppSlug is { } plainSlug)
+        {
+            <span class="lt-replication-owner">App <span class="lt-shell-mono">@plainSlug</span></span>
         }
         else
         {
@@ -211,9 +215,13 @@ else
 
     private RenderFragment RenderAction(ReplicationTreeRow row) => __builder =>
     {
-        if (row.AppSlug is { } slug)
+        if (row.AppSlug is { } slug && Shows(Apps.Catalogue.AppsRoutes.AreaKey))
         {
             <a class="lt-btn lt-btn--quiet" href="@AppHref(slug)" data-lt-replication-app="@slug">Managed by <span class="lt-shell-mono">@slug</span></a>
+        }
+        else if (row.AppSlug is { } plainSlug)
+        {
+            <span class="lt-replication-owner" data-lt-replication-app="@plainSlug">Managed by <span class="lt-shell-mono">@plainSlug</span></span>
         }
         else if (row.Entry.Source == ReplicationEnrollmentSource.Static)
         {

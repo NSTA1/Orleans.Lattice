@@ -97,13 +97,23 @@ public abstract class TenancyTestContext : ShellChromeTestContext
     /// <summary>The circuit's tenancy catalogue.</summary>
     internal TenancyCatalog Catalog => Services.GetRequiredService<TenancyCatalog>();
 
-    /// <summary>Navigates to <paramref name="relative"/> and renders <typeparamref name="TPage"/> there, at <paramref name="band"/>.</summary>
-    internal IRenderedComponent<TPage> RenderAt<TPage>(string relative, LtBreakpoint? band = null)
+    /// <summary>
+    /// Navigates to <paramref name="relative"/> and renders <typeparamref name="TPage"/> there, at <paramref name="band"/>.
+    /// With <paramref name="alsoShown"/>, the directory shows those areas, so links into them are offered.
+    /// </summary>
+    internal IRenderedComponent<TPage> RenderAt<TPage>(string relative, LtBreakpoint? band = null, params IExplorerArea[] alsoShown)
         where TPage : IComponent
     {
         Navigation.NavigateTo(relative);
         return Render<TPage>(parameters =>
         {
+            if (alsoShown.Length > 0)
+            {
+                var address = Services.GetRequiredService<ExplorerNavigator>().Current ?? Orleans.Lattice.Explorer.UI.Navigation.Address.ExplorerAddress.Home;
+                var entries = alsoShown.Select(area => new ExplorerAreaEntry(area, AreaAvailability.Visible)).ToArray();
+                parameters.AddCascadingValue(new ExplorerLocation(address, entries, EntriesLoaded: true, TenancyActive: address.Tenant is not null));
+            }
+
             if (band is { } value)
             {
                 parameters.AddCascadingValue(LtBreakpointCascade.Name, value);

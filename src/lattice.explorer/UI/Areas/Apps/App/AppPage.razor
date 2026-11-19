@@ -220,7 +220,14 @@ else
                  DetailTitle="tree => tree.Name">
             <ChildContent>
                 <LtColumn TItem="AppPageTree" Title="Tree" RowHeader="true" Mono="true" SortBy="tree => tree.Name" Value="tree => tree.Name">
-                    <a href="@Href(AppPageAddresses.DataTree(Address.Tenant, model.Slug, context.Name))">@context.Name</a>
+                    @if (Shows(AppPageAddresses.DataArea))
+                    {
+                        <a href="@Href(AppPageAddresses.DataTree(Address.Tenant, model.Slug, context.Name))">@context.Name</a>
+                    }
+                    else
+                    {
+                        @context.Name
+                    }
                 </LtColumn>
                 <LtColumn TItem="AppPageTree" Title="Adopted" Value="@(tree => tree.Adopted ? "Adopted" : "Owned")" />
                 <LtColumn TItem="AppPageTree" Title="Shards" Align="LtColumnAlign.End" Value="tree => AppPageText.Declared(tree.ShardCount)" />
@@ -238,7 +245,10 @@ else
                 </LtCompactRow>
             </CompactRow>
             <DetailActions>
-                <a class="lt-btn" href="@Href(AppPageAddresses.DataTree(Address.Tenant, model.Slug, context.Name))">Open in Data</a>
+                @if (Shows(AppPageAddresses.DataArea))
+                {
+                    <a class="lt-btn" href="@Href(AppPageAddresses.DataTree(Address.Tenant, model.Slug, context.Name))">Open in Data</a>
+                }
             </DetailActions>
         </LtTable>
     </text>;
@@ -308,9 +318,12 @@ else
             </ChildContent>
             <EmptyContent>This app declares no replication intent.</EmptyContent>
         </LtTable>
-        <p class="lt-app-actions">
-            <a class="lt-btn" href="@Href(AppPageAddresses.Replication(Address.Tenant, model.Slug))">See replication for this app</a>
-        </p>
+        @if (Shows(AppPageAddresses.ReplicationArea))
+        {
+            <p class="lt-app-actions">
+                <a class="lt-btn" href="@Href(AppPageAddresses.Replication(Address.Tenant, model.Slug))">See replication for this app</a>
+            </p>
+        }
     </text>;
 
     private RenderFragment RenderConsent(AppPageModel model) => @<text>

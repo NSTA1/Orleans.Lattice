@@ -43,8 +43,14 @@
                         case AppGroupMembership.NotMember:
                             <p class="lt-apps-hint" data-lt-holding="not-member">
                                 You are not in @group, so you will not hold the @name role.
-                                <a class="lt-apps-link" href="@Navigator.Canonicalize(AppBindingGroups.JoinAddress(group)).ToHref()" data-lt-join="@group">Add me to @group</a>,
-                                or bind it to a group you are in.
+                                @if (AccessShown)
+                                {
+                                    <a class="lt-apps-link" href="@Navigator.Canonicalize(AppBindingGroups.JoinAddress(group)).ToHref()" data-lt-join="@group">Add me to @group</a><text>, or bind it to a group you are in.</text>
+                                }
+                                else
+                                {
+                                    <text>Bind it to a group you are in.</text>
+                                }
                             </p>
                             break;
                         default:
@@ -81,6 +87,13 @@
 
     [CascadingParameter]
     internal AppInstallFlow? Flow { get; set; }
+
+    /// <summary>The layout's location, whose directory decides whether the Access area is linked.</summary>
+    [CascadingParameter]
+    internal ExplorerLocation? Location { get; set; }
+
+    /// <summary>Whether the directory shows the Access area, so a join link would open.</summary>
+    private bool AccessShown => Location?.Shows(Access.AccessRoutes.AreaKey) == true;
 
     [Inject]
     internal ExplorerSuggestions Suggestions { get; set; } = default!;

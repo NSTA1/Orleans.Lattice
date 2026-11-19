@@ -50,6 +50,10 @@ public partial class TenancyTenantPage : IDisposable
 
     private bool IsActive => string.Equals(TenantId, Catalog.ActiveTenant, StringComparison.Ordinal);
 
+    private string AppsCountText => _apps is { } apps
+        ? (apps == 1 ? "1 app installed" : $"{TenancyFormat.Count(apps)} apps installed")
+        : "Installed apps";
+
     private LtDialogPlacement DialogPlacement => Breakpoint == LtBreakpoint.Compact ? LtDialogPlacement.End : LtDialogPlacement.Center;
 
     /// <summary>Cancels the reads started for this page.</summary>

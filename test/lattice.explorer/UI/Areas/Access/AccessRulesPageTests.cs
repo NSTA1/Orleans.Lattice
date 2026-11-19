@@ -54,7 +54,7 @@ public sealed class AccessRulesPageTests : AccessTestContext
     {
         Admin.WithRule(AppRule("crm"));
 
-        var cut = RenderAt<AccessRulesPage>("access/rules");
+        var cut = RenderAt<AccessRulesPage>("access/rules", null, new FakeArea("apps", "Apps"));
 
         cut.WaitUntil(() =>
         {
@@ -62,6 +62,10 @@ public sealed class AccessRulesPageTests : AccessTestContext
             Assert.That(owner.TextContent, Is.EqualTo("app crm"));
             Assert.That(owner.GetAttribute("href"), Is.EqualTo("apps/crm/roles"));
         });
+
+        var hidden = RenderAt<AccessRulesPage>("access/rules");
+        hidden.WaitUntil(() => Assert.That(hidden.Find("tbody td:last-child").TextContent.Trim(), Is.EqualTo("app crm")));
+        Assert.That(hidden.FindAll("tbody td:last-child a"), Is.Empty, "the Apps area is not shown, so the app is named without a link");
     }
 
     [Test]
@@ -70,7 +74,7 @@ public sealed class AccessRulesPageTests : AccessTestContext
         UseTenancy("acme");
         Admin.WithRule(AppRule("crm"));
 
-        var cut = RenderAt<AccessRulesPage>("access/rules");
+        var cut = RenderAt<AccessRulesPage>("access/rules", null, new FakeArea("apps", "Apps"));
 
         cut.WaitUntil(() =>
         {

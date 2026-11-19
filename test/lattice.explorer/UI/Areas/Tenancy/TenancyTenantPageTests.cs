@@ -21,10 +21,14 @@ public sealed class TenancyTenantPageTests : TenancyTestContext
     {
         UseTenancyAs(isOperator: true);
 
-        var cut = RenderAt<TenancyTenantPage>("tenancy/acme");
+        var cut = RenderAt<TenancyTenantPage>("tenancy/acme", null, new FakeArea("apps", "Apps"));
+        var hidden = RenderAt<TenancyTenantPage>("tenancy/acme");
 
+        hidden.WaitUntil(() => Assert.That(Facts(hidden)["Apps"], Is.EqualTo("2 apps installed")));
+        Assert.That(hidden.FindAll(".lt-dl__row a").Select(link => link.TextContent), Has.None.EqualTo("2 apps installed"), "the Apps area is not shown, so the count is not linked");
         cut.WaitUntil(() =>
         {
+            Assert.That(cut.FindAll(".lt-dl__row a").Single(link => link.TextContent == "2 apps installed").GetAttribute("href"), Is.EqualTo("t/acme/apps"));
             Assert.That(cut.Find("h1").TextContent, Is.EqualTo("acme"));
             Assert.That(Facts(cut), Is.EqualTo(new Dictionary<string, string>
             {

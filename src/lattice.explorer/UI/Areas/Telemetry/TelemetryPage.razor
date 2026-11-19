@@ -177,7 +177,10 @@ else
         <p class="lt-telemetry-filter">
             Narrowed to tree <span class="lt-shell-mono">@tree</span>.
             <a class="lt-telemetry-link" href="@ClearTreeHref">Show every tree</a>
-            <a class="lt-telemetry-link" href="@DataHref(tree)">Open @tree in Data</a>
+            @if (Shows(DataAreaKey))
+            {
+                <a class="lt-telemetry-link" href="@DataHref(tree)">Open @tree in Data</a>
+            }
         </p>
     }
 
@@ -200,6 +203,7 @@ else
     else
     {
         <div class="lt-telemetry-board">
+            @{ var dataLink = Shows(DataAreaKey) ? DataHref : (Func<string, string>?)null; }
             @foreach (var chart in VisibleCharts)
             {
                 var ask = TelemetryChartRequest.For(chart, _window, _now, Tenancy.IsActive);
@@ -212,7 +216,7 @@ else
                                 Generation="_generation"
                                 TableHref="@ViewHref(true)"
                                 TreeHref="TreeHref"
-                                DataHref="DataHref"
+                                DataHref="dataLink"
                                 OnDenied="OnDenied"
                                 OnScope="OnScope" />
             }

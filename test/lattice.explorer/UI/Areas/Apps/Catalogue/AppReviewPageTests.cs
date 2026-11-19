@@ -1,3 +1,4 @@
+using Orleans.Lattice.Explorer.UI.Navigation;
 using Bunit;
 using Orleans.Lattice.Api.Apps;
 using Orleans.Lattice.Explorer.UI.Areas.Apps.Catalogue;
@@ -262,9 +263,9 @@ public sealed partial class AppReviewPageTests : AppsTestContext
         Catalog.Offers.Add(AppsTestData.Offer(app, source.Key));
     }
 
-    private IRenderedComponent<AppReviewPage> RenderReady(string address, LtBreakpoint breakpoint = LtBreakpoint.Expanded)
+    private IRenderedComponent<AppReviewPage> RenderReady(string address, LtBreakpoint breakpoint = LtBreakpoint.Expanded, params IExplorerArea[] shown)
     {
-        var cut = RenderAt<AppReviewPage>(address, breakpoint);
+        var cut = RenderAt<AppReviewPage>(address, breakpoint, shown);
         cut.WaitUntil(() => Assert.That(cut.FindAll("section[aria-labelledby=lt-apps-identity], .lt-apps-status, .lt-apps-error"), Is.Not.Empty));
         return cut;
     }

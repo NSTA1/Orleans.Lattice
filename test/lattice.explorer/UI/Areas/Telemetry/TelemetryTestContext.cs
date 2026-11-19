@@ -36,11 +36,21 @@ public abstract class TelemetryTestContext : ShellChromeTestContext
     /// <summary>Navigates to <paramref name="relative"/> and renders the Telemetry page there.</summary>
     /// <param name="relative">The base-relative address, such as <c>telemetry/latency?range=1h</c>.</param>
     /// <param name="band">The width band the layout cascades.</param>
+    /// <param name="alsoShown">Areas the directory shows, so links into them are offered; none cascades no location.</param>
     /// <returns>The rendered page.</returns>
-    internal IRenderedComponent<TelemetryPage> RenderPage(string relative, LtBreakpoint band = LtBreakpoint.Expanded)
+    internal IRenderedComponent<TelemetryPage> RenderPage(string relative, LtBreakpoint band = LtBreakpoint.Expanded, params IExplorerArea[] alsoShown)
     {
         Navigation.NavigateTo(relative);
-        return Render<TelemetryPage>(parameters => parameters.AddCascadingValue(LtBreakpointCascade.Name, band));
+        return Render<TelemetryPage>(parameters =>
+        {
+            parameters.AddCascadingValue(LtBreakpointCascade.Name, band);
+            if (alsoShown.Length > 0)
+            {
+                var address = Services.GetRequiredService<ExplorerNavigator>().Current ?? Orleans.Lattice.Explorer.UI.Navigation.Address.ExplorerAddress.Home;
+                var entries = alsoShown.Select(area => new ExplorerAreaEntry(area, AreaAvailability.Visible)).ToArray();
+                parameters.AddCascadingValue(new ExplorerLocation(address, entries, EntriesLoaded: true, TenancyActive: false));
+            }
+        });
     }
 
     /// <summary>The circuit's shared telemetry catalogue.</summary>

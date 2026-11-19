@@ -53,7 +53,14 @@ else
         @if (_workspace.Row.Declaration is { } declaration)
         {
             <span>
-                Declared by <a href="@_workspace.Href(SchemaAddresses.App(declaration.Slug))">app <span class="lt-shell-mono">@declaration.Slug</span> @declaration.AppVersion</a>:
+                Declared by @if (Shows(SchemaAddresses.AppsAreaKey))
+                {
+                    <a href="@_workspace.Href(SchemaAddresses.App(declaration.Slug))">app <span class="lt-shell-mono">@declaration.Slug</span> @declaration.AppVersion</a>
+                }
+                else
+                {
+                    <span>app <span class="lt-shell-mono">@declaration.Slug</span> @declaration.AppVersion</span>
+                }:
                 family <span class="lt-shell-mono">@declaration.Family</span>, version @declaration.Version@(declaration.StrictIngest ? ", strict ingest" : string.Empty)
             </span>
         }

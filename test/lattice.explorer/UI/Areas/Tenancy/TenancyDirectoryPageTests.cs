@@ -277,7 +277,7 @@ public sealed partial class TenancyDirectoryPageTests : TenancyTestContext
     {
         UseTenancyAs(isOperator: true);
 
-        var cut = RenderAt<TenancyDirectoryPage>("tenancy", LtBreakpoint.Compact);
+        var cut = RenderAt<TenancyDirectoryPage>("tenancy", LtBreakpoint.Compact, new FakeArea("apps", "Apps"));
 
         cut.WaitUntil(() =>
         {
@@ -291,6 +291,19 @@ public sealed partial class TenancyDirectoryPageTests : TenancyTestContext
 
         cut.FindAll("button").Single(button => button.TextContent == "New tenant").Click();
         cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-dialog").Any(dialog => dialog.ClassList.Contains("lt-dialog--end")), Is.True));
+    }
+
+    [Test]
+    public void Without_the_apps_area_shown_a_tenants_sheet_does_not_offer_its_apps()
+    {
+        UseTenancyAs(isOperator: true);
+
+        var cut = RenderAt<TenancyDirectoryPage>("tenancy", LtBreakpoint.Compact);
+        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-table-list__open"), Is.Not.Empty));
+        cut.Find(".lt-table-list__open").Click();
+
+        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-dialog .lt-dialog__actions a").Select(link => link.GetAttribute("href")),
+            Is.EqualTo(new[] { "tenancy/acme", "tenancy/acme/regions", "t/acme/tenancy" })));
     }
 
     private IRenderedComponent<TenancyDirectoryPage> OpenCreate()

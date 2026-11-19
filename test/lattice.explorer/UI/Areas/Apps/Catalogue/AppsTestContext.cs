@@ -76,12 +76,14 @@ public abstract class AppsTestContext : ShellChromeTestContext
     /// <typeparam name="TPage">The page.</typeparam>
     /// <param name="address">The canonical address.</param>
     /// <param name="breakpoint">The width band the layout cascades.</param>
-    internal IRenderedComponent<TPage> RenderAt<TPage>(string address, LtBreakpoint breakpoint = LtBreakpoint.Expanded)
+    /// <param name="shown">The areas the directory shows as visible, so links into them are offered.</param>
+    internal IRenderedComponent<TPage> RenderAt<TPage>(string address, LtBreakpoint breakpoint = LtBreakpoint.Expanded, params IExplorerArea[] shown)
         where TPage : IComponent
     {
         var parsed = ExplorerAddress.Parse(address);
         Navigation.NavigateTo(parsed.ToHref());
-        var location = new ExplorerLocation(parsed, [], EntriesLoaded: true, TenancyActive: parsed.Tenant is not null);
+        var entries = shown.Select(area => new ExplorerAreaEntry(area, AreaAvailability.Visible)).ToArray();
+        var location = new ExplorerLocation(parsed, entries, EntriesLoaded: true, TenancyActive: parsed.Tenant is not null);
         return Render<TPage>(parameters => parameters
             .AddCascadingValue(location)
             .AddCascadingValue(LtBreakpointCascade.Name, breakpoint));

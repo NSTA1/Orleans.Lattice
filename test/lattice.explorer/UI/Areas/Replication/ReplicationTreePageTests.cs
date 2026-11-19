@@ -24,7 +24,7 @@ public sealed class ReplicationTreePageTests : ReplicationTestContext
         UseEstate();
         Control.Trees.Add(Tree("a/crm/contacts"));
 
-        var cut = RenderAt<ReplicationTreePage>("replication/trees/a/crm/contacts");
+        var cut = RenderAt<ReplicationTreePage>("replication/trees/a/crm/contacts", alsoShown: Apps);
 
         cut.WaitUntil(() =>
         {
@@ -226,8 +226,22 @@ public sealed class ReplicationTreePageTests : ReplicationTestContext
         UseTenancy("acme");
         UseEstate();
 
-        var cut = RenderAt<ReplicationTreePage>("t/acme/replication/trees/a/crm/contacts", tenancy: true);
+        var cut = RenderAt<ReplicationTreePage>("t/acme/replication/trees/a/crm/contacts", tenancy: true, alsoShown: Apps);
 
         cut.WaitUntil(() => Assert.That(cut.Find(".lt-shell-page-lede a").GetAttribute("href"), Is.EqualTo("t/acme/apps/crm/replication")));
     }
+
+    [Test]
+    public void Without_the_apps_area_shown_the_owning_app_is_named_without_a_link()
+    {
+        UseEstate();
+        Control.Trees.Add(Tree("a/crm/contacts"));
+
+        var cut = RenderAt<ReplicationTreePage>("replication/trees/a/crm/contacts");
+
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-shell-page-lede").TextContent, Does.Contain("owned by app crm")));
+        Assert.That(cut.FindAll(".lt-shell-page-lede a"), Is.Empty);
+    }
+
+    private static FakeArea Apps => new("apps", "Apps");
 }

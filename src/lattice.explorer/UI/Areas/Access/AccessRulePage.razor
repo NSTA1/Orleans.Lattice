@@ -42,9 +42,13 @@ else
     {
         <p class="lt-access-notice" role="note" data-lt-app-owned="true">
             This rule is owned by
-            @if (owner.HasSlug)
+            @if (owner.HasSlug && Shows(Apps.Catalogue.AppsRoutes.AreaKey))
             {
                 <a href="@AppRolesHref(owner.Slug)">the @owner.Slug app</a>
+            }
+            else if (owner.HasSlug)
+            {
+                <span>the @owner.Slug app</span>
             }
             else
             {
@@ -90,7 +94,7 @@ else
         </LtDefinition>
     </LtDefinitionList>
     <div class="lt-access-actions">
-        @if (_owner is { } linked && linked.HasSlug)
+        @if (_owner is { } linked && linked.HasSlug && Shows(Apps.Catalogue.AppsRoutes.AreaKey))
         {
             <a class="lt-btn" href="@AppRolesHref(linked.Slug)">Open @linked.Slug roles</a>
         }

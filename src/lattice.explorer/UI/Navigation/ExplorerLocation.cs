@@ -22,4 +22,24 @@ internal sealed record ExplorerLocation(
     /// <summary>The entry of the current area, or <see langword="null"/> at Home or when the area is not shown.</summary>
     public ExplorerAreaEntry? CurrentEntry =>
         Address.Area is { } key ? Entries.FirstOrDefault(entry => string.Equals(entry.Area.Key, key, StringComparison.Ordinal)) : null;
+
+    /// <summary>
+    /// Whether the directory shows the area keyed <paramref name="areaKey"/> as openable now.
+    /// A hidden, unavailable or unchecked area answers <see langword="false"/>, so a
+    /// link into another area is offered only when that area would open.
+    /// </summary>
+    /// <param name="areaKey">The area's key.</param>
+    /// <returns><see langword="true"/> when the area's entry is visible.</returns>
+    public bool Shows(string areaKey)
+    {
+        foreach (var entry in Entries)
+        {
+            if (entry.IsVisible && string.Equals(entry.Area.Key, areaKey, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 }

@@ -125,7 +125,7 @@ public sealed class TelemetryBoardPageTests : TelemetryTestContext
     [Test]
     public void A_tree_filter_narrows_every_chart_that_is_broken_down_by_tree_and_links_to_Data()
     {
-        var cut = RenderPage("telemetry/storage?tree=a%2Fcrm%2Forders");
+        var cut = RenderPage("telemetry/storage?tree=a%2Fcrm%2Forders", LtBreakpoint.Expanded, new FakeArea("data", "Data"));
 
         cut.WaitUntil(() =>
         {
@@ -134,6 +134,26 @@ public sealed class TelemetryBoardPageTests : TelemetryTestContext
             Assert.That(filter.TextContent, Does.Contain("Narrowed to tree a/crm/orders."));
             Assert.That(filter.QuerySelectorAll("a").Select(link => link.GetAttribute("href")), Is.EqualTo(new[] { "telemetry/storage", "data/a/crm/orders" }));
         });
+
+        var hidden = RenderPage("telemetry/storage?tree=a%2Fcrm%2Forders");
+        hidden.WaitUntil(() => Assert.That(
+            hidden.Find(".lt-telemetry-filter").QuerySelectorAll("a").Select(link => link.GetAttribute("href")),
+            Is.EqualTo(new[] { "telemetry/storage" }),
+            "the Data area is not shown, so the tree is not linked there"));
+    }
+
+    [Test]
+    public void A_legend_links_a_tree_into_Data_only_while_the_data_area_is_shown()
+    {
+        Telemetry.Answer("tree.write.latency_p95", request => TelemetryTestData.Response(request, default,
+            TelemetryTestData.Series("a/crm/orders", TelemetryTestData.Now, 1, 2)));
+
+        var shown = RenderPage("telemetry/latency", LtBreakpoint.Expanded, new FakeArea("data", "Data"));
+        var hidden = RenderPage("telemetry/latency");
+
+        shown.WaitUntil(() => Assert.That(shown.Find("a.lt-telemetry-legend__data").GetAttribute("href"), Is.EqualTo("data/a/crm/orders")));
+        hidden.WaitUntil(() => Assert.That(hidden.FindAll(".lt-telemetry-legend__name"), Is.Not.Empty));
+        Assert.That(hidden.FindAll("a.lt-telemetry-legend__data"), Is.Empty);
     }
 
     [Test]

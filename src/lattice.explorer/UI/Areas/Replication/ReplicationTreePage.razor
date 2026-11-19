@@ -28,7 +28,15 @@
     }
     @if (_appSlug is { } slug)
     {
-        <text> - owned by </text><a href="@AppHref(slug)">app <span class="lt-shell-mono">@slug</span></a>
+        <text> - owned by </text>
+        @if (Shows(Apps.Catalogue.AppsRoutes.AreaKey))
+        {
+            <a href="@AppHref(slug)">app <span class="lt-shell-mono">@slug</span></a>
+        }
+        else
+        {
+            <span>app <span class="lt-shell-mono">@slug</span></span>
+        }
     }
 </p>
 

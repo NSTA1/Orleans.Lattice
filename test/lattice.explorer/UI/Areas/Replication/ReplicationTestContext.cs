@@ -54,14 +54,16 @@ public abstract class ReplicationTestContext : ShellChromeTestContext
 
     /// <summary>
     /// Renders <typeparamref name="TPage"/> at <paramref name="relative"/>, with the
-    /// location the layout would cascade and, optionally, a measured width band.
+    /// location the layout would cascade and, optionally, a measured width band. The
+    /// directory shows <paramref name="alsoShown"/>, so links into those areas are offered.
     /// </summary>
-    internal IRenderedComponent<TPage> RenderAt<TPage>(string relative, LtBreakpoint? band = null, bool tenancy = false)
+    internal IRenderedComponent<TPage> RenderAt<TPage>(string relative, LtBreakpoint? band = null, bool tenancy = false, params IExplorerArea[] alsoShown)
         where TPage : IComponent
     {
         Navigation.NavigateTo(relative);
         var address = ExplorerAddress.Parse(relative);
-        var location = new ExplorerLocation(address, [], EntriesLoaded: true, TenancyActive: tenancy);
+        var entries = alsoShown.Select(area => new ExplorerAreaEntry(area, AreaAvailability.Visible)).ToArray();
+        var location = new ExplorerLocation(address, entries, EntriesLoaded: true, TenancyActive: tenancy);
         return Render<TPage>(parameters =>
         {
             parameters.AddCascadingValue(location);

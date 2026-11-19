@@ -21,7 +21,7 @@ public sealed class MyTenantPageTests : TenancyTestContext
         Cluster.Tenants["acme"].Quotas = new TenantQuotasDescriptor { MaxBytes = 1000 };
         Cluster.Tenants["acme"].Usage["bytes"] = 250;
 
-        var cut = RenderAt<MyTenantPage>("t/acme/tenancy");
+        var cut = RenderAt<MyTenantPage>("t/acme/tenancy", null, new FakeArea("apps", "Apps"));
 
         cut.WaitUntil(() =>
         {
@@ -43,6 +43,10 @@ public sealed class MyTenantPageTests : TenancyTestContext
             Assert.That(cut.FindAll(".lt-tenancy-nav__link").Select(link => link.GetAttribute("href")),
                 Is.EqualTo(new[] { "t/acme/tenancy", "t/acme/tenancy/members", "t/acme/tenancy/quota", "t/acme/tenancy/regions", "t/acme/tenancy/sharing" }));
         });
+
+        var hidden = RenderAt<MyTenantPage>("t/acme/tenancy");
+        hidden.WaitUntil(() => Assert.That(Facts(hidden)["Apps"], Is.EqualTo("2 apps installed")));
+        Assert.That(hidden.FindAll(".lt-dl a").Select(link => link.GetAttribute("href")), Has.None.EqualTo("t/acme/apps"), "the Apps area is not shown, so the count is not linked");
     }
 
     [Test]

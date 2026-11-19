@@ -1,3 +1,4 @@
+using Orleans.Lattice.Explorer.UI.Design.Tokens;
 using Bunit;
 using NSubstitute;
 using Orleans.Lattice.Api.Apps;
@@ -310,9 +311,9 @@ public sealed partial class AppReviewPageTests
         cut.WaitUntil(() => Assert.That(Control.Installs.Single().Version, Is.EqualTo("2.0.0")));
     }
 
-    private IRenderedComponent<AppReviewPage> AtBindRoles()
+    private IRenderedComponent<AppReviewPage> AtBindRoles(params IExplorerArea[] shown)
     {
-        var cut = RenderReady(Review);
+        var cut = RenderReady(Review, LtBreakpoint.Expanded, shown);
         Button(cut, "Install...").Click();
         cut.WaitUntil(() => Assert.That(cut.FindAll("section[aria-labelledby=lt-apps-bind]"), Has.Count.EqualTo(1)));
         return cut;

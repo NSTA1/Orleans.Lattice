@@ -45,7 +45,14 @@ else
         <LtDefinition Term="Kind">@(view.IsDefault ? "The reserved default tenant" : "Tenant")</LtDefinition>
         <LtDefinition Term="Resident in" Mono="true"><a href="@Href(TenancyRoutes.TenantRegions(TenantId))" aria-label="@($"Resident in: {TenancyFormat.ResidencyText(view.Regions)}. Open the regions of tenant {TenantId}")">@TenancyFormat.ResidencyText(view.Regions)</a></LtDefinition>
         <LtDefinition Term="Allowed" Mono="true"><a href="@Href(TenancyRoutes.TenantRegions(TenantId))" aria-label="@($"Allowed: {TenancyFormat.RegionList(TenancyFormat.AllowedRegions(view.Regions))}. Open the regions of tenant {TenantId}")">@TenancyFormat.RegionList(TenancyFormat.AllowedRegions(view.Regions))</a></LtDefinition>
-        <LtDefinition Term="Apps"><a href="@Href(TenancyRoutes.Apps(TenantId))">@(_apps is { } apps ? (apps == 1 ? "1 app installed" : $"{TenancyFormat.Count(apps)} apps installed") : "Installed apps")</a></LtDefinition>
+        <LtDefinition Term="Apps">@if (Shows(Apps.Catalogue.AppsRoutes.AreaKey))
+            {
+                <a href="@Href(TenancyRoutes.Apps(TenantId))">@AppsCountText</a>
+            }
+            else
+            {
+                @AppsCountText
+            }</LtDefinition>
         <LtDefinition Term="Workspace"><a href="@Href(TenancyRoutes.MyTenant(TenantId))">@(IsActive ? "Open the tenant's workspace" : "Scope to this tenant")</a></LtDefinition>
         <LtDefinition Term="Quota"><a href="@Href(TenancyRoutes.TenantQuota(TenantId))">@(view.IsDefault ? "Use against quota" : "Use against quota, and its limits")</a></LtDefinition>
     </LtDefinitionList>

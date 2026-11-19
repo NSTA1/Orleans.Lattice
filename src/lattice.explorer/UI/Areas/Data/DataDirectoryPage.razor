@@ -115,9 +115,13 @@ else
             @if (_anyApp)
             {
                 <LtColumn TItem="DataTreeEntry" Context="entry" Title="App" SortBy="@(entry => entry.AppSlug)">
-                    @if (entry.AppSlug is { } slug)
+                    @if (entry.AppSlug is { } slug && Shows(DataArea.AppsAreaKey))
                     {
                         <a class="lt-shell-mono lt-data-key" href="@AppHref(slug)">@slug</a>
+                    }
+                    else if (entry.AppSlug is { } plainSlug)
+                    {
+                        <span class="lt-shell-mono lt-data-key">@plainSlug</span>
                     }
                 </LtColumn>
             }

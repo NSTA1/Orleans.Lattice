@@ -76,17 +76,34 @@ public abstract class AccessTestContext : ShellChromeTestContext
     internal static LatticeAuthorizationRule AppRule(string slug, string role = "viewer", string tree = "a/crm/orders") =>
         new($"app:{slug}:{role}:0123456789abcdef", LatticeSubjectSelector.Group($"{slug}-{role}"), LatticeScope.Tree(tree), LatticeOperation.Read, LatticeEffect.Allow);
 
-    /// <summary>Navigates to <paramref name="relative"/> and renders <typeparamref name="TPage"/> there, at <paramref name="band"/>.</summary>
-    internal IRenderedComponent<TPage> RenderAt<TPage>(string relative, LtBreakpoint? band = null)
+    /// <summary>
+    /// Navigates to <paramref name="relative"/> and renders <typeparamref name="TPage"/> there, at <paramref name="band"/>.
+    /// With <paramref name="alsoShown"/>, the directory shows those areas beside Access, so links into them are offered.
+    /// </summary>
+    internal IRenderedComponent<TPage> RenderAt<TPage>(string relative, LtBreakpoint? band = null, params IExplorerArea[] alsoShown)
         where TPage : IComponent
     {
         Navigation.NavigateTo(relative);
         return Render<TPage>(parameters =>
         {
+            if (alsoShown.Length > 0)
+            {
+                parameters.AddCascadingValue(ShownLocation(alsoShown));
+            }
+
             if (band is { } value)
             {
                 parameters.AddCascadingValue(LtBreakpointCascade.Name, value);
             }
         });
+    }
+
+    /// <summary>A location at the current address whose directory shows Access and <paramref name="alsoShown"/>.</summary>
+    internal ExplorerLocation ShownLocation(params IExplorerArea[] alsoShown)
+    {
+        var area = Services.GetServices<IExplorerArea>().OfType<AccessArea>().First();
+        var entries = alsoShown.Prepend(area).Select(shown => new ExplorerAreaEntry(shown, AreaAvailability.Visible)).ToArray();
+        var address = Services.GetRequiredService<ExplorerNavigator>().Current ?? Orleans.Lattice.Explorer.UI.Navigation.Address.ExplorerAddress.Home;
+        return new ExplorerLocation(address, entries, EntriesLoaded: true, TenancyActive: false);
     }
 }

@@ -65,7 +65,14 @@ else
         <LtDefinition Term="Resident in" Mono="true"><a href="@Href(TenancyRoutes.MyTenant(TenantId, TenancyRoutes.RegionsSegment))" aria-label="@($"Resident in: {TenancyFormat.ResidencyText(status.Regions)}. Open the regions of tenant {TenantId}")">@TenancyFormat.ResidencyText(status.Regions)</a></LtDefinition>
         <LtDefinition Term="Allowed" Mono="true"><a href="@Href(TenancyRoutes.MyTenant(TenantId, TenancyRoutes.RegionsSegment))" aria-label="@($"Allowed: {TenancyFormat.RegionList(TenancyFormat.AllowedRegions(status.Regions))}. Open the regions of tenant {TenantId}")">@TenancyFormat.RegionList(TenancyFormat.AllowedRegions(status.Regions))</a></LtDefinition>
         <LtDefinition Term="Quota use">@(_quota ?? "Unknown")</LtDefinition>
-        <LtDefinition Term="Apps"><a href="@Href(TenancyRoutes.Apps(TenantId))">@AppsText</a></LtDefinition>
+        <LtDefinition Term="Apps">@if (Shows(Apps.Catalogue.AppsRoutes.AreaKey))
+            {
+                <a href="@Href(TenancyRoutes.Apps(TenantId))">@AppsText</a>
+            }
+            else
+            {
+                @AppsText
+            }</LtDefinition>
     </LtDefinitionList>
     @if (status.Status == TenantLifecycleStatus.Suspended)
     {

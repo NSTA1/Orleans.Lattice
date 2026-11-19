@@ -5,6 +5,8 @@ using Orleans.Lattice.Explorer.UI.Areas.Apps.App;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
 using Orleans.Lattice.Explorer.UI.Framing;
+using Orleans.Lattice.Explorer.UI.Navigation;
+using Orleans.Lattice.Explorer.UI.Navigation.Address;
 using Orleans.Lattice.Explorer.Tests.UI.Navigation;
 using Orleans.Lattice.Explorer.UI.Transport;
 
@@ -42,13 +44,25 @@ public abstract class AppPageTestContext : ShellChromeTestContext
     /// <summary>Navigates to <paramref name="relative"/> and renders the app page there.</summary>
     /// <param name="relative">The base-relative address, such as <c>apps/crm/trees</c>.</param>
     /// <param name="compact">Whether the layout is in its compact (below 768px) width band.</param>
+    /// <param name="shown">The areas the directory shows as visible, so links into them are offered; none cascades no location.</param>
     /// <returns>The rendered page.</returns>
-    internal IRenderedComponent<AppPage> RenderAt(string relative, bool compact = false)
+    internal IRenderedComponent<AppPage> RenderAt(string relative, bool compact = false, params IExplorerArea[] shown)
     {
         Navigation.NavigateTo(relative);
-        return compact
-            ? Render<AppPage>(parameters => parameters.AddCascadingValue(LtBreakpointCascade.Name, LtBreakpoint.Compact))
-            : Render<AppPage>();
+        return Render<AppPage>(parameters =>
+        {
+            if (shown.Length > 0)
+            {
+                var address = Services.GetRequiredService<ExplorerNavigator>().Current ?? ExplorerAddress.Home;
+                var entries = shown.Select(area => new ExplorerAreaEntry(area, AreaAvailability.Visible)).ToArray();
+                parameters.AddCascadingValue(new ExplorerLocation(address, entries, EntriesLoaded: true, TenancyActive: address.Tenant is not null));
+            }
+
+            if (compact)
+            {
+                parameters.AddCascadingValue(LtBreakpointCascade.Name, LtBreakpoint.Compact);
+            }
+        });
     }
 
     /// <summary>The page's section tabs, by label.</summary>
