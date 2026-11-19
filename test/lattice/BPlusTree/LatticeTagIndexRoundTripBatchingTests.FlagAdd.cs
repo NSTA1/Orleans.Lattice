@@ -7,35 +7,111 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// Round-trip accounting for the tag index's flag-membership add path.
 /// </summary>
 /// <remarks>
-/// Under a flag membership mode a row is authored as a typed enable delta
-/// minted against that row's own current state, so the rows cannot collapse
-/// into one batched value write the way the LwwRegister path does. They can
-/// still stop being serial, and that is what is asserted here. The call
-/// <em>count</em> is unchanged by the optimisation - the same 2N rows are
-/// written either way - so a count assertion cannot discriminate the wave from
-/// the loop it replaced, and the discriminating instrument is the peak number
-/// of writes simultaneously in flight.
+/// Under OrFlag every enable is minted with a fresh counter floor that does not
+/// depend on the row having been read, so the whole add - rows, mirrors and the
+/// first-add covered marker - collapses into one batched read and one batched
+/// delta apply. Under RwFlag an enable tombstones the disables it observed, so
+/// each row is still read and applied on its own; those writes are issued as a
+/// bounded wave, and the discriminating instrument there is the peak number of
+/// writes simultaneously in flight rather than a call count.
 /// </remarks>
 public partial class LatticeTagIndexRoundTripBatchingTests
 {
     /// <summary>
-    /// Builds a coordinator-scoped index over one counting tree in OrFlag
+    /// Builds a coordinator-scoped index over one counting tree in a flag
     /// membership mode, where every row write is an enable delta rather than a
     /// plain value set.
     /// </summary>
-    private static (CountingTree tree, LatticeTagIndexContext ctx) CreateFlagMode()
+    private static (CountingTree tree, LatticeTagIndexContext ctx) CreateFlagMode(
+        LatticeMergeMode mode = LatticeMergeMode.OrFlag)
     {
         var tree = new CountingTree();
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<ILattice>(Arg.Any<string>()).Returns(tree.Lattice);
         return (tree, LatticeTagIndexContext.CreateForCoordinator(
-            grainFactory, IndexName, LatticeMergeMode.OrFlag, replicaId: "r1"));
+            grainFactory, IndexName, mode, replicaId: "r1"));
+    }
+
+    [Test]
+    public async Task Or_flag_add_batches_every_row_into_one_read_and_one_delta_apply()
+    {
+        var (tree, ctx) = CreateFlagMode();
+        await ctx.AddTagsForKeyAsync(TreeId, "warm", ["warm"], CancellationToken.None);
+        var readsBefore = tree.GetManyAsyncCalls;
+        var manyBefore = tree.ApplyCrdtDeltaManyCalls;
+        tree.ApplyCrdtDeltaCalls = 0;
+
+        string[] tags = ["red", "green", "blue", "amber", "violet"];
+        await ctx.AddTagsForKeyAsync(TreeId, "k1", tags, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            // Previously ten per-row enables, each its own read and apply.
+            Assert.That(tree.GetManyAsyncCalls - readsBefore, Is.EqualTo(1));
+            Assert.That(tree.ApplyCrdtDeltaManyCalls - manyBefore, Is.EqualTo(1));
+            Assert.That(tree.ApplyCrdtDeltaManyWidths[^1], Is.EqualTo(tags.Length * 2));
+            Assert.That(tree.ApplyCrdtDeltaCalls, Is.Zero);
+            Assert.That(tree.GetAsyncCalls, Is.Zero);
+        });
+    }
+
+    [Test]
+    public async Task Or_flag_first_add_folds_the_covered_marker_into_the_batch()
+    {
+        var (tree, ctx) = CreateFlagMode();
+
+        await ctx.AddTagsForKeyAsync(TreeId, "k1", ["red", "blue"], CancellationToken.None);
+        await ctx.AddTagsForKeyAsync(TreeId, "k2", ["red", "blue"], CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            // The first add carries four rows plus the marker in one batch, and
+            // the marker is not written separately afterwards.
+            Assert.That(tree.ApplyCrdtDeltaManyWidths, Is.EqualTo(new[] { 5, 4 }));
+            Assert.That(tree.ApplyCrdtDeltaCalls, Is.Zero);
+            Assert.That(
+                tree.CrdtDeltaKeys.Count(k => k.StartsWith("\0covered\0", StringComparison.Ordinal)),
+                Is.EqualTo(1));
+        });
+    }
+
+    [Test]
+    public async Task Or_flag_failed_first_add_does_not_cache_the_covered_marker()
+    {
+        var (tree, ctx) = CreateFlagMode();
+        tree.FailApplyCrdtDeltaMany = new IOException("transient");
+
+        Assert.ThrowsAsync<IOException>(async () =>
+            await ctx.AddTagsForKeyAsync(TreeId, "k1", ["red"], CancellationToken.None));
+
+        tree.FailApplyCrdtDeltaMany = null;
+        await ctx.AddTagsForKeyAsync(TreeId, "k1", ["red"], CancellationToken.None);
+
+        // The marker rode in the failed batch, so the retry must carry it again.
+        Assert.That(tree.ApplyCrdtDeltaManyWidths, Is.EqualTo(new[] { 3, 3 }));
+    }
+
+    [Test]
+    public async Task Rw_flag_first_add_writes_the_covered_marker_in_the_row_wave()
+    {
+        var (tree, ctx) = CreateFlagMode(LatticeMergeMode.RwFlag);
+
+        await ctx.AddTagsForKeyAsync(TreeId, "k1", ["red"], CancellationToken.None);
+        var first = tree.ApplyCrdtDeltaCalls;
+        await ctx.AddTagsForKeyAsync(TreeId, "k2", ["red"], CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first, Is.EqualTo(3), "row, mirror and marker");
+            Assert.That(tree.ApplyCrdtDeltaCalls - first, Is.EqualTo(2));
+            Assert.That(tree.ApplyCrdtDeltaManyCalls, Is.Zero, "RW enables are never batched");
+        });
     }
 
     [Test]
     public async Task Flag_mode_add_issues_its_row_writes_concurrently()
     {
-        var (tree, ctx) = CreateFlagMode();
+        var (tree, ctx) = CreateFlagMode(LatticeMergeMode.RwFlag);
 
         // Warm the covered-tree marker so the gate below sees only the tag
         // fan-out. A one-tag add takes the direct-await fast path, so this
@@ -97,7 +173,7 @@ public partial class LatticeTagIndexRoundTripBatchingTests
     [Test]
     public async Task Flag_mode_add_caps_its_write_wave_at_the_row_concurrency_limit()
     {
-        var (tree, ctx) = CreateFlagMode();
+        var (tree, ctx) = CreateFlagMode(LatticeMergeMode.RwFlag);
         await ctx.AddTagsForKeyAsync(TreeId, "warm", ["warm"], CancellationToken.None);
 
         // 24 tags is 48 rows, past the cap of 32.
@@ -163,6 +239,7 @@ public partial class LatticeTagIndexRoundTripBatchingTests
         // with the writes - as this branch did before the wave - overlapping
         // them would have widened that window rather than introduced it.
         Assert.That(tree.ApplyCrdtDeltaCalls, Is.Zero);
+        Assert.That(tree.ApplyCrdtDeltaManyCalls, Is.EqualTo(1), "only the warm-up batch");
     }
 
     [Test]
@@ -188,7 +265,7 @@ public partial class LatticeTagIndexRoundTripBatchingTests
     [Test]
     public async Task Flag_mode_single_tag_add_writes_exactly_two_rows()
     {
-        var (tree, ctx) = CreateFlagMode();
+        var (tree, ctx) = CreateFlagMode(LatticeMergeMode.RwFlag);
         await ctx.AddTagsForKeyAsync(TreeId, "warm", ["warm"], CancellationToken.None);
         tree.ApplyCrdtDeltaCalls = 0;
 

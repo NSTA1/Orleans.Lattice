@@ -740,54 +740,62 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
             // A flag membership row is authored as a typed enable delta minted
             // against that row's own current state, so the rows cannot be
             // collapsed into one value batch the way the LwwRegister branch
-            // below does. They can still stop being serial: the rows are
-            // distinct keys (a tag-major row and its key-major mirror, across
-            // distinct tags), so no two enables in the wave contend on one row's
-            // state, and the router grain is a stateless worker, so independent
-            // writes issued together are serviced by separate local workers
-            // rather than queued behind one another. The window reuses
-            // RemoveRowConcurrencyLimit for the reason documented there.
+            // below does. How far they collapse depends on the flag type; see
+            // the two branches below.
             //
             // Validation runs as its own pass first, for the same reason the
             // LwwRegister branch hoists it: interleaved with the writes it could
-            // reject tag i after tags 0..i-1 had already been durably written,
-            // and overlapping the writes would widen that window rather than
-            // introduce it.
+            // reject tag i after tags 0..i-1 had already been durably written.
             for (var i = 0; i < tags.Count; i++)
             {
                 ValidateTag(tags[i]);
             }
 
-            List<Task>? wave = null;
-            for (var i = 0; i < tags.Count; i++)
+            // The covered-tree marker is one more enable row, so the first add
+            // to a tree this index has not yet marked authors it alongside the
+            // membership rows instead of in a serial round trip afterwards. As
+            // on the LwwRegister path the hint is recorded only once every row
+            // write has succeeded, so a failed marker is retried by the next
+            // add, and a marker that lands without its rows only names a tree
+            // the reconciler would scan anyway.
+            var needsMarker = !IsHinted(treeId);
+
+            if (_membershipMode == LatticeMergeMode.OrFlag)
             {
-                var tag = tags[i];
-                var row = WriteRowAsync(RowKey(tag, treeId, key), cancellationToken);
-                var mirror = WriteRowAsync(KeyRowKey(treeId, key, tag), cancellationToken);
-
-                if (tags.Count == 1)
+                // OR-Flag enables are safe to mint from one batched snapshot:
+                // EnableDeltaFor floors every dot at a fresh, strictly
+                // increasing counter, so a row the snapshot missed can never be
+                // handed a dot an existing tombstone already cancels (#2208).
+                // The whole add - rows, mirrors and marker - is therefore one
+                // GetManyAsync plus one ApplyCrdtDeltaManyAsync instead of two
+                // calls per row. Non-atomic exactly as the wave was.
+                var keys = new List<string>((tags.Count * 2) + (needsMarker ? 1 : 0));
+                for (var i = 0; i < tags.Count; i++)
                 {
-                    // One tag is two writes; a wave container would cost more
-                    // than the overlap saves.
-                    await row.ConfigureAwait(false);
-                    await mirror.ConfigureAwait(false);
-                    break;
+                    var tag = tags[i];
+                    keys.Add(RowKey(tag, treeId, key));
+                    keys.Add(KeyRowKey(treeId, key, tag));
                 }
-
-                wave ??= new List<Task>(Math.Min(tags.Count * 2, RemoveRowConcurrencyLimit));
-                wave.Add(row);
-                wave.Add(mirror);
-                if (wave.Count >= RemoveRowConcurrencyLimit)
+                if (needsMarker)
                 {
-                    await Task.WhenAll(wave).ConfigureAwait(false);
-                    wave.Clear();
+                    keys.Add(CoveredMarkerKey(treeId));
                 }
+                await _indexTree.EnableManyAsync(keys, _replicaId!, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                // RW-Flag enables must stay per row: an RW enable tombstones the
+                // disables it observed, so one minted from an incomplete batched
+                // snapshot could leave a disabled row disabled. The marker joins
+                // the same bounded wave instead of following it serially.
+                await WriteRwFlagRowsAsync(treeId, key, tags, needsMarker, cancellationToken).ConfigureAwait(false);
             }
 
-            if (wave is { Count: > 0 })
+            if (needsMarker)
             {
-                await Task.WhenAll(wave).ConfigureAwait(false);
+                await RecordHintedAsync(treeId).ConfigureAwait(false);
             }
+            return;
         }
         else
         {
@@ -836,8 +844,51 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
             }
             return;
         }
+    }
 
-        await EnsureHintAsync(treeId, cancellationToken).ConfigureAwait(false);
+    // Authors an RW-Flag add as one bounded wave of per-row enables: the rows
+    // are distinct keys (a tag-major row and its key-major mirror per tag, plus
+    // the covered marker on a tree's first add), so no two enables contend on
+    // one row's state, and the router grain is a stateless worker, so writes
+    // issued together are serviced by separate local workers. The window reuses
+    // RemoveRowConcurrencyLimit for the reason documented there.
+    private async Task WriteRwFlagRowsAsync(
+        string treeId, string key, IReadOnlyList<string> tags, bool withMarker, CancellationToken cancellationToken)
+    {
+        var total = (tags.Count * 2) + (withMarker ? 1 : 0);
+        if (total <= 2)
+        {
+            // One tag and no marker is two writes; a wave container would cost
+            // more than the overlap saves.
+            var tag = tags[0];
+            var row = WriteRowAsync(RowKey(tag, treeId, key), cancellationToken);
+            var mirror = WriteRowAsync(KeyRowKey(treeId, key, tag), cancellationToken);
+            await row.ConfigureAwait(false);
+            await mirror.ConfigureAwait(false);
+            return;
+        }
+
+        var wave = new List<Task>(Math.Min(total, RemoveRowConcurrencyLimit));
+        if (withMarker)
+        {
+            wave.Add(WriteRowAsync(CoveredMarkerKey(treeId), cancellationToken));
+        }
+        for (var i = 0; i < tags.Count; i++)
+        {
+            var tag = tags[i];
+            wave.Add(WriteRowAsync(RowKey(tag, treeId, key), cancellationToken));
+            wave.Add(WriteRowAsync(KeyRowKey(treeId, key, tag), cancellationToken));
+            if (wave.Count >= RemoveRowConcurrencyLimit)
+            {
+                await Task.WhenAll(wave).ConfigureAwait(false);
+                wave.Clear();
+            }
+        }
+
+        if (wave.Count > 0)
+        {
+            await Task.WhenAll(wave).ConfigureAwait(false);
+        }
     }
 
     /// <summary>
@@ -1395,23 +1446,56 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
             // The subject may have reappeared after the failed delete, or the
             // retained posting may since have been removed. Re-verify both;
             // never recreate a mirror from a stale or gate-filtered absence.
-            var subjects = await subject.GetManyWithGateAccountingAsync([.. subjectKeys], cancellationToken).ConfigureAwait(false);
-            var rows = await _indexTree.GetManyWithGateAccountingAsync(rowKeys, cancellationToken).ConfigureAwait(false);
+            // The two reads are independent, so they are issued together; both
+            // must still be complete before anything is written.
+            var subjectsRead = subject.GetManyWithGateAccountingAsync([.. subjectKeys], cancellationToken);
+            var rowsRead = _indexTree.GetManyWithGateAccountingAsync(rowKeys, cancellationToken);
+            var subjects = await subjectsRead.ConfigureAwait(false);
+            var rows = await rowsRead.ConfigureAwait(false);
             RequireCompleteReconcileRead(subjects);
             RequireCompleteReconcileRead(rows);
 
+            List<KeyValuePair<string, byte[]>>? batch = null;
             List<Task>? wave = null;
             for (var i = start; i < end; i++)
             {
                 var row = missing[i];
                 var mirrorKey = rowKeys[(i - start) * 2 + 1];
+                byte[]? mirror = null;
                 if (!subjects.Values.ContainsKey(row.Key)
                     || !rows.Values.TryGetValue(row.RowKey, out var posting) || !IsRowLive(posting)
-                    || (rows.Values.TryGetValue(mirrorKey, out var mirror) && IsRowLive(mirror)))
+                    || (rows.Values.TryGetValue(mirrorKey, out mirror) && IsRowLive(mirror)))
                 {
                     continue;
                 }
-                (wave ??= new List<Task>(end - start)).Add(WriteRowAsync(mirrorKey, cancellationToken));
+
+                switch (_membershipMode)
+                {
+                    case LatticeMergeMode.OrFlag:
+                        // The complete verification read already holds the
+                        // mirror's current state, so the enable is minted from
+                        // it rather than re-read per row. EnableDeltaFor's fresh
+                        // counter floor makes the dot safe even against a row
+                        // that changed since the read (#2208).
+                        var delta = OrFlagAccessor.EnableDeltaFor(OrFlagAccessor.DecodeFlag(mirror), _replicaId!);
+                        (batch ??= new(end - start)).Add(new KeyValuePair<string, byte[]>(
+                            mirrorKey, JsonLatticeSerializer<OrFlagDelta>.Default.Serialize(delta)));
+                        break;
+                    case LatticeMergeMode.RwFlag:
+                        // An RW enable tombstones the disables it observes, so it
+                        // stays a per-row read-and-apply at write time.
+                        (wave ??= new List<Task>(end - start)).Add(WriteRowAsync(mirrorKey, cancellationToken));
+                        break;
+                    default:
+                        (batch ??= new(end - start)).Add(new KeyValuePair<string, byte[]>(mirrorKey, Flag));
+                        break;
+                }
+            }
+            if (batch is not null)
+            {
+                await (_membershipMode == LatticeMergeMode.OrFlag
+                    ? _indexTree.ApplyCrdtDeltaManyAsync(batch, LatticeMergeMode.OrFlag, cancellationToken)
+                    : _indexTree.SetManyAsync(batch, cancellationToken)).ConfigureAwait(false);
             }
             if (wave is not null)
             {

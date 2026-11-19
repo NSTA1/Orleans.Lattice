@@ -40,7 +40,20 @@ public partial class LatticeTagIndexRoundTripBatchingTests
         public int ExistsAsyncCalls;
         public int GateAccountedCalls;
         public int ApplyCrdtDeltaCalls;
+        public int ApplyCrdtDeltaManyCalls;
         public int TreeExistsAsyncCalls;
+
+        /// <summary>Entry count of each batched CRDT delta apply, in arrival order.</summary>
+        public readonly List<int> ApplyCrdtDeltaManyWidths = [];
+
+        /// <summary>
+        /// Optional per-entry merge invoked by every batched CRDT delta apply, so
+        /// a test that models flag rows can make the batch durable.
+        /// </summary>
+        public Action<string, LatticeMergeMode, byte[]>? MergeDelta;
+
+        /// <summary>When set, every batched CRDT delta apply fails with this exception and applies nothing.</summary>
+        public Exception? FailApplyCrdtDeltaMany;
 
         /// <summary>What <c>TreeExistsAsync</c> reports for the subject tree.</summary>
         public bool TreeExists = true;
@@ -140,6 +153,34 @@ public partial class LatticeTagIndexRoundTripBatchingTests
                         await gate().ConfigureAwait(false);
                     }
                     return default(HybridLogicalClock);
+                });
+
+            tree.ApplyCrdtDeltaManyAsync(
+                    Arg.Any<List<KeyValuePair<string, byte[]>>>(),
+                    Arg.Any<LatticeMergeMode>(),
+                    Arg.Any<CancellationToken>())
+                .Returns(ci =>
+                {
+                    var entries = ci.ArgAt<List<KeyValuePair<string, byte[]>>>(0);
+                    var mode = ci.ArgAt<LatticeMergeMode>(1);
+                    Interlocked.Increment(ref ApplyCrdtDeltaManyCalls);
+                    lock (CrdtDeltaKeys)
+                    {
+                        ApplyCrdtDeltaManyWidths.Add(entries.Count);
+                        CrdtDeltaKeys.AddRange(entries.Select(e => e.Key));
+                    }
+                    if (FailApplyCrdtDeltaMany is { } failure)
+                    {
+                        return Task.FromException(failure);
+                    }
+                    if (MergeDelta is { } merge)
+                    {
+                        foreach (var entry in entries)
+                        {
+                            merge(entry.Key, mode, entry.Value);
+                        }
+                    }
+                    return Task.CompletedTask;
                 });
 
             tree.SetAsync(Arg.Any<string>(), Arg.Any<byte[]>(), Arg.Any<CancellationToken>())

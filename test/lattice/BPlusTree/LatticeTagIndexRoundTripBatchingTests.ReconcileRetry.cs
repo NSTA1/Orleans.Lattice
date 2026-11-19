@@ -185,9 +185,11 @@ public partial class LatticeTagIndexRoundTripBatchingTests
                 Arg.Any<byte[]>(), Arg.Any<CancellationToken>())
             .Returns(ci =>
             {
+                Interlocked.Increment(ref index.ApplyCrdtDeltaCalls);
                 MergeFlagRow(index, ci.Arg<string>(), ci.Arg<LatticeMergeMode>(), ci.Arg<byte[]>());
                 return Task.FromResult(default(HybridLogicalClock));
             });
+        index.MergeDelta = (row, mode, delta) => MergeFlagRow(index, row, mode, delta);
         index.Lattice.EntriesAsync(
                 Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<bool>(),
                 Arg.Any<bool?>(), Arg.Any<CancellationToken>())
