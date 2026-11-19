@@ -203,6 +203,12 @@ generations keep resolving through the old one - so upgrading strands no data an
 forces no rebuild - and the next rebuild moves the view onto the current naming on
 its own. The superseded generation is still reclaimed on the normal grace cadence.
 
+A superseded generation is deleted through the ordinary tree-deletion path once
+`OldGenerationReclaimGrace` has elapsed, which stops its shard healing, hot-shard
+monitoring and tombstone compaction at once and purges its shards and log after
+`SoftDeleteDuration`. Deletions are paced to one at a time per silo, and the same
+sweep retires the generations earlier releases only emptied and left registered.
+
 ### Multi-tenancy
 
 With the tenancy add-on enabled, a view created through the tree-administration
@@ -1229,7 +1235,7 @@ row notes its rule:
 | `MaxStagedTransactions` | 1024 | Maximum in-flight atomic-write transactions buffered before the backstop forces a rebuild. Must be at least 1. |
 | `MaxStagedBytes` | 64 MiB | Maximum buffered prepared-entry payload (key + value) before the backstop forces a rebuild. Must be at least 1. |
 | `ReadHandleCacheTtl` | 1 s | How long an `ILatticeView` handle caches the resolved live view tree id before re-resolving it. Bounds the post-swap read-staleness window. A handle that itself rebuilt, reconciled or waited on a read-your-writes barrier drops its cached id, so its next read re-resolves. Must be greater than zero. |
-| `OldGenerationReclaimGrace` | 5 s | How long a swapped-out view tree is retained before reclamation. Must exceed `ReadHandleCacheTtl` so a reader holding a stale cached id still resolves a live tree. |
+| `OldGenerationReclaimGrace` | 5 s | How long a swapped-out view tree is retained before it is deleted. Must exceed `ReadHandleCacheTtl` so a reader holding a stale cached id still resolves a live tree. |
 | `CrossTreeReadinessTimeout` | 5 s | Cross-tree atomic visibility only: how long a completed cross-tree batch waits for every present participant view before degrading to per-tree atomicity. Must be greater than zero. |
 | `ReplicationMode` | `DeriveLocally` | How the view tree is made available across clusters. See [Replication modes](#replication-modes). |
 | `ShipViewProducerClusterId` | `null` | Required only when `ShipView` replicates both source and view trees. The stable, case-sensitive replication cluster id of the single producer. When set it must not be empty or whitespace, and `ReplicationMode` must be `ShipView`. |

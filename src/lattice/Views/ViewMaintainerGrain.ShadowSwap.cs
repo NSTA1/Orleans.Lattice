@@ -46,8 +46,10 @@ namespace Orleans.Lattice.Views;
 /// (<see cref="LatticeViewOptions.OldGenerationReclaimGrace"/>) that exceeds the
 /// read handle's active-tree cache lifetime, so a reader still holding the prior
 /// generation during the brief post-swap staleness window reads a fully-built
-/// (if slightly stale) tree rather than a deleted one. The reclaim runs on the
-/// regular drain cadence and is itself durable.
+/// (if slightly stale) tree rather than a deleted one. Once the grace has elapsed
+/// the generation is deleted through the ordinary tree-deletion path, paced and
+/// on the regular drain cadence, together with any generation an earlier release
+/// left behind (see <c>ViewMaintainerGrain.GenerationReclaim.cs</c>).
 /// </para>
 /// </summary>
 internal sealed partial class ViewMaintainerGrain
@@ -259,7 +261,7 @@ internal sealed partial class ViewMaintainerGrain
             return false;
         }
 
-        await TryReclaimPendingGenerationAsync(cancellationToken);
+        await TryReclaimSupersededGenerationsAsync(cancellationToken);
 
         // Digest the live active view before touching anything. The shadow build
         // writes only into the shadow generation, so the active tree (and this
@@ -657,10 +659,10 @@ internal sealed partial class ViewMaintainerGrain
         var oldGeneration = state.State.ActiveGeneration;
         var newGeneration = oldGeneration + 1;
 
-        // Flush any still-pending older reclaim so the new pending does not clobber
-        // it (only reachable when two rebuilds happen within one reclaim grace,
-        // already beyond the single post-swap staleness window).
-        await TryReclaimPendingGenerationAsync(cancellationToken, force: true);
+        // An older generation still pending (two rebuilds within one reclaim
+        // grace, already beyond the single post-swap staleness window) is not
+        // flushed here: once the record below names the newer one, the older
+        // generation falls under the reclaim ceiling and the sweep retires it.
 
         var currentPhysical = await ResolveSourcePhysicalAsync(registration.SourceTreeId);
         if (!string.Equals(currentPhysical, built.WalTreeId, StringComparison.Ordinal))
@@ -700,37 +702,6 @@ internal sealed partial class ViewMaintainerGrain
             await cursorRegistry.UnregisterAsync(retiredPhysical, ConsumerId, cancellationToken);
             await WithdrawReadRegistrationAsync(retiredPhysical);
         }
-    }
-
-    /// <summary>
-    /// Reclaims (deletes) the swapped-out generation tree once its post-swap reader
-    /// grace has elapsed, or immediately when <paramref name="force"/> is set.
-    /// Never reclaims the active generation. Durable, so a crash mid-reclaim simply
-    /// retries on the next drain.
-    /// </summary>
-    private async Task TryReclaimPendingGenerationAsync(CancellationToken cancellationToken, bool force = false)
-    {
-        if (!state.State.HasPendingReclaim)
-        {
-            return;
-        }
-
-        if (!force && DateTime.UtcNow.Ticks < state.State.ReclaimEligibleAtTicks)
-        {
-            return;
-        }
-
-        var generation = state.State.PendingReclaimGeneration;
-        if (generation != state.State.ActiveGeneration)
-        {
-            var stale = grainFactory.GetGrain<ILattice>(GenerationTreeId(generation));
-            await ClearTreeAsync(stale, cancellationToken);
-        }
-
-        state.State.HasPendingReclaim = false;
-        state.State.PendingReclaimGeneration = 0;
-        state.State.ReclaimEligibleAtTicks = 0;
-        await state.WriteStateAsync();
     }
 
     /// <summary>
