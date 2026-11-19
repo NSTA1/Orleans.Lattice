@@ -12,7 +12,7 @@ in one fixture.
 | `logs`, `trim` | Each physical copy's WAL and its GC trim point | `ILatticeWalGc.RunOnceAsync`, `LatticeWalGc.RunOnceAsync`. |
 | `alias`, `snap`, `swapped` | The physical copy the logical source names | `ILatticeRegistry.SwapAliasAsync`. |
 | `bound` | The physical copy the view tails | `ViewMaintainerGrain.ResolveSourcePhysicalAsync`, `ViewMaintainerGrain.EnsureBoundToCurrentSourceIdentityAsync`. |
-| `vval`, `active`, `gens` | Served generation tree and generations awaiting reclaim | `ViewMaintainerGrain.SwapToShadowAsync`, `ViewMaintainerGrain.TryReclaimPendingGenerationAsync`. |
+| `vval`, `active`, `gens` | Served generation tree and generations awaiting reclaim | `ViewMaintainerGrain.SwapToShadowAsync`, `ViewMaintainerGrain.TryReclaimSupersededGenerationsAsync`. |
 | `applied`, `ckpt` | In-memory drain progress and the durable resume checkpoint | `ViewMaintainerGrain.DrainAsync`. |
 | `hw`, `rbHw` | The log prefix the served (or scanned shadow) view already reflects; replay below it re-applies entries | Modelling device for at-least-once replay; production keeps no high-water mark, which is why replay transiently regresses. |
 | `readReg`, `pubTree`, `pubPos` | Offset-consumer registration and published read position | `ViewMaintainerGrain.EnsureReadRegisteredAsync`, `ViewMaintainerGrain.PublishReadPositions`, `IWalOffsetConsumer.GetDurableReadPositionsAsync`. |
@@ -40,7 +40,7 @@ in one fixture.
 | `Reconcile` | A digest mismatch triggers a rebuild | `ViewMaintainerGrain.ReconcileAsync`, `ViewMaintainerGrain.ComputeViewDigestAsync`. | Yes: `MaterialisedViewShadowSwapTests.ReconcileAsync_detects_and_repairs_out_of_band_drift`. |
 | `RebuildScan` | Capture the resume floor and scan source state into a shadow generation | `ViewMaintainerGrain.BuildShadowAsync`, `ViewMaintainerGrain.CaptureResumeFloorsAsync`. | Yes: `MaterialisedViewShadowSwapTests.Rebuild_never_exposes_empty_or_partial_view_to_a_concurrent_reader`, `MaterialisedViewIntegrationTests.RebuildAsync_reconverges_after_view_drift`. |
 | `RebuildSwap` | Flip the generation, binding and resume point in one durable write | `ViewMaintainerGrain.SwapToShadowAsync`. | Yes: `MaterialisedViewShadowSwapTests.Rebuild_never_exposes_empty_or_partial_view_to_a_concurrent_reader`, `MaterialisedViewIdentitySwapHealTests.View_tails_new_identity_after_swap`. |
-| `Reclaim` | Delete a superseded generation | `ViewMaintainerGrain.TryReclaimPendingGenerationAsync`. | Yes: `MaterialisedViewShadowSwapTests.Rebuild_reclaims_the_old_generation_tree`. |
+| `Reclaim` | Delete a superseded generation | `ViewMaintainerGrain.TryReclaimSupersededGenerationsAsync`. | Yes: `MaterialisedViewShadowSwapTests.Rebuild_deletes_the_old_generation_tree`. |
 | `Delete` | Withdraw registration, release logical and physical pins, delete generations | `ViewMaintainerGrain.DecommissionAsync`, `ViewMaintainerGrain.PublishNoReadPositions`, `ViewMaintainerGrain.WithdrawReadRegistrationAsync`, `ViewMaintainerGrain.DeleteBackingGenerationsAsync`. | Yes: `ViewMaintainerDecommissionTests.Decommission_releases_the_pin_deletes_the_tree_and_clears_the_checkpoint`, `ViewMaintainerDecommissionTests.Decommission_deletes_every_generation_up_to_and_including_the_active_one`, `MaterialisedViewIdentitySwapHealTests.Deleting_a_view_after_a_swap_releases_the_pin_on_the_physical_identity`, `ViewMaintainerReadPositionTests.A_decommissioned_maintainer_holds_no_log`, `ViewDecommissionOrphanShadowTests.Decommission_deletes_the_shadow_generation_an_interrupted_rebuild_left_behind`. |
 | `Stutter` | No step | Not applicable. | Not applicable. |
 
@@ -58,7 +58,7 @@ in one fixture.
 | `ReplayConverges` | A crash replay or post-rebuild catch-up, once past the prefix the view already reflected, leaves the view equal to its source prefix | Yes: `ViewMaintainerReplayFlushTests.A_reactivation_that_replays_an_already_flushed_batch_keeps_the_batch_value_over_the_older_ordinary_write`, `ViewMaintainerReplayFlushTests.A_pass_replayed_after_a_lost_flush_response_keeps_the_batch_value_over_the_older_ordinary_write`, `MaterialisedViewAtomicVisibilityTests.Re_drain_from_held_back_checkpoint_does_not_double_apply_or_lose_the_batch`. |
 | `ViewConverges` | The view converges to its current source copy | Yes: `MaterialisedViewIdentitySwapHealTests.View_heals_after_source_physical_identity_swap`, `MaterialisedViewIntegrationTests.GetLagAsync_reports_backlog_then_zero_after_drain`. |
 | `PinConverges` | The cursor pin follows the binding to the current copy's head | Yes: `MaterialisedViewIdentitySwapHealTests.View_reports_its_wal_cursor_under_the_bound_physical_identity_after_swap`. |
-| `GenerationsReclaimed` | Superseded generations are deleted | Yes: `MaterialisedViewShadowSwapTests.Rebuild_reclaims_the_old_generation_tree`. |
+| `GenerationsReclaimed` | Superseded generations are deleted | Yes: `MaterialisedViewShadowSwapTests.Rebuild_deletes_the_old_generation_tree`. |
 
 ## Excluded properties
 
