@@ -81,6 +81,20 @@ The package is the engine. Operators reach it through companion packages:
   prerequisite fails that app's activation with a structured result. Silo startup
   is never affected.
 
+## Features
+
+| Feature | Description |
+|---|---|
+| [Manifest](#the-manifest) | An embedded JSON manifest declares the app's trees, roles, replication, schema, subscriptions, MCP tools, presentation and UI; `AppManifestParser` and `AppManifestValidator` check it, bounded, without loading app code. |
+| [Install, consent and the ceiling](#install-consent-and-the-ceiling) | The per-tenant app registry (`IAppRegistry`) records group-only role bindings, a version-pinned `AppCapabilityCeiling` and the consented UI bridge grants. |
+| [Tree ownership](#tree-ownership) | Every app tree belongs to exactly one install; conflicts are reported as `AppTreeOwnershipConflict`, and core aliasing cannot cross ownership. |
+| [Activation](#activation) | `IAppActivationPipeline` enables, disables, uninstalls and reconciles an install, reporting a structured `AppActivationOutcome` and never failing silo startup. |
+| [Replication intent](#replication-intent) | Each install enrols its declared trees in the runtime replication configuration, and unenrols only what it enrolled. |
+| [Compiled rules](#compiled-rules) | `AppRoleCompiler` compiles roles into owned `app:` authorization rules that the existing access gate enforces. |
+| [App sources](#app-sources) | `IAppSource` and `IAppCatalogSource` resolve and enumerate apps; `InImageAppSource` serves the apps registered in the image. |
+| [Presentation and UI](#presentation-and-ui) | Untrusted display metadata and a digest-pinned UI bundle whose bridge operations are consented at install. |
+| [Change-feed subscriptions](#change-feed-subscriptions) | An `IAppChangeFeedHandler` receives committed mutations on the trees an app subscribes to. |
+
 ## Quick start
 
 Register the apps engine after `AddLattice`, membership and authorization, then
@@ -339,8 +353,9 @@ rebuild from the changed registry.
 **Aliasing is bounded by ownership.** The package registers an
 [`ITreeOwnershipGuard`](../lattice/tree-registry.md#ownership-bounded-aliasing) backed
 by the ledger, so a core alias from logical tree `L` to physical tree `P` is allowed
-only when the install that owns `L` also owns `DerivedFrom(P) ?? P` (either side may
-be owned by no app). A resize, restore or remediation of an app tree passes, because
+only when the install that owns `L` also owns the tree `P` was derived from (a resize,
+shadow-restore or remediation copy records the tree it copies), or `P` itself when it
+was derived from none (either side may be owned by no app). A resize, restore or remediation of an app tree passes, because
 its copy is derived from that tree; an alias between two trees no app owns is
 unchanged; every other alias that would cross an ownership boundary is refused with
 `LatticeTreeOwnershipDeniedException`, for every caller including core maintenance.

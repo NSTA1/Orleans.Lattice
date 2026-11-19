@@ -47,7 +47,7 @@ public interface ISnapshotProvider
     /// leaf-chain enumeration order. A non-<see cref="HybridLogicalClock.Zero"/>
     /// <paramref name="asOfHlc"/> is therefore <i>not</i> a resume point:
     /// the call returns every live entry whose timestamp is
-    /// ≤ asOfHlc, in any order, and excludes the rest. A receiver
+    /// &lt;= asOfHlc, in any order, and excludes the rest. A receiver
     /// resuming a partial drain must re-export with
     /// <see cref="HybridLogicalClock.Zero"/> (as the bootstrap coordinator
     /// does) and dedupe the overlap with previously-applied entries itself

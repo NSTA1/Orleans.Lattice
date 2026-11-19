@@ -24,7 +24,9 @@ use the same two extension methods:
   described under [Diagnosing a console that stops responding](#diagnosing-a-console-that-stops-responding).
 - `MapLatticeExplorer()` maps the Explorer under the configured base path: static
   assets, the `auth/login` and `auth/logout` server form-post endpoints, the
-  Lattice App frame route, and the interactive Razor components.
+  `downloads` form-post endpoint that streams a data export or an import's
+  rejection list to the browser, the Lattice App frame route, and the
+  interactive Razor components.
 
 The standalone `Orleans.Lattice.Explorer.WebHost` program is those calls plus the
 standard ASP.NET exception, HSTS, HTTPS redirection and antiforgery middleware.
@@ -272,6 +274,21 @@ extension, which `MapLatticeExplorer` calls with the base href as the redirect
 target. A federated provider such as the hosted-web Entra package can publish a
 separate sign-out path so the identity menu posts there instead and ends the
 browser identity-provider session as well.
+
+**The download endpoint.** `MapLatticeExplorer` maps one more form-post endpoint
+beside these. A file the console produces, such as a Data area export or an
+import's list of rejected records, reaches the browser through
+`POST downloads` below the Explorer mount. The circuit mints a single-use,
+short-lived ticket bound to itself, and the form posts the ticket with an
+antiforgery token. The endpoint redeems it and streams the file straight into
+the response, unbuffered and marked `Cache-Control: no-store`, running the
+download over the connection the circuit captured, as that user; the endpoint
+carries no credential of its own.
+
+It fails closed and says nothing: a missing, unknown, reused, expired or wrongly
+bound ticket gets the same empty `204 No Content`, so the endpoint is no oracle
+for which tickets exist and the browser stays on the console. A post without a
+valid antiforgery token gets `400`, as for sign-in.
 
 ## See also
 

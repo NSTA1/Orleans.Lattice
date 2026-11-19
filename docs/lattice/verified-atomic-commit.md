@@ -199,7 +199,7 @@ The models live under `test/lattice/BPlusTree/Coyote/`:
 | `SpanAdmissionMigrationModel` | `SplitBoundary` - a cross-shard migration import is subject to the same declared-span admission as any other commit | #3117 |
 | `MovedAwaySealInheritanceModel` | `SplitBoundary` - a leaf divided from a sealed leaf is born carrying the donor's moved-away seal | #3121 |
 
-The same directory also holds the models of the other verified protocols - the write-ahead log, the distributed lock and the atomic action - which [Verified WAL](verified-wal.md), [Verified Distributed Lock](verified-lock.md) and [Verified Atomic Action](verified-atomic-action.md) document.
+The same directory also holds the models of the other verified protocols - the write-ahead log, the distributed lock, the atomic action and shard ownership across an alias swap - which [Verified WAL](verified-wal.md), [Verified Distributed Lock](verified-lock.md), [Verified Atomic Action](verified-atomic-action.md) and [Verified Shard Ownership](verified-shard-ownership.md) document.
 
 ### The replicated half
 
@@ -268,8 +268,8 @@ Safety properties:
   post-saga value and another at its pre-saga value; never a split view.
 - **VisibilityMatchesDecision** - a key is observed post-saga only when the
   recorded decision is committed, and pre-saga only when it is not (the sharpest
-  safety statement). A key the gate hides because the registry reports
-  `Indeterminate` satisfies both: hiding asserts nothing about the saga.
+  safety statement). A key the gate hides because the registry reports the
+  decision as indeterminate satisfies both: hiding asserts nothing about the saga.
 - **StrictIsolation** - an in-flight or aborted saga is never surfaced as
   committed.
 - **CommitIntegrity** - commit implies every participant acked; abort implies at
@@ -355,6 +355,8 @@ The spec lives outside the compiled solution, as the `atomic-commit` module unde
 | `mutations/` | Deliberate defects - at least one per checked property and at least one perturbing each protocol action - each of which must make its paired property fire (see [`spec/atomic-commit/mutations/README.md`](../../spec/atomic-commit/mutations/README.md)). |
 | `Refinement.md` | The refinement note mapping each spec variable and action to its protocol counterpart in the code cores. |
 | `AtomicCommit.manifest.json` | The counts the formal gates assert for this module, and where its mutations and refinement note live. |
+| `perturbations/` | Production-perturbation experiments: each an anchored edit to one `src/` file that breaks a behaviour row of the refinement note, and must turn at least one of that row's cited detector tests red. |
+| `TraceValidation.md` | The trace-validation spike (#5159): production saga traces checked against the specification with TLC, with its costs, limits and recommendation. |
 | `README.md` | What is modelled, the last-checked result, and the module's counts table. |
 
 The `AtomicCommit.cfg` instance fixes two concurrent sagas over three keys with
@@ -371,9 +373,14 @@ production counterpart - as its one reasoned exclusion.
 `RefinementPropertyCoverageTests` fails the build when a checked property is
 neither mapped nor excluded.
 
-TLC **is** run per PR. `TlcModelCheckTests` (`test/lattice/Formal/`, tagged
-`[Category("Tlc")]`) shells out to TLC from the ordinary deterministic test tier,
-and CI provisions a Java runtime and a digest-pinned `tla2tools.jar` for it. The
+TLC **is** run in CI. `TlcModelCheckTests` (`test/lattice/Formal/`, tagged
+`[Category("Tlc")]`) shells out to TLC, and CI provisions a Java runtime and a
+digest-pinned `tla2tools.jar` for it. Every routine pull request runs a TLC smoke
+check of one base specification; the exhaustive run below executes on a pull
+request only when it changes a TLC verdict input, and on release lines,
+integration-branch pushes and the nightly lane, skipping a module with a trusted
+verdict receipt except on release lines and nightly (see
+[Formal verification pipeline](formal-verification-pipeline.md)). The exhaustive
 fixture checks that the base specification holds and that each of the thirteen
 checked properties of `AtomicCommit` (and every property of every other module) fires under its paired mutations in that module's mutation directory while
 staying clean against the unmutated specification, so a property weakened until it
@@ -392,8 +399,9 @@ ungated legacy path; the cross-tree receiver barrier and the registry's
 delegation to it, with an undiallable barrier answering Indeterminate; the two
 delegation maps' disjointness; and a receiver's bootstrap from a snapshot. Its
 properties - `RAllOrNothing`, `RStrictIsolation`, `RLinearizedTerminals`,
-`DelegationsDisjoint`, `RMonotonicVisibility`, `RCommittedEventuallyVisible` and
-`RNoStrandedPrepare` - are claims about the receiver only, each paired with its
+`DelegationsDisjoint`, `RMonotonicVisibility`, `RCommittedEventuallyVisible`,
+`RNoStrandedPrepare` and `RImportFenceLifts` (every held import's read fence
+eventually lifts) - are claims about the receiver only, each paired with its
 own mutations under `spec/atomic-commit/mutations-cross-cluster/` and mapped in
 [`RefinementCrossCluster.md`](../../spec/atomic-commit/RefinementCrossCluster.md),
 whose abstraction gaps state what it does not cover.

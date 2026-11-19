@@ -180,7 +180,7 @@ that episode taught, so the set can be watched in any order and from any path.
 
 | # | Episode | Idea | Introduces | Reached from |
 | --- | --- | --- | --- | --- |
-| H1 | Conflict-free merges in 90 seconds | two concurrent writes and their join: why merges need no lock and no consensus, told with a scenario the front door does not use - a [G-Set](../docs/crdt/gset.md) or an [MV-Register](../docs/crdt/mvregister.md), not its G-Counter; the brief picks one, and adds its guide to what the episode introduces | [CRDT primitives](../docs/crdt/readme.md), [state primitives](../docs/lattice/state-primitives.md) | B2 |
+| H1 | Conflict-free merges in 90 seconds | two concurrent writes and their join: why merges need no lock and no consensus, told with a scenario the front door does not use - a [G-Set](../docs/crdt/gset.md), not its G-Counter | [CRDT primitives](../docs/crdt/readme.md), [state primitives](../docs/lattice/state-primitives.md) | B2 |
 | H2 | Clocks and version vectors | ordering events without a shared clock | [Version vector](../docs/crdt/versionvector.md) | E2 |
 | H3 | Trees that split online | sharded B+ trees rebalancing under load without downtime | [Architecture](../docs/lattice/architecture.md), [tree structure](../docs/lattice/tree-structure.md) | O3 |
 | H4 | Atomic commit without consensus | the protocol behind all-or-nothing writes | [Verified atomic commit](../docs/lattice/verified-atomic-commit.md) | B4 |
@@ -258,11 +258,10 @@ The order is kept, not just stated:
    back to, it forced the style, voice and pacing decisions before there were
    ten episodes to change, and its source is the most-reviewed prose in the
    repository. It is published: the docs site plays it on the home page and
-   under Videos. Its ending has not yet been re-cut: the published episode
-   lists only F in `episode.json`, and its narration still ends by naming the
-   three paths. F2 is the next re-cut, to name Build's and Evaluate's first
-   episodes and bring the cut back within three minutes (the current cut runs
-   3:01); F3 will name Operate's first episode once it exists.
+   under Videos. Its ending has been re-cut once: F2 names Build's and
+   Evaluate's first episodes, and brought the cut back within three minutes
+   (it runs 2:56), so the published episode lists F and F2 in `episode.json`.
+   F3 will name Operate's first episode once it exists.
 3. **The order**, each item in turn:
 
    | Step | Items | Completes |
@@ -291,8 +290,10 @@ The order is kept, not just stated:
    and each heard back by two local speech recognisers and made again when it
    does not say what the script says; the cues joined on a timeline and
    mastered to the series loudness; and WebVTT captions. A `<!-- pause N -->`
-   comment in the script adds N seconds of silence, and a new scene waits a
-   little longer than the next cue in a scene does (`voice/voice.json`). Then
+   comment in the script adds N seconds of silence, a `<!-- pace N -->` at the
+   start of `## Narration` (between 0.8 and 1) slows every cue while keeping
+   its pitch, and a new scene waits a little longer than the next cue in a
+   scene does (`voice/voice.json`). Then
    listen to the narration alone (`npm run review -- <slug> --audio`). Where a
    line reads wrongly - a word said wrong, a statement that rises like a
    question - make several takes of it and pick one by ear
@@ -532,7 +533,7 @@ How it works:
   copies them into the site once, and generates the Videos tab and the home
   page's introduction from the pages that pin a cut.
 - **The cost, accepted:** each published cut adds its size to git history for
-  good (about 4 MB a minute; 11.6 MB for the introduction), and every
+  good (about 4 MB a minute; 11.0 MB for the introduction's current cut), and every
   full-history CI checkout downloads it. Keep re-cuts deliberate, and publish
   from a review, not from a draft.
 

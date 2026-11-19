@@ -161,6 +161,10 @@ Cluster.
 - An **unavailable** area's stop is shown, demoted, with the one-sentence reason
   it cannot be opened now, such as "Sign in to administer access on this
   cluster."
+- An area the cluster did not answer for is shown, demoted, as "Could not be
+  checked: the cluster did not answer.", or keeps its last shown answer marked
+  "Last known: not rechecked yet.", with a **Check again** button under the
+  spine.
 - A **hidden** area has no stop at all.
 
 How an area decides between these is described in
@@ -188,7 +192,9 @@ own width and uses three bands:
 | Medium | 768px to 1199px | A rail: every label, but no badges or reasons. | As expanded. | The full chain. |
 | Compact | Below 768px | A slide-in sheet opened from the **Directory** button, which returns focus when it closes; for an operator it starts with the tenant switcher. | The mark and the name, shortened to "Lattice Explorer" so it is never cut off, with a **Menu** button holding the connection, identity and appearance controls. | The current node alone, on one line, after a `...` elision (not a node) that opens the full chain as a list. The command palette opens as a full-screen sheet. |
 
-Until the width has been measured, the expanded layout renders, so nothing
+Until the width has been measured (the server prerender, and the live page's
+first renders), both forms of the chrome render and a stylesheet shows the one
+the width calls for, so the first paint is right at every width and nothing
 depends on script to be usable.
 
 Skip links come first on every page: **Skip to directory**, **Skip to address**

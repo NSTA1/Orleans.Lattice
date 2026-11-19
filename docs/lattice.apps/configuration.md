@@ -32,6 +32,9 @@ These are input-format constraints, not mutable options. Exceeded limits return 
 |---|---|
 | JSON text / input stream | 1,048,576 UTF-16 characters / 1,048,576 UTF-8 bytes |
 | Entries in a section or scopes of one role | 256 |
+| App slug (`identity.slug`) | 2-31 characters matching `^[a-z][a-z0-9-]{1,30}$` |
+| Tree, role or subscription name | 1-128 characters: a lower-case ASCII letter, then lower-case letters, digits, `-` or `_`; unique within its section |
+| MCP tool name | 1-96 characters, with the same alphabet as other names; unique within the section |
 | Key, prefix, adopted id, schema family or provenance string | 1,024 characters |
 | MCP tool description | 4,096 characters |
 | Presentation display name | 60 characters |

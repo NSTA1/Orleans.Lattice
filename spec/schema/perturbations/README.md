@@ -21,11 +21,12 @@ and `SchemaStageOrdering` ([`SchemaStageOrderingRefinement.md`](../SchemaStageOr
 have one perturbation for every behaviour row. `SchemaVersionFamily`
 ([`SchemaVersionFamilyRefinement.md`](../SchemaVersionFamilyRefinement.md)),
 `SchemaDurableOperation`
-([`SchemaDurableOperationRefinement.md`](../SchemaDurableOperationRefinement.md))
+([`SchemaDurableOperationRefinement.md`](../SchemaDurableOperationRefinement.md)),
 `SchemaComplianceScan`
 ([`SchemaComplianceScanRefinement.md`](../SchemaComplianceScanRefinement.md)),
 `SchemaRemediationCutover`
 ([`SchemaRemediationCutoverRefinement.md`](../SchemaRemediationCutoverRefinement.md)),
+`SchemaStrictIngest` ([`SchemaStrictIngestRefinement.md`](../SchemaStrictIngestRefinement.md)),
 `SchemaCrossRegion` ([`SchemaCrossRegionRefinement.md`](../SchemaCrossRegionRefinement.md))
 and `SchemaTenantScope` ([`SchemaTenantScopeRefinement.md`](../SchemaTenantScopeRefinement.md))
 seed every behaviour row except those listed below. The gate requires every

@@ -83,8 +83,8 @@ await theLock.ReleaseAsync(lease.Token);
 `ReleaseAsync` is idempotent: a release with a stale token - one that is not the
 current holder's - is a silent no-op and does not disturb the current holder. A
 `RenewAsync` with a stale token, by contrast, throws
-`LatticeLockConflictException`, because a holder that believes it still owns the
-lock but does not needs to find out.
+`LatticeLockConflictException` (its `LockName` names the lock), because a holder
+that believes it still owns the lock but does not needs to find out.
 
 ## Non-blocking try-acquire
 

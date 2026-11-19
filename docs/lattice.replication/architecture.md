@@ -118,8 +118,9 @@ flowchart LR
    switches to incremental shipping at the snapshot's HLC. A receiver-side
    fall-off probe can start that automatically when the receiver's own local WAL
    no longer retains entries for an origin it has already recorded. A source-side
-   shipper can also detect that its read cursor was trimmed past, stamp the next
-   push with `ReplicationBatch.ReseedAfterEpoch`, and ask the receiver to run the
+   shipper can also detect that its read cursor was trimmed past and attach a
+   re-seed request to each later push (carried out of band by the transport)
+   asking the receiver to run the
    same full bootstrap. An explicit re-seed request seeds a new peer. See
    [`snapshot-bootstrap.md`](snapshot-bootstrap.md) and
    [`auto-bootstrap.md`](auto-bootstrap.md).
@@ -290,7 +291,10 @@ carried over replication (invariant 4 above) are not modelled here; that is
 owned by #4436, as is saga atomicity across a bootstrap (#4683, #4684,
 #4685). The refinement note lists every other abstraction the
 model makes, among them anti-entropy repair, a single WAL partition per
-cluster, a bounded fault budget, and an unbounded identity cache.
+cluster, a bounded fault budget, and an unbounded identity cache. The
+low-watermark module is the exception on partitions: its base model checks two
+WAL partitions, because its floors are per partition, and each of its variant
+configurations enables one feature on one partition.
 
 ## Relationship to the core library
 

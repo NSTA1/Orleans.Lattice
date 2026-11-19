@@ -112,7 +112,7 @@ The request records' members and the RPCs that use each one are listed under [Wi
 
 - `ILatticeTreeAdminApiAuthorizer` - the per-call transport gate, with the shipped `DenyTreeAdminApiAuthorizer` (the registered default) and `AllowAllTreeAdminApiAuthorizer` (opt-in).
 - `LatticeTreeAdminApiAuthorizationContext` - the call handed to the authorizer: `Call`, `Operation` and `TargetId`.
-- `LatticeTreeAdminApiOperation` - names 20 RPCs individually. Every other RPC, and any unrecognised method, is presented as `Unknown`.
+- `LatticeTreeAdminApiOperation` - names 22 RPCs individually. Every other RPC, and any unrecognised method, is presented as `Unknown`.
 - `ILatticeTreeAdminApiCredentialBridge` - lifts the caller's credential from the call.
 - `ILatticeTreeAdminApiAuthSchemeSource` - supplies the `GetAuthScheme` advertisement, built from `AuthSchemeDescriptor` entries inside an `AuthSchemeAdvertisement`.
 
@@ -242,7 +242,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TreeAdmin.Grpc.LatticeTreeAdminApiAuthorizationContext`
 
-[Source](../../src/lattice.api.treeadmin.grpc/Security/LatticeTreeAdminApiAuthorizationContext.cs) (line 91).
+[Source](../../src/lattice.api.treeadmin.grpc/Security/LatticeTreeAdminApiAuthorizationContext.cs) (line 102).
 
 `public readonly struct LatticeTreeAdminApiAuthorizationContext`
 

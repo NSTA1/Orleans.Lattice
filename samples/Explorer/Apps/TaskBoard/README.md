@@ -16,6 +16,7 @@ app's one tree, `tasks`.
 | `src/ui/app.mjs` | The app's one ES module. It is self-contained and talks to the Explorer only through `globalThis.lattice`. |
 | `src/ui/icon.svg` | The catalogue icon, shown through an `<img>` element only. |
 | `src/TaskBoardApp.cs` | The slug and embedded-resource names the silo registers the app with. |
+| `src/TaskBoard.csproj` | The class library that embeds the manifest and the bundle files as resources under the names the in-image source reads. |
 | `test/` | `TaskBoard.Tests`: the manifest validates, every digest matches, the in-image source enumerates and serves the app, and the bundle stays self-contained. |
 
 There is no build toolchain. The bundle is plain HTML, CSS and one ES module,
@@ -143,4 +144,5 @@ consent, separate bindings, separate boards.
 - Stored values are treated as untrusted input: a card that does not parse is
   skipped, and titles are always rendered as text.
 - The layout reflows from three columns to one on a 360px screen, every
-  control is a 44px touch target, and nothing depends on hover.
+  control is a kit-sized touch target (44px in the comfortable density, 28px
+  in compact), and nothing depends on hover.

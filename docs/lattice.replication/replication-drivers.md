@@ -28,8 +28,8 @@ migration on silo loss without leader election.
 
 | Driver | Key | Cadence | Purpose |
 |---|---|---|---|
-| Per-peer shipper | `{treeName}/{peerClusterId}` | 100 ms phase timer + 90 s reminder backstop + writer-side doorbell | Drains the tree's WAL partitions from the per-peer partition cursors, applies producer-side filters and the local-origin-only cycle-break, calls `IReplicationTransport.SendAsync`, advances the cursor on ack, applies exponential backoff on transient failure, parks batches whose framing header cannot be built on the per-tree DLQ. |
-| Per-tree maintenance | `{treeName}` | 5 s phase timer + 60 s reminder backstop | Schedules WAL garbage collection (`ILatticeWalGc.RunOnceAsync`) and per-peer fall-off-the-log probes (`ILatticeFallOffLogDetector.CheckAndTriggerAsync`) on independent cadences. |
+| Per-peer shipper | `{treeName}/{peerClusterId}` | 100 ms phase timer + 90 s reminder backstop + writer-side doorbell | Drains the tree's WAL partitions from the per-peer partition cursors, applies producer-side filters and the local-origin-only cycle-break, calls `IReplicationTransport.SendAsync`, advances the cursor on ack, applies exponential backoff on transient failure, and takes the peer off the log (quarantining the batch) when a batch's framing header cannot be built - see [Unencodable batches](#unencodable-batches). |
+| Per-tree maintenance | `{treeName}` | 5 s phase timer + 60 s reminder backstop | Schedules WAL garbage collection (`ILatticeWalGc.RunOnceAsync`) and per-peer fall-off-the-log probes (`ILatticeFallOffLogDetector.CheckAndTriggerAsync`) on independent cadences, and drains the tree's causal-apply buffer on every phase tick. |
 
 The shipper is per-peer because per-peer back-pressure isolation must not
 couple peers to each other; one slow peer cannot block any other.
@@ -345,7 +345,7 @@ Every phase tick (default 100 ms, `LatticeReplicationOptions.ShipPhaseTimerPerio
    A rejected ack (`Accepted = false`) is treated as transient: the
    cursor stays put and the shipper backs off.
 
-A successful round-trip resets `ConsecutiveFailures` to `0` and clears
+A successful round-trip resets the shipper's consecutive-failure count to `0` and clears
 the backoff budget.
 
 **Continuous drain within a tick.** A tick does not stop after shipping a
@@ -491,7 +491,7 @@ only per-tick work is the WAL-tail poll, cursor-flush, and liveness probe.
 
 A restore, revert, purge and recreate, or alias move re-stamps the source tree's registry lineage (the durable registry lineage, #4537). A batch the source read before that re-stamp can still reach a peer afterwards, as a push already in flight or a retry. If the peer has meanwhile drained the new lineage, the batch plants a source-origin row the new lineage never held, and the peer's next delete reconcile, aligned with the new lineage, would delete it on the source's behalf although the source never deleted it ([#4673](https://github.com/NSTA1/Orleans.Lattice/issues/4673)). So:
 
-- **Every push is stamped.** It carries the lineage the shipper's binding was read under (`ReplicationBatch.SourceLineage`, sent as the `x-lattice-replication-source-lineage` call header). The shipper reads the physical id and the lineage from one registry row, which an alias move re-stamps in the same write, so the pair is consistent.
+- **Every push is stamped.** It carries the lineage the shipper's binding was read under, sent as the `x-lattice-replication-source-lineage` call header. The shipper reads the physical id and the lineage from one registry row, which an alias move re-stamps in the same write, so the pair is consistent.
   - The stamp is `Guid.Empty` while the lineage is unknown, which happens briefly when a notified rebind finds the registry already moved on.
   - There is no stamp when the registry tracks no lineage for the tree.
   - A liveness probe carries no records and is not stamped.
@@ -531,8 +531,10 @@ head-of-line-block the phase timer and every queued doorbell, and - under
 receiver back-pressure - time out at the sink and be dropped, starving the
 very wake it was meant to deliver. Because the timer is the drain driver,
 steady-state ship latency stays sub-second regardless of the doorbell, and
-the doorbell is best-effort: a missed call only delays the next ship by one
-timer tick (default 100 ms).
+the doorbell is best-effort: a missed call costs an active shipper nothing,
+because its phase timer (default 100 ms) drains regardless, while a shipper
+that had been deactivated waits for the next doorbell, grain call, or 90 s
+keepalive reminder to reactivate it.
 
 #### Writer-side coalescing
 
@@ -619,7 +621,7 @@ range per partition, so it needs no capacity bound and never stalls the
 link.
 
 The shipper logs a warning naming the batch size and the epoch, and the
-link reports `Stalled` (with `ReseedRequiredSeconds` set) until the peer
+link reports `Stalled` (with the `ReseedRequired` stall reason) until the peer
 has re-seeded. Nothing is written to the dead-letter queue.
 
 A shipper whose state still carries a poison list from an earlier build
@@ -837,7 +839,7 @@ A rebind that meets no purged saga, which is the normal case, costs nothing beyo
 
 ### Applied low watermark: what the shipper vouches for
 
-Beside every batch, and on an idle link's liveness probe, the shipper ships `ReplicationBatch.SourceFrontier` ([#4586](https://github.com/NSTA1/Orleans.Lattice/issues/4586)). Every write this cluster authored to the tree and stamped strictly below its `TreeLowWatermark` was acknowledged by the peer, and is visible there, in the peer's lineage of the tree that the frontier names. `OriginLowWatermark` is the same claim over every tree this cluster replicates to the peer.
+Beside every batch, and on an idle link's liveness probe, the shipper ships a source frontier ([#4586](https://github.com/NSTA1/Orleans.Lattice/issues/4586)) carrying two watermarks. The tree watermark claims that every write this cluster authored to the tree and stamped strictly below it was acknowledged by the peer, and is visible there, in the peer's lineage of the tree that the frontier names. The origin watermark is the same claim over every tree this cluster replicates to the peer.
 
 - **Per partition.** A shipping read returns the partition's clock floor paired with the offset it was in force at: every fresh local write at or after that offset is stamped at or above the floor. Once the durable cursor has passed that offset, the floor is covered. The durable cursor moves only on acknowledgements and is capped at held saga terminals.
 - **Per tree.** The watermark is the minimum covered floor over the tree's partitions. A partition with no covered floor means the tree has no watermark.
@@ -962,7 +964,7 @@ The shipper is therefore also an offset-reading WAL consumer:
 - Before its first read of a physical log it registers with that log's
   durable consumer set, so a GC pass on any silo, and after a restart, asks
   it where it is.
-- It answers with its durable `PartitionCursors`, which a held saga terminal
+- It answers with its durable per-partition resume cursors, which a held saga terminal
   already caps. A position is raised only after the write that made it
   durable. It is lowered before the next read when the in-memory cursors drop
   (an alias rebind, a rewind).
@@ -1071,7 +1073,10 @@ distinct from the content-hash dedup measurement above, which never
 alters the bytes shipped - coalescing actually elides entries.
 
 The pass handles both last-writer-wins and recognised CRDT trees, by
-different mechanics. For a tree whose declared `LatticeMergeMode` is
+different mechanics, choosing between them from the tree's merge-mode
+resolution on each pass. A tree whose resolution yields no mode - one
+disabled or made ambiguous at runtime, whose shipper keeps running -
+takes the last-writer-wins path. For a tree whose declared `LatticeMergeMode` is
 `LwwRegister` the receiver applies each entry by last-writer-wins
 ordered by HLC (an exact HLC tie falls to the replica-invariant
 tombstone, expiry, and value-byte fields before the observer-relative
@@ -1178,10 +1183,19 @@ last-run timestamps in persistent state:
   compares local readings and guards local seal gaps; it is not the
   cross-cluster source-WAL trim detector. Source trims are detected by
   the sender shipper when a shipping read returns a first sequence above
-  the requested sequence, and the request is carried on
-  `ReplicationBatch.ReseedAfterEpoch`. On positive local detection, the
-  detector drives the bootstrap kickoff itself - the maintenance grain
-  is a pure scheduler.
+  the requested sequence, and the shipper asks the peer to re-seed on
+  every push and liveness probe (see [Forced gap](#forced-gap-a-peer-taken-off-the-log)).
+  On positive local detection, the detector drives the bootstrap kickoff
+  itself when `AutoBootstrapOnFallOffLog` is on, unless a bootstrap from
+  the same source is already in flight - the maintenance grain is a pure
+  scheduler. Before probing each peer, the same cadence also retries any
+  bootstrap delete reconcile still owed for that peer, and first retries
+  any receiver-side saga-poison re-seed still owed for the tree.
+
+Independently of both cadences, every 5 s phase tick also drains the
+tree's causal-apply buffer, so a parked inbound entry whose dependencies
+are already met is released without waiting for a further high-water-mark
+advance; a failed drain is logged and retried on the next tick.
 
 ### Failure handling
 
@@ -1260,10 +1274,10 @@ emits; the table shows which driver is the source of each.
 | `wal.entries_shipped` | gRPC push transport, inside the shipper's `IReplicationTransport.SendAsync` call | A `Push` call for a non-empty batch returned an ack - accepted or not, so a batch a receive fence deferred counts again when it is re-shipped (a custom transport does not emit it). |
 | `wal.entries_trimmed` (on the core `orleans.lattice` meter, not `orleans.lattice.replication` - see `LatticeMetrics.WalEntriesTrimmed`) | Maintenance grain GC pass, and the core library's per-silo WAL garbage-collection scheduler, which runs without the drivers | GC trim removed at least one entry. |
 | `ship.duration` | gRPC push transport, inside the shipper's `IReplicationTransport.SendAsync` call | Every `Push` call (success or failure), liveness probes included. |
-| `peer.fell_off_log` | Maintenance grain fall-off probe | Detector finds the peer's HWM below the oldest entry that peer authored in the head window of the local WAL partitions. Source shipper trim gaps use the `ReplicationBatch.ReseedAfterEpoch` request path instead. |
+| `peer.fell_off_log` | Maintenance grain fall-off probe | Detector finds the peer's HWM below the oldest entry that peer authored in the head window of the local WAL partitions, and no bootstrap from that peer is already in flight (that case counts `peer.fell_off_log_suppressed` instead). Source shipper trim gaps use the forced-gap re-seed request instead. |
 | `apply.lag` / `apply.duration` / `apply.fifo_violations` / `apply.buffered_entries` / `apply.buffer_bytes` / `apply.dependency_wait` / `apply.causal_violations_blocked` / `apply.parallel_runs` | Receiver-side `IReplicationApplier` | Lit transitively once the peer is shipping real traffic. |
 | `dead_letter.removed` | (already wired) | Operator discards / replays. The queue refuses rather than evicts, so `evicted` is no longer emitted. |
-| `dead_letter.refused` | Dead-letter queue grain | A park refused because the queue is full; the shipper holds its cursor (backoff `dead-letter-refused`) and the link reports Stalled. |
+| `dead_letter.refused` | Dead-letter queue grain | A park refused because the queue is full; the receiver defers the entry instead of acknowledging it, so the sender's shipper holds its cursor and backs off, and the inbound link reports Stalled. |
 
 ---
 

@@ -96,7 +96,7 @@ The source reads the section's `Secret`, `AcceptedSecrets`, and `PeerSecrets` ke
 
 A hosted startup validator runs as an `IHostedService` and inspects every registered `IConfigurationProvider` at startup. It checks the replication secret keys specifically - the flat `LatticeReplication:Secret` and `LatticeReplication:AcceptedSecrets` spellings and the nested `LatticeReplication:Secrets:Secret`, `LatticeReplication:Secrets:AcceptedSecrets`, and `LatticeReplication:Secrets:PeerSecrets:*` shape - and if a populated one resolves through a file-backed provider whose file lies under the application directory, startup fails with a diagnostic that names the offending key and file path. The .NET user-secrets store lives outside the application directory and does not trip it.
 
-The check exists because the most common path to a leaked secret is a developer pasting it into `appsettings.json` (or its `Development` / `Production` variants), committing the file to source control, and discovering the leak weeks later. The scan does not inspect values; only the (key name, provider type, file path) tuple, so it cannot itself surface a secret.
+The check exists because the most common path to a leaked secret is a developer pasting it into `appsettings.json` (or its `Development` / `Production` variants), committing the file to source control, and discovering the leak weeks later. The scan checks only whether a key is populated and reports only the (key name, provider type, file path) tuple, never a value, so it cannot itself surface a secret.
 
 To opt out, set `LATTICE_REPLICATION_ALLOW_SOURCE_TREE_SECRETS` to `1`, `true`, or `yes`, or set `LatticeReplicationSecurityOptions.ScanConfigurationForSecrets` to `false`; either one skips the scan and logs a warning at startup. The environment variable is the preferred escape hatch: the validator reads it straight from the process environment rather than through `IConfiguration`, and it is auditable in deployment manifests.
 
@@ -136,7 +136,7 @@ The receiver-side auth interceptor is registered globally on the gRPC service an
 - **Calls whose secret is not in the accepted-set snapshot** with `StatusCode.PermissionDenied`.
 - **Calls whose secret is not the one this cluster would itself send to the origin they claim** with `StatusCode.PermissionDenied`, while `LatticeReplicationSecurityOptions.BindCredentialToOriginCluster` is `true` (the default). A call with no `x-lattice-replication-origin` header, an origin for which no secret resolves, and a mismatched secret all get the same refusal. See [`BindCredentialToOriginCluster`](configuration.md#transport-security---latticereplicationsecurityoptions) for how the secret is resolved and what the binding establishes under cluster-wide and per-peer secrets.
 
-Beyond the shared secret, the peer-read RPCs (digest probe, Merkle walk, peer high-water mark, and content-manifest exchange) re-resolve the peer-supplied tree name against the receiving cluster's own replication enrollment and refuse, with `StatusCode.PermissionDenied`, any tree that is not enrolled there - so a peer holding the mesh secret cannot aim those system-origin reads at a tree the cluster keeps local. The snapshot metadata and snapshot stream RPCs apply the same check on the exporting side before any tree is read, and refuse a non-enrolled tree with `StatusCode.PermissionDenied` too. The push, peer high-water-mark, and content-manifest RPCs also compare the origin cluster id the request declares (for a push, the batch envelope's) with the `x-lattice-replication-origin` header, and refuse with `StatusCode.PermissionDenied` a request that carries no header or whose declared origin differs from it. The saga control RPCs refuse a call that carries no header, or whose declared coordinator cluster id differs from it, and then pass the header's cluster id to an `ISagaPeerAuthorizer` gate, which by default admits only cluster ids present in `LatticeReplicationGrpcOptions.Peers`. These per-RPC checks run in the services themselves, so they apply even when `RequireAuthentication` is `false`.
+Beyond the shared secret, the peer-read RPCs (digest probe, Merkle walk, peer high-water mark, and content-manifest exchange) re-resolve the peer-supplied tree name against the receiving cluster's own replication enrollment and refuse, with `StatusCode.PermissionDenied`, any tree that is not enrolled there - so a peer holding the mesh secret cannot aim those system-origin reads at a tree the cluster keeps local. The snapshot metadata and snapshot stream RPCs apply the same check on the exporting side before any tree is read, and refuse a non-enrolled tree with `StatusCode.PermissionDenied` too. The push, peer high-water-mark, and content-manifest RPCs also compare the origin cluster id the request declares (for a push, the batch envelope's) with the `x-lattice-replication-origin` header, and refuse with `StatusCode.PermissionDenied` a request that carries no header or whose declared origin differs from it. The saga control RPCs refuse a call that carries no header, or whose declared coordinator cluster id differs from it (a participant's decision query names the coordinator it asks, so its requester is taken from the header instead), and then pass the header's cluster id to an `ISagaPeerAuthorizer` gate, which by default admits only cluster ids present in `LatticeReplicationGrpcOptions.Peers`. These per-RPC checks run in the services themselves, so they apply even when `RequireAuthentication` is `false`.
 
 The accepted-set check uses `LatticeReplicationSharedSecret.FixedTimeEquals` to keep comparison time independent of how close the candidate secret is to a real one.
 
@@ -149,6 +149,12 @@ reads the current registry record, requires an active tenant, and requires the
 authenticated requesting region to be operator-authorized and `Backfilling` or
 `Online`. Bare legacy and platform trees retain their enrollment-only behavior.
 An absent tenant export gate or an unavailable authenticated requester is a denial.
+
+The digest-probe, Merkle-walk, and content-manifest RPCs hold a `t/{tenant}/{tree}`
+tree to the same gate before they answer, because an answer over a caller-chosen
+range discloses which keys exist and what they hold. They read the requester from
+the same credential-to-origin binding and refuse with `StatusCode.PermissionDenied`
+when it is unavailable, the gate is inactive, or the gate refuses the requester.
 
 The gRPC binding obtains requester identity only from successful credential-to-origin
 binding, never from the request's `SourceClusterId` (which pins the exporting
@@ -194,7 +200,7 @@ before the decision is redelivered, so it never leaves the tree write-fenced
 ([#5506](https://github.com/NSTA1/Orleans.Lattice/issues/5506)).
 
 Turning off authentication or origin binding does not authorize these identity-sensitive
-operations: tenant snapshot and saga RPCs remain denied. An mTLS-only setup below
+operations: tenant snapshot, tenant-tree probe and content-manifest, and saga RPCs remain denied. An mTLS-only setup below
 does not provide the package's credential-bound peer identity for these operations.
 
 ## Headers on the wire

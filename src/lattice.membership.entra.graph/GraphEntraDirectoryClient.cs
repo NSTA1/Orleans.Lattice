@@ -10,9 +10,11 @@ namespace Orleans.Lattice.Membership.Entra.Graph;
 /// Graph <c>/users</c> and <c>/groups</c> read queries - server-side searched (or
 /// browsed) and paged - and resolves a single principal by exact id. Requires the
 /// app-only token to hold the <c>User.Read.All</c> and <c>Group.Read.All</c> read
-/// scopes; a Graph denial (missing scopes, or any other error) is translated into
+/// scopes; a Graph error response (a denial for missing scopes, or any other
+/// <c>ODataError</c>) is translated into
 /// <see cref="EntraDirectoryUnavailableException"/> so the calling
 /// <see cref="EntraGraphIdentityDirectory"/> degrades cleanly instead of faulting.
+/// Any other failure, such as a transport fault, is not caught here and propagates.
 /// </summary>
 internal sealed class GraphEntraDirectoryClient : IEntraGraphDirectoryClient
 {

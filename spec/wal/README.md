@@ -68,17 +68,23 @@ TLC's count for the module's own cfg. `WalDurability` searches to depth 35 and
 25, and its `WideEpochs` variant finds 495,810 distinct states to depth 26.
 `WalHandOffFence` searches to depth 19, and its `WideWindows` variant finds 47,000
 distinct states to depth 23; its `StaleDonor`, `StaleDonorPreArm` and `StaleDonorRearmRace`
-variants (#5841, #5840 S4) find 574,540, 2,651,431 and 64,825. `WalRoutingFloor` searches to depth 15, and its
-`WideGenerations` variant finds 24,084 distinct states to depth 15.
+variants (#5841, #5840 S4) find 574,540, 2,651,431 and 64,825, its `StaleDonorDonorFence`
+variant (#5839) 2,294,406 and its `DeferredClose` variant (#5839) 3,836. `WalRoutingFloor` searches to depth 15, and its
+`WideGenerations` variant finds 65,151 distinct states.
 `WalLiveAdvanceCore` searches to depth 25; its variants find 3,052,664 (`Restart`,
 depth 26), 3,373,761 (`GateFlip`, depth 25), 3,693,715 (`Recreate`, depth 26),
 4,638,713 (`RecreateSurvivor`, depth 26), 1,622,161 (`RecreateSurvivorMixed`, depth 25)
-and 1,114,185 (`Bulk`, depth 25) distinct states. Its claimless-advance variants (#5837)
+and 1,114,185 (`Bulk`, depth 25) distinct states, and its lazy-arm variants 1,021,427
+(`KeyMove`), 2,262,022 (`PreArmRestart`), 2,511,745 (`PreArmBulk`), 2,631,557
+(`PreArmRecreate`) and 490,073 (`PreArmGateFlip`). Its claimless-advance variants (#5837)
 find 4,680,662 (`Free`), 2,386,428 (`FreeKeyMove`), 3,562,343 (`FreeSplitHint`),
 2,146,154 (`FreeSplitBirth`), 428,890 (`FreeSplitLink`), 892,259 (`FreeLatch`), 707,726
 (`FreeOrphan`), 3,855,129 (`FreeRestart`), 477,300 (`FreeRestartKeyMove`), 1,715,417
 (`FreeRecreate`), 4,908,025 (`FreeRecreateSurvivor`), 3,309,965 (`FreeBulk`), 1,904,304
-(`FreeGateFlip`), 4,217,142 (`FreeFwdExclusion`) and 821,800 (`FreeTagEvict`).
+(`FreeGateFlip`), 4,217,142 (`FreeFwdExclusion`), 821,800 (`FreeTagEvict`), 1,795,034
+(`FreeReforward`), 1,993,821 (`FreeChainEvict`), 3,045,174 (`FreeOrphanEvict`), 1,032,584
+(`FreeForwardIn`), 712,124 (`FreeEpochOnly`), 1,159,405 (`FreeSplitView`), 1,056,232
+(`FreeOtherLinkRaise`), 8,791 (`FreeKeyFilter`) and 24,397 (`FreeReportFetch`).
 `WalBulkSwitch` searches to depth 29, and its `Skip` variant finds 197,156 distinct
 states to depth 30.
 `WalLiveAdvanceComposite`'s actions are non-behavioural interface steps, which the five
@@ -86,7 +92,7 @@ modules map to production, except the three WAL shard checks its edges rest on.
 
 `WalDurability` has a two-fault variant configuration, `WalDurability.TwoFaults.cfg`
 (see "Variant configurations" in [`../README.md`](../README.md)). It checks every
-invariant and both action properties with a budget of two faults instead of one:
+invariant and all four action properties with a budget of two faults instead of one:
 3,237,411 distinct states to depth 42. The liveness properties stay at one fault,
 because at two the full configuration is far past the TLC budget.
 
@@ -155,6 +161,8 @@ distinct states to depth 21, about fifteen seconds on two workers.
 | [`AppendEpochRefinement.md`](AppendEpochRefinement.md) | `WalAppendEpoch` mapped to production, and the interface the other promoted modules assume. |
 | `WalHandOffFence.tla` / `.cfg` / `.manifest.json` | The hand-off fence module, its TLC model and its manifest. |
 | `WalHandOffFence.WideWindows.cfg` | The hand-off fence module with four offsets, generations up to 4 and three windows, checked against every invariant and the action property. |
+| `WalHandOffFence.StaleDonor.cfg`, `.StaleDonorPreArm.cfg`, `.StaleDonorRearmRace.cfg`, `.StaleDonorDonorFence.cfg` | The stale duplicate donor of #5841 under today's eager arm, under #5833's pre-arm, with the live donor's re-arm race, and under #5837's rule S donor fence (#5839), each checked against every invariant and the action property. |
+| `WalHandOffFence.DeferredClose.cfg` | The lazy key-moving close under pre-arm (#5839), checked against every invariant and the action property. |
 | `WalBulkSwitch.Skip.cfg` | The bulk switch module on a never-written shard (#5812, B2): no root when the load begins, an unstamped seed, and a batch write that may seed a root mid-load, checked against every invariant. |
 | [`handoff-fence-mutations/`](handoff-fence-mutations/) | One or more deliberate defects per property and per action of `WalHandOffFence`. |
 | `WalRoutingFloor.tla` / `.cfg` / `.manifest.json` | The routing-floor module, its TLC model and its manifest. |
@@ -162,15 +170,17 @@ distinct states to depth 21, about fifteen seconds on two workers.
 | [`routing-floor-mutations/`](routing-floor-mutations/) | One or more deliberate defects per property and per action of `WalRoutingFloor`. |
 | [`RoutingFloorRefinement.md`](RoutingFloorRefinement.md) | `WalRoutingFloor` mapped to production, and its interface. |
 | `WalLiveAdvanceCore.tla` / `.cfg` / `.manifest.json` | The live-advance core module, its TLC model and its manifest. |
-| `WalLiveAdvanceCore.Restart.cfg` | The live-advance core with a WAL shard restart, checked against every invariant. |
-| `WalLiveAdvanceCore.GateFlip.cfg` | The live-advance core with own unstamped appends by any running activation, checked against every invariant. |
-| `WalLiveAdvanceCore.Recreate.cfg` | The live-advance core with the tree purged and re-created, a straddler and the first initialisation, for purges that find the born activation claimed, checked against every invariant. |
-| `WalLiveAdvanceCore.RecreateSurvivor.cfg` | The same purge for purges that find the born activation unclaimed, which may then claim as the re-created incarnation's, without the 10.2.0 silo, checked against every invariant. |
-| `WalLiveAdvanceCore.RecreateSurvivorMixed.cfg` | The unclaimed-survivor purge with the 10.2.0 silo and no hand-off window, checked against every invariant. |
-| `WalLiveAdvanceCore.Bulk.cfg` | The live-advance core with a bulk-born leaf, checked against every invariant and the liveness property. |
+| `WalLiveAdvanceCore.Restart.cfg` | The live-advance core with a WAL shard restart, checked against `TypeOK` and the four safety guarantees. |
+| `WalLiveAdvanceCore.GateFlip.cfg` | The live-advance core with own unstamped appends by any running activation, checked against `TypeOK` and the four safety guarantees. |
+| `WalLiveAdvanceCore.Recreate.cfg` | The live-advance core with the tree purged and re-created, a straddler and the first initialisation, for purges that find the born activation claimed, checked against `TypeOK` and the four safety guarantees. |
+| `WalLiveAdvanceCore.RecreateSurvivor.cfg` | The same purge for purges that find the born activation unclaimed, which may then claim as the re-created incarnation's, without the 10.2.0 silo, checked against `TypeOK` and the four safety guarantees. |
+| `WalLiveAdvanceCore.RecreateSurvivorMixed.cfg` | The unclaimed-survivor purge with the 10.2.0 silo and no hand-off window, checked against `TypeOK` and the four safety guarantees. |
+| `WalLiveAdvanceCore.Bulk.cfg` | The live-advance core with a bulk-born leaf, checked against `TypeOK`, the four safety guarantees and `NewbornPinEventuallyUsable`. |
+| `WalLiveAdvanceCore.KeyMove.cfg`, `.PreArmRestart.cfg`, `.PreArmBulk.cfg`, `.PreArmRecreate.cfg`, `.PreArmGateFlip.cfg` | The lazy arm (#5833) with a key-moving close, a WAL shard restart, a bulk-born leaf, the purge, or own unstamped appends. `KeyMove` and `PreArmBulk` also check `NewbornPinEventuallyUsable`. |
+| `WalLiveAdvanceCore.Free*.cfg` | The claimless advance (#5837), twenty-four variants; the refinement note's property classification tables what each adds. |
 | [`live-advance-core-mutations/`](live-advance-core-mutations/) | One or more deliberate defects per property and per action of `WalLiveAdvanceCore`, and one weakening of each assumption it takes. |
 | [`LiveAdvanceCoreRefinement.md`](LiveAdvanceCoreRefinement.md) | `WalLiveAdvanceCore` mapped to production, and its interface: each assumption with the guarantee and module that discharge it. |
-| [`HandOffFenceRefinement.md`](HandOffFenceRefinement.md) | `WalHandOffFence` mapped to production, and its interface: E's entry check assumed, `HandOffBound`, `AbsentMarkerHolds` and `CloseHeadMonotone` guaranteed. |
+| [`HandOffFenceRefinement.md`](HandOffFenceRefinement.md) | `WalHandOffFence` mapped to production, and its interface: E's entry check assumed, `HandOffBound`, `AbsentMarkerHolds`, `CloseHeadMonotone` and `DeferredHeadAtRaisedGeneration` guaranteed. |
 | `WalBulkSwitch.tla` / `.cfg` / `.manifest.json` | The bulk switch module, its TLC model and its manifest. |
 | [`bulk-switch-mutations/`](bulk-switch-mutations/) | One or more deliberate defects per property and per action of `WalBulkSwitch`. |
 | [`BulkSwitchRefinement.md`](BulkSwitchRefinement.md) | `WalBulkSwitch` mapped to production, and its interface. |
@@ -340,18 +350,19 @@ write occupies an offset, so an allocator re-seeded beneath a call still in moti
 
 Two cuts are budget bounds rather than abstractions, and the core's
 [property classification](LiveAdvanceCoreRefinement.md#property-classification) names
-them: the liveness property is checked on the base and `Bulk` only (`Restart` holds it
-but takes over seven minutes, and `GateFlip` and `Recreate` are outside its premise), and
+them: the liveness property `NewbornPinEventuallyUsable` is checked on the base and on
+the variants whose newborn it applies to (`Bulk`, `KeyMove`, `PreArmBulk` and five of the
+claimless-advance variants), not on `Restart` (it holds there but takes over seven minutes)
+or on `GateFlip` and `Recreate`, which are outside its premise; and
 CI checks a purge's unclaimed survivor with a hand-off window and, separately, with a
 10.2.0 silo. The combination of both was checked locally and is clean at 8,913,193 states
 (232 seconds), but is kept out of CI only for the 5M-state case budget.
 
 The composite interface check ([gaps and scope cuts](LiveAdvanceCompositeRefinement.md#scope-cuts))
-has four scope cuts of its own: one WAL shard restart; no purge after a bulk birth (no
-module combines the two either); no step for the bulk switch's own close, which no B
-guarantee states, and which is shown harmless: C's `Bulk` configuration without the close's
-`phase` guard is clean at 1,114,208 states; and two offsets with one hand-off window, which its witness mutations
-show reach every edge.
+has three scope cuts of its own: one WAL shard restart; no purge after a bulk birth (no
+module combines the two either); and two offsets with one hand-off window, which its witness mutations
+show reach every edge. The bulk switch's own close is a composite step (`BulkClose`, #5839),
+checked by the `BulkCloseMeetsCoreClose` edge.
 
 ## How to run TLC
 
@@ -474,8 +485,8 @@ epoch row, retire the entry under a floor of at least the higher of the entry an
 row (#5641), then delete the row conditionally on the ETag read.
 
 It is the first of five modules promoted from the design draft, and the root of their
-assume-guarantee graph: it assumes nothing, and its four guarantees are what the
-hand-off, routing-floor, bulk-switch and core modules assume
+assume-guarantee graph: it assumes nothing, its entry check is what the hand-off and
+routing-floor modules assume, and its guarantees are what the core module assumes
 ([the interface](AppendEpochRefinement.md#interface)).
 
 | Property | Kind | Meaning |
@@ -528,8 +539,8 @@ gate opened has no marker; it opens one when it resumes, and the owner's marker 
 is initialised only once no such hand-off is in flight.
 
 It is module H of the five promoted from the design draft. It assumes only
-`WalAppendEpoch`'s entry check, as an environment constraint, and its three guarantees
-are what the bulk-switch and core modules assume
+`WalAppendEpoch`'s entry check, as an environment constraint, and its guarantees
+are what the core module assumes
 ([the interface](HandOffFenceRefinement.md#interface)).
 
 | Property | Kind | Meaning |
@@ -537,11 +548,16 @@ are what the bulk-switch and core modules assume
 | `TypeOK` | Invariant | State stays well-typed. |
 | `HandOffBound` | Invariant | Whenever the owner's marker reads closed, every stamped foreign append lies below the heads its closes recorded. |
 | `AbsentMarkerHolds` | Invariant | The owner's marker state is initialised only while no hand-off begun without a marker is in flight, so an absent marker holds the owner. |
+| `DeferredHeadAtRaisedGeneration` | Invariant | The lazy key-moving close raises before it defers (#5839): a pending deferred head never names a generation above the shard root's durable raised one. |
+| `LiveDonorProgress` | Invariant | In the stale-donor variants (#5840 S4), the live donor is never superseded or left self-fencing its own appends unless a stale duplicate's claim raised its row or it is itself stale. |
+| `StaleDetectionHonoured` | Invariant | A probe that finds the live donor's state stale marks it stale, even when the relinquish discards the claim it ran in (#5840 S4). |
 | `CloseHeadMonotone` | Action property | The heads the owner's marker requires never decrease: every close is max-merged with the heads earlier closes recorded. |
 
-The base checks every property with every environment step on (about a second on four
+The base checks every property with the batch, the restart, the tree walk and the
+legacy hand-off on (about a second on four
 workers); `WalHandOffFence.WideWindows.cfg` re-checks them with four offsets,
-generations up to 4 and three windows (a few seconds). Twelve of the design draft's
+generations up to 4 and three windows (a few seconds), and the stale-donor and
+`DeferredClose` variants turn on the steps the base leaves off. Twelve of the design draft's
 mutations moved here, re-targeted at these properties, eight more perturb the
 actions the draft had none for, and one makes a close overwrite the recorded heads; the refinement note lists them, and the redundancy
 check this module keeps.
@@ -639,7 +655,7 @@ that no batch write seeded a root meanwhile, falling back to the switched path i
 did.
 
 It is module B of the promoted modules' assume-guarantee graph: it assumes nothing, and
-its four guarantees are what the core module assumes of a bulk-born leaf and of a bulk
+its five guarantees are what the core module assumes of a bulk-born leaf and of a bulk
 operation's seed ([the interface](BulkSwitchRefinement.md#interface)).
 
 | Property | Kind | Meaning |
@@ -650,6 +666,7 @@ operation's seed ([the interface](BulkSwitchRefinement.md#interface)).
 | `HintOnlyWhileOpen` | Invariant | A stored birth hint belongs to an open switch. |
 | `SeedCovered` | Invariant | Every seed record is admitted under its switch's open token and below its close heads, or reported in the unstamped watermark. |
 | `ReplacedRootRelocated` | Invariant | A load published over a root a batch write seeded while it ran has relocated that root, never overwritten it (#5819). |
+| `SwitchCloseCoversPriorAllocations` | Action property | A switch's close records the allocator head at its re-claim, so its head is above every record allocated before the close (#5833). |
 
 The base checks every property with every environment step on, in about fifteen
 seconds at two workers; the `Skip` variant checks them on a never-written shard.
@@ -707,17 +724,34 @@ itself ([the interface](LiveAdvanceCoreRefinement.md#interface)).
 | `SnapshotHonest` | Invariant | The shared snapshot never claims coverage of a durable entry it lacks. |
 | `NoTrimPastAcked` | Invariant | The GC never trims an acknowledged append the snapshot lacks. |
 | `OldNeverRejected` | Invariant | An unstamped append is never rejected. |
+| `PreArmCostWitness` | Invariant | The lazy arm's cost witness (#5833): a `PreArm` append never raises the partition's shared unstamped watermark. |
+| `ReclaimCostBound` | Invariant | A key-moving close writes no WAL generation claim, and the deferred re-claim writes the generation row at most once per raise and partition. |
+| `SiblingHintHonest` | Invariant | The split's sibling is handed every durable record at or below its hint (#5837). |
+| `TransferCostWitness` | Invariant | A record appended under the per-leaf class never raises the partition's shared unstamped watermark (#5837). |
+| `DeferredHeadCostWitness` | Invariant | A split-born receiver's resolved deferred head is the stale donor's bound plus one, never the partition's allocator head (#5837). |
+| `SoleActivationNeverFallsOff` | Invariant | A sole running activation never falls off the log: the liveness excuse covers duplicates only. |
+| `NarrowObligated` | Invariant | Once the donor's narrow is durable, so is its obligation to link L (#5837). |
+| `UnlinkedNeverClaims` | Invariant | Under the reachability latch, an unlinked L never takes an epoch, except its proven birth activation (#5837). |
+| `RepairLatches` | Invariant | Under the reachability latch, orphan repair always latches an unlinked L. |
+| `PendingCloseNotLatched` | Invariant | An unlinked L whose donor's close is pending, under pre-arm and with no orphan repair, is never latched. |
+| `ForwardHonest` | Invariant | No running activation passes a forward of a key L owns, or of a key its own span still holds, without holding it. |
+| `SnapshotForwardHonest` | Invariant | The shared snapshot never covers a forward of a key its span holds, or of a key L owns, without holding it. |
+| `StaleHighExcludesReceiverTag` | Invariant | The donor's forwards into L, tagged with the split that created L, never raise L's `staleHigh` (#5837). |
 | `NewbornPinEventuallyUsable` | Liveness | Under fairness of the leaf's own steps, with replay fair only toward a bound the arming list names, the shared snapshot eventually covers every own append, so the newborn's pin becomes usable without a replay from -1. |
+| `SplitEventuallyLinked` | Liveness | A split-born L is eventually linked (#5837). |
 
-The base checks every property with the duplicate, one hand-off window and a 10.2.0 silo's
-unstamped append, the liveness property under `LiveSpec`'s single fairness condition
-(about a minute and a half on two workers). Each variant adds one environment:
+The base checks every property with the duplicate, one hand-off window, a 10.2.0 silo's
+unstamped append and the lazy arm, the liveness properties under `LiveSpec`'s single
+fairness condition. The first six variants add one environment each under today's eager arm:
 `WalLiveAdvanceCore.Restart.cfg` a WAL shard restart, `WalLiveAdvanceCore.GateFlip.cfg` own
 unstamped appends, the purge with a straddler and the first initialisation in three
 slices (`WalLiveAdvanceCore.Recreate.cfg`, `.RecreateSurvivor.cfg` and
 `.RecreateSurvivorMixed.cfg`, by whether the purge finds the born activation claimed), and
 `WalLiveAdvanceCore.Bulk.cfg` a bulk-born leaf (each between a minute and three; `Bulk`
-also re-checks the liveness property). The design model's larger combined configurations stay as
+also re-checks `NewbornPinEventuallyUsable`). These check `TypeOK` and the four safety
+guarantees; the `KeyMove`, `PreArm*` and `Free*` variants check the lazy arm and the
+claimless advance, and the refinement note's property classification lists what each
+re-checks. The design model's larger combined configurations stay as
 local evidence in the design note. Seven of the design draft's mutations moved here; the
 refinement note lists them, the assumption mutations that weaken each assumption in turn,
 and the one redundancy check this module keeps, which stays clean and so is not in its
@@ -797,7 +831,7 @@ mutation that weakens it, which must turn the edge red.
 [`LiveAdvanceCompositeRefinement.md`](LiveAdvanceCompositeRefinement.md) tables these
 mutations. It also records:
 - the redundancy check;
-- the scope cuts: one restart, a purge never after a bulk birth, the bulk switch's own close, two offsets and one window;
+- the scope cuts: one restart, a purge never after a bulk birth, two offsets and one window;
 - the module configurations that cover what the cuts drop.
 
 ### What it covers, and what it does not

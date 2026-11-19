@@ -124,17 +124,19 @@ the tree that holds it, there is nothing to configure per tree for local
 Most mutating accessors read the current value once to mint the delta they need,
 then apply that one typed delta through the tree. They no longer run a client-side
 CAS retry loop; any `maxAttempts` parameter you see is retained for compatibility,
-validated to be at least `1`, and otherwise ignored. The monotone max/min
-registers are the exception: their writes are blind candidate deltas and do not
-need the read.
+validated to be at least `1`, and otherwise ignored. Writes that do not depend on
+the current value skip the read: the monotone max/min registers send the
+candidate value as-is, and a sequence's `RemoveAsync` (unlike `RemoveAtAsync`)
+and `MergeAsync` need nothing from the stored list.
 
 > [!NOTE]
-> The one exception is **cross-cluster replication**. An enrolled tree declares a
+> The one exception to mixing modes is **cross-cluster replication**. An enrolled tree declares a
 > single [`LatticeMergeMode`](../lattice/api.md) in its replication map, and a
 > receiver dead-letters any inbound write whose mode differs - so a peer cannot
-> override the merge algebra, and a declared-CRDT tree also rejects plain
-> `SetAsync` writes. Mix modes freely on a local tree; keep a replicated tree to
-> the single mode it was enrolled under.
+> override the merge algebra. Locally, a write under any other mode is rejected
+> too, including plain last-writer-wins writes such as `SetAsync` or `DeleteAsync`
+> to a declared-CRDT tree. Mix modes freely on a local tree; keep a replicated
+> tree to the single mode it was enrolled under.
 
 The `replicaId` argument you pass to many of these methods names the writer.
 Give each independent writer (cluster, silo, or logical actor) a stable, distinct

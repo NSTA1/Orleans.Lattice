@@ -12,7 +12,11 @@ A sealed class configuring the account, container, key layout, and client. Every
 
 ## `LatticeAzureBlobCacheServiceCollectionExtensions`
 
-A static class with one extension method.
+A static class with one extension method:
+
+`public static IServiceCollection AddAzureBlobDistributedCache(this IServiceCollection services, Action<LatticeAzureBlobCacheOptions> configure)`
+
+It returns the same `services` for chaining.
 
 ```csharp verify
 using Microsoft.Extensions.DependencyInjection;

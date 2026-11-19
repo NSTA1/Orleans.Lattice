@@ -267,8 +267,8 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
     /// time keeps the Phase A provider hot path allocation-free. The
     /// tag is emitted on <see cref="LatticeMetrics.ProviderCommitDuration"/>
     /// and <see cref="LatticeMetrics.ProviderRetryExhausted"/> so the
-    /// attribution sweep can pivot between synchronous (default) and
-    /// pipelined phase-2 modes in a single dashboard query.
+    /// attribution sweep can pivot between synchronous and pipelined
+    /// (default) phase-2 modes in a single dashboard query.
     /// </summary>
     private readonly KeyValuePair<string, object?> _pipelinePhaseTwoTag;
 

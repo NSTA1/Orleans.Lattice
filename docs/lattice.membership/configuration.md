@@ -27,7 +27,7 @@ Provider-neutral bounds for the identity-directory seam: the default and maximum
 |---|---|---|---|
 | `DefaultPageSize` | `int` | `25` | The page size a provider applies when a directory search query requests none (its page size is `0`). Must be strictly positive and no greater than `MaxPageSize`. |
 | `MaxPageSize` | `int` | `100` | The upper bound a provider clamps a requested search page size to. Must be strictly positive. |
-| `ValidationRequired` | `bool` | `false` | Whether a supplied principal id must resolve to an existing directory principal before an administrative create path records it: a group upsert or member add through `ILatticeAuthAdmin`, or a tenant admin subject (see [Fail-closed create validation](identity-directory-providers.md#fail-closed-create-validation-validationrequired)). The subject of an authorization rule is not checked. No validation runs while the no-op `NullIdentityDirectory` is active. `false` accepts ids without validation, matching the behaviour of the no-op null directory. |
+| `ValidationRequired` | `bool` | `false` | Whether a supplied principal id must resolve to an existing directory principal before an administrative create path records it: a group upsert or member add through `ILatticeAuthAdmin`, a user or cluster-group entry added through the tenant directory facade (`ILatticeTenantDirectoryAdmin`), or a tenant admin subject (see [Fail-closed create validation](identity-directory-providers.md#fail-closed-create-validation-validationrequired)). The subject of an authorization rule is not checked. No validation runs while the no-op `NullIdentityDirectory` is active. `false` accepts ids without validation, matching the behaviour of the no-op null directory. |
 
 ## `JwtAuthenticatorOptions`
 

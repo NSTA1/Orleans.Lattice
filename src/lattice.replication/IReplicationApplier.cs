@@ -50,7 +50,7 @@ public interface IReplicationApplier
     /// and aggregates the per-entry results, preserving exact per-entry
     /// semantics for legacy implementations.
     /// <para>
-    /// Optimised implementations (notably <c>ReplicationApplier</c>) collapse
+    /// Optimised implementations (notably the built-in applier) collapse
     /// the per-entry per-origin high-water-mark round-trips to one
     /// <c>GetAsync</c> + one <c>TryAdvanceAsync</c> per distinct origin
     /// per batch and drain the causal-apply buffer once at the end of
@@ -69,9 +69,8 @@ public interface IReplicationApplier
     /// cursor and the batch is re-shipped rather than acknowledged past the
     /// deferred entry. Per-entry
     /// failures are surfaced as exceptions only when the implementation
-    /// has no recoverable per-entry failure handling - the
-    /// <c>LatticeReplicationGrpcService</c>
-    /// receiver wraps the batch call in a transport-level exception so
+    /// has no recoverable per-entry failure handling - the built-in gRPC
+    /// receiver turns such a fault into a failed call so
     /// the sender's backoff/retry loop kicks in for the whole batch.
     /// </para>
     /// </summary>

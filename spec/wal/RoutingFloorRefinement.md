@@ -158,8 +158,8 @@ the design model ([`LiveAdvanceInterface.md`](LiveAdvanceInterface.md)).
 
 `TypeOK` and the two invariants are state safety, and `InitHeadCoversPriorAllocations` is
 an action property; all four are reached and checked on the base
-(10,704 distinct states, depth 15) and re-checked in the `WideGenerations` variant
-(24,084 distinct states, depth 15). Every environment step is on in the base, so
+(28,956 distinct states) and re-checked in the `WideGenerations` variant
+(65,151 distinct states). Every environment step is on in the base, so
 nothing is bounded out; the variant widens the purged incarnation's generations so
 the two shard roots' floors and seeds can differ by more than one. Liveness is not
 checked here: that a re-created tree eventually initialises is the core module's

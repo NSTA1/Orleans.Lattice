@@ -637,7 +637,7 @@ function Measure-FanInTimeoutCensus {
 		# The status / diagnostics clause is the free discriminator between
 		# 'never served' (absent: the target could not answer a status probe
 		# because it was still activating) and 'served slowly' (present). Both
-		# spellings are matched; Orleans 10.2.x renders 'Status:' and earlier
+		# spellings are matched; current Orleans renders 'Status:' and earlier
 		# versions rendered 'Diagnostics:'.
 		$carriesStatus = ($record.Body -match '(?:Status|Diagnostics):')
 

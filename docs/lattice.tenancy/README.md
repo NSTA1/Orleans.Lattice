@@ -78,6 +78,23 @@ from the backup shared-sink rule: a coordinated restore must resolve its backup
 chain in every region. Tenancy plus backup without replication still starts
 with the default sink. See [Cross-cluster sink sharing](../lattice.backup/configuration.md#cross-cluster-sink-sharing).
 
+## Features
+
+| Feature | Surface | Summary |
+|---|---|---|
+| Registration | `AddLatticeTenancy`, `ConfigureLatticeTenancy`, `LatticeTenancyOptions` | Guarded silo registration that replaces the null tenancy seams of core and its companion packages with the active implementations. See [Configuration](configuration.md) and [Architecture](architecture.md#seams-the-add-on-fills). |
+| Tenant registry | `ITenantRegistry`, `TenantRecord` | Durable, CRDT-merged tenant definitions (status, quotas, placement, admin and member sets, cross-tenant grants, allowed regions and region statuses) in `sys-tenant-registry`. |
+| Tenant isolation | `ITenantPolicyEngine`, `TenantAccessDecision` | Validates the asserted active tenant and resolves cross-tenant grants from a compiled, epoch-leased snapshot; composed into the fail-closed access gate. See [Isolation model](#isolation-model). |
+| Cross-tenant grants | `CrossTenantGrant`, `TenantGrantLifecycle`, `TenantGrantState` | Offer (`Pending`), approve (`Active`), reject (`Rejected`) and revoke (`Revoked`); only an `Active` grant authorizes, and concurrent states converge on the more restrictive one. |
+| Resource quotas | `TenantQuotas`, `TenantUsageAccountingOptions`, `TenantEnforcementScope` | Aggregate byte, key, memory and tree-count ceilings with burst, admitted against metered usage. See [Resource governance](#resource-governance). |
+| Request-rate limiting | `ITenantRateLimiter`, `LatticeTenantRateLimiterOptions` | Silo-local token buckets apportioned from each tenant's cluster-wide `MaxOpsPerSecond`. See [Rate limiting](#rate-limiting). |
+| Overage metering | `ITenantOverageBilling`, `TenantOverageRecord`, `TenantOverageSample` | Grow-only, converged per-tenant overage tallies for a billing consumer to poll. |
+| Usage reads | `ITenantObservabilityView`, `ITenantUsageReader`, `TenantObservabilitySnapshot` | Fail-closed per-tenant usage, quota and overage reads, and a by-id reader for an already-authorized control facade. |
+| Region residency | `TenantRegionStatus`, `TenantRegionLifecycle`, `ITenantResidencyResolver`, `ITenantRegionStatusChangeListener` | Per-tenant allowed and resident regions with a single-step add and remove lifecycle. See [Region residency](#region-residency). |
+| WAL placement | `TenantPlacement` | Pins a tenant's trees to a dedicated WAL provider at registration. See [Placement follows the registry on every silo](#placement-follows-the-registry-on-every-silo). |
+| Delegated tenant access administration | `LatticeTenancyOptions.DelegatedAccessAdministrationEnabled`, `TenantAccessCaps` | Opt-in tenant groups, member sets and tenant-tier rules, bounded by per-tenant access caps. See [Delegated tenant access administration](#delegated-tenant-access-administration). |
+| Observability | `LatticeTenantMetrics`, `TenantObservabilityOptions` | Per-tenant observable gauges on the `orleans.lattice.tenancy` meter. See [Observability](#observability). |
+
 ## Quick start
 
 Register the package on the silo, alongside the auth and membership packages it
@@ -581,7 +598,7 @@ the store reads the tenant's record with its version, folds the change in with t
 record's CRDT join, and writes back only if the version has not moved. A write that
 loses that race re-reads (now seeing the competing write) and merges again, at once
 and with no backoff, so a concurrent change is never dropped. After a small, fixed
-number of lost races on the same tenant's record the store gives up and throws one
+number of lost races on the same tenant's record the store gives up and throws
 a public exception for that store, carrying the `Tenant` and the number of `Attempts`
 it made. The retries absorb ordinary contention; each exception signals sustained
 write contention on one tenant.

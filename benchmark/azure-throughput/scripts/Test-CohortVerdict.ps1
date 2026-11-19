@@ -404,7 +404,7 @@ _Assert -Name 'warmup-retry signature does NOT match a load-time storage excepti
 	-Condition (-not ($loadExcLine -match $warmupSig)) `
 	-Detail "pattern '$warmupSig' wrongly matched a load-time exception"
 
-# Benign placement-convergence exclusion: since the Orleans 10.2.0 -> 10.2.2
+# Benign placement-convergence exclusion: since the Orleans package
 # bump (#1598), a fresh silo's cluster-manifest view converges lazily per
 # grain type. The FIRST hot-path message to a not-yet-resolved grain type is
 # rejected with an "OrleansException: No active nodes are compatible with

@@ -538,7 +538,7 @@ if (options.WalAdmissionSaturationCallBudget < TimeSpan.Zero
     return ValidateOptionsResult.Fail(
         $"{nameof(LatticeOptions.WalAdmissionSaturationCallBudget)} must be non-negative or {nameof(Timeout.InfiniteTimeSpan)} "
         + "(the total time one top-level call may spend waiting at the WAL admission saturation gate across every append and retry layer; "
-        + "infinite is the default and leaves only the per-append WalAdmissionSaturationWaitBudget in force, while zero refuses at the gate without waiting).");
+        + "15 seconds is the default and infinite leaves only the per-append WalAdmissionSaturationWaitBudget in force, while zero refuses at the gate without waiting).");
 }
 if (options.SetManyFanOutBudget <= TimeSpan.Zero
     && options.SetManyFanOutBudget != Timeout.InfiniteTimeSpan)
@@ -546,7 +546,7 @@ if (options.SetManyFanOutBudget <= TimeSpan.Zero
     return ValidateOptionsResult.Fail(
         $"{nameof(LatticeOptions.SetManyFanOutBudget)} must be greater than zero or {nameof(Timeout.InfiniteTimeSpan)} "
         + "(how long a batch write's per-shard fan-out may run before it is refused with LatticeSaturatedException; "
-        + "infinite is the default and awaits the slowest branch however long it takes, while zero would refuse every "
+        + "30 seconds is the default and infinite awaits the slowest branch however long it takes, while zero would refuse every "
         + "fan-out immediately and is never a useful configuration).");
 }
 if (options.SetManyEnvelopeBudget <= TimeSpan.Zero

@@ -28,8 +28,11 @@ public sealed class LatticeIdentityDirectoryOptions
     /// <see cref="DirectoryPrincipal"/> (via
     /// <see cref="ILatticeIdentityDirectory.ResolveAsync(string, System.Threading.CancellationToken)"/>)
     /// before an administrative create path records it - a group upsert or
-    /// member add through the authorization administration facade, or a tenant
-    /// administration subject. The subject of an authorization rule is not
+    /// member add through the authorization administration facade, a tenant
+    /// administration subject, or a user or cluster-group member added through the
+    /// delegated tenant directory facade (<c>ILatticeTenantDirectoryAdmin</c>), which
+    /// also checks the resolved principal's kind. An id in the reserved <c>t/</c>
+    /// tenant-group namespace is not looked up. The subject of an authorization rule is not
     /// checked, and no validation runs while <see cref="NullIdentityDirectory"/>
     /// is the active directory. <c>false</c> (the default) accepts ids without
     /// validation, matching the behaviour of <see cref="NullIdentityDirectory"/>.

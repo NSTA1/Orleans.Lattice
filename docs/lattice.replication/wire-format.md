@@ -6,7 +6,7 @@ agent_spec: "docs/agents/api/replication.json"
 
 `IReplicationBatchEncoder` is the public, pluggable seam over the on-the-wire bytes of a replication batch. It is the encode/decode counterpart to [`IReplicationTransport`](transport.md): the transport delivers opaque bytes between clusters, and the encoder is the only component that knows how to translate a batch of [`WalRecord`](change-feed.md) records to and from those bytes.
 
-The seam covers these payload shapes. The **typed envelope** (`Encode` / `Decode`) is the versioned `ReplicationBatchEnvelope`, carried in [`ReplicationBatch.Payload`](transport.md) or `ReplicationBatch.Envelope`. The **framing layout** (`EncodeFraming` / `TryDecodeFraming`), carried in `ReplicationBatch.EncodedEnvelope`, is a fixed 32-byte `EncodedBatchHeader`, the length-prefixed tree name and origin cluster id, and then one length-prefixed, pre-encoded `WalRecord` segment per entry. The built-in shipper always ships the framing layout and leaves `Payload` empty; the gRPC receiver recognises a framing payload by its magic prefix and falls back to the typed decode for anything else.
+The seam covers these payload shapes. The **typed envelope** (`Encode` / `Decode`) is the versioned `ReplicationBatchEnvelope`, carried in [`ReplicationBatch.Payload`](transport.md) or `ReplicationBatch.Envelope`. The **framing layout** (`EncodeFraming` / `TryDecodeFraming`), carried in `ReplicationBatch.EncodedEnvelope`, is a fixed 32-byte `EncodedBatchHeader`, the length-prefixed tree name and origin cluster id, and then one length-prefixed, pre-encoded `WalRecord` segment per entry. The built-in shipper always ships the framing layout and leaves `Payload` empty; anti-entropy leaf re-replay, which re-ships selected entries outside the shipper, sends the typed envelope in `Payload` instead. The gRPC receiver recognises a framing payload by its magic prefix and falls back to the typed decode for anything else.
 
 The default registration is a binary encoder that uses the Orleans serializer for the typed envelope and writes the framing layout itself, with optional tail compression. Hosts that need a different framing - JSON for HTTP-transport debuggability, a custom envelope for compatibility with an external pipeline, content-hash-prefixed framing for deduplication - replace the registration via standard DI.
 
@@ -61,7 +61,7 @@ The envelope is Orleans-serialisable (alias `olr.be`); the call-shape `Replicati
 
 ## Serializer and gRPC field map
 
-There are no `.proto` files in the current replication gRPC package. The gRPC binding is built manually with `Grpc.Core.Method` definitions under the service name `orleans.lattice.replication.LatticeReplication`; the request and response bodies below are Orleans-serialized DTOs, so the `[Id(n)]` attributes in source are the field numbers.
+There are no `.proto` files in the current replication gRPC package. The gRPC binding is built manually with `Grpc.Core.Method` definitions under the service name `orleans.lattice.replication.LatticeReplication`; the request and response bodies below are Orleans-serialized DTOs, so the `[Id(n)]` attributes in source are the field numbers and the type alias (in parentheses after each type name below) is the Orleans type tag. The one exception is the `Push` request body: the built-in shipper sends it in the framing layout described below, and the receiver falls back to decoding a typed `ReplicationBatchEnvelope` only when the payload does not carry the framing magic prefix.
 
 | RPC | Request | Response |
 |-----|---------|----------|
@@ -72,27 +72,46 @@ There are no `.proto` files in the current replication gRPC package. The gRPC bi
 | `ProbeMerkleWalk` | `MerkleWalkProbeRequest` | `MerkleWalkProbeResponse` |
 | `GetPeerHighWaterMark` | `PeerHighWaterMarkRequest` | `PeerHighWaterMarkResponse` |
 
-`ReplicationBatchEnvelope` serializes these fields: `[Id(0)] WireVersion`, `[Id(1)] TreeName`, `[Id(2)] OriginClusterId`, and `[Id(3)] Entries`.
+`ReplicationBatchEnvelope` (`olr.be`) serializes these fields: `[Id(0)] WireVersion`, `[Id(1)] TreeName`, `[Id(2)] OriginClusterId`, and `[Id(3)] Entries`.
 
-`ReplicationAck` serializes these fields: `[Id(0)] Accepted`, `[Id(1)] HighestAppliedHlc`, `[Id(2)] BlockedAtHlc`, `[Id(3)] SuggestedBatchSize`, `[Id(4)] PauseForMs`, `[Id(5)] SupportedWireVersion`, `[Id(6)] AdvertisedDictionaryIds`, and `[Id(7)] AdvertisedDictionaries`. Each `AdvertisedCompressionDictionary` entry serializes `[Id(0)] Id` and `[Id(1)] Fingerprint`.
+`ReplicationAck` (`olr.ak`) serializes these fields: `[Id(0)] Accepted`, `[Id(1)] HighestAppliedHlc`, `[Id(2)] BlockedAtHlc`, `[Id(3)] SuggestedBatchSize`, `[Id(4)] PauseForMs`, `[Id(5)] SupportedWireVersion`, `[Id(6)] AdvertisedDictionaryIds`, `[Id(7)] AdvertisedDictionaries`, `[Id(8)] BootstrapEpoch`, `[Id(9)] ReceiverLineage`, and `[Id(10)] SourceLineageRefused`. Each `AdvertisedCompressionDictionary` (`olr.ad`) entry serializes `[Id(0)] Id` and `[Id(1)] Fingerprint`. The last three slots are strictly additive like the others: `BootstrapEpoch` echoes the export epoch of the last full bootstrap the receiver completed from the sender for the tree (see [Auto-bootstrap](auto-bootstrap.md)); `ReceiverLineage` reports the receiver's frontier epoch for the tree, which a sender treats as a forced gap when it moves (see [Causal-dependency gate](replication-apply.md#6-causal-dependency-gate)); and `SourceLineageRefused` marks a not-accepted ack for a batch the sender read under a source lineage the receiver's tree no longer holds (see [Replication drivers](replication-drivers.md)).
 
 The anti-entropy and auxiliary RPC DTOs serialize these fields:
 
-| DTO | Fields |
+| DTO (alias) | Fields |
 |-----|--------|
-| `DigestProbeRequest` | `[Id(0)] TreeName`, `[Id(1)] ShardIndex` |
-| `DigestProbeResponse` | `[Id(0)] DigestAvailable`, `[Id(1)] Digest` |
-| `ContentManifestRequest` | `[Id(0)] TreeName`, `[Id(1)] OriginClusterId`, `[Id(2)] Entries` |
-| `ContentManifestEntry` | `[Id(0)] EntryIndex`, `[Id(1)] Key`, `[Id(2)] ContentHash`, `[Id(3)] Hlc` |
-| `ContentManifestResponse` | `[Id(0)] ExchangeSupported`, `[Id(1)] MissingEntryIndices`, `[Id(2)] AdvancedHlc` |
-| `CompressionDictionaryPullRequest` | `[Id(0)] DictionaryId` |
-| `CompressionDictionaryPullResponse` | `[Id(0)] ExchangeSupported`, `[Id(1)] Found`, `[Id(2)] DictionaryId`, `[Id(3)] Fingerprint`, `[Id(4)] Dictionary` |
-| `MerkleWalkProbeRequest` | `[Id(0)] TreeName`, `[Id(1)] ShardIndex`, `[Id(2)] RangeStartKey`, `[Id(3)] RangeEndKey`, `[Id(4)] Depth` |
-| `MerkleWalkProbeResponse` | `[Id(0)] Available`, `[Id(1)] Digest` |
-| `PeerHighWaterMarkRequest` | `[Id(0)] TreeName`, `[Id(1)] OriginClusterId` |
-| `PeerHighWaterMarkResponse` | `[Id(0)] Clock` |
+| `DigestProbeRequest` (`olr.dq`) | `[Id(0)] TreeName`, `[Id(1)] ShardIndex` |
+| `DigestProbeResponse` (`olr.dp`) | `[Id(0)] DigestAvailable`, `[Id(1)] Digest` |
+| `ContentManifestRequest` (`olr.cq`) | `[Id(0)] TreeName`, `[Id(1)] OriginClusterId`, `[Id(2)] Entries` |
+| `ContentManifestEntry` (`olr.ce`) | `[Id(0)] EntryIndex`, `[Id(1)] Key`, `[Id(2)] ContentHash`, `[Id(3)] Hlc` |
+| `ContentManifestResponse` (`olr.cp`) | `[Id(0)] ExchangeSupported`, `[Id(1)] MissingEntryIndices`, `[Id(2)] AdvancedHlc` |
+| `CompressionDictionaryPullRequest` (`olr.kq`) | `[Id(0)] DictionaryId` |
+| `CompressionDictionaryPullResponse` (`olr.kp`) | `[Id(0)] ExchangeSupported`, `[Id(1)] Found`, `[Id(2)] DictionaryId`, `[Id(3)] Fingerprint`, `[Id(4)] Dictionary` |
+| `MerkleWalkProbeRequest` (`olr.mq`) | `[Id(0)] TreeName`, `[Id(1)] ShardIndex`, `[Id(2)] RangeStartKey`, `[Id(3)] RangeEndKey`, `[Id(4)] Depth` |
+| `MerkleWalkProbeResponse` (`olr.mp`) | `[Id(0)] Available`, `[Id(1)] Digest` |
+| `PeerHighWaterMarkRequest` (`olr.hq`) | `[Id(0)] TreeName`, `[Id(1)] OriginClusterId` |
+| `PeerHighWaterMarkResponse` (`olr.hp`) | `[Id(0)] Clock` |
 
-`WalRecord` is the per-entry payload inside a batch. Its durable serializer ids are: `[Id(0)] TreeId`, `[Id(1)] Op`, `[Id(2)] Key`, `[Id(3)] EndExclusiveKey`, `[Id(4)] Value`, `[Id(5)] Timestamp`, `[Id(6)] IsTombstone`, `[Id(7)] ExpiresAtTicks`, `[Id(8)] OriginClusterId`, `[Id(10)] VectorClock`, `[Id(11)] DependencySummary`, `[Id(13)] Delta`, `[Id(14)] AtomicBatchSize`, `[Id(15)] AtomicBatchIndex`, `[Id(16)] TransactionId`, `[Id(17)] IsPrepared`, `[Id(18)] ShardIndex`, `[Id(19)] AtomicShardCount`, `[Id(20)] IsMerge`, `[Id(21)] IsBackstop`, `[Id(22)] Category`, `[Id(23)] MatchedKeys`, `[Id(24)] CrossTreeOperationId`, `[Id(25)] CrossTreeParticipants`, and `[Id(26)] Mode`. Ids `9` and `12` are retired and reserved: `9` was the original `Mode` tag, and `12` was the retired `DeltaKind` tag.
+A `Push` call also carries call metadata beside its body. Besides the authentication and origin headers covered in [Transport Security](transport-security.md), the gRPC sender adds, when it has a value for them: `x-lattice-replication-reseed-after` (the export epoch past which the sender asks the receiver to re-seed, see [Auto-bootstrap](auto-bootstrap.md)), `x-lattice-replication-source-frontier` and `x-lattice-replication-acked-positions` (the sender's applied low watermark and acknowledged read positions, see [Causal-dependency gate](replication-apply.md#6-causal-dependency-gate)), `x-lattice-replication-cross-tree-purge-frontier` (see [Cross-tree terminals](replication-apply.md#cross-tree-terminals-receiver-barrier)), and `x-lattice-replication-source-lineage` (the source lineage the sender read the batch under). None of them changes the body or the framing layout, and a receiver that predates one ignores it.
+
+The two other gRPC services the binding maps carry these Orleans-serialized bodies:
+
+| Service | RPC | Request | Response |
+|-----|-----|-----|-----|
+| `orleans.lattice.replication.LatticeRemoteSnapshot` | `GetMetadata` (unary) | `RemoteSnapshotMetadataRequest` | `RemoteSnapshotMetadata` |
+| `orleans.lattice.replication.LatticeRemoteSnapshot` | `RequestSnapshot` (server-streaming) | `RemoteSnapshotMetadataRequest` | stream of `RemoteSnapshotStreamItem` |
+| `orleans.lattice.replication.LatticeSaga` | `Prepare`, `Commit`, `Abort`, `GetStatus`, `GetDecision` (unary) | `SagaControlRequest` | `SagaControlResponse` |
+
+| DTO (alias) | Fields |
+|-----|--------|
+| `RemoteSnapshotMetadataRequest` (`olr.sr`) | `[Id(0)] TreeName`, `[Id(1)] SourceClusterId`, `[Id(2)] FromAsOfHlc` |
+| `RemoteSnapshotMetadata` (`olr.sm`) | `[Id(0)] TreeName`, `[Id(1)] SourceClusterId`, `[Id(2)] AsOfHlc`, `[Id(3)] CausalStableFrontier`, `[Id(4)] ExportEpoch`, `[Id(5)] OpenGeneration`; non-public `[Id(6)]` and `[Id(7)]` carry the source's applied frontier when the export opened and whether the export was served under the cross-tree decision purge hold |
+| `RemoteSnapshotStreamItem` (`olr.si`) | `[Id(0)] Entry`, `[Id(1)] CloseGeneration`; non-public `[Id(2)]` to `[Id(4)]` carry, on the end-of-stream trailer, the source's applied frontier, the cross-tree sibling boundaries and the exported tree's own boundary |
+| `SnapshotEntry` (`olr.se`) | `[Id(0)] Key`, `[Id(1)] Value`, `[Id(2)] Timestamp`, `[Id(3)] IsPrepared`, `[Id(4)] IsTombstone`, `[Id(5)] TransactionId`, `[Id(6)] SourceShardIndex`, `[Id(7)] AtomicBatchSize`, `[Id(8)] AtomicBatchIndex`, `[Id(9)] ExpiresAtTicks`, `[Id(10)] Delta`, `[Id(11)] Mode`, `[Id(12)] SettledDecision`; non-public `[Id(13)]` to `[Id(16)]` carry a row's cross-tree operation id, participant set, decision stamps and decision sequences |
+| `SagaControlRequest` (`olr.sq`) | `[Id(0)] SagaId`, `[Id(1)] TargetTree`, `[Id(2)] ManifestId`, `[Id(3)] CoordinatorClusterId`, `[Id(4)] SetId`, `[Id(5)] RequesterClusterId` |
+| `SagaControlResponse` (`olr.sv`) | `[Id(0)] SagaId`, `[Id(1)] Phase`, `[Id(2)] Vote`, `[Id(3)] Detail` |
+
+`WalRecord` (`olr.re`) is the per-entry payload inside a batch. Its durable serializer ids are: `[Id(0)] TreeId`, `[Id(1)] Op`, `[Id(2)] Key`, `[Id(3)] EndExclusiveKey`, `[Id(4)] Value`, `[Id(5)] Timestamp`, `[Id(6)] IsTombstone`, `[Id(7)] ExpiresAtTicks`, `[Id(8)] OriginClusterId`, `[Id(10)] VectorClock`, `[Id(11)] DependencySummary`, `[Id(13)] Delta`, `[Id(14)] AtomicBatchSize`, `[Id(15)] AtomicBatchIndex`, `[Id(16)] TransactionId`, `[Id(17)] IsPrepared`, `[Id(18)] ShardIndex`, `[Id(19)] AtomicShardCount`, `[Id(20)] IsMerge`, `[Id(21)] IsBackstop`, `[Id(22)] Category`, `[Id(23)] MatchedKeys`, `[Id(24)] CrossTreeOperationId`, `[Id(25)] CrossTreeParticipants`, `[Id(26)] Mode`, `[Id(27)] PrepareStampOriginal`, `[Id(28)] IsMigrated`, and `[Id(29)] IsCarriedStamp`. Two further non-public slots, `[Id(30)]` and `[Id(31)]`, carry a cross-tree terminal's per-participant decision stamps and decision sequences; the shipper sets them on the wire copy of such a terminal only, never in the write-ahead log. Ids `9` and `12` are retired and reserved: `9` was the original `Mode` tag, and `12` was the retired `DeltaKind` tag.
 
 The fixed framing header is not Orleans-serialized. Its 32 bytes are: bytes `0..3` magic `OLRF` (`0x46524C4F` little-endian), `4..7` `WireVersion`, `8..15` `OriginClusterIdHash`, `16..19` `EntryCount`, `20..27` `BatchSequence`, and `28..31` a packed word containing low 16 bits `AtomicBatchSpanCount`, bits 16-23 `Mode`, and bits 24-31 `Compression`. `DictionaryId` is not part of the fixed header; when present, it is carried in the variable-length compressed tail for `ZstdDictionary` frames.
 
@@ -102,8 +121,8 @@ The fixed framing header is not Orleans-serialized. Its 32 bytes are: bytes `0..
 
 Future breaking changes to the on-the-wire shape - new top-level fields that older receivers must reject rather than silently discard, restructured `Entries` collections, alternate carrier formats for typed CRDT deltas - are signalled by bumping `WireVersion`. A receiver compares against its `CurrentWireVersion` strictly:
 
-- `WireVersion <= CurrentWireVersion` → accepted.
-- `WireVersion > CurrentWireVersion` → rejected with `NotSupportedException`.
+- `WireVersion <= CurrentWireVersion` -> accepted.
+- `WireVersion > CurrentWireVersion` -> rejected with `NotSupportedException`.
 
 This is the canonical fail-fast posture: an older receiver paired with a newer producer immediately surfaces a deployment-ordering bug rather than mis-applying a payload it cannot interpret. A newer receiver paired with an older producer is the "normal" mixed-version case during a rolling upgrade and decodes the payload directly.
 

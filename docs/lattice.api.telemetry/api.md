@@ -229,7 +229,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.Telemetry.TelemetryRangeGuardrails`
 
-[Source](../../src/lattice.api.telemetry/TelemetryRangeGuardrails.cs) (line 17).
+[Source](../../src/lattice.api.telemetry/TelemetryRangeGuardrails.cs) (line 18).
 
 `public static class TelemetryRangeGuardrails`
 

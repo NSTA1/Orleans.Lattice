@@ -53,8 +53,8 @@ namespace Orleans.Lattice.Benchmark.Microbench;
 /// differently is measuring different work, and the comparison would be void.
 /// </para>
 /// <para>
-/// Run it via <c>BENCH_MICROBENCH_SUITE=orsetdecodetrims</c> (or
-/// <c>--suite orsetdecodetrims</c>); see <c>Program.cs</c>. No Orleans silo is
+/// Run it via <c>BENCH_MICROBENCH_SUITE=crdtcoveragecollapse</c> (or
+/// <c>--suite crdtcoveragecollapse</c>); see <c>Program.cs</c>. No Orleans silo is
 /// involved, so it runs cheaply at <c>BENCH_MICROBENCH_FIDELITY=full</c>.
 /// </para>
 /// </summary>

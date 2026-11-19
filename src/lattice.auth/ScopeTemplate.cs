@@ -29,7 +29,7 @@ namespace Orleans.Lattice.Auth;
 /// </para>
 /// <para>
 /// Matching (<see cref="TryMatchPrefix"/>, <see cref="MatchesKey"/>) and
-/// <see cref="VisitInstantiations{TVisitor}"/> are allocation-free for the group
+/// <see cref="VisitInstantiations{TVisitor}(in LatticeSubject, ref TVisitor)"/> are allocation-free for the group
 /// closures the membership package produces (an ordinal
 /// <see cref="HashSet{T}"/>), as well as arrays, lists and frozen sets.
 /// </para>
@@ -41,7 +41,7 @@ internal sealed class ScopeTemplate
     internal const string GroupPlaceholderOpen = "{group:";
 
     /// <summary>
-    /// The most instantiations <see cref="VisitInstantiations{TVisitor}"/> visits for
+    /// The most instantiations <see cref="VisitInstantiations{TVisitor}(in LatticeSubject, ref TVisitor)"/> visits for
     /// one template before reporting itself incomplete. Bounds the work a template
     /// with several group placeholders can cause for a subject in many groups.
     /// </summary>
@@ -49,7 +49,7 @@ internal sealed class ScopeTemplate
 
     /// <summary>
     /// The most steps - placeholder expansions and group-set iterations together -
-    /// <see cref="VisitInstantiations{TVisitor}"/> takes for one template before
+    /// <see cref="VisitInstantiations{TVisitor}(in LatticeSubject, ref TVisitor)"/> takes for one template before
     /// reporting itself incomplete. <see cref="MaxInstantiations"/> counts only
     /// completed instantiations, so this bounds the work of branches that never
     /// complete as well; callers treat an incomplete walk as fail closed.
@@ -68,7 +68,7 @@ internal sealed class ScopeTemplate
 
     /// <summary>
     /// The most placeholders one template may carry. Bounds the recursion depth of
-    /// <see cref="VisitInstantiations{TVisitor}"/> and the per-decision match cost.
+    /// <see cref="VisitInstantiations{TVisitor}(in LatticeSubject, ref TVisitor)"/> and the per-decision match cost.
     /// </summary>
     internal const int MaxPlaceholders = 8;
 

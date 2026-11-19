@@ -46,7 +46,9 @@ IEndpointRouteBuilder MapLatticeExplorer(IEndpointRouteBuilder endpoints)
 ```
 
 Maps the Explorer's static assets, local sign-in and sign-out form endpoints,
-app-frame bootstrap route and interactive Razor components. At the root, it
+the `downloads` form-post endpoint that streams a file the console produces (a
+data export or an import's rejection list), app-frame bootstrap route and
+interactive Razor components. At the root, it
 maps onto the application's endpoint pipeline. With a non-root
 `LatticeExplorerWebOptions.BasePath`, it isolates the Explorer in a branch at
 that prefix. The supplied route builder must also be the application middleware
@@ -85,7 +87,7 @@ re-authentication; see [Configuration](configuration.md#explorerreauthoptions).
 
 `Orleans.Lattice.Explorer.AppKit` is a shared static-assets package. Its one
 public .NET protocol type is `AppKitProtocol`; the package also serves the
-versioned browser bootstrap, schema, stylesheet and fonts from
+versioned browser bootstrap, schema, stylesheets and fonts from
 `_content/Orleans.Lattice.Explorer.AppKit/appkit/v1/`. `AppKitProtocol` is the
 public owner of the frame protocol's literal names and bounds. `Messages`,
 `Events`, `RevokedReasons`, `Operations`, `DataActions`, `ErrorCodes`,
@@ -521,17 +523,17 @@ This index lists every effectively public type and each member declared directly
     `TagIndexesLabel`; `TelemetryArea`; `TenantAdministrationArea`; `TenantAdministrationAreaShort`; `TenantGrantAudience`; `TreesLabel`
     `ViewsLabel`; `ViewsLongLabel`
 
-#### `Orleans.Lattice.Explorer.UI` (194 exported types)
+#### `Orleans.Lattice.Explorer.UI` (196 exported types)
 - `Orleans.Lattice.Explorer.UI._Imports`
   - `constructors (1)`
 - `Orleans.Lattice.Explorer.UI.Areas.Access._Imports`
   - `constructors (1)`
 - `Orleans.Lattice.Explorer.UI.Areas.Access.AccessExplainPage`
-  - `constructors (1)`
+  - `constructors (1)`; `Dispose`
 - `Orleans.Lattice.Explorer.UI.Areas.Access.AccessGroupPage`
   - `constructors (1)`; `Dispose`
 - `Orleans.Lattice.Explorer.UI.Areas.Access.AccessGroupsPage`
-  - `constructors (1)`
+  - `constructors (1)`; `Dispose`
 - `Orleans.Lattice.Explorer.UI.Areas.Access.AccessMembersPage`
   - `constructors (1)`
 - `Orleans.Lattice.Explorer.UI.Areas.Access.AccessNav`
@@ -543,7 +545,7 @@ This index lists every effectively public type and each member declared directly
 - `Orleans.Lattice.Explorer.UI.Areas.Access.AccessRulePage`
   - `constructors (1)`; `Dispose`
 - `Orleans.Lattice.Explorer.UI.Areas.Access.AccessRulesPage`
-  - `constructors (1)`
+  - `constructors (1)`; `Dispose`
 - `Orleans.Lattice.Explorer.UI.Areas.Access.AccessRuleTable`
   - `constructors (1)`; `Caption`; `CaptionHidden`; `DecidingRuleId`; `EmptyText`; `Rules`; `Tenant`; `TenantRules`
 - `Orleans.Lattice.Explorer.UI.Areas.Access.AccessSubjectPicker`
@@ -623,6 +625,10 @@ This index lists every effectively public type and each member declared directly
 - `Orleans.Lattice.Explorer.UI.Areas.Backups.BackupsCataloguePage`
   - `constructors (1)`; `Dispose`; `PageSize`
 - `Orleans.Lattice.Explorer.UI.Areas.Backups.BackupSchedulesPage`
+  - `constructors (1)`; `Dispose`
+- `Orleans.Lattice.Explorer.UI.Areas.Backups.BackupSetRunProgress`
+  - `constructors (1)`; `AnnouncePhase`; `Progress`; `Schedule`
+- `Orleans.Lattice.Explorer.UI.Areas.Backups.BackupSetSchedulesSection`
   - `constructors (1)`; `Dispose`
 - `Orleans.Lattice.Explorer.UI.Areas.Backups.BackupsNav`
   - `constructors (1)`; `BackText`; `CataloguePage`; `Current`; `Dispose`; `HealthPage`; `MaintenancePage`; `SchedulesPage`
@@ -729,7 +735,7 @@ This index lists every effectively public type and each member declared directly
 - `Orleans.Lattice.Explorer.UI.Areas.Schema.SchemaPolicyPanel`
   - `constructors (1)`; `Dispose`
 - `Orleans.Lattice.Explorer.UI.Areas.Schema.SchemaRegistryPanel`
-  - `constructors (1)`; `Dispose`
+  - `constructors (1)`; `CatalogChanged`; `Config`; `Dispose`
 - `Orleans.Lattice.Explorer.UI.Areas.Schema.SchemaRemediationPanel`
   - `constructors (1)`; `Dispose`
 - `Orleans.Lattice.Explorer.UI.Areas.Schema.SchemaRuleBuilder`
@@ -748,29 +754,29 @@ This index lists every effectively public type and each member declared directly
 - `Orleans.Lattice.Explorer.UI.Areas.Tenancy._Imports`
   - `constructors (1)`
 - `Orleans.Lattice.Explorer.UI.Areas.Tenancy.MyTenantPage`
-  - `constructors (1)`
+  - `constructors (1)`; `Dispose`
 - `Orleans.Lattice.Explorer.UI.Areas.Tenancy.TenancyAccessPage`
   - `constructors (1)`
 - `Orleans.Lattice.Explorer.UI.Areas.Tenancy.TenancyDirectoryPage`
   - `constructors (1)`
 - `Orleans.Lattice.Explorer.UI.Areas.Tenancy.TenancyGrants`
-  - `constructors (1)`; `OpenOfferOnLoad`; `TenantId`
+  - `constructors (1)`; `Dispose`; `OpenOfferOnLoad`; `TenantId`
 - `Orleans.Lattice.Explorer.UI.Areas.Tenancy.TenancyGrantsPage`
-  - `constructors (1)`
+  - `constructors (1)`; `Dispose`
 - `Orleans.Lattice.Explorer.UI.Areas.Tenancy.TenancyMembers`
   - `constructors (1)`; `Dispose`; `TenantId`
 - `Orleans.Lattice.Explorer.UI.Areas.Tenancy.TenancyNav`
   - `constructors (1)`; `Current`; `Own`; `Tenant`
 - `Orleans.Lattice.Explorer.UI.Areas.Tenancy.TenancyQuota`
-  - `constructors (1)`; `CanEdit`; `TenantId`
+  - `constructors (1)`; `CanEdit`; `Dispose`; `TenantId`
 - `Orleans.Lattice.Explorer.UI.Areas.Tenancy.TenancyQuotaPage`
-  - `constructors (1)`
+  - `constructors (1)`; `Dispose`
 - `Orleans.Lattice.Explorer.UI.Areas.Tenancy.TenancyRegions`
   - `constructors (1)`; `CanAuthorize`; `Dispose`; `TenantId`
 - `Orleans.Lattice.Explorer.UI.Areas.Tenancy.TenancyRegionsPage`
-  - `constructors (1)`
+  - `constructors (1)`; `Dispose`
 - `Orleans.Lattice.Explorer.UI.Areas.Tenancy.TenancyTenantPage`
-  - `constructors (1)`
+  - `constructors (1)`; `Dispose`
 - `Orleans.Lattice.Explorer.UI.Design.Components.ILtSuggestionSource`
   - `SuggestAsync`
 - `Orleans.Lattice.Explorer.UI.Design.Components.LtButton`
@@ -825,8 +831,8 @@ This index lists every effectively public type and each member declared directly
 - `Orleans.Lattice.Explorer.UI.Design.Components.LtMonoCell`
   - `constructors (1)`; `CopyLabel`; `Truncate`; `Value`
 - `Orleans.Lattice.Explorer.UI.Design.Components.LtMultiComboBox`
-  - `constructors (1)`; `ConfirmAsync`; `Disabled`; `Error`; `Hint`; `Label`; `Limit`; `Mode`; `Mono`; `Noun`; `Placeholder`; `Source`; `Values`
-    `ValuesChanged`
+  - `constructors (1)`; `ConfirmAsync`; `Disabled`; `Dispose`; `Error`; `Hint`; `Label`; `Limit`; `Mode`; `Mono`; `Noun`; `Placeholder`; `Source`
+    `Values`; `ValuesChanged`
 - `Orleans.Lattice.Explorer.UI.Design.Components.LtNameInput`
   - `constructors (1)`; `AdditionalAttributes`; `CheckFailedNote`; `ConfirmAsync`; `Disabled`; `Dispose`; `Error`; `Existing`; `ExistingMessage`
     `FocusAsync`; `Hint`; `InputId`; `Label`; `Mono`; `Noun`; `Placeholder`; `ReadOnly`; `RejectExisting`; `Validate`; `Value`; `ValueChanged`
@@ -944,7 +950,7 @@ This index lists every effectively public type and each member declared directly
 - `Orleans.Lattice.Explorer.Web.LatticeExplorerWebOptions`
   - `constructors (1)`; `AllowEnvironmentCredentialSeed`; `AllowInteractiveEndpointConfiguration`; `BasePath`; `ConfigFilePath`
     `ConfigureDataProtection`; `DataProtectionApplicationName`; `DataProtectionKeyRingBlobUri`; `DataProtectionKeyRingCredential`
-    `UseEnvironmentBootstrap`
+    `MaxImportBytes`; `UseEnvironmentBootstrap`
 - `Orleans.Lattice.Explorer.Web.LatticeExplorerWebServiceCollectionExtensions`
   - `AddLatticeExplorerWeb`
 

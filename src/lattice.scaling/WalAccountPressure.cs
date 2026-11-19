@@ -27,7 +27,9 @@ public readonly record struct WalAccountPressure
 
     /// <summary>
     /// Worst-case <see cref="Orleans.Lattice.WalSaturationState"/> classification
-    /// observed on partitions backed by <see cref="ProviderKey"/>. Serves as the
+    /// of the trees that have at least one WAL partition backed by
+    /// <see cref="ProviderKey"/> (saturation is tracked per tree, not per
+    /// partition). Serves as the
     /// per-account saturation indicator the storage-axis collector (#1187) uses,
     /// together with how long it has persisted, to decide whether the account is
     /// throughput-bound.

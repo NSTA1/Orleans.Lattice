@@ -8,7 +8,7 @@ This page describes how a remote call travels through the code-first gRPC bindin
 
 ## Request path
 
-1. **Client.** A `LatticeTreeAdminApiGrpcClient` method checks its arguments, wraps them in the RPC's request record and sends a unary call through the caller's `CallInvoker`, passing only the caller's cancellation token. Headers, deadlines and TLS come from that invoker.
+1. **Client.** A `LatticeTreeAdminApiGrpcClient` method checks its arguments, wraps them in the RPC's request record and sends the call - unary for every RPC except the duplex `StreamBulkLoad` that `BulkLoadStreamAsync` drives - through the caller's `CallInvoker`, passing only the caller's cancellation token. Headers, deadlines and TLS come from that invoker.
 2. **Wire.** The request record is serialized with the Orleans binary serializer (see [Code-first binding](#code-first-binding)).
 3. **Routing.** ASP.NET Core endpoint routing dispatches the call to the service mapped by `MapLatticeTreeAdminApiGrpc`.
 4. **Transport gate.** The authorization interceptor decides whether the call may run at all (see [Transport gate](#transport-gate)).
@@ -19,7 +19,7 @@ The response record travels back through the same marshalling, and the client re
 
 ## Code-first binding
 
-The binding defines its RPCs in C#, not in a `.proto`. A method-definition set builds one unary gRPC method per RPC under the service name `orleans.lattice.api.treeadmin`, each with a request and a response marshaller built from the Orleans `Serializer<T>` instances resolved from the service provider. The server-side service and the public client build the same set, so the two ends agree on every method name and message type by construction; the [API reference](api.md#service-and-rpcs) lists all 61 RPCs.
+The binding defines its RPCs in C#, not in a `.proto`. A method-definition set builds one gRPC method per RPC under the service name `orleans.lattice.api.treeadmin` - unary for every RPC except the duplex-streaming `StreamBulkLoad` - each with a request and a response marshaller built from the Orleans `Serializer<T>` instances resolved from the service provider. The server-side service and the public client build the same set, so the two ends agree on every method name and message type by construction; the [API reference](api.md#service-and-rpcs) lists all 62 RPCs.
 
 Each marshaller writes the encoded message straight into the gRPC stream's buffer writer, with no intermediate array. On the read side, a single-segment payload is deserialized in place; a multi-segment payload is copied into a pooled buffer that is returned after use.
 
@@ -43,7 +43,7 @@ For a call to this service, the interceptor:
 4. when the request names a second tree the operation reaches - the destination of `SnapshotTree`, or the physical tree of `SetTreeAlias` - asks the authorizer again, under the same operation, with that tree as the target, unless it is blank or the same tree as the first;
 5. refuses a denied call with `PermissionDenied`, logging a warning, before the service or facade is touched. If the authorizer itself is cancelled, the call ends `Cancelled`.
 
-The default `DenyTreeAdminApiAuthorizer` refuses everything, so with the defaults no protected call succeeds until a host registers a permissive authorizer or turns enforcement off behind an outer boundary. Because unnamed RPCs arrive as `Unknown`, a per-operation policy that denies by default also refuses the RPCs the enum does not distinguish. The interceptor applies the same check to streaming call shapes, deciding before the first message is read, although every RPC this service defines is unary.
+The default `DenyTreeAdminApiAuthorizer` refuses everything, so with the defaults no protected call succeeds until a host registers a permissive authorizer or turns enforcement off behind an outer boundary. Because unnamed RPCs arrive as `Unknown`, a per-operation policy that denies by default also refuses the RPCs the enum does not distinguish. The interceptor applies the same check to streaming call shapes, deciding before the first message is read: the duplex `StreamBulkLoad` is presented as its own `StreamBulkLoad` operation with a `null` `TargetId`, because its tree is named only in the first frame, and the facade then authorizes the bulk-load capability over that tree before anything is written.
 
 The README's [Authorization surface](README.md#authorization-surface) lists which RPCs carry which operation and which requests leave `TargetId` `null`.
 
@@ -64,7 +64,7 @@ The service requires `ILatticeTreeAdmin`. It takes `ILatticeTreeAdminOperations`
 
 ## Status mapping
 
-The service translates every facade outcome into an explicit gRPC status at one boundary shared by all RPCs. A status the service raised itself, such as `Unimplemented`, passes through unchanged. Cancellation becomes `Cancelled`; authorization, tree-ownership and fail-closed tenant-resolution refusals become `PermissionDenied`; an unknown view or tag index becomes `NotFound`; precondition failures become `FailedPrecondition`; malformed arguments and out-of-order bulk-load chunks become `InvalidArgument`. Anything else is logged on the server and returned as `Internal` with a generic message, so exception text never reaches the client. The binding never issues `Unauthenticated`. The full exception-to-status table is in the README's [Status mapping](README.md#status-mapping).
+The service translates every facade outcome into an explicit gRPC status at one boundary shared by all RPCs. A status the service raised itself, such as `Unimplemented`, passes through unchanged. Cancellation becomes `Cancelled`; authorization, tree-ownership and fail-closed tenant-resolution refusals become `PermissionDenied`; an unknown view or tag index becomes `NotFound`; precondition failures become `FailedPrecondition`; malformed arguments and out-of-order bulk-load chunks become `InvalidArgument`; storage back-pressure becomes `ResourceExhausted`; a grain-call timeout inside the cluster becomes `DeadlineExceeded`; and an unavailable or rejecting silo, a lost remote enumeration or a WAL shard quiesced for a placement move becomes `Unavailable`. Anything else is logged on the server and returned as `Internal` with a generic message, so exception text never reaches the client. The binding never issues `Unauthenticated`. The full exception-to-status table is in the README's [Status mapping](README.md#status-mapping).
 
 ## Source map
 

@@ -52,8 +52,10 @@ public readonly record struct ReplicationBatch
     /// (the canonical gRPC streaming push transport, for example) prefer
     /// <see cref="Envelope"/> when it is non-<see langword="null"/> and
     /// fall back to decoding <see cref="Payload"/> only when the call
-    /// site predates the typed-envelope slot. The shipper populates
-    /// both slots on every send so transports are free to pick.
+    /// site predates the typed-envelope slot. The built-in shipper leaves
+    /// both this slot and <see cref="Envelope"/> empty on the steady-state
+    /// ship path and fills <see cref="EncodedEnvelope"/> instead; anti-entropy
+    /// leaf re-replay fills both this slot and <see cref="Envelope"/>.
     /// </para>
     /// </summary>
     public ReadOnlyMemory<byte> Payload { get; init; }

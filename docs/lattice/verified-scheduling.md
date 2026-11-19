@@ -44,7 +44,9 @@ passed all 221 scheduling cases on GC member head `9be5db45`: ten bases,
 fifteen variants and 196 paired mutations, including the GC core and witness.
 The actual passing TRX names match discovery from all ten manifests exactly.
 The overall run failed outside those jobs; this is scheduling-job evidence,
-not a green bucket integration certificate. The subsystem documentation
+not a green bucket integration certificate. The census has grown since that
+run, so it certifies the earlier census only; the area README's Counts table
+is the current figure. The subsystem documentation
 fixture separately passed all 54 cases, including the three GC target-existence
 checks, against bucket `f732d8f9` combined with that exact GC source.
 
@@ -132,8 +134,8 @@ checkpoint, not merely a matching subject fingerprint or an attempted repair.
 The chunk unit is a tree in a phase callback: a probe callback examines at most
 `max(1, ChunkSize)` trees, while a repair callback processes one whole tree.
 That tree can require multiple row scans and storage operations. A synchronous
-`RunSweepAsync` drains multiple callbacks, so the chunk setting does not bound
-its caller turn, total rows or elapsed time. Eventual repair assumes subjects
+sweep that runs to completion in one call drains multiple callbacks, so the
+chunk setting does not bound its caller turn, total rows or elapsed time. Eventual repair assumes subjects
 stop changing, runtime/reminder opportunities continue, and registry, storage
 and checkpoint operations eventually succeed.
 An unsuccessful keepalive registration must remain retryable; an in-progress
@@ -298,7 +300,7 @@ two measured work-item times, from the receipt-free bucket push ci.yml run
 40923724192 (head 0e4aa6b2a), both of which passed every case: the dedicated
 TwoPartitions item took 35.22 and 52.78 minutes (jobs 123577568395 and
 123623834893), priced 44.00; the 106-case general group 31.71 and 30.38, priced
-31.05; the 86-case group 12.11 and 20.64, priced 16.38; Shipping base/pairs 4.37
+31.05; the 93-case group 12.11 and 20.64, priced 16.38; Shipping base/pairs 4.37
 and 4.20, priced 4.29; and FourRecords 22.29 and 17.23, priced 19.76. A single
 case varies up to 1.5x between runs on identical inputs, so the estimates are
 planning inputs, not runtime guarantees.

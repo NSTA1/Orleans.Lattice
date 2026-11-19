@@ -54,11 +54,11 @@ The reverse index is self-healed like the symbol and content trees, but with one
 
 ### Session reuse bookkeeping
 
-The session tree holds one per-session reuse-bookkeeping record per `(repoId, sessionId)` at `repo/{repoId}/session/{sessionId}`, recording what a prior `repocontext_context` call delivered to that session so a later call never re-charges for it. It carries two grow-only sets: the opaque **receipts** of units already delivered, and the whole-file **possession** versions the session has received as a complete body. Each record is a CRDT whose merge is a set union, so concurrent bundle calls sharing a session id converge; entries carry a finite time-to-live (default six hours) so an abandoned session's bookkeeping lapses on its own. The load-bearing guard is enforced on both sides: possession is recorded only for `slices` (whole-body) deliveries, and a `known` whole-file claim is honoured only against recorded possession, so partial (outline/paths) evidence can never be promoted to whole-file possession. See [retrieval-economics.md](retrieval-economics.md#reuse-economics) for the full protocol.
+The session tree holds one per-session reuse-bookkeeping record per `(repoId, sessionId)` at `repo/{repoId}/session/{sessionId}`, recording what a prior `repocontext_context` call delivered to that session so a later call never re-charges for it. It carries two grow-only sets: the opaque **receipts** of units already delivered, and the whole-file **possession** versions the session has received as a complete body. The record's merge is a set union, but a bundle call records its deliveries by reading the stored record, adding to it, and writing the whole record back, so two calls racing on one session id can each overwrite the other's additions; the only effect is that a later call may re-deliver content instead of suppressing it. Each set is capped per session (4,096 receipts and 1,024 possession versions); once a set is full further deliveries are not recorded, with the same re-delivery effect. Every recording write re-stamps a fixed six-hour time-to-live, so an active session stays live and an abandoned session's bookkeeping lapses on its own. The load-bearing guard is enforced on both sides: possession is recorded only for `slices` (whole-body) deliveries, and a `known` whole-file claim is honoured only against recorded possession, so partial (outline/paths) evidence can never be promoted to whole-file possession. See [retrieval-economics.md](retrieval-economics.md#reuse-economics) for the full protocol.
 
 ### File token count
 
-Each file node carries a `TokenCount`: the exact number of BPE tokens the whole file body is worth under the configured tokenizer profile, computed once during the content reconcile from the same bytes read for hashing. It is the currency the retrieval surface budgets in - `repocontext_outline` reports it as the cost of a full read, and `repocontext_context` uses it as each candidate's `fullReadTokenCount` when deciding what fits under the bundle ceiling. It is null only for a file that was never content-processed. See [retrieval-economics.md](retrieval-economics.md#the-shared-token-counter) for the tokenizer profile.
+Each file node carries a token count: the exact number of BPE tokens the whole file body is worth under the configured tokenizer profile, computed once during the content reconcile from the same bytes read for hashing. It is the currency the retrieval surface budgets in - `repocontext_outline` reports it as the cost of a full read, and `repocontext_context` uses it as each candidate's `fullReadTokenCount` when deciding what fits under the bundle ceiling. It is null only for a file that was never content-processed. See [retrieval-economics.md](retrieval-economics.md#the-shared-token-counter) for the tokenizer profile.
 
 ## Key grammar
 
@@ -84,9 +84,9 @@ The leading segment after the repository id (`pkg`, `file`, `symbol`, `content`,
 
 ## CRDT store of record
 
-The store of record is the WAL-backed Lattice tree itself. Each value is a CRDT record with a static, commutative, associative, idempotent `Merge`, so:
+The store of record is the WAL-backed Lattice tree itself. Each value is a CRDT record with a static, commutative, associative, idempotent merge, so:
 
-- A write is a read-merge-write through the record's `Merge`, never a blind overwrite, and concurrent writers converge.
+- A write is a read-merge-write through the record's merge, never a blind overwrite, and concurrent writers converge.
 - Field edits (`repocontext_update`) apply each field as a last-writer-wins register at a fresh logical tick, so a later edit wins deterministically and untouched fields are preserved.
 - The vector trees hold discardable, regenerable projections: payloads are content-addressed and write-once, membership is one add-wins presence flag (`OrFlag`) per stable source id, and metadata carries the embedding-space identity so a wrong-space vector is never compared or stored.
 

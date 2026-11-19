@@ -96,7 +96,7 @@ An **all-trees grant** is a rule whose scope is the cluster-wide sentinel `Tree:
   2. **Specific-tree verdict** - the target tree's own most-specific-wins verdict (a specific deny overrides a global allow, and a specific allow stands).
   3. **All-trees allow** - a matched `Tree:*` allow grants access when the target tree has no matching rule of its own.
   4. **Default effect** - otherwise the cluster's `DefaultEffect` applies.
-- **System-tree exclusion (fail-closed).** The all-trees tier is **never** consulted for a control-plane namespace - the reserved authorization namespace (`sys-auth-*`, `LatticeAuthReservedTrees.IsReserved`), the tenant-registry namespace (`sys-tenant-*`), the installable-apps namespace (`sys-app-*`: the app registry, activation status and `sys-app-trees` tree ownership ledger), or the delegated tenant-administration capability namespace (`_lattice_tenant_admin_*`, `LatticeTenantAdminScope.TenantScopePrefix`) - or for a literal request targeting the sentinel id `*` itself. A `Tree:*` allow therefore can never satisfy a control-plane admin check or leak into access or tenant administration.
+- **System-tree exclusion (fail-closed).** The all-trees tier is **never** consulted for a control-plane namespace - the reserved authorization namespace (`sys-auth-*`, `LatticeAuthReservedTrees.IsReserved`), the tenant-registry namespace (`sys-tenant-*`), the installable-apps namespace (`sys-app-*`: the app registry, activation status and `sys-app-trees` tree ownership ledger), the membership store (`sys-membership-*`), the schema and backup backing stores (`sys-schema-*`, `sys-backup-*`), the shared tag indexes (`tag-*`), or the delegated tenant-administration capability namespace (`_lattice_tenant_admin_*`, `LatticeTenantAdminScope.TenantScopePrefix`) - or for a literal request targeting the sentinel id `*` itself. A `Tree:*` allow therefore can never satisfy a control-plane admin check or leak into access or tenant administration.
 - **Operation-bit separation is preserved.** A widened data-plane `Tree:*` grant never confers `Telemetry`, and a telemetry `Tree:*` grant never confers a data-plane operation; the operation mask semantics are unchanged.
 - A real tree literally named `*` is never creatable: the core lattice grain rejects user-origin creation or mutation of a tree whose id is exactly `*`, so the sentinel can only ever be an authorization scope.
 
@@ -187,7 +187,7 @@ Every request / response record is Orleans-serialized with a stable, compact ali
 | `RulesEnforced` | `bool` | Whether the access gate actually enforces authorization rules. |
 | `DirectoryAvailable` | `bool` | Whether an identity directory is configured for validating candidate ids. |
 | `DirectoryProviderId` | `string` | The configured directory provider's stable id (for example `"entra"` or `"static"`); the no-op provider's `"null"` when no directory is configured. |
-| `DirectoryExplanation` | `string` | The active provider's operator-facing description of what a valid principal id is (its `DescribeEntry` text for a group), rendered as create-form guidance; the no-op provider's text says ids are accepted without validation. |
+| `DirectoryExplanation` | `string` | The active provider's operator-facing description of what a valid principal id is (its kind-neutral `DescribeEntry` text, which covers users and groups alike because one explanation serves every subject picker), rendered as create-form guidance; the no-op provider's text says ids are accepted without validation. |
 | `LocalMembershipEffective` | `bool` | Whether locally-administered group membership (the groups and member edges this facade manages) contributes to a subject's effective groups at authorization time; `false` under the token-only group-merge mode, where groups come solely from the identity-provider token and local membership administration is inert. |
 | `AllTreesGrantsEnabled` | `bool` | The live all-trees-grants tier flag. |
 | `AccessAdministrationDelegationEnabled` | `bool` | The live access-administration-delegation tier flag. |
@@ -206,7 +206,7 @@ Every request / response record is Orleans-serialized with a stable, compact ali
 | `Filtered` | `bool` | `true` when the allow is partial: a per-key filter applies to a tree- or prefix-scoped request. A prefix-scoped request whose every key resolves to the same allowing rule (no narrower prefix or exact-key rule for the subject and operation inside the prefix) is a plain allow and reports `false`. Always `false` for a point (key-scoped) request. |
 | `Reason` | `string?` | A human-readable reason, or `null` for a plain unqualified allow. |
 | `DefaultEffect` | `LatticeEffect` | The closed-world default effect applied when no rule matches. |
-| `MatchedRules` | `IReadOnlyList<LatticeAuthorizationRule>` | The authored rules whose subject, operations, and scope overlap the request, from the target tree and the cluster-wide `*` bucket, capped at `MaxExplanationRules` (advisory; `Allowed` is authoritative). The list is assembled independently of the verdict: it is empty when no authored rule matches, but it can cite a rule that did not decide the verdict - for example one naming a bootstrap administrator, whose allow comes from the bypass, or a data-plane `Tree:*` rule that is inert while `AllTreesGrantsEnabled` is off (see `Posture`). |
+| `MatchedRules` | `IReadOnlyList<LatticeAuthorizationRule>` | The authored rules whose subject, operations, and scope overlap the request, from the target tree, the cluster-wide `*` bucket and, for a tree the tenant layer governs, the owning tenant's tenant-wide `t/{tenant}/*` bucket, capped at `MaxExplanationRules` (advisory; `Allowed` is authoritative). The list is assembled independently of the verdict: it is empty when no authored rule matches, but it can cite a rule that did not decide the verdict - for example one naming a bootstrap administrator, whose allow comes from the bypass, or a data-plane `Tree:*` rule that is inert while `AllTreesGrantsEnabled` is off (see `Posture`). |
 | `Posture` | `AuthPolicyPosture` | The cluster's opt-in posture (both tier flags), so a caller can tell an in-force all-trees rule from an authored-but-inert one. |
 | `DecidingLayer` | `TenantRuleLayer?` | `Platform` when an operator rule decided (its verdict is final), `Tenant` when no operator rule matched and a tenant-tier rule did. For a tree- or prefix-scoped request it is set only when one rule decides the whole scope; `null` when the default effect decided, when the verdict is resolved key by key, and from a server that predates the member. |
 | `DecidingRuleId` | `string?` | The id of the deciding rule; `null` exactly when `DecidingLayer` is. |
@@ -300,6 +300,31 @@ The following are **not** in v1 and are deliberately left out so a caller cannot
 
 - **A condition / attribute predicate language.** Rules carry an opaque, reserved condition string that is not evaluated in this version, matching the policy model the store persists.
 - **Bulk import / export of policy or membership.** Administration is per-record; a caller composes bulk workflows over the CRUD surface.
+
+## Quick Start
+
+Register the facade on the silo after membership and authorization, then resolve `ILatticeAuthAdmin` from the silo's service provider (or expose it remotely through the [gRPC binding](../lattice.api.auth.grpc/README.md#quick-start)):
+
+```csharp
+siloBuilder
+    .AddLattice((silo, name) => silo.AddMemoryGrainStorage(name))
+    .AddLatticeMembership()
+    .AddLatticeAuth(options =>
+    {
+        options.DefaultEffect = LatticeEffect.Deny;
+        options.BootstrapAdministrators.Add("root-admin");
+    })
+    .AddLatticeAuthApi(options => options.MaxExplanationRules = 500);
+```
+
+Every call then runs as the ambient caller, so only a bootstrap administrator (here `root-admin`) or a delegated access administrator gets past the administrator check:
+
+```csharp
+var admin = serviceProvider.GetRequiredService<ILatticeAuthAdmin>();
+await admin.UpsertGroupAsync(new AuthGroup { GroupId = "readers", DisplayName = "Readers" });
+await admin.AddMemberAsync("readers", "alice");
+var explanation = await admin.ExplainAsync("alice", LatticeOperation.Read, LatticeScope.Tree("orders"));
+```
 
 ## Reference
 

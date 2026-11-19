@@ -14,8 +14,10 @@ status**, and the operator-only **advance region** override), the tenant-admin s
 and the cross-tenant grant operations (**list**, **offer**, **approve**,
 **reject**, and **revoke**), plus delegated tenant access administration for
 tenant groups, group members, the member set, tenant rules, explanations,
-effective permissions, and posture, alongside the unauthenticated auth-scheme
-discovery RPC. A read-only
+effective permissions, and posture - the client implements the tenant directory
+and policy facades, `ILatticeTenantDirectoryAdmin` and
+`ILatticeTenantPolicyAdmin`, directly over those RPCs - alongside the
+unauthenticated auth-scheme discovery RPC. A read-only
 `LatticeTenantSelfServiceApiGrpcClient` binds the co-hosted self-service reads -
 **current tenant**, **list accessible tenants**, and **get tenant** - which any
 caller, including an anonymous one, may invoke and which the facade scopes

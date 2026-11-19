@@ -78,7 +78,8 @@ The owned detector exports are `0a4bbd830` (retained history), `11e9344d9`
 (exact interrupted shadow, #4906) and `c8c789a7e` (Horizon lifecycle seams).
 Production mutations were temporary edits to the actual callers or guards;
 all were restored, with no runtime change in these detector exports.
-Artifacts are TRX files under this session's `files/horizon-acceptance/`.
+Artifacts were TRX files in the authoring session's working files
+(`files/horizon-acceptance/`); they are not committed to the repository.
 The restored exact core filter combines `ViewMaintainerPhysicalStagingTests`
 and `BPlusLeafGrainTests.GetVisibleRawEntries`: 45 executed/passed (33 physical,
 12 logical-row cases), zero skipped/inconclusive/not-executed. The exact live

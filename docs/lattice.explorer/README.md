@@ -81,7 +81,7 @@ transitively.
 
 | Feature | Surface | Summary |
 |---|---|---|
-| Data | [State API](../lattice.api.state/README.md), [data API](../lattice.api.data/README.md), [tree administration](../lattice.api.treeadmin/README.md) | Trees and views, key scans (live or snapshot), entries and creating, editing and deleting them, per-key history and point-in-time reads, metrics, strict-mode dead letters, tag indexes and materialised views. See [The Explorer areas](areas.md#data). |
+| Data | [State API](../lattice.api.state/README.md), [data API](../lattice.api.data/README.md), [tree administration](../lattice.api.treeadmin/README.md) | Trees and views, key scans (live or snapshot), entries and creating, editing and deleting them, per-key history and point-in-time reads, import and export, metrics, strict-mode dead letters, tag indexes and materialised views. See [The Explorer areas](areas.md#data). |
 | Apps | [App control, catalogue, workspace and bridge](../lattice.api.apps/README.md) | Your apps, the source catalogue, consent review, lifecycle, each app's own pages, and its sandboxed UI. See [Lattice Apps in the Explorer](lattice-apps.md). |
 | Access | [Auth control API](../lattice.api.auth/README.md), [Tenant administration API](../lattice.api.tenantadmin/README.md) | Cluster rules and groups, delegated tenant groups and members, tenant-tier rules, and decision explanation. See [Managing access](managing-access.md). |
 | Schema | [Schema control API](../lattice.api.schema/README.md) | Policy, version configuration, compliance scans, remediation and schema dead letters. See [Managing schema](managing-schema.md). |
@@ -138,8 +138,10 @@ app.Run();
 
 There is nothing to register per area: every area is compiled in and decides for
 itself whether you may see it. The [Explorer sample](../../samples/Explorer/README.md)
-co-hosts a single-silo cluster with the facades most areas need, and the
-[task-board sample app](../../samples/Explorer/Apps/TaskBoard/README.md).
+co-hosts a two-region estate of single-silo clusters, replicating between
+regions and serving the facades most areas need, with tenancy on and the
+[task-board sample app](../../samples/Explorer/Apps/TaskBoard/README.md);
+`--minimal` runs one region with no tenancy and no peer.
 
 See [Running and hosting the Explorer](running-the-explorer.md) for the full
 hosting, deployment and subpath guidance, and
@@ -165,7 +167,7 @@ for wiring sign-in.
 
 - [Running and hosting the Explorer](running-the-explorer.md) - standalone and embedded hosting, package shape, the app frame route and security headers.
 - [Configuration](configuration.md) - every public options property, its type and its default, plus the launcher environment variables, the persisted configuration document and the connection settings.
-- [API reference](api.md) - the public host entry points, sign-in seam and AppKit frame protocol.
+- [API reference](api.md) - the public host entry points, sign-in seam and AppKit frame protocol, plus the complete exported-symbol index of the Core, UI, Web and AppKit assemblies.
 - [Architecture](architecture.md) - host composition, calls to cluster facades, area gating and the app-frame boundary.
 - [Multi-replica and failover hosting](multi-replica-hosting.md) - durable auth state and graceful re-authentication for a multi-replica deployment.
 - [Connecting to an auth-enabled State API](connecting-to-an-auth-enabled-state-api.md) - selecting a sign-in method and attaching its credential.

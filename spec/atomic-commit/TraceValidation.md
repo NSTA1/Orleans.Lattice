@@ -60,8 +60,10 @@ initial predicate matching nothing (zero states, also a clean exit) from passing
 as acceptance. The specification's safety invariants and its single-step and
 whole-behaviour safety properties are checked along the trace too.
 
-Neither block is a file under `spec/`. Any non-markdown file there is a TLC
-verdict input (`tier-scope.py`'s `spec/*` glob) and would be discovered as a
+Neither block is a file under `spec/`. A `.tla` or `.cfg` file in a module
+directory there is a TLC verdict input (the `spec/**` glob in
+`.github/workflows/tlc-inputs.json`, which `tier-scope.py` reads) and would be
+discovered as a
 module (`SpecModuleCatalogue`), so the prototype extracts them from this page,
 by their fence info strings, into a scratch directory beside a copy of
 `AtomicCommit.tla` and the generated `AtomicCommitTraceData` module. What is
@@ -362,7 +364,10 @@ no workflow uses one that matches it.
 
 Why not a filter clause instead: excluding a category in every lane means
 editing `plan-test-matrix.py`, `plan-coverage-matrix.py`, `ci.yml` and their
-self-tests, and every workflow edit currently costs a full exhaustive TLC run.
+self-tests, and at the time of the spike every workflow edit cost a full
+exhaustive TLC run (those three files are now classified as TLC routing in
+`.github/workflows/tlc-inputs.json`, so an edit confined to them runs only the
+TLC smoke shard).
 `[Explicit]` gives the same exclusion with none of that, and the `Integration`
 category it also carries satisfies `IntegrationCategoryHygieneTests` for a
 fixture that starts a cluster.

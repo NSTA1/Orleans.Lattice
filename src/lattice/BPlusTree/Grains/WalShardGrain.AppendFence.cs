@@ -1123,7 +1123,7 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable, IWalAppend
     }
 
     /// <summary>
-    /// Marks a multi-entry stamped batch of <paramref name="leafId"/> as assigning
+    /// Marks the multi-entry stamped batch described by <paramref name="stamp"/> as assigning
     /// offsets. Called under <see cref="_stateGate"/> in the step that admitted its
     /// first entry; no allocation.
     /// </summary>

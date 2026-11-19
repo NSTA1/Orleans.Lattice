@@ -22,13 +22,19 @@ Structural trees use the app namespace. Adopted trees retain their pre-existing 
 
 Disabling removes app-owned grants while keeping trees, data, and replication. Uninstall removes grants, withdraws replication that the app itself enrolled, soft-deletes structural trees, and leaves adopted trees intact. The core retention handling performs any later physical purge. Startup reconciliation runs in the background; an app failure is recorded rather than preventing silo startup.
 
+## Registry projection and subscriptions
+
+Each silo keeps a compiled, immutable snapshot of the app registry (`IAppRegistryProjection`), rebuilt from the core change feed whenever the reserved registry tree mutates, so activation and app surfaces answer install, enablement and ceiling questions without storage reads. The change feed fires only on the silo that committed a write, so a surface that decides access on the snapshot first brings it current with the cluster-wide registry.
+
+Change-feed subscriptions attach to the core mutation-observer seam. A routing table from observed tree to handlers is rebuilt in the background whenever the registry snapshot changes; dispatch runs inline on the write path, skips maintenance writes, and logs and skips a handler that throws without failing the write.
+
 ## Public seams
 
 | Public seam | Responsibility |
 |---|---|
 | `IAppSource` / `IAppCatalogSource` | Resolve manifests and enumerate source offerings. |
 | `IAppRegistry` / `IAppRegistryProjection` | Persist install transitions and expose the compiled current view. |
-| `IAppActivationPipeline` | Run enable, disable, uninstall, and reconcile. |
+| `IAppActivationPipeline` | Run enable, disable, uninstall, and reconcile, and read an app's recorded status and in-flight run. |
 | `ITreeOwnershipGuard` | Let core alias changes respect app tree ownership. |
 | `IAppChangeFeedHandler` | Handle mutations declared by app subscriptions. |
 

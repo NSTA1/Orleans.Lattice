@@ -27,6 +27,12 @@ The public surface - `ILatticeScalingSignal`; the `ScalingSignal`,
 registration and endpoint extension classes; `LatticeScalingMetrics`; and
 `ScalingTypeAliases` - is stable for downstream integration.
 
+The package also ships reference autoscaler manifests in its `deploy/` folder:
+an Azure Container Apps custom scale rule (`aca-scale-rule.json` and
+`aca-scale-rule.bicep`) and a KEDA `ScaledObject` (`keda-scaledobject.yaml`)
+that scale on the endpoint's `scaleValue`. See the
+[deploy README](https://github.com/NSTA1/Orleans.Lattice/blob/main/src/lattice.scaling/deploy/README.md).
+
 ## Getting started
 
 Register the signal on your silo with `AddLatticeScalingSignal`, then resolve

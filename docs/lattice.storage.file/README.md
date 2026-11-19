@@ -27,6 +27,18 @@ Core WAL semantics, the provider seam, and placement are covered in [WAL Storage
 - **Self-compacting.** Trimmed payload bytes are physically reclaimed by rewriting a WAL partition's segment file once enough dead space accumulates.
 - **Published to NuGet** as `Orleans.Lattice.Storage.File`, released under `lattice.storage.file-v<X.Y.Z>` tags.
 
+## Features
+
+| Feature | What it gives you | Docs |
+|---|---|---|
+| **File WAL provider** | Durable `IWalStorageProvider` implementation on local disk, one `wal.log` per tree/WAL partition. | [Architecture](architecture.md#on-disk-layout) |
+| **All-or-nothing append** | Data records sealed by one commit trailer and, with `FlushToDisk` on (the default), fsynced before the append returns; a failed write or flush is rolled back rather than resurrected by recovery. | [Architecture](architecture.md#append-and-commit-framing) |
+| **Crash recovery** | Reconciliation rolls committed batches forward, discards a torn tail, and keeps honest offset gaps. | [Architecture](architecture.md#crash-recovery) |
+| **Compaction** | Ratio, absolute-ceiling, and reconciliation triggers return trimmed space to the filesystem. | [Configuration](configuration.md#options) |
+| **Bounded reads** | `MaxReadBatchBytes` caps a read page, narrowed further under memory pressure. | [Configuration](configuration.md#options) |
+| **Filtered replay reads** | Records outside a reader's `WalKeyFilter` are classified from a short prefix and skipped without a full decode. | [Architecture](architecture.md#filtered-replay-reads) |
+| **Telemetry** | Compaction and recovery instruments on the core `orleans.lattice` meter. | [Architecture](architecture.md#telemetry) |
+
 ## Public surface
 
 The table summarises each public type's role; the [Public API](api.md) reference lists every public member and signature.
@@ -60,7 +72,7 @@ Register it alongside `AddLattice(...)` on the silo that owns the WAL. The regis
 
 - [Public API](api.md) - every public type, member and signature, and what `AddFileWalStorage` registers.
 - [Configuration](configuration.md) - every `FileWalStorageOptions` knob, default, and validation rule.
-- [Architecture](architecture.md) - the on-disk layout, the append/commit framing, the durability contract, compaction, and recovery behaviour.
+- [Architecture](architecture.md) - the on-disk layout, the append/commit framing, the durability contract, compaction, recovery behaviour, and the telemetry the provider emits.
 
 Related package docs:
 

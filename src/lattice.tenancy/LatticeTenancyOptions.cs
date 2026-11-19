@@ -4,9 +4,12 @@ namespace Orleans.Lattice.Tenancy;
 /// Options controlling the <c>Orleans.Lattice.Tenancy</c> registry add-on: the
 /// durable per-key history retention over the <c>sys-tenant-registry</c>
 /// definition tree, whether
-/// the durable history materialised view is created, and whether the reserved
-/// default tenant is seeded. Resolved through the standard options system and
-/// configured via <c>AddLatticeTenancy(...)</c> or
+/// the durable history materialised view is created, whether the reserved
+/// default tenant is seeded, how long a silo may serve its cached tenant policy
+/// snapshot (<see cref="PolicySnapshotLeaseDuration"/>), and whether delegated
+/// tenant access administration is enabled
+/// (<see cref="DelegatedAccessAdministrationEnabled"/>). Resolved through the
+/// standard options system and configured via <c>AddLatticeTenancy(...)</c> or
 /// <c>ConfigureLatticeTenancy(...)</c>.
 /// </summary>
 public sealed class LatticeTenancyOptions

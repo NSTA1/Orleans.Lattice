@@ -22,7 +22,7 @@ public interface IReceiverFlowControlPolicy
 }
 ```
 
-The receiver-side gRPC service calls `EvaluateAsync` after a successful apply, on every push. The policy gets the per-batch `ReceiverFlowControlContext`:
+The receiver-side gRPC service calls `EvaluateAsync` on a push once the applier returns without throwing, unless the batch was refused for its source lineage; a push refused before it reaches the applier is not evaluated. A deferred push's not-accepted ack carries a fixed pause rather than the policy's hint. The policy gets the per-batch `ReceiverFlowControlContext`:
 
 | Field | Semantics |
 |---|---|

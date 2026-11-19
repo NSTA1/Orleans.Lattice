@@ -55,6 +55,7 @@ The leaf state row carries topology, lifecycle, checkpoint and recovery metadata
 | Snapshot load hint (the byte size the leaf's last persisted snapshot occupied) | `long` | 8 bytes |
 | Unlinked split sibling and its separator key (a completed division whose link the shard root has not yet acknowledged) | `GrainId?`, `string?` | 0 bytes when absent; ~80 bytes plus the key's UTF-8 bytes while the link is owed |
 | Leaf-reclaim retirement flag and the owed reclaim successor references | `bool`, `GrainId?` | 1 byte; ~80 bytes per reference while a reclaim completion is owed |
+| Projection-hash contribution version (the digest function version that produced the projection hash) | `int` | ~5 bytes |
 | Orleans state envelope | - | ~100-200 bytes |
 
 **Steady-state leaf state row size: roughly 0.6 to 1.2 KB**, dominated by the grain-identity fields (sibling, parent, and split pointers). The row does **not** scale with `MaxLeafKeys`, `MaxInternalChildren`, or live-entry count, so the leaf state row is comfortably within every supported storage provider's per-row limit (including DynamoDB at 400 KB) regardless of structural sizing.
@@ -75,7 +76,7 @@ Every mutation appends exactly one encoded `WalRecord` to the tree's WAL - to on
 - The mutation kind and the declared merge mode (omitted from the bytes for the default last-writer-wins mode). The tree id is not stored: it is stripped on encode and recovered from the row's storage context.
 - An optional vector-clock frontier (`VersionVector?`), stamped on causal-plus and replicated writes.
 - For a range delete, the exclusive end key (and, for a predicate-filtered range delete, the keys the predicate matched); for a CRDT merge-mode key, the typed delta bytes, carried instead of a full value.
-- The authoring shard index and merge, backstop, and category markers, plus atomic-write and cross-tree transaction metadata (transaction id, batch position, participants) on saga records.
+- The authoring shard index and merge, backstop, category, migrated, and carried-stamp markers, plus atomic-write and cross-tree transaction metadata (transaction id, batch position, participants) on saga records.
 - Orleans framing (~30-40 bytes).
 
 The per-row total is therefore **roughly 60-100 bytes overhead + key bytes + value bytes**, plus the vector-clock frontier and dependency summary when a write carries one.
@@ -333,7 +334,7 @@ Migration is handled by a staleness horizon. When a tree's aggregator moves to a
 
 ### Advisory byte-pressure WAL retention
 
-WAL retention is normally bounded by consumer cursors and an optional wall-clock TTL (`LatticeOptions.WalRetention`). For a size-based safety valve, set `LatticeOptions.WalMaxRetainedBytes` - an **advisory** per-tree ceiling on the WAL's on-disk occupancy. The option and `LATTICE_WAL_MAX_RETAINED_BYTES` environment-variable names are legacy compatibility names: neither switches the comparison to retained payload. Read `storage.wal_physical_bytes`, not `storage.wal_bytes`, to compare the magnitude with this ceiling. When set, each `ILatticeWalGc.RunOnceAsync` pass samples that occupancy - physical bytes, dead bytes not yet compacted included, or the retained payload for a provider that cannot report a physical size - before and after its safe trim:
+WAL retention is normally bounded by consumer cursors and an optional wall-clock TTL (`LatticeOptions.WalRetention`). For a size-based safety valve, set `LatticeOptions.WalMaxRetainedBytes` - an **advisory** per-tree ceiling on the WAL's on-disk occupancy. The option name, and the repocontext container host's `LATTICE_WAL_MAX_RETAINED_BYTES` environment variable that sets it, are legacy compatibility names: neither switches the comparison to retained payload. Read `storage.wal_physical_bytes`, not `storage.wal_bytes`, to compare the magnitude with this ceiling. When set, each `ILatticeWalGc.RunOnceAsync` pass samples that occupancy - physical bytes, dead bytes not yet compacted included, or the retained payload for a provider that cannot report a physical size - before and after its safe trim:
 
 - If the pre-trim total exceeds the ceiling, the policy schedules a byte-pressure trim and increments `orleans.lattice.storage.policy.trim_triggered` (tagged `reason=byte_pressure`). The bytes actually freed are reported on `orleans.lattice.storage.policy.bytes_reclaimed` and on the report's `RetainedBytesBefore` / `RetainedBytesAfter` fields.
 - The trim **never crosses the safe frontier** (the minimum consumer cursor, overruled where available by the durable materialiser offset floor, intersected with the causal-stable frontier and held below the blocked floor). If the trim cannot bring occupancy back under the ceiling, the data is preserved, `orleans.lattice.storage.policy.over_threshold` reports `1`, and the write path is unaffected. The breach is advisory; the durability invariant wins. The flag compares occupancy with the ceiling and asserts no cause: a lagging consumer or pin holding bytes sets it, and so does a tree that reclaimed everything it was entitled to and is only waiting for compaction to return its dead bytes.

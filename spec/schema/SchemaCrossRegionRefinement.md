@@ -170,8 +170,8 @@ record was written inside the batch's prepared transaction and so was never
 committed; the record is now an ordinary committed write. No mutation here stands
 for #5297, because the model's diversion has no record of its own; the strict
 ingest model's `DiversionAckedOnlyWhenRecorded` row owns it. Both are fixed in the
-schema-assurance integration bucket; this is integration-branch evidence, not a
-claim the fixes are released.
+schema-assurance integration bucket, which landed on `main` with #5330 and
+shipped in the 10.3.0 release.
 
 ## Deliberate abstraction gaps
 

@@ -55,7 +55,8 @@ internal sealed class ReplicationShipperState
     /// <remarks>
     /// <para>
     /// Sequence-based, not HLC-based, because the WAL partitions are
-    /// dense append-only logs (zero gaps, monotonically increasing) and
+    /// append-only logs with monotonically increasing sequence numbers
+    /// (not guaranteed dense: a sequence can be a hole) and
     /// resuming by sequence converts every pump tick from an O(N)
     /// rescan-from-zero walk into an O(page) read past the last
     /// successfully shipped offset. The HLC <see cref="Cursor"/> is

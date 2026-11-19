@@ -91,7 +91,7 @@ See [Backfill](backfill.md).
 | `IGrainIndexAdmin` | `DeclaredIndexes`, `GetStatusAsync`, `ListStatusAsync`, `PauseBackfillAsync`, `ResumeBackfillAsync`, `RebuildAsync`, `RunBackfillPassAsync`. |
 | `GrainIndexStatus` | `IndexName`, `Definition`, `Registered`, `Fingerprint`, `KeyCodecId`, `NeedsBackfill`, `Drift`, `Backfill`, `Progress`, `EntryCount`. |
 | `GrainIndexDriftStatus` | Whether the declaration drifted, and on which fields. |
-| `GrainIndexMetrics` | `MeterName` and `Meter` - the shared core meter (`LatticeMetrics.Meter`), not a package meter - plus the instrument names, tag names and `path` values, and `IndexTag(string)`, which caches one `index` tag per index name. |
+| `GrainIndexMetrics` | `MeterName` and `Meter` - the shared core meter (`LatticeMetrics.Meter`), not a package meter - plus the eight instrument fields (`GrainsEnrolled`, `Entries`, `WriteFailures`, `ProjectionDuration`, `BackfillProcessed`, `BackfillTotal`, `BackfillPercentComplete`, `BackfillState`) and their `*Name` constants, the tag names and `path` values, and `IndexTag(string)`, which caches one `index` tag per index name. |
 
 See [Observability](observability.md).
 
@@ -122,7 +122,7 @@ See [Observability](observability.md).
 
 | Type | Purpose |
 |---|---|
-| `IGrainKeyCodec` / `IGrainKeyCodec<TGrain>` | Encodes a `GrainId` into an index entry's grain key (`Encode`, `TryEncode`), and resolves an encoded key back to a grain reference (`Resolve`). |
+| `IGrainKeyCodec` / `IGrainKeyCodec<TGrain>` | Encodes a `GrainId` into an index entry's grain key (`Encode`, `TryEncode`), resolves an encoded key back to a grain reference (`Resolve`), and names the grain interface it serves (`GrainInterfaceType`). |
 | `GrainKeyCodec` | Factory for the built-in codecs. |
 | `StringGrainKeyCodec<TGrain>`, `GuidGrainKeyCodec<TGrain>`, `IntegerGrainKeyCodec<TGrain>` | The built-in codecs. |
 | `GrainIndexKeyCodecIdentity` | The stable codec identity recorded in the registry. |

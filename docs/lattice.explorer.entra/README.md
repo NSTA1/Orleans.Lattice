@@ -20,7 +20,7 @@ for the Blazor Server web head. That package uses ASP.NET Core OpenID Connect
 and Microsoft.Identity.Web instead of opening the interactive MSAL flow from the
 host process.
 
-## Behaviour
+## Core properties
 
 - The provider registers an `IExplorerAuthMethod` for the `entra` scheme. The
   session chrome offers it when the endpoint advertises that scheme.
@@ -36,6 +36,17 @@ host process.
 - An advertised audience is accepted only when it is an `api://` resource, an
   `https` resource on the endpoint host, or an exact match in `AllowedAudiences`.
 - `UseDeviceCode` switches from an interactive browser flow to device-code flow.
+
+## Features
+
+| Feature | Public surface | Reference |
+|---|---|---|
+| Registration | `ExplorerEntraServiceCollectionExtensions.AddExplorerEntraAuth` | [Registration](api.md#registration) |
+| Interactive `entra` sign-in method | `EntraExplorerAuthMethod` | [API reference](api.md#entraexplorerauthmethod) |
+| Interactive and silent token acquisition seam | `IEntraInteractiveTokenAcquirer`, `MsalEntraInteractiveTokenAcquirer` | [API reference](api.md#ientrainteractivetokenacquirer) |
+| Account-bound silent renewal | `EntraTokenRequest`, `EntraTokenResult` | [Sign-in and renewal](architecture.md#sign-in-and-renewal) |
+| Advertised authority and audience admission | `ExplorerEntraOptions.AllowedAuthorityHosts`, `ExplorerEntraOptions.AllowedAudiences` | [Authority and audience admission](configuration.md#authority-and-audience-admission) |
+| Device-code flow | `ExplorerEntraOptions.UseDeviceCode`, `ExplorerEntraOptions.DeviceCodeCallback` | [Configuration](configuration.md) |
 
 ## Setup
 

@@ -16,8 +16,10 @@ using Orleans.Lattice.ReferenceArchitecture.Mcp;
 //
 // A stateless Model Context Protocol server that fronts the region's silo
 // cluster it is NOT co-hosted with, delegating each facade group to the silo's
-// gRPC endpoint (AddLatticeMcpRemote). It exposes the read-only state facade and
-// the auth-admin control plane as MCP tools, permission-scoped per caller, and
+// gRPC endpoint (AddLatticeMcpRemote). It exposes the read-only state facade,
+// the auth-admin control plane and the tree-administration (and schema-control)
+// tools, plus the data, backup and replication tool groups whenever their
+// endpoints are configured, as MCP tools, permission-scoped per caller, and
 // - when a PromQL backend is configured - the cluster telemetry tools.
 //
 // Auth: the head is Entra-authenticated. When Entra is enabled the MCP HTTP
@@ -69,9 +71,11 @@ var clusterId = config["Mcp:ClusterId"];
 // real guarantee behind a global load balancer: a peer accidentally pointed at an
 // anycast/Front Door endpoint that latency-routes to the nearest region fails the
 // assertion and is omitted / rejected fail-closed rather than silently answered by
-// the wrong cluster. On by default here because the reference estate fronts every
-// region with one global Front Door; peers are always dialed at their DIRECT
-// region-pinned silo FQDN, so the assertion passes.
+// the wrong cluster. Off by default (Mcp:VerifyRegionIdentity), and this
+// local-dev harness leaves it off; the deployed reference estate turns it on
+// whenever peer regions are wired behind its one global Front Door, and peers
+// are always dialed at their DIRECT region-pinned silo FQDN, so the assertion
+// passes.
 var verifyRegionIdentity = config.GetValue("Mcp:VerifyRegionIdentity", false);
 
 var entraEnabled = config.GetValue("Entra:Enabled", false);

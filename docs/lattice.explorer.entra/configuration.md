@@ -12,7 +12,7 @@ values.
 
 | Property | Type | Default | Meaning |
 |---|---|---|---|
-| `Authority` | `string?` | `null` | OIDC authority. Takes precedence over `TenantId`; when neither is set, an admitted advertised authority may supply it. |
+| `Authority` | `string?` | `null` | OIDC authority. Takes precedence over `TenantId`; when neither is set, an admitted advertised authority may supply it, or else an advertised tenant id composes `https://login.microsoftonline.com/{tenant}`. |
 | `TenantId` | `string?` | `null` | Directory tenant id used to compose `https://login.microsoftonline.com/{tenant}` when `Authority` is unset. |
 | `ClientId` | `string?` | `null` | Public client application id. An advertised client id is used only when this is unset. |
 | `Scopes` | `IList<string>` | Empty | Requested State API scopes. If empty, the method resolves an admitted advertised audience and adds `/.default` unless already present. |
@@ -34,13 +34,17 @@ the authority, that value must be an absolute HTTPS URL whose host is admitted.
 The default authority-host set is `login.microsoftonline.com`,
 `login.microsoftonline.us`, `login.partner.microsoftonline.cn` and
 `login.microsoftonline.de`. A non-empty `AllowedAuthorityHosts` list replaces
-that set.
+that set. When the endpoint advertises no authority but does advertise a tenant
+id, the method composes `https://login.microsoftonline.com/{tenant}` from it, so
+the host is fixed rather than endpoint-chosen.
 
 When scopes are empty, the advertised audience is accepted by default only when
 it is an `api://` resource or an HTTPS resource sharing the configured State API
 endpoint's host. A non-empty `AllowedAudiences` list replaces that rule with
 case-insensitive exact matches. If the audience already ends in `/.default`, it
-is used as the scope; otherwise that suffix is appended.
+is used as the scope; otherwise that suffix is appended. A refused authority or
+audience fails the challenge with `InvalidOperationException` rather than being
+used.
 
 ## Example
 

@@ -16,7 +16,7 @@ The area is unavailable, not hidden, when the cluster serves backup control but 
 
 > You do not hold a backup grant on this cluster. Ask an administrator for one.
 
-A denial from the probe is shown the same way. The area is hidden when the cluster does not serve backup control, the backup control facade is absent, the connection is not configured, or the probe faults.
+A denial from the probe is shown the same way. The area is hidden when the cluster does not serve backup control, the backup control facade is absent, the connection is not configured, or the probe faults definitely. A probe the cluster did not answer (a transient fault) leaves the area not checked rather than hidden; see [Area availability](area-availability.md#faults-the-cluster-did-not-answer).
 
 Backup page actions also use per-scope probes. If a probe denies a page action, the control is replaced with text such as **You may not restore this backup's tree**, **You may not delete this backup**, or **You may not schedule backups of this tree**. If the server denies an operation anyway, the page shows:
 

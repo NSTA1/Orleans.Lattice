@@ -100,7 +100,8 @@ public static partial class LatticeReplicationApiGrpcServiceCollectionExtensions
     /// <summary>
     /// Maps the replication control-API RPC routes (the unary
     /// <c>EnableReplication</c>, <c>DisableReplication</c>,
-    /// <c>GetReplicationConfig</c>, <c>DecommissionPeer</c>, and unauthenticated
+    /// <c>GetReplicationConfig</c>, <c>DecommissionPeer</c>,
+    /// <c>ProbeCapabilities</c>, and unauthenticated
     /// <c>GetAuthScheme</c> RPCs) on the supplied <paramref name="endpoints"/>.
     /// The host must have called
     /// <see cref="AddLatticeReplicationApiGrpc"/> and must expose

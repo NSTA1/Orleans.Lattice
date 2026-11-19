@@ -111,8 +111,7 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
     /// The core coordinator the accept-then-poll verbs of
     /// <see cref="ILatticeTreeAdminOperations"/> run on, registered by <c>AddLattice</c>,
     /// or <c>null</c> for a facade built without it. When <c>null</c> the start verbs
-    /// throw <see cref="InvalidOperationException"/> and the deprecated blocking verbs
-    /// call the engine directly instead of wrapping an operation.
+    /// throw <see cref="InvalidOperationException"/>.
     /// </param>
     /// <param name="viewProviders">
     /// The silo's host-registered runtime-view projection providers, registered with the

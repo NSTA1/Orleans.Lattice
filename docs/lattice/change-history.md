@@ -196,8 +196,8 @@ the decoded member changes of a CRDT revision. The timeline is retention-aware -
 it marks a revision that kept only its value's size and hash as metadata only, and
 says when older revisions were trimmed or when the tree has no change-history view
 and only the write-ahead-log window is shown (a tree's retention mode decides what each
-revision keeps, not how long revisions are kept) - and an **As of (UTC)** field shows
-the key as it stood at a point in time, marking the revision then in effect.
+revision keeps, not how long revisions are kept) - and an **As of** field (a UTC
+time) shows the key as it stood at a point in time, marking the revision then in effect.
 
 **Live-follow** is on by default, behind a **Follow new revisions** switch: once
 the first page of the stored timeline has loaded, the Explorer subscribes to the

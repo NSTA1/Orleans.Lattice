@@ -4,6 +4,8 @@ agent_spec: "docs/agents/deployment.yaml"
 
 # Orleans.Lattice.Scaling
 
+## What is it?
+
 Opt-in autoscaling signal for Orleans.Lattice: a read-only, cluster-aggregate,
 two-axis (compute and storage) pressure snapshot that an external autoscaler can
 scrape to size the silo pool.
@@ -13,8 +15,6 @@ need right now?* - and answers a second, advisory one alongside it - *is any WAL
 storage account hot enough that its partitions should be spread across more
 accounts?* The first drives replica autoscaling on the compute axis; the second
 is signal-only and never moves a replica.
-
-## Why it exists
 
 Orleans clusters that back a B+ tree store scale on two independent axes:
 
@@ -32,13 +32,14 @@ or an Azure Container Apps custom scale rule) consumes directly, and it reports
 storage-axis pressure as an operator recommendation that maps onto the
 `ILatticeAdmin` WAL-move workflow.
 
-## The two axes
+## Core Properties
 
 - **Compute axis (`ComputePressure`)** - normalised activation, host-resource,
   and WAL-dispatch pressure (each `0.0` idle to `1.0` saturated), plus the
   worst-case `WalSaturationState` the answering silo has observed across its
-  trees. The dominant dimension times the current replica count is the raw
-  replica demand.
+  trees. Activation and resource are the worst silo in the cluster; the
+  WAL-dispatch dimension and `WalSaturation` are the answering silo's own. The
+  dominant dimension times the current replica count is the raw replica demand.
 - **Storage axis (`StoragePressure`)** - whether the retained WAL bytes of the
   trees that declare a `WalMaxRetainedBytes` ceiling reached the configured
   fraction of those ceilings, the aggregate retained bytes, a
@@ -52,7 +53,30 @@ concrete `RecommendedReplicas` count, the raw `RawScaleValue` before smoothing,
 a human-readable `Reason`, and a `SampledAt` timestamp. **The storage axis never
 contributes to `ScaleValue`** - it is reported for operator action only.
 
-## Quick start
+- **Read-only and cheap to scrape.** A hosted sampler on each silo recomputes
+  the signal every `SampleInterval` and caches it; every read - the facade, the
+  HTTP endpoint, the health check, or the metrics - returns the cached snapshot
+  and never fans out to the cluster.
+- **Fast to scale out, slow to scale in.** A rising demand is adopted
+  immediately; a falling one decays through an EWMA and only once every
+  scale-in precondition (all compute dimensions low, WAL healthy, no shard split
+  in flight) has held for `ScaleInGateWindow`.
+- **Off by default.** Nothing changes until a host calls
+  `AddLatticeScalingSignal`.
+
+## Features
+
+| Feature | Description |
+|---|---|
+| Compute-axis replica demand | `ScaleValue` and `RecommendedReplicas` from the dominant compute dimension, smoothed, gated, and floored at `MinReplicas`. See [Architecture](architecture.md). |
+| Storage-axis advisory | Per-account throughput-bound versus capacity-bound classification and an optional `WalRebalanceRecommendation`. See [Storage pressure](storage-pressure.md). |
+| Split-aware scale-in | Scale-in is held while any shard split is in flight cluster-wide. See [split-aware scale-in](architecture.md#split-aware-scale-in). |
+| HTTP scrape endpoint | `MapLatticeScalingSignal` serves the signal as JSON with a top-level `scaleValue` for a KEDA `metrics-api` scaler. See [API](api.md). |
+| Health check | `AddLatticeScalingHealthCheck` projects the signal onto a `HealthStatus`. See [Configuration](configuration.md#latticescalinghealthcheckoptions). |
+| Metrics and dashboard | Eight observable gauges on the `orleans.lattice.scaling` meter and a bundled Grafana dashboard. See [Observability](observability.md). |
+| Reference autoscaler manifests | An ACA scale rule (JSON and Bicep) and a KEDA `ScaledObject`, shipped in the package's `deploy/` folder. See [`src/lattice.scaling/deploy/README.md`](../../src/lattice.scaling/deploy/README.md). |
+
+## Quick Start
 
 Register the signal on the silo builder, then expose it over an HTTP endpoint on
 the co-hosted web host (the optional ASP.NET Core health check is covered in
@@ -92,7 +116,7 @@ async Task InspectAsync(ILatticeScalingSignal signal, CancellationToken cancella
 }
 ```
 
-## Documentation
+## Reference
 
 | Document | What it covers |
 |---|---|
@@ -115,4 +139,5 @@ scales the replica count out.
 ## Related
 
 - Package overview: [`src/lattice.scaling/NUGET_README.md`](../../src/lattice.scaling/NUGET_README.md).
+- Reference autoscaler manifests shipped in the package: [`src/lattice.scaling/deploy/`](../../src/lattice.scaling/deploy/README.md).
 - Bundled dashboards: [`Orleans.Lattice.Dashboards`](../lattice.dashboards/README.md).

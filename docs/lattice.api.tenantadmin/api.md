@@ -4,7 +4,7 @@ This package implements caller-facing tenant administration over the tenancy reg
 
 ## Registration and facade families
 
-`AddLatticeTenantAdminApi` requires `AddLatticeTenancy` on the same silo builder first. It registers lifecycle, region-residency, access, grants, self-service and quota-usage facades plus the authorization, write-clock and tree-cascade seams. The options delegate accepts `LatticeApiTenantAdminOptions`, currently an empty reservation type, not an enforcement switch.
+`AddLatticeTenantAdminApi` requires `AddLatticeTenancy` on the same silo builder first. It registers lifecycle, region-residency, access, grants, self-service and quota-usage facades, the delegated tenant directory (`ILatticeTenantDirectoryAdmin`) and policy (`ILatticeTenantPolicyAdmin`) facades, plus the authorization, write-clock and tree-cascade seams. The options delegate accepts `LatticeApiTenantAdminOptions`, currently an empty reservation type, not an enforcement switch.
 
 Tenant lifecycle and quota mutation use the operator authorization tier. Region residency, tenant-admin subjects and cross-tenant grants also have tenant-specific authority checks. Delegated directory and policy administration require the separate tenancy opt-in; registration is not permission. Read-only self-service resolves accessible tenants from the caller and hides inaccessible tenants as absent.
 
@@ -12,7 +12,7 @@ Tenant lifecycle and quota mutation use the operator authorization tier. Region 
 
 ## Contracts and support seams
 
-Use the exact method signatures below for cancellation, paging, request records and return values. Registry mutations receive monotonic timestamps; tenant deletion enumerates and soft-deletes its owned trees through the internal lifecycle cascade. Directory and policy support interfaces permit composition with membership/policy storage; they do not waive caller authorization or tenant confinement.
+Use the exact method signatures below for cancellation, paging, request records and return values. Registry mutations receive monotonic timestamps; tenant deletion enumerates and soft-deletes its owned trees through the internal lifecycle cascade. The directory and policy facades compose the membership directory and the authorization policy store internally; that composition does not waive caller authorization or tenant confinement.
 
 A lifecycle or grant write is not a distributed transaction across all tenant trees. Region backfill/drain and tree deletion are resumable follow-on work; poll the status/read contracts rather than interpreting accepted control state as completed data movement. See [architecture](architecture.md).
 
@@ -304,7 +304,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantAccessPageRequest`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantAccessPageRequest.cs) (line 18).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantAccessPageRequest.cs) (line 21).
 
 `public sealed record TenantAccessPageRequest`
 
@@ -316,7 +316,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantAccessPosture`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantAccessPosture.cs) (line 26).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantAccessPosture.cs) (line 29).
 
 `public sealed record TenantAccessPosture`
 
@@ -331,7 +331,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantAdminSubjectChangeResult`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantAdminSubjectChangeResult.cs) (line 11).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantAdminSubjectChangeResult.cs) (line 14).
 
 `public sealed record TenantAdminSubjectChangeResult`
 
@@ -342,7 +342,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantAdminSubjectReport`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantAdminSubjectReport.cs) (line 10).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantAdminSubjectReport.cs) (line 13).
 
 `public sealed record TenantAdminSubjectReport`
 
@@ -361,7 +361,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantCreationResult`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantCreationResult.cs) (line 11).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantCreationResult.cs) (line 14).
 
 `public sealed record TenantCreationResult`
 
@@ -371,7 +371,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantDeletionResult`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantDeletionResult.cs) (line 8).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantDeletionResult.cs) (line 11).
 
 `public sealed record TenantDeletionResult`
 
@@ -380,7 +380,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantDescriptor`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantDescriptor.cs) (line 12).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantDescriptor.cs) (line 15).
 
 `public sealed record TenantDescriptor`
 
@@ -390,7 +390,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantEffectivePermissions`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantEffectivePermissions.cs) (line 20).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantEffectivePermissions.cs) (line 23).
 
 `public sealed record TenantEffectivePermissions`
 
@@ -402,7 +402,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantExplanation`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantExplanation.cs) (line 26).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantExplanation.cs) (line 29).
 
 `public sealed record TenantExplanation`
 
@@ -423,7 +423,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantGrantAccess`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantGrantAccess.cs) (line 11).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantGrantAccess.cs) (line 14).
 
 `public enum TenantGrantAccess`
 
@@ -434,7 +434,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantGrantChangeResult`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantGrantChangeResult.cs) (line 10).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantGrantChangeResult.cs) (line 13).
 
 `public sealed record TenantGrantChangeResult`
 
@@ -443,7 +443,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantGrantDescriptor`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantGrantDescriptor.cs) (line 10).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantGrantDescriptor.cs) (line 13).
 
 `public sealed record TenantGrantDescriptor`
 
@@ -456,7 +456,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantGrantLifecycleState`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantGrantLifecycleState.cs) (line 19).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantGrantLifecycleState.cs) (line 21).
 
 `public enum TenantGrantLifecycleState`
 
@@ -478,7 +478,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantGrantReport`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantGrantReport.cs) (line 11).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantGrantReport.cs) (line 14).
 
 `public sealed record TenantGrantReport`
 
@@ -501,7 +501,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantGroupDescriptor`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantGroupDescriptor.cs) (line 16).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantGroupDescriptor.cs) (line 19).
 
 `public sealed record TenantGroupDescriptor`
 
@@ -510,7 +510,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantGroupMember`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantGroupMember.cs) (line 16).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantGroupMember.cs) (line 19).
 
 `public sealed record TenantGroupMember`
 
@@ -519,7 +519,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantGroupPage`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantGroupPage.cs) (line 9).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantGroupPage.cs) (line 12).
 
 `public sealed record TenantGroupPage`
 
@@ -528,7 +528,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantGroupRemovalResult`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantGroupRemovalResult.cs) (line 15).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantGroupRemovalResult.cs) (line 18).
 
 `public sealed record TenantGroupRemovalResult`
 
@@ -561,7 +561,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantLifecycleStatus`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantLifecycleStatus.cs) (line 10).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantLifecycleStatus.cs) (line 12).
 
 `public enum TenantLifecycleStatus`
 
@@ -570,7 +570,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantMemberEntry`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantMemberEntry.cs) (line 13).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantMemberEntry.cs) (line 16).
 
 `public sealed record TenantMemberEntry`
 
@@ -579,7 +579,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantMemberPage`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantMemberPage.cs) (line 13).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantMemberPage.cs) (line 16).
 
 `public sealed record TenantMemberPage`
 
@@ -588,7 +588,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantMembershipChangeResult`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantMembershipChangeResult.cs) (line 10).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantMembershipChangeResult.cs) (line 13).
 
 `public sealed record TenantMembershipChangeResult`
 
@@ -610,7 +610,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantQuotaDimensionUsage`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantQuotaDimensionUsage.cs) (line 35).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantQuotaDimensionUsage.cs) (line 38).
 
 `public readonly record struct TenantQuotaDimensionUsage`
 
@@ -625,7 +625,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantQuotaEnforcementScope`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantQuotaEnforcementScope.cs) (line 17).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantQuotaEnforcementScope.cs) (line 19).
 
 `public enum TenantQuotaEnforcementScope`
 
@@ -634,7 +634,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantQuotaUsageReport`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantQuotaUsageReport.cs) (line 26).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantQuotaUsageReport.cs) (line 29).
 
 `public sealed record TenantQuotaUsageReport`
 
@@ -652,7 +652,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantQuotasDescriptor`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantQuotasDescriptor.cs) (line 25).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantQuotasDescriptor.cs) (line 28).
 
 `public readonly record struct TenantQuotasDescriptor`
 
@@ -671,7 +671,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantQuotasUpdateResult`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantQuotasUpdateResult.cs) (line 9).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantQuotasUpdateResult.cs) (line 12).
 
 `public sealed record TenantQuotasUpdateResult`
 
@@ -680,7 +680,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantRegionAuthorizationResult`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantRegionAuthorizationResult.cs) (line 8).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantRegionAuthorizationResult.cs) (line 11).
 
 `public sealed record TenantRegionAuthorizationResult`
 
@@ -689,7 +689,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantRegionBackfillProgress`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantRegionBackfillProgress.cs) (line 4).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantRegionBackfillProgress.cs) (line 7).
 
 `public sealed record TenantRegionBackfillProgress`
 
@@ -699,7 +699,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantRegionBackfillTreeProgress`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantRegionBackfillTreeProgress.cs) (line 4).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantRegionBackfillTreeProgress.cs) (line 7).
 
 `public sealed record TenantRegionBackfillTreeProgress`
 
@@ -712,7 +712,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantRegionLifecycleStatus`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantRegionLifecycleStatus.cs) (line 21).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantRegionLifecycleStatus.cs) (line 23).
 
 `public enum TenantRegionLifecycleStatus`
 
@@ -736,7 +736,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantRegionStatusDescriptor`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantRegionStatusDescriptor.cs) (line 12).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantRegionStatusDescriptor.cs) (line 15).
 
 `public sealed record TenantRegionStatusDescriptor`
 
@@ -747,7 +747,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantRegionStatusReport`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantRegionStatusReport.cs) (line 10).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantRegionStatusReport.cs) (line 13).
 
 `public sealed record TenantRegionStatusReport`
 
@@ -756,7 +756,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantResidencyChangeResult`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantResidencyChangeResult.cs) (line 10).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantResidencyChangeResult.cs) (line 13).
 
 `public sealed record TenantResidencyChangeResult`
 
@@ -767,7 +767,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantRuleDraft`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantRuleDraft.cs) (line 36).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantRuleDraft.cs) (line 39).
 
 `public sealed record TenantRuleDraft`
 
@@ -782,7 +782,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantRuleLayer`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantRuleLayer.cs) (line 14).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantRuleLayer.cs) (line 16).
 
 `public enum TenantRuleLayer`
 
@@ -791,7 +791,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantRuleOrigin`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantRuleOrigin.cs) (line 23).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantRuleOrigin.cs) (line 25).
 
 `public enum TenantRuleOrigin`
 
@@ -802,7 +802,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantRulePage`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantRulePage.cs) (line 13).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantRulePage.cs) (line 16).
 
 `public sealed record TenantRulePage`
 
@@ -811,7 +811,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantRuleScopeKind`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantRuleScopeKind.cs) (line 21).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantRuleScopeKind.cs) (line 23).
 
 `public enum TenantRuleScopeKind`
 
@@ -822,7 +822,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantRuleView`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantRuleView.cs) (line 35).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantRuleView.cs) (line 38).
 
 `public sealed record TenantRuleView`
 
@@ -841,7 +841,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantStatusChangeResult`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantStatusChangeResult.cs) (line 10).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantStatusChangeResult.cs) (line 13).
 
 `public sealed record TenantStatusChangeResult`
 
@@ -852,7 +852,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantStatusReport`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantStatusReport.cs) (line 12).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantStatusReport.cs) (line 15).
 
 `public sealed record TenantStatusReport`
 
@@ -864,7 +864,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantSubjectKind`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantSubjectKind.cs) (line 25).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantSubjectKind.cs) (line 27).
 
 `public enum TenantSubjectKind`
 
@@ -874,7 +874,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.TenantAdmin.TenantSubjectResolution`
 
-[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantSubjectResolution.cs) (line 15).
+[Source](../../src/lattice.api.abstractions/TenantAdmin/Model/TenantSubjectResolution.cs) (line 18).
 
 `public sealed record TenantSubjectResolution`
 

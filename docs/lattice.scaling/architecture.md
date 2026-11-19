@@ -31,9 +31,13 @@ the storage axis can never move a replica.
      ILatticeScalingSignal / HTTP endpoint / health check
 ```
 
-The live facade (`ILatticeScalingSignal`) runs as an `IHostedService`. On a timer
-(`SampleInterval`) it samples both collectors, folds them through the
-scaling-signal computer, and caches the resulting `ScalingSignal`. Every scrape -
+The live facade (`ILatticeScalingSignal`) runs as an `IHostedService`. It takes
+a first sample as soon as it starts, then on a timer (`SampleInterval`) it
+samples both collectors, the current replica count (the cluster's active silo
+count), and split activity, folds them through the scaling-signal computer, and
+caches the resulting `ScalingSignal`. A sample that fails is logged and the
+previous cached signal is kept; a storage sample that fails on its own yields an
+empty, not-over-threshold storage axis for that tick. Every scrape -
 whether from the HTTP endpoint, the health check, or a direct
 `GetScalingSignalAsync` call - reads the cached snapshot, so scrapes are cheap and
 never fan out to the cluster.
@@ -53,7 +57,10 @@ three normalised dimensions, each `0.0` (idle) to `1.0` (saturated):
   reports no memory ceiling contributes CPU only.
 - **WAL dispatch** - how close the WAL append-dispatch pipeline is to its
   admission ceiling, derived from the answering silo's own WAL saturation signal
-  (the worst state across every tree that silo has observed).
+  (the worst state across every tree that silo has observed) as a step mapping:
+  `0.0` for `Healthy`, `0.5` for `Throttled`, `1.0` for `Saturated`. Without the
+  core `AddLattice` registration the signal is absent, so the dimension reads
+  `0.0` and `WalSaturation` reads `Healthy`.
 
 It also carries that worst-case `WalSaturationState`, so a hard `Saturated`
 state can gate scale-in and drive the health check independently of the ratios.
@@ -145,8 +152,10 @@ activity.
 
 The signal comes from the cluster's split-admission singleton, read once per
 sample tick through `ILatticeAdmin.GetSplitActivityAsync`. Each per-tree
-autonomic monitor publishes its authoritative in-flight count (derived from shard
-`IsSplitting` status) to that singleton, so the query costs one call and never
+autonomic monitor publishes its authoritative in-flight count (derived from each
+shard's own split-in-progress status, which an adaptive split source and a
+consolidation fold donor both carry, so a fold in flight holds scale-in too) to
+that singleton, so the query costs one call and never
 fans out across trees or shards. With no cluster-wide split ceiling configured
 (`MaxClusterConcurrentAutoSplits` unset, the default), publication is
 edge-triggered - a tree reports only while it actually has splits in flight, plus
@@ -156,8 +165,9 @@ same singleton on every pass to acquire admission slots. Footprints carry a
 time-to-live, so a silo lost mid-split has its share reclaimed on expiry rather
 than suppressing scale-in indefinitely.
 
-Because the count is sampled once per monitor pass, it is a lower bound that
-trails reality by at most one `HotShardSampleInterval`; splits a monitor triggers
+Because the count is sampled once per monitor pass, it trails reality by at most
+one `HotShardSampleInterval`; it can briefly over-count work that has just
+finished, which only holds scale-in slightly longer. Splits a monitor triggers
 are published in the same pass that starts them, so the gate never misses a split
 it caused. A deployment with autonomic splitting disabled always reports zero.
 

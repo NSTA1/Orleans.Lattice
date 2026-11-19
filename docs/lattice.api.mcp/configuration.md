@@ -18,7 +18,7 @@ Populated through the optional `AddLatticeMcp(Action<LatticeApiMcpOptions>? conf
 | `TransportPattern` | `string` | `""` | The route the streamable-HTTP transport is mapped at. Empty maps it at the route builder's root; the origin check also covers the whole application when it is empty. |
 | `Stateless` | `bool` | `false` | Copied onto the SDK's `HttpServerTransportOptions.Stateless`. The per-session, permission-scoped tool collections rely on the stateful default. |
 | `RequireAllowedOrigin` | `bool` | `false` | When `true`, a request on the transport path whose `Origin` header is not allowed is answered `403` before authentication, routing or any tool runs (the DNS-rebinding defence). A request without an `Origin` header is unaffected. |
-| `AllowedOrigins` | `IList<string>` | empty | The `scheme://host[:port]` origins allowed when `RequireAllowedOrigin` is `true`, matched case-insensitively against the whole `Origin` value. Get-only; add to it. |
+| `AllowedOrigins` | `IList<string>` | empty | The `scheme://host[:port]` origins allowed when `RequireAllowedOrigin` is `true`, matched case-insensitively against the whole `Origin` value; a trailing `/` on an entry is ignored. Get-only; add to it. |
 | `AllowLoopbackOrigins` | `bool` | `true` | When `RequireAllowedOrigin` is `true`, also allow any `http`/`https` origin on `localhost` or a loopback address, on any port. |
 | `CredentialHeaderName` | `string` | `authorization` | The inbound header the credential bridge reads the caller's token from. |
 | `CredentialScheme` | `string` | `Bearer` | The scheme stamped on the bridged credential; a case-insensitive scheme prefix is stripped from the header value before the token is used. |

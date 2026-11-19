@@ -12,7 +12,7 @@ A transport-agnostic control facade for runtime per-tree cross-cluster replicati
 
 It is built the same way as the sibling [`Orleans.Lattice.Api.Backup`](../lattice.api.backup/README.md) control facade:
 
-- **A transport-agnostic facade.** A single control surface (`ILatticeReplicationControl`, a public contract in the shared `Orleans.Lattice.Api.Abstractions` package) exposes enable, disable, permission-scoped config reporting, and peer decommissioning over plain request / response records. It has no wire dependency, so the same surface serves an in-process consumer and a remote one.
+- **A transport-agnostic facade.** A single per-tree control surface (`ILatticeReplicationControl`, a public contract in the shared `Orleans.Lattice.Api.Abstractions` package) exposes enable, disable, permission-scoped config reporting, and a side-effect-free capability probe over plain request / response records; the cluster-wide peer decommission verb sits on the separate `ILatticeReplicationPeerAdmin` contract beside it. Neither has a wire dependency, so the same surface serves an in-process consumer and a remote one.
 - **A code-first gRPC binding** (the sibling [`Orleans.Lattice.Api.Replication.Grpc`](../lattice.api.replication.grpc/README.md) package) that projects this facade onto a remotely callable service and typed client.
 - **An MCP tool group** (in [`Orleans.Lattice.Api.Mcp`](../lattice.api.mcp/README.md)) that exposes enable, disable, and config reporting as agent tools, gated by the same access control; peer decommissioning has no MCP tool. The config-inspect tool is offered as soon as the host registers the group (`AddReplicationTools`); the mutating enable and disable tools only once replication control is opted in as well (see [the replication tools](../lattice.api.mcp/tools.md#replication-tools-lattice_replication_)).
 
@@ -41,13 +41,14 @@ For the engine-side mechanics - the static anchor, the compiled snapshot, and th
 
 ## Surface
 
-The facade operations (each reached over the gRPC binding as one RPC, and over MCP as one tool):
+The facade operations (each reached over the gRPC binding as one RPC; over MCP, only enable, disable, and get replication config are tools):
 
 | Operation | Purpose |
 |---|---|
 | Enable replication | Enable a tree under a fixed merge mode, optionally bootstrapping it from a named source cluster's snapshot. |
 | Disable replication | Disable a tree's runtime enrollment without purging already-replicated peer data. Idempotent. |
 | Get replication config | Report each authorized tree's enrolled state, the merge mode in force, its ambiguity status, and which enrollment source put it in force. |
+| Probe capabilities | Report, with no side effects, whether the caller may enable or disable replication for a tree. Advisory only: every real enable and disable is still authorized on attempt. |
 | Decommission peer | Remove a peer's durable cross-tree enrollment from every registered tree, releasing any origin-side cross-tree decision hold still waiting on its acknowledgement. Refuses while the peer is still present in `ReplicationPeers`; a later re-add starts a fresh bootstrap rather than resuming the old enrollment. Idempotent. |
 
 ## Peer status

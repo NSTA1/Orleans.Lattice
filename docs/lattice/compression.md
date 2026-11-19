@@ -128,7 +128,7 @@ siloBuilder.AddLatticeReplication(o =>
     o.ClusterId = "site-a";
     // Dict-less Zstd is the default; set this to LatticeCompression.None to opt out.
     o.FramingCompression = LatticeCompression.Zstd;
-    o.FramingCompressionLevel = 3;          // Zstd: 1 (fastest) - 22 (highest ratio), default 3
+    o.FramingCompressionLevel = 3;          // validated to 1-22; the registered compressor's level applies (see below)
     o.FramingCompressionMinBatchBytes = 512; // skip compression below this uncompressed tail size
 });
 ```
@@ -136,7 +136,7 @@ siloBuilder.AddLatticeReplication(o =>
 | Option | Type | Default | Meaning |
 |---|---|---|---|
 | `FramingCompression` | `LatticeCompression` | `Zstd` | Algorithm tag stamped into the framing header. Defaults to dict-less Zstd; set to `None` to opt out. |
-| `FramingCompressionLevel` | `int` | `3` | Zstd compression level, validated to `[1, 22]`. |
+| `FramingCompressionLevel` | `int` | `3` | Validated to `[1, 22]` when `FramingCompression` is `Zstd` or `ZstdDictionary`, but not read by the encoder: frames are compressed at the level of the registered compressor instance - `3` for the `ZstdLatticeCompressor` that `AddLatticeReplication` registers, and the `compressionLevel` passed to `AddLatticeZstdDictionaryCompressor` for `ZstdDictionary`. To change the dict-less level, register your own `ZstdLatticeCompressor` instance (`AddLatticeCompressor(new ZstdLatticeCompressor(level))`) before calling `AddLatticeReplication`. |
 | `FramingCompressionMinBatchBytes` | `int` | `512` | Uncompressed-tail threshold below which the batch ships uncompressed. |
 | `FramingCompressionDictionaryId` | `uint` | `0` | Shared-dictionary id requested when the algorithm is `ZstdDictionary`. |
 | `MaxInboundDecompressedBytes` | `long` | `64 MiB` | Receiver ceiling on the decompressed size of an inbound framing batch. |

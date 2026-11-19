@@ -275,17 +275,17 @@ them with their issues.
 | Property | Kind | Module | Meaning |
 |----------|------|--------|---------|
 | `TypeOK` | invariant | all | State stays well-typed. |
-| `UniqueOwner` | invariant | ownership | Every routing pair any router may hold is refused for a key or reaches that key's one owner. |
-| `NoKeyLost` | invariant | both | The owner holds every value acknowledged to a writer (or, under retention, the gate declines to answer). |
-| `NoResurrection` | invariant | both | No read through any pair returns a value older than one already acknowledged. |
+| `UniqueOwner` | invariant | ownership, fold | Every routing pair any router may hold is refused for a key or reaches that key's one owner. |
+| `NoKeyLost` | invariant | both, fold | The owner holds every value acknowledged to a writer (or, under retention, the gate declines to answer). |
+| `NoResurrection` | invariant | both, fold | No read through any pair returns a value older than one already acknowledged. |
 | `SagaBatchOnOneCopy` | invariant | ownership | A committed saga holds buckets only on its bound copy and the copy that copy mirrors into. |
-| `AtomicOnOwner` | invariant | both | Until the later write, a fresh reader sees the batch on both keys or on neither. |
-| `OwnerMonotonic` | invariant over a ghost history | both | A fresh reader's value never moves backwards, except across the undo's swap, which discards the resized copy's writes by contract. |
+| `AtomicOnOwner` | invariant | both, fold | Until the later write, a fresh reader sees the batch on both keys or on neither. |
+| `OwnerMonotonic` | invariant over a ghost history | both, fold | A fresh reader's value never moves backwards, except across the undo's swap, which discards the resized copy's writes by contract. |
 | `SplitCompletes` | liveness | both | A split that opened its window finishes. |
 | `ReshardCompletes` | liveness | ownership | A reshard that started reaches its target. |
 | `ResizeCompletes` | liveness | both | A resize that started is purged or undone. |
-| `SagaCompletes` | liveness | both | A saga that started completes. |
-| `RoutingConverges` | liveness | ownership | Eventually the registry's own pair serves every key. |
+| `SagaCompletes` | liveness | both, fold | A saga that started completes. |
+| `RoutingConverges` | liveness | ownership, fold | Eventually the registry's own pair serves every key. |
 | `ReadableOnceComplete` | invariant | retention | Once a saga has completed, and while its row is neither retired nor masked, no read at the owner is gated (#4545). |
 | `NoLiveBucketAfterForget` | invariant | retention | No copy that can still become the tree keeps a bucket of a saga whose registry row is retired (#4619). |
 | `NoLostContribution` | invariant | crdt | The owner's copy of a CRDT key holds every contribution acknowledged to a writer. |

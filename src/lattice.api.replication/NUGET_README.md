@@ -7,7 +7,8 @@ replication configuration through the
 [`Orleans.Lattice.Replication`](https://www.nuget.org/packages/Orleans.Lattice.Replication)
 engine: enable replication for a tree (fixing its wire merge mode), disable it,
 inspect the effective replicated-tree set (runtime and static enrollment
-reconciled), and permanently decommission a peer cluster - from one place. Sibling packages
+reconciled), permanently decommission a peer cluster, and probe, with no side
+effects, whether the caller may configure replication for a tree - from one place. Sibling packages
 project this facade onto a code-first gRPC surface and an MCP tool group.
 
 ## Design

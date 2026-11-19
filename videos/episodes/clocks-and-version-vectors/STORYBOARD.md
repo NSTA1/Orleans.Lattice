@@ -15,5 +15,5 @@ components, and `npm run timeline` stamps their beats from the narration.
 | | | 8 | The merged row appears as `A=2, B=3`, with the join marker; a repeated merge leaves it unchanged. |
 | | | 9 | The dominance note appears: every entry is at least as high as the compared history. |
 | | | 10 | The diagram gives way to the compiled accessor example: tick a replica, read the vector and compare it. |
-| | | 11 | The code holds as the narration leaves conflict resolution to the application. |
-| Where next | `title-card` | 12 | "Back on Evaluate" and "The evidence", held through the closing narration. |
+| | | 11-13 | The code holds as the narration names the hybrid logical clocks and the typed accessor, and leaves conflict resolution to the application. |
+| Where next | `choice-list` | 14 | "Back on Evaluate" and "The evidence", held through the closing narration. |

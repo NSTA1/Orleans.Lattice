@@ -28,7 +28,7 @@ the receiver, and the cross-cluster module's properties cover nothing else.
 |------|-----------|
 | [`AtomicCommit.tla`](AtomicCommit.tla) | The specification: state, actions, safety invariants, liveness properties. |
 | [`AtomicCommit.cfg`](AtomicCommit.cfg) | The TLC model: the bounded instance and the invariant / property list to check. |
-| [`mutations/`](mutations/) | One deliberate defect per checked property, each of which must make that property fire. See [`mutations/README.md`](mutations/README.md). |
+| [`mutations/`](mutations/) | Deliberate defects - at least one per checked property and per protocol action - each of which must make its named property fire. See [`mutations/README.md`](mutations/README.md). |
 | [`Refinement.md`](Refinement.md) | The refinement note: each spec variable, action and checked property mapped to its protocol counterpart in the code cores, or excluded with a reason. |
 | [`AtomicCommit.manifest.json`](AtomicCommit.manifest.json) | The module manifest: where the mutations and refinement note live, which actions are non-behavioural, and the counts the gates assert (see [Counts](#counts)). |
 | [`AtomicCommitCrossCluster.tla`](AtomicCommitCrossCluster.tla) | The cross-cluster module: the origin saga (this module, instanced) replicated to a receiver. |

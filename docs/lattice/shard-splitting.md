@@ -58,7 +58,7 @@ stateDiagram-v2
    transaction registry already reports as committed or aborted has its
    terminal applied to *T* directly instead, and so does one whose decision
    the registry still records but has stopped reporting once its retention
-   window elapsed (`Indeterminate`): the sweep reads the recorded decision
+   window elapsed (it reports such a saga as indeterminate, not in flight): the sweep reads the recorded decision
    rather than replaying a prepare *T* would refuse for a decided saga
    ([#4473](https://github.com/NSTA1/Orleans.Lattice/issues/4473)). An online
    resize snapshot carries prepared buckets through the same sweep. The sweep is idempotent per
@@ -181,7 +181,7 @@ throughout the split: every successful write is mirrored to the new
 owner during the shadow phase and the reject phase (which precedes the map
 swap) causes stale activations to transparently retry against the correct
 shard. The
-post-Complete `MovedAwaySlots` rejection extends this for as long as the
+post-Complete moved-away-slot rejection extends this for as long as the
 source does not own those slots again (only a later shard consolidation
 that folds them back lifts it).
 
@@ -218,16 +218,15 @@ moved, the count is discarded and retried on the fresh map, bounded by
 Reconciliation is driven inside the main k-way merge loop rather than
 as a separate pass. Each shard root reports back:
 
-* the keys/entries of all keys *not* in its `MovedAwaySlots` table
+* the keys/entries of all keys *not* in its moved-away slot table
   (entries it no longer authoritatively owns), and
-* the set of `MovedAwaySlots` virtual slots it observed during the
+* the set of moved-away virtual slots it observed during the
   traversal (used as a topology-stability hint).
 
 Before each priority-queue dequeue, the orchestrator checks whether
-any live shard cursor has reported new `MovedAwaySlots` since the last
+any live shard cursor has reported new moved-away slots since the last
 reconciliation step. If so, it queries the current owners of the
-affected slots via the slot-filtered variants
-`GetSortedKeysBatchForSlotsAsync` / `GetSortedEntriesBatchForSlotsAsync`,
+affected slots through slot-filtered key and entry batch reads,
 loads the reconciled keys into memory, sorts them with the same
 comparer, and injects them as an additional in-memory cursor into the
 same priority queue. The merge invariant (global minimum is yielded
@@ -258,8 +257,8 @@ is materialised once by walking the shard's leaf chain and folding each
 leaf's WAL tail, then persisted and seeded into the leaf with no
 serve-time WAL replay. Whether a per-key record reaches the served view
 is resolved by the key's virtual slot under the pinned map - **not** by
-the mutation's stamped `ShardIndex` - applied both when the baseline is
-folded at capture and again through the leaf's `IsKeyOwned` filter when
+the mutation's stamped shard index - applied both when the baseline is
+folded at capture and again through the leaf's key-ownership filter when
 the durable rows are seeded. Resolving by slot is what makes the snapshot
 view correct across a split, because the stamp records the shard that
 *authored* a record, which is not the same as the shard that *owns* the
@@ -320,14 +319,14 @@ shadow-forwarded through the donor, then reactivated cold:
   another shard under the current map and is dropped, and a donor leaf's
   own orphan copies of moved slots are dropped because their slot now
   routes to the target - the live read path already seals those orphans
-  via `MovedAwaySlots`.
+  via the moved-away slot table.
 
 The current map is fetched best-effort and is trusted only when it
 references the leaf's own shard, so a registry hiccup at activation or a
 map drawn from a foreign physical shard space falls back to the legacy
-stamped-`ShardIndex` axis - a leaf can never reject its own writes.
-Slot-less legacy leaves (pre-split-feature persisted state with a null
-`ShardIndex`) keep their unconditional V1 single-leaf-per-shard
+stamped-shard-index axis - a leaf can never reject its own writes.
+Slot-less legacy leaves (pre-split-feature persisted state with no
+shard index) keep their unconditional V1 single-leaf-per-shard
 semantics and apply on the shard axis regardless.
 
 ### Trade-offs
@@ -364,7 +363,7 @@ that is still initialising cannot leave it claiming to run with nothing
 sampling; a keepalive registration deferred that way is retried after each
 sampling pass until it succeeds. On each tick (default every 30 s) it:
 
-1. Polls every physical shard's `GetSamplingStatusAsync()` (hotness, split and pending-bulk status) in parallel.
+1. Polls every physical shard's sampling status (hotness, split and pending-bulk status) in parallel.
 2. Computes ops/sec = `(reads + writes) / window.TotalSeconds`.
 3. Counts the shard migrations in flight **for this tree** by asking every
    physical shard whether it is splitting - the source of an adaptive split
@@ -471,7 +470,7 @@ Automatic over-split healing, which folds shards back together once a tree's loa
 ## Convergence guarantees
 
 * **No data loss** - every write committed to *S* is either drained,
-  shadow-mirrored, or both, and `MergeManyAsync` is idempotent under LWW.
+  shadow-mirrored, or both, and the drain's batched merge into *T* is idempotent under LWW.
   A CRDT key can take contributions on both shards during the split - a
   saga's delta folded on *T* by its terminal while *S* takes a non-atomic
   CRDT write - so a migrated CRDT row is joined into the row *T* holds, through
@@ -481,7 +480,7 @@ Automatic over-split healing, which folds shards back together once a tree's loa
   ([#4613](https://github.com/NSTA1/Orleans.Lattice/issues/4613)).
 * **No prepared-mutation loss** - the retroactive sweep at
   `BeginShadowWrite` re-stamps every in-flight prepared mutation from
-  *S*'s leaves onto *T*'s `_pendingTx` buckets, so a `SetManyAtomicAsync`
+  *S*'s leaves onto *T*'s pending-transaction buckets, so a `SetManyAtomicAsync`
   saga whose Prepare landed on *S* before the split commits and
   completes against *T* with no perceived interruption. A swept or
   shadow-forwarded prepare that reaches *T* after its saga has decided is
@@ -531,7 +530,7 @@ Automatic over-split healing, which folds shards back together once a tree's loa
 
   A saga
   whose decision has aged out of
-  `TxDecisionRetention` reads as `Indeterminate` and takes the same
+  `TxDecisionRetention` reads as indeterminate and takes the same
   conservative arm as a committed one - serving the migrated pre-saga
   value there would be an affirmative claim that the saga did not commit,
   which is exactly what the registry has stopped vouching for. See

@@ -22,7 +22,8 @@ Each area follows the pattern the
   [`spec/`](../../spec/README.md), one directory per area. Every pull request
   that runs the core `test/lattice` suite keeps a base-model smoke check. Exhaustive bases, variants and
   mutants run when the diff touches a TLC verdict input, on every release-line
-  pull request, on integration-branch and release-line pushes, and nightly on
+  pull request, on integration-branch and release-line pushes, on a push to
+  `main` for the modules `main` holds no receipt for, and nightly on
   `main`; outside release lines, the nightly run and a dispatch with receipts
   switched off, a module whose fingerprint already has a trusted verdict receipt
   is not rerun. The [Formal Verification Pipeline](formal-verification-pipeline.md)
@@ -123,7 +124,7 @@ claim to reproduce every manifestation of the original incidents.
 |--------|-------------------|-------------------|------------------|
 | `TurnOccupancy` | #4949, fixed by #4950 | `NoAwaitedDriveAwaitDriveOnExclusiveTurn` / `NoAwaitedDrive` | Awaiting the background drive can occupy the non-reentrant turn; dispatch must return the turn while storage remains pending. |
 | `WalAdmission` | #3402, fixed by #3404 | `PacedRecoveryReleaseRecoveryHerd` / `PacedRecoveryRelease` | A recovery sample caps saturation-gate releases; released callers still need partition capacity and storage progress. |
-| `TagIndexReconcile` | Merged member PR #4978; #4976 remains open until integration | `RepairCursorOnlyAfterCompletionCursorFirst` and `RepairCursorOnlyAfterCompletionFailedCheckpoint` / `RepairCursorOnlyAfterCompletion` | A failed repair RPC or checkpoint cannot consume the current tree or certify durable progress. |
+| `TagIndexReconcile` | #4976, fixed by #4978 | `RepairCursorOnlyAfterCompletionCursorFirst` and `RepairCursorOnlyAfterCompletionFailedCheckpoint` / `RepairCursorOnlyAfterCompletion` | A failed repair RPC or checkpoint cannot consume the current tree or certify durable progress. |
 
 The classifier recovery window is tree-wide even though admission capacity and
 waiter queues are partition-scoped. An idle sibling receives the Healthy floor
@@ -149,7 +150,7 @@ opportunities and eventually successful registry/storage/checkpoint operations.
 A phase callback probes at most the configured
 tree count, clamped to at least one, or repairs one whole tree. This is not a
 bound on rows, storage time, caller-turn occupancy or a synchronous full sweep:
-`RunSweepAsync` can drain several phase callbacks.
+one requested full sweep can drain several phase callbacks.
 
 The real cursor/checkpoint and incomplete-read repairs in #4976/#4977 remain
 part of the checked boundary. #4985 adds recovery after initial keepalive
@@ -201,7 +202,7 @@ states. The larger instance retains every base safety and temporal check;
 lease loss retains explicit resolution and caller completion instead of
 claiming a successful answer after invalidation.
 
-The real LatticeGrain/registry/two-leaf harness retains #4758's shipped
+The real tree-facade/registry/two-leaf harness retains #4758's shipped
 fallback and rejects historical retry exhaustion (#4563), mixed reads and
 lost coverage. Actual caller controls separately hold terminal delivery and
 the completion checkpoint, observing success or the precise provider fault.
@@ -228,13 +229,13 @@ The base and Larger instances contain 1,076 and
 separates online-copy concurrency, admitted leaf durability, finite-budget WAL
 shutdown, service-opportunity backlog and stable-identity live routing.
 
-The Coyote companion executes real WalLogSubscriber/ViewBackpressure cores,
+The Coyote companion executes the real WAL log-subscriber and view back-pressure cores,
 not a duplicate scheduler. Grain controls cover checkpoint failure, pin
 publication, exclusive-head replay, bounded copy passes and both rebuild and
 reconcile entry points. The old slot-cap detector was false-green under a
 real cap-plus-one perturbation; its strengthened first-wave assertion rejects
 that same source change. The real online-slice entry-point detector also
-rejects an increased LeafWalkBudget that standalone copy/resume tests missed
+rejects an increased leaf-walk budget that standalone copy/resume tests missed
 (#4999). Finite work and completing collaborators remain
 premises, not conclusions supplied by fairness.
 
@@ -428,7 +429,7 @@ gaps, states its full scope.
       root's routing floor before it retires their rows, the floor checked where a
       generation is claimed, a straddling write's seam retry that never re-stamps
       it, and the re-created incarnation's first initialisation, against a second
-      shard root, a purge that finished on 10.2.0 with the re-seed catch-up, and a
+      shard root, a purge that finished on Orleans.Lattice 10.2.0 with the re-seed catch-up, and a
       WAL shard restart;
     - the bulk switch (`WalBulkSwitch`): a bulk append's leaf born from the old
       rightmost leaf's range with its birth hint capped at the old leaf's read
@@ -512,7 +513,9 @@ gaps, states its full scope.
     aborts and re-drives.
   - **Does not cover:** atomic-write sagas carried over replication (the
     cross-cluster area covers them), anti-entropy repair, and more than one WAL
-    partition per cluster.
+    partition per cluster, except in the low-watermark companion
+    (`ReplicationLowWatermark`), which ships one origin's writes over two
+    partitions to check the watermark it publishes.
 - **Backup and restore** ([`spec/backup/`](../../spec/backup/README.md)).
   - **Covers:** capture, incremental chains, provenance, a coordinated restore
     across regions, and a local cutover and its revert, all against in-flight
@@ -591,6 +594,46 @@ gaps, states its full scope.
     Physical WAL consumers, atomic visibility and data movement retain the
     view, ownership, anti-entropy and lifecycle companion models' guarantees.
 
+- **Tenant quotas** ([`spec/tenant-quotas/`](../../spec/tenant-quotas/README.md)).
+  - **Covers:** sampled footprint admission against the last selected usage
+    sample, cold admission, local and replicated usage accounting with
+    per-cluster usage slots and their publication hysteresis, the
+    authoritative tree-count check with its check-then-register race, and the
+    quota evaluator's independent nullable limits, burst arithmetic and
+    refusal order.
+  - **Does not cover:** a hard ceiling - quotas are soft, concurrent admissions
+    can overshoot, and no invariant bounds actual usage by the limit;
+    deletions, changed quotas or residency, failed storage operations and
+    equal-clock writer ties; capacity reservation, registry merging or tree
+    deletion for tree counts; and rate limits, exception transport or
+    permission checks in the evaluator.
+
+- **Tenant rate budgets** ([`spec/tenant-rate-budget/`](../../spec/tenant-rate-budget/README.md)).
+  - **Covers:** the per-silo coordinator and GCRA limiter for one tenant on two
+    silos: shares bounded by the captured cluster rate under static-even or
+    demand-proportional allocation, silo join and departure, a budget change
+    deferred to the next completed refresh, coordinator recreation that
+    preserves GCRA debt, and a cancelled delayed grant that can neither
+    replace a bucket nor reset its debt.
+  - **Does not cover:** a strict instantaneous cluster-wide admission ceiling
+    (shares are floored, and an existing silo may keep an older share until it
+    refreshes), a distributed rate lease, which production does not have, or
+    every machine-integer extreme of timestamp division.
+
+- **Tenant isolation** ([`spec/tenant-isolation/`](../../spec/tenant-isolation/README.md)).
+  - **Covers:** a tenant registry write reaching every silo's compiled policy
+    snapshot through the epoch advance and its lease ledger; when a silo may
+    trust its snapshot for an authorization decision, a decision that cannot
+    confirm currency denying; and publication failure with its background
+    re-publish, a silo crash, and the epoch coordinator's re-activation with
+    its grace.
+  - **Does not cover:** revoking decisions already taken; the two windows
+    tracked by design - a write whose publication failed, until the re-publish
+    lands, and a crashed writer, until membership declares it dead; a silo
+    clock slower than the epoch coordinator's by more than the ledger margin
+    over one lease; more than one write or two silos; and rate budgets and
+    footprint quotas, which the two areas above cover.
+
 - **Scheduling and progress** ([`spec/scheduling/`](../../spec/scheduling/README.md)).
   - **Covers:** non-reentrant turn occupancy, partition admission capacity,
     paced gate-release bursts, queue ordering and wait-budget outcomes in the
@@ -627,8 +670,8 @@ gaps, states its full scope.
     for a re-delivered refused row, and a repair or re-seed admitting a row
     diverted for an unservable stamp once the receiver's catalog serves it; replication of any schema definition between regions; re-applying
     a diverted entry, which stays diverted after the version is registered;
-    and the batched (`MergeManyAsync`) merges the merge-result observer does
-    not see. The tenant model covers the facade only, not the in-process
+    and the batched merges the merge-result observer (`ILatticeMergeObserver`)
+    does not see. The tenant model covers the facade only, not the in-process
     admins.
 
 - **Schema and view composition** ([`spec/schema-view/`](../../spec/schema-view/README.md)).
@@ -692,7 +735,9 @@ area's list is the authoritative one. The separately listed interrupted-shadow d
 | Tree lifecycle composition | #4858 | [`spec/tree-lifecycle/`](../../spec/tree-lifecycle/README.md#defect-found) |
 | Anti-entropy remediation | #4859, #4862, #4863, #5530 | [`spec/anti-entropy/`](../../spec/anti-entropy/README.md) |
 | Shared alias routing and revert | #4860 | [`spec/aliasing/`](../../spec/aliasing/README.md#defect-found) |
-| Scheduling and progress | #4976, #4977, #4979, #4985, #4992 | [Scheduling defects](verified-scheduling.md#defects-found-during-the-bucket) |
+| Tenant rate budgets | A late collaborator response installed after its cycle was cancelled (no issue number) | [`spec/tenant-rate-budget/`](../../spec/tenant-rate-budget/README.md#defect-found) |
+| Tenant isolation | #4806 | [`spec/tenant-isolation/`](../../spec/tenant-isolation/README.md#defects-this-specification-found) |
+| Scheduling and progress | #4976, #4977, #4979, #4985, #4986, #4992 | [Scheduling defects](verified-scheduling.md#defects-found-during-the-bucket) |
 
 ## CI partition and non-vacuity
 

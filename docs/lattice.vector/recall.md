@@ -27,6 +27,11 @@ total ordering, so tie-breaking cannot confound the comparison.
 | Clustered (real embedding geometry) | recall@10 >= 0.95 | 1.0000 |
 | Unclustered (adversarial, independent Gaussian) | recall@10 >= 0.55 | 0.5880 |
 
+Both floors are measured over 20,000 vectors at dimension 64, with the partition
+and probe counts derived by default (141 partitions, 24 probes). The harness pins
+`TrainingSampleSize` to 8,192 (the default is 32,768) and lowers
+`MinimumTrainingCount` to 16; every other option is the default.
+
 Both are asserted. The adversarial figure is reported deliberately so the headline
 is not flattered by a friendly corpus: on data with no cluster structure to
 exploit, recall tracks the fraction of the corpus scanned almost exactly, which is
@@ -64,8 +69,8 @@ more of the true neighbours:
 | 8 | 5.7% | 0.9700 | - |
 | 16 | 11.3% | 1.0000 | - |
 | 24 (default here) | 17.0% | 1.0000 | 0.5880 |
-| 36 | - | - | 0.7260 |
-| 71 | - | - | 0.9120 |
+| 36 | 25.5% | - | 0.7260 |
+| 71 | 50.4% | - | 0.9120 |
 | 141 (all) | 100.0% | 1.0000 | 1.0000 |
 
 Measured at 20,000 vectors, dimension 64, k = 10, over 50 queries.

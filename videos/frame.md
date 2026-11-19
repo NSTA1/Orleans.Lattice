@@ -162,7 +162,8 @@ as spines, grains as hollow nodes, a grain call in ink), the store in its
 cluster, the core and its seams, the deployment journey and the ways in; the
 notation they share - scene heading, node, status pill, code panel - is in
 [shared/brand/brand.css](shared/brand/brand.css), so a new scene adds layout,
-not new devices.
+not new devices. Later episodes added a choice list, the version vector, the
+atomic-write saga and the migration flow the same way.
 
 ### Plain-language scenes
 

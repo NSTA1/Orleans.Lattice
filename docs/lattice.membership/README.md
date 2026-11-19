@@ -22,7 +22,19 @@ It is the identity foundation the [`Orleans.Lattice.Auth`](../lattice.auth/READM
 - **Pluggable authentication.** A credential is turned into a principal by one or more `ILatticeCredentialAuthenticator`s, tried in registration order: the first whose `CanHandle` recognizes the credential - by its scheme / issuer hint, or by the issuer parsed from the token when no hint is present - resolves it, and a credential no authenticator claims resolves to the anonymous subject. The package ships an anonymous authenticator (which never claims a credential) and a JWT authenticator; a host can register its own.
 - **Resolution is cached.** Subject resolution is memoised with a configurable TTL (`ResolutionCacheTtl`, default 5 minutes) so a burst of calls from the same caller does not re-expand its group closure every time. Cache hit and miss rates are exposed as counters on the `orleans.lattice.membership` meter (see [Observability](observability.md)).
 
-## Setup
+## Features
+
+| Feature | Public surface | Details |
+|---|---|---|
+| Group directory with nested, transitive membership | `ILatticeMembershipDirectory`, `MembershipGroup`, `MembershipMemberKind` | [Managing the directory](#managing-the-directory) |
+| Pluggable credential authentication | `ILatticeCredentialAuthenticator`, `JwtCredentialAuthenticator`, `JwtAuthenticatorOptions`, `AnonymousCredentialAuthenticator`, `LatticePrincipal` | [Registering an authenticator](#registering-an-authenticator) |
+| Token-vs-directory group merge policy | `SubjectGroupMergeMode`, `ILatticeSubjectMapper`, `LatticeMembershipOptions` | [Group merge mode](#group-merge-mode) |
+| Cached, cross-silo-consistent subject resolution | `LatticeMembershipOptions` (`ResolutionCacheTtl`) | [Architecture - Resolving a subject](architecture.md#resolving-a-subject) |
+| Tenant groups (nesting invariant and claim filter) | `LatticeTenantGroupNestingException`, `ITenantGroupClaimFilter` | [Tenant groups](#tenant-groups) |
+| Identity-directory providers and fail-closed create validation | `ILatticeIdentityDirectory`, `NullIdentityDirectory`, `StaticIdentityDirectory`, `StaticIdentityDirectoryOptions`, `LatticeIdentityDirectoryOptions`, `LatticeDirectoryValidationException` | [Identity-directory providers](identity-directory-providers.md) |
+| Resolution-cache and directory-search metrics | `LatticeMembershipMetrics` | [Observability](observability.md) |
+
+## Quick Start
 
 Register membership on the silo **after** the core lattice. It layers cleanly under the authorization add-on:
 
@@ -240,7 +252,7 @@ Deleting a tenant removes its tenant groups and their edges in both directions.
 
 Membership produces subjects; [`Orleans.Lattice.Auth`](../lattice.auth/README.md) decides what a subject may do. `AddLatticeAuth(...)` must be called **after** `AddLatticeMembership()` because the authorization layer resolves the caller's subject through this package on every gated operation. Registering membership without authorization gives you identity resolution and a directory but no enforcement.
 
-## See also
+## Reference
 
 - [Public API](api.md) - every public type and member, including the `JwtCredentialAuthenticator` extension points, with source links.
 - [Configuration](configuration.md) - every public options property, its type, and its default.

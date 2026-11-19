@@ -16,7 +16,7 @@ Static extension method on `ISiloBuilder`.
 
 - `ISiloBuilder AddLatticeSchemaApi(this ISiloBuilder builder, Action<LatticeApiSchemaOptions>? configure = null)`
 
-  Adds the transport-agnostic schema-management control facade: binds `LatticeApiSchemaOptions`, registers the internal silo singleton that every transport binding adapts over, and an idempotency marker. Adds no transport behaviour of its own. Must be called after `AddLatticeSchemaEnforcement(...)`; throws `InvalidOperationException` when called first. Throws `ArgumentNullException` when `builder` is null. Idempotent.
+  Adds the transport-agnostic schema-management control facade: binds `LatticeApiSchemaOptions`, registers one internal silo singleton as both `ILatticeSchemaControl` and `ILatticeSchemaOperations` (the singleton every transport binding adapts over), registers the default `ILatticeSchemaComplianceOperations` as a silo singleton, and adds an idempotency marker. Every service is registered with `TryAdd`. Adds no transport behaviour of its own. Must be called after `AddLatticeSchemaEnforcement(...)`; throws `InvalidOperationException` when called first. Throws `ArgumentNullException` when `builder` is null. Idempotent.
 
 ## Options
 

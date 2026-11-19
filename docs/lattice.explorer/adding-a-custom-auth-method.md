@@ -172,8 +172,9 @@ public static class CustomAuthRegistration
 }
 ```
 
-The Explorer resolves `IEnumerable<IExplorerAuthMethod>` and chooses a method
-whose `CanHandle` accepts the advertised scheme. No Explorer core code changes
+The Explorer resolves `IEnumerable<IExplorerAuthMethod>` and chooses the method
+whose `SchemeId` equals the advertised scheme (ignoring case), or, when none
+does, the first method whose `CanHandle` accepts it. No Explorer core code changes
 are required.
 
 ## Re-authentication, federated sign-out and CSP

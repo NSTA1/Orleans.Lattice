@@ -63,7 +63,7 @@ The Explorer fails closed around it:
 
 ## The reserved default tenant
 
-`default` is the reserved tenant that owns legacy, un-prefixed trees. The shipped chrome hides tenancy for a non-operator whose active tenant is `default`: there is no tenant root, `t/` offers no tenant, and `/t/default/...` canonicalises to the plain address. The Explorer treats a caller as a platform operator exactly when the Access area is visible to them. The layout refreshes the operator verdict before it resolves each navigation. Until that verdict proves the caller is an operator for `default`, the safe answer is to hide tenancy chrome.
+`default` is the reserved tenant that owns legacy, un-prefixed trees. The shipped chrome hides tenancy for a non-operator whose active tenant is `default`: there is no tenant root, `t/` offers no tenant, and `/t/default/...` canonicalises to the plain address. The Explorer treats a caller as a platform operator exactly when the Access area's cluster-wide probe admits them, that is, when they administer access for the whole cluster. The Access area itself is visible to more callers, because a delegated tenant administrator sees it too, but that never makes them an operator. The layout refreshes the operator verdict before it resolves each navigation. Until that verdict proves the caller is an operator for `default`, the safe answer is to hide tenancy chrome.
 
 An operator on `default` does see tenancy chrome, because the `default` root is the way they reach tenant-aware addresses and switch to other tenants. The cluster lists only the tenants a caller administers, which never includes `default`, so the Explorer adds `default` to a proven platform operator's reachable tenants. An operator can therefore always pick it and open `/t/default/...`, and an operator with no remembered tenant starts there.
 
@@ -177,8 +177,8 @@ read-only, since they are members already.
 - **Tenant** - the tenant's own rules, each linking to its page.
 
 Both can be filtered by tree and by subject, and a line reports the tenant's rule
-count against its `MaxTenantRules` cap. The rule editor offers the scopes **Tree**,
-**Prefix**, **Key** and **Tenant-wide**, the tree from the tenant's own trees (never
+count against its `MaxTenantRules` cap. The rule editor offers the scopes **Whole tree**, **Key prefix in a tree**,
+**Single key in a tree** and **Every tree in this tenant**, the tree from the tenant's own trees (never
 its app trees), the data-plane operations only, and the subject picker; it suggests a
 rule id. While you edit, it warns when a platform rule would decide the same requests
 first, so the rule would not take effect. A rule's page edits or deletes it, links to
@@ -258,7 +258,7 @@ The Regions page offers platform operators an **Override backfill** action while
 
 **A residency whose regions have all left it.** The tenancy engine counts a tenant as having residency once any region has a lifecycle status, Offline and Removed included, and then serves it only where it is exactly Online. A tenant whose only statuses are Offline or Removed is therefore served in no region, never in every region, and the Explorer says the same everywhere: its **Resident in** reads `None: served in no region` on the Regions page, its overview, My tenant and in the directory; every region reads **Not served**; the Regions page carries the served-nowhere warning; and Home does not count it among the tenants with no residency set.
 
-**Creating a tenant with regions.** The directory's **New tenant** form can also set the new tenant's **Allowed regions** and its **Initial residency**, both optional. The residency is chosen from the allowed regions: it is disabled until one is chosen, and a region removed from the allowed set leaves the residency too. A tenant created with a residency is confirmed first, in a dialog titled **Create tenant {tenant} with no Online region?**, because each of its regions starts Provisioning and the tenant is served nowhere until automatic backfill is verified; **Back** returns to the form. The tenant is created, then its allowed regions are set, then its residency, and each step reports its own outcome, so a tenant can be created even when a region step fails. The form then opens the new tenant's Regions page, or its overview when no region was chosen.
+**Creating a tenant with regions.** The directory's **New tenant** form can also set the new tenant's **Allowed regions** and its **Initial residency**, both optional. The residency is chosen from the allowed regions: it is disabled until one is chosen, and a region removed from the allowed set leaves the residency too. A residency chosen here is applied as part of creation, with no second confirmation: each of its regions starts Provisioning, so the tenant is served nowhere until automatic backfill is verified in one of them, and the residency outcome adds "It is not served anywhere until one of its regions is Online." The tenant is created, then its allowed regions are set, then its residency, and each step reports its own outcome, so a tenant can be created even when a region step fails. The form then opens the new tenant's Regions page, or its overview when no region was chosen.
 
 **Finding a tenant's regions.** The directory's **Resident in** column links each tenant to its Regions page, and so do the **Resident in** and **Allowed** lines of a tenant's overview and of My tenant. The directory's **Set regions...** button, and the **Set a tenant's regions** palette command, pick a tenant and open its Regions page. **Change residency** opens the scoped tenant's own Regions tab.
 

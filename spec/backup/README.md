@@ -95,6 +95,7 @@ fixed in the anti-entropy digest); it checks every fix it models. See
 | | `RevertNeverServesRestored` | Invariant | Once a revert returns, no reader is served the restored copy. |
 | | `DeleteNeverMidCutover` | Invariant | A tree is never deleted while its copies are in motion. |
 | | `RestoreReturns` | Liveness | A restore whose shadow is built eventually returns. |
+| | `RevertReturns` | Liveness | A revert that has taken its reservation eventually returns, a crash included. |
 
 Every module also checks `TypeOK`. Each liveness property fails on a protocol
 defect under the fairness its module asserts, demonstrated by a mutation that
@@ -140,12 +141,14 @@ refinement note's rows:
 - **#4686** (`BackupIncremental`, fixed by #4690): an increment on a legacy base
   captured before the #4589 fix recorded its undecided sagas could restore a
   batch committed in its decision snapshot as absent, because the base carried
-  no undecided set the increment could look the saga up in. The module checks
-  the fix: `LatticeBackupCaptureService.PredatesUndecidedSagaRecording`
-  recognises such a base and falls back to a full backup rather than layering an
-  increment on it. `LatticeBackupIncrementalSagaConsistencyTests.An_increment_on_a_legacy_base_that_recorded_no_undecided_sagas_falls_back_to_a_full_backup_holding_the_batch_whole`
-  reproduces production before the fix, and its code analogue turns the fix's
-  regression test red.
+  no undecided set the increment could look the saga up in. The fix:
+  `LatticeBackupCaptureService.PredatesUndecidedSagaRecording` recognises such a
+  base and falls back to a full backup rather than layering an increment on it.
+  The module builds no such base (every base it builds records its undecided
+  sagas), so the fix lies outside it, as
+  [`RefinementIncremental.md`](RefinementIncremental.md) records;
+  `LatticeBackupIncrementalSagaConsistencyTests.An_increment_on_a_legacy_base_that_recorded_no_undecided_sagas_falls_back_to_a_full_backup_holding_the_batch_whole`
+  is its regression test.
 
 - **#5357** (`BackupRetention`, fixed): a retention pass could delete the base
   of an incremental backup still being captured, because it planned from a
@@ -278,9 +281,10 @@ refinement note's rows:
   backup listed again as not deleted. `ListedRestorableArtifactsOnHeartbeat`
   reproduces production before the fix.
 
-All nineteen fixes have landed, so the reproducing mutations now stand as
-regression checks: each must keep firing, and each has a code analogue that turns
-the fix's regression tests red.
+All nineteen fixes have landed, so the reproducing mutations named above now
+stand as regression checks: each must keep firing, and each has a code analogue
+that turns the fix's regression tests red. The fixes named without a mutation
+(#4686, #5531, #5532, #5628, #5629 and #5632) are pinned by regression tests alone.
 ## Saga abstraction
 
 `BackupCapture` restates the saga steps of

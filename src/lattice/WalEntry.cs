@@ -3,8 +3,8 @@ namespace Orleans.Lattice;
 /// <summary>
 /// Single offset-tagged entry as exchanged between WAL consumers and an
 /// <see cref="IWalStorageProvider"/> implementation. Pairs the captured
-/// <see cref="LatticeMutation"/> mutation record with the dense,
-/// monotonically increasing per-shard offset assigned at append time.
+/// <see cref="LatticeMutation"/> mutation record with the monotonically
+/// increasing per-shard offset assigned at append time.
 /// <para>
 /// This is the public provider-boundary type. Replication-package wire
 /// envelopes (e.g. <c>WalRecord</c>) and any other ship-time enrichment
@@ -19,10 +19,12 @@ namespace Orleans.Lattice;
 public readonly record struct WalEntry
 {
     /// <summary>
-    /// The dense, monotonically-increasing per-shard offset assigned to
-    /// this entry at append time. Offsets start at <c>0</c> and increase
-    /// by one per successful append per shard; gaps never appear in a
-    /// successfully-persisted WAL.
+    /// The monotonically-increasing per-shard offset assigned to this entry
+    /// at append time. Offsets start at <c>0</c> and increase by one per
+    /// assigned append per shard. They are normally dense, but a persisted
+    /// WAL can carry holes: an offset whose flush was abandoned and never
+    /// landed is skipped rather than reissued, so readers must tolerate a
+    /// missing offset that sits above the trim watermark (issue #4621).
     /// </summary>
     [Id(0)] public long Offset { get; init; }
 

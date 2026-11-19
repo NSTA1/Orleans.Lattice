@@ -19,8 +19,8 @@ it is restored with on dimensionality or metric.
 | `Metric` | `Cosine` | `Cosine` or `DotProduct`. Cosine needs no pre-normalised input: the index caches each vector's norm and computes the query's norm once, so cosine costs one dot product per candidate. Do not normalise on the way in on the index's account. |
 | `PartitionCount` | `0` (auto) | How many cells to partition into. `0` derives it from the corpus size, which is what you want unless you are reproducing a specific measurement. |
 | `Probes` | `0` (auto) | How many partitions a query scores. `0` derives it. **See the warning below before setting this.** |
-| `Seed` | a fixed constant | Seeds the deterministic generator. Exposed so a build can be reproduced bit-for-bit on any machine and any runtime. |
-| `TrainingSampleSize` | `32768` | Caps how many vectors the k-means refinement samples, which bounds the iterative part of training. The final pass that assigns every vector to its nearest centroid still grows with the corpus. |
+| `Seed` | `0x9E3779B97F4A7C15` | Seeds the deterministic generator. Exposed so a build can be reproduced bit-for-bit on any machine and any runtime. |
+| `TrainingSampleSize` | `32768` | Caps how many vectors the k-means refinement samples (raised to the partition count when that is larger), which bounds the iterative part of training. The final pass that assigns every vector to its nearest centroid still grows with the corpus. |
 | `MaxTrainingIterations` | `10` | Bounds the k-means pass. |
 | `MinimumTrainingCount` | `1024` | Below this the index does not partition at all and answers exactly by exhaustive scan. That is correct behaviour for a small corpus, not a failure. |
 

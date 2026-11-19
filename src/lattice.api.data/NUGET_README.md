@@ -40,9 +40,11 @@ Must be called after `AddLattice(...)`.
 ## Scope (v1)
 
 Point `SetAsync` / `DeleteAsync`, bounded range `DeleteRangeAsync`, non-atomic
-bulk `SetManyAsync`, single-tree atomic `SetManyAtomicAsync` (upserts +
+bulk `SetManyAsync` and its batched, progress-reporting streamed form
+`SetManyStreamAsync`, single-tree atomic `SetManyAtomicAsync` (upserts +
 deletes), cross-tree atomic `SetManyAtomicCrossTreeAsync`, point `GetAsync`, a
-single-page bounded `ReadRangeAsync`, and the typed CRDT write and read verbs
+single-page bounded `ReadRangeAsync`, the side-effect-free write-capability
+probe `ProbeCapabilitiesAsync`, and the typed CRDT write and read verbs
 (PN-counter, OR-Set, OR-Flag, RW-Flag, G-counter, G-Set, RW-Set, version vector,
 MV / max / min registers, sequence, and OR-Map). A live streaming scan / change
 feed is intentionally out of scope.

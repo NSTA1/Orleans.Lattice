@@ -6,10 +6,9 @@ namespace Orleans.Lattice.Api.Backup;
 
 /// <summary>
 /// The accept-then-poll half of the backup facade (#4122): the
-/// <see cref="ILatticeBackupOperations"/> verbs, and the start cores the
-/// deprecated blocking verbs wrap. Every start authorizes exactly as the blocking
-/// verb always has - the same tenant composition and the same gate, on the same
-/// composed scope - before the work is handed to the shared coordinator.
+/// <see cref="ILatticeBackupOperations"/> verbs and their start cores. Every start
+/// authorizes with the facade's tenant composition and gate, on the composed scope,
+/// before the work is handed to the shared coordinator.
 /// </summary>
 internal sealed partial class LatticeBackupControl
 {
@@ -347,7 +346,7 @@ internal sealed partial class LatticeBackupControl
         CancellationToken cancellationToken)
     {
         // Cluster-wide administrative action: authorized fail-closed at the reserved
-        // catalog tree with the Restore authority, exactly as the blocking verb is.
+        // catalog tree with the Restore authority.
         // The catalog tree is a platform-owned constant, never tenant-composed.
         var catalogScope = BackupScopeSelector.WholeTree(BackupConstants.CatalogTree);
         await _authorizer.AuthorizeRestoreAsync(catalogScope, cancellationToken).ConfigureAwait(false);
@@ -372,10 +371,9 @@ internal sealed partial class LatticeBackupControl
     }
 
     /// <summary>
-    /// The deprecated blocking verbs' wait: awaits the in-process work this call
-    /// started and returns the engine's own result or rethrows its own exception.
-    /// Cancelling <paramref name="cancellationToken"/> cancels the operation, as
-    /// cancelling a blocking call always cancelled its work.
+    /// Awaits the in-process work this call started and returns the engine's own
+    /// result or rethrows its own exception. Cancelling
+    /// <paramref name="cancellationToken"/> cancels the operation.
     /// </summary>
     private async Task<TResult> AwaitOperationAsync<TResult>(
         string tenantId,

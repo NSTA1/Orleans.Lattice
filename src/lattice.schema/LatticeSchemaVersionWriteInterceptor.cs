@@ -29,8 +29,11 @@ namespace Orleans.Lattice.Schema;
 /// tag it carries. Strict mode (<see cref="InterceptsSystemOrigin"/>) re-validates
 /// those intercepted writes: an enveloped item whose version is newer than the
 /// target, or whose version cannot be upcast to the target, is dead-lettered
-/// rather than applied, so that intercepted write never blocks. Direct replication
-/// merge apply, backup restore, and tree-merge paths bypass write interception.
+/// rather than applied, so that intercepted write never blocks. A plain
+/// last-writer-wins replicated write is judged too, but only for a tree whose
+/// version config sets strict ingest (<see cref="JudgesReplicatedWritesAsync"/>,
+/// issue #5684): an admitted row is stored verbatim, never stamped. Backup restore
+/// and tree-merge paths write below the choke point and bypass write interception.
 /// </para>
 /// <para>
 /// <b>CRDT deltas.</b> A <see cref="LatticeOperation.CrdtApply"/> delta is made
@@ -60,7 +63,11 @@ internal sealed class LatticeSchemaVersionWriteInterceptor : ILatticeWriteInterc
     /// <param name="deadLetters">The dead-letter store strict-ingest diversions are appended to.</param>
     /// <param name="options">The versioning options carrying the preview byte bound.</param>
     /// <param name="timeProvider">The clock used to stamp dead-letter entries.</param>
-    /// <exception cref="ArgumentNullException">Any argument is <c>null</c>.</exception>
+    /// <param name="runtimeRegistry">
+    /// Optional resolver of each tree's durable schema catalog; when supplied it replaces
+    /// <paramref name="registry"/> for the upcastability check. <c>null</c> uses <paramref name="registry"/>.
+    /// </param>
+    /// <exception cref="ArgumentNullException">Any argument other than <paramref name="runtimeRegistry"/> is <c>null</c>.</exception>
     public LatticeSchemaVersionWriteInterceptor(
         ILatticeSchemaVersionProvider provider,
         ILatticeSchemaRegistry registry,

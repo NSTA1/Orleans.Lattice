@@ -312,7 +312,12 @@ public sealed partial class DurableVectorIndex
     /// <summary>The key prefix every durable record of this index sits under.</summary>
     public string KeyPrefix => _prefix;
 
-    /// <summary>The generation currently loaded. Bumped only by a retrain or a rebuild.</summary>
+    /// <summary>
+    /// The generation currently loaded. A new generation is committed whenever a
+    /// trained layout is persisted - by a retrain, or by the training step of a
+    /// build or rebuild - and the generation returns to <c>0</c> when the index's
+    /// durable state is discarded or nothing has been loaded.
+    /// </summary>
     public long Generation => _generation;
 
     /// <summary>How much of the index is resident, and therefore whether it can be mutated.</summary>

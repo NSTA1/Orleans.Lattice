@@ -279,25 +279,23 @@ docs/lattice.replication/wal.md	84C8210C968C3007639ED7BCFFBD102138911A0FD0503E6C
 docs/lattice.replication/wal.md	8A0CB8F0EF3A580ED523F81D8718BB1CB193B3A9F17EAF301285D82456C70315	2	Existing rendered reference, diagram or authoring example retained; baseline line 20; U+25BC
 docs/lattice.replication/wal.md	ACA78847EDB9C11A1F93EAD4800865BE1FE4E510EC8F9CC800F0B9514EE4755C	3	Existing rendered reference, diagram or authoring example retained; baseline line 24; U+2502
 docs/lattice.replication/wal.md	5B7C02397AB5956AE57911AAE573E2F9C9E766A6A16ECD0823D5397F5EEB5318	3	Existing rendered reference, diagram or authoring example retained; baseline line 25; U+25BC
-docs/lattice.replication/wire-format.md	245C6FE1118198399C546951B3F07DA176E707FC5B1288F724A0E204A5C81962	1	Existing rendered reference, diagram or authoring example retained; baseline line 105; U+2192
-docs/lattice.replication/wire-format.md	08DC1B16C25E91B601919B2354FBA96567E26A4D036AD932C6EDB52BEDCE2E1D	1	Existing rendered reference, diagram or authoring example retained; baseline line 106; U+2192
 docs/lattice/architecture.md	23C21B02F8C3435E617010088625F82A5DA371C026B5B6DE59BF17C66A86530A	1	Existing rendered reference, diagram or authoring example retained; baseline line 69; U+2192
 docs/lattice/architecture.md	39B5468A3E6FC429B6CB6EEEB39C0A12AC885B389D3691E3FDA860A4B33C2DA0	1	Existing rendered reference, diagram or authoring example retained; baseline line 249; U+2264
 docs/lattice/architecture.md	CE6777075D22A74F56DAF238719D777C9342D3EC1C2613DDDFF50F4AA5B1D8A7	1	Existing rendered reference, diagram or authoring example retained; baseline line 250; U+2264
 docs/lattice/architecture.md	A2A21063B7533121A4E95B0C0F557678DD01540A0A42B7EA123466EB4AA130F1	1	Existing rendered reference, diagram or authoring example retained; baseline line 251; U+2264
-docs/lattice/caching.md	9922F5B93EECFB07C8C1066F86ADFB93AD75C6F9D31CB8914135EC5F30082F4F	1	Existing rendered reference, diagram or authoring example retained; baseline line 21; U+2081
-docs/lattice/caching.md	AB5073608A053A4ED5D5AE29E4C102CA32E484AD251F72E94CACEF7B115EA73F	1	Existing rendered reference, diagram or authoring example retained; baseline line 22; U+2082
-docs/lattice/caching.md	2CF72C434F49427F6A591B2FC8989E4B5E74C3A268D0344EB6B25007BE256B35	1	Existing rendered reference, diagram or authoring example retained; baseline line 55; U+2265
-docs/lattice/caching.md	E36CA6A8CD9C18F34F813BFF818A5DF75ACB1BB53C4E8EB973E6450881A7CC03	1	Existing rendered reference, diagram or authoring example retained; baseline line 132; U+2192
-docs/lattice/caching.md	7EBBEAA804631149E04FE2A380CCF3DA6D32342980D9A71F5DC2A1F207E00B70	1	Existing rendered reference, diagram or authoring example retained; baseline line 135; U+2192
-docs/lattice/chaos-tests.md	6870C9F420136B3DF5C070FF134D30F8EB113A00E0C9210D2F41F7B57617906F	1	Existing rendered reference, diagram or authoring example retained; baseline line 45; U+2192
-docs/lattice/chaos-tests.md	8DF462A2E3B62114E6C7D2C2DE7B1242A640629A4CC09FA6EA99F47AFFB4300B	1	Existing rendered reference, diagram or authoring example retained; baseline line 51; U+2192
+docs/lattice/caching.md	C5AFCC212D6A6D8A8915C046520ACCC15CBA9E5F42BE76334CC4B1350AF58A36	1	Existing rendered reference, diagram or authoring example retained; baseline line 21; U+2081
+docs/lattice/caching.md	8E8A19AAA592257CD1CCDA40457D5646C05B5D962843E70ABE49164034652C02	1	Existing rendered reference, diagram or authoring example retained; baseline line 22; U+2082
+docs/lattice/caching.md	AADAF46CD7A40EB5BA66825213A2DFDEE9767D3C1E31FA40FAEE25650DD0F0ED	1	Existing rendered reference, diagram or authoring example retained; baseline line 55; U+2265
+docs/lattice/caching.md	2CFC45036C0FBF99394E8A990B18D7A8349A9868F326CAEE1018186B838EDD2A	1	Existing rendered reference, diagram or authoring example retained; baseline line 132; U+2192
+docs/lattice/caching.md	E9FD6B8D28ACF3637297D34792D2D014735699AE66A056D11305DD5243C1C338	1	Existing rendered reference, diagram or authoring example retained; baseline line 135; U+2192
+docs/lattice/chaos-tests.md	DD075EE33B5F841AB971C8964D77E5FA0672EBE62E27C532A83BCBDAE3CDE269	1	Existing rendered reference, diagram or authoring example retained; baseline line 45; U+2192
+docs/lattice/chaos-tests.md	C39743656E00735533F86616FAC028FF413A3C4C0B5151D17E65F517E6CB7290	1	Existing rendered reference, diagram or authoring example retained; baseline line 51; U+2192
 docs/lattice/chaos-tests.md	D5FC85519F110646C11E61CA193EF44B9CB2151F2E3265A89E7D9BF4EF686DE8	1	Existing rendered reference, diagram or authoring example retained; baseline line 54; U+2192
 docs/lattice/chaos-tests.md	167A6DA576480FA3E988EDCD4323B1B849C79B45E8FA807BCF73BAC48B4524C3	1	Existing rendered reference, diagram or authoring example retained; baseline line 105; U+2192
 docs/lattice/chaos-tests.md	E0A885D414690581B7E438BD549606BA81E1315AD0A74882D86FD5981B4D8100	1	Existing rendered reference, diagram or authoring example retained; baseline line 153; U+00B1
 docs/lattice/chaos-tests.md	3DE22D315AC390AABADE07EEE20E91C15778904B5DEF5A99BB5C7D9CD79AAE0C	1	Existing rendered reference, diagram or authoring example retained; baseline line 261; U+2248
-docs/lattice/chaos-tests.md	30AE134A9972BFE0DF97E444D91BF2DE0ED4D46385260CF7846C7430BD4DF038	1	Existing rendered reference, diagram or authoring example retained; baseline line 351; U+2192
-docs/lattice/chaos-tests.md	AE536EBB721AB99C170AA5E1D294D591A6F933BAE3649B9D357D1145ECA4106F	1	Existing rendered reference, diagram or authoring example retained; baseline line 450; U+2192
+docs/lattice/chaos-tests.md	FFA1C328D744A1D1A140B9E4B096475D6E4739CA5B09F05F659698114E3ED5D9	1	Existing rendered reference, diagram or authoring example retained; baseline line 351; U+2192
+docs/lattice/chaos-tests.md	36DFBBC8B84ADDC784276D210D80F63869E19E28DBC9DFB4C7A4EB9A2423DFF3	1	Existing rendered reference, diagram or authoring example retained; baseline line 450; U+2192
 docs/lattice/chaos-tests.md	2E217267E4930F5EBF8B144E6EFA29389674A7E1C8CFCB41C3B322E11343D85D	1	Existing rendered reference, diagram or authoring example retained; baseline line 455; U+2026
 docs/lattice/chaos-tests.md	6500EF1D2ADFB7481555AF745FA445AED35AE8719920F024CF090C828D093065	1	Existing rendered reference, diagram or authoring example retained; baseline line 457; U+2192
 docs/lattice/chaos-tests.md	DFD76367BB15C602AB0C51E5CFB054998EB4D2EBDEE1EED2A0E1FC918BAF2F0C	1	Existing rendered reference, diagram or authoring example retained; baseline line 599; U+2192
@@ -305,28 +303,28 @@ docs/lattice/chaos-tests.md	335B79668B8706B0AA88FDC3EB27323D743938EA00CDBE8043ED
 docs/lattice/chaos-tests.md	B576668ECD8BF91A1E8D3E55D30968F29D0E644994357EF0CEB9415C93D72F7F	1	Existing rendered reference, diagram or authoring example retained; baseline line 922; U+2705
 docs/lattice/chaos-tests.md	E8AB3DFF653BD7A192F51C9181E9230D03A0C603316C556D8BB0A4AD407670AD	1	Existing rendered reference, diagram or authoring example retained; baseline line 923; U+2705
 docs/lattice/chaos-tests.md	DDC1875425868ABFF3966E1D0B6EB4298D2AF31B6C7208D35B279D487C11AF23	1	Existing rendered reference, diagram or authoring example retained; baseline line 924; U+2705
-docs/lattice/chaos-tests.md	2AE134285495E727ACA1867BBB10BF647439482EC097F086AD3EFE0137B6467C	1	Existing rendered reference, diagram or authoring example retained; baseline line 925; U+2705
-docs/lattice/chaos-tests.md	18EE57C0861037ED9952486F43C9374602EFACAB8E4BD61276AD5E7B52DB732B	1	Existing rendered reference, diagram or authoring example retained; baseline line 926; U+2705
-docs/lattice/chaos-tests.md	60899B80FBFA3831F87FBA056A28B2F0B060EFE8DFA2242C5BA9BCBC8862A334	1	Existing rendered reference, diagram or authoring example retained; baseline line 927; U+2705
-docs/lattice/chaos-tests.md	B250CE9E7CCDDD7D098BE5244D7C549D7F0404CBABF628114B656C13EF67181E	1	Existing rendered reference, diagram or authoring example retained; baseline line 928; U+2705
-docs/lattice/chaos-tests.md	56590D69F81689BAEEF632FF2597F3C3D784CD426E60341039FFEFAA4227E5DF	1	Existing rendered reference, diagram or authoring example retained; baseline line 929; U+2705
-docs/lattice/chaos-tests.md	BBBB9868035A33FF2FF853B9B18B907161212DCEC5CD81A47C12EF99381A620E	1	Existing rendered reference, diagram or authoring example retained; baseline line 930; U+2705
+docs/lattice/chaos-tests.md	7837E05A09A0A36B04A0795DA3F1821065F2A3ED5C3E9A4FE3787409DED065D0	1	Existing rendered reference, diagram or authoring example retained; baseline line 925; U+2705
+docs/lattice/chaos-tests.md	91FCBE9BB918EBBC18A0BC0FEA0AFB9746EB2B3EC46555E4CB67103105615542	1	Existing rendered reference, diagram or authoring example retained; baseline line 926; U+2705
+docs/lattice/chaos-tests.md	CB065CA034E8BBD20AB85E051966006550DC60651F76E6A4F1796AC2823146CE	1	Existing rendered reference, diagram or authoring example retained; baseline line 927; U+2705
+docs/lattice/chaos-tests.md	ECD6DBBDEF4BA8F38BB5619C3B405BCB95D22AE080E838BF427C105421B72112	1	Existing rendered reference, diagram or authoring example retained; baseline line 928; U+2705
+docs/lattice/chaos-tests.md	F31B69C3855F6821C4936AF7E5A8EA5FDFD877D5DD6DD5A835E3105D5EAF70FD	1	Existing rendered reference, diagram or authoring example retained; baseline line 929; U+2705
+docs/lattice/chaos-tests.md	8325C397C20A6911F42FEC9CB7EEA07261AF6CAE6F62FE2E66410434C9732B39	1	Existing rendered reference, diagram or authoring example retained; baseline line 930; U+2705
 docs/lattice/chaos-tests.md	2AEECB72C75C5680D97C1FF71968AE2F36401EAF46FCF8DBD2FEEC2C932CE9A9	1	Existing rendered reference, diagram or authoring example retained; baseline line 931; U+2705
 docs/lattice/chaos-tests.md	44AC08C5AB206D95AB34863E03185339AF818976B4C3E50BAA7A0EFE4398498B	1	Existing rendered reference, diagram or authoring example retained; baseline line 932; U+2705
-docs/lattice/chaos-tests.md	1B3CB01EADDA2221EEBEED7BB8B55BE28D7A251D565901373609F966F6529D3C	1	Existing rendered reference, diagram or authoring example retained; baseline line 933; U+2705
+docs/lattice/chaos-tests.md	B94C25794145DFE131EE7FD4EB4541B8B35287BB1A2274EEB31FA1770ACDB61C	1	Existing rendered reference, diagram or authoring example retained; baseline line 933; U+2705
 docs/lattice/chaos-tests.md	D6533D909D66C49815FD1C89B4F9B89EF3FA393255219636D227ECFB96D39607	1	Existing rendered reference, diagram or authoring example retained; baseline line 934; U+2705
-docs/lattice/chaos-tests.md	0BDA31B2091F63620F10D27D098D8684E4FB0FD6483A9ED8A2DB01C62A128709	1	Existing rendered reference, diagram or authoring example retained; baseline line 935; U+2705
+docs/lattice/chaos-tests.md	142BDC385E69213331E98D046F17336341732CB45BFA2CC06CB5DB272AFEBEAA	1	Existing rendered reference, diagram or authoring example retained; baseline line 935; U+2705
 docs/lattice/chaos-tests.md	02846CCDA258826A3BD1781D711DED93AE60CD3A9BF602E96E8CAD627D6554AB	1	Existing rendered reference, diagram or authoring example retained; baseline line 941; U+2705
-docs/lattice/chaos-tests.md	588E86C971F05A5550698E256C15F85F7B3F6EDC467CB09486BB1B53BA6B6A0C	1	Existing rendered reference, diagram or authoring example retained; baseline line 942; U+2705
+docs/lattice/chaos-tests.md	14EED761A8A7D8E253EFA0A0F10E56B847914023C28393A356E6118A247F7772	1	Existing rendered reference, diagram or authoring example retained; baseline line 942; U+2705
 docs/lattice/chaos-tests.md	F08F48E9CE42ED515DECDE29D596C9A1FEBDE489ADBC2897AF741C962197B11C	1	Existing rendered reference, diagram or authoring example retained; baseline line 943; U+2705
 docs/lattice/chaos-tests.md	D003F801F0B0F847531BE3FDFBE239D1ABD045B88C6BCB052BCB93B1593E5673	1	Existing rendered reference, diagram or authoring example retained; baseline line 944; U+2705
 docs/lattice/chaos-tests.md	921CED74E813B6CD8ACDB414F401D1593D0AE52B2F9A0437A650962450C60C76	1	Existing rendered reference, diagram or authoring example retained; baseline line 945; U+2705
-docs/lattice/chaos-tests.md	FB3B5533FCDA6A3F8888AC65873551B450B95210205ED45C9663D703DC82CF42	1	Existing rendered reference, diagram or authoring example retained; baseline line 946; U+2705
-docs/lattice/chaos-tests.md	746DFB295D95D848E0F9368EC41F6F5159A0DFC6AEE90A29BC257F9976C7DC33	1	Existing rendered reference, diagram or authoring example retained; baseline line 947; U+2705
+docs/lattice/chaos-tests.md	F3F29928E77328DF1C73388F6C5BDA6BDD028930D30627B2BCDA1384D1A91ECC	1	Existing rendered reference, diagram or authoring example retained; baseline line 946; U+2705
+docs/lattice/chaos-tests.md	950EA552BAE2E62C2987203ADEBC0AF4B2E7D81FD7DC4D283C827478DFF84C27	1	Existing rendered reference, diagram or authoring example retained; baseline line 947; U+2705
 docs/lattice/chaos-tests.md	5A7CDEDB29B6124AE23D4477938C7C9158871558DE9378B4E231011B896CEC40	1	Existing rendered reference, diagram or authoring example retained; baseline line 948; U+2705
 docs/lattice/chaos-tests.md	5ED03B5C18571B6B960C19E5B2E1B29B4326D21F0A53C61769F6391FAAEE35BE	1	Existing rendered reference, diagram or authoring example retained; baseline line 949; U+2705
 docs/lattice/chaos-tests.md	33C593928D920E73D1F47EFF68E7AE0A4342BF8FA8F5E42BA0393F3480F9E7B3	1	Existing rendered reference, diagram or authoring example retained; baseline line 950; U+2705
-docs/lattice/chaos-tests.md	FF89F1275F670DDC8ACDE3F84BAD6C2E1A36FFBDF0DC0A11E9875A5C5C78BDA6	1	Existing rendered reference, diagram or authoring example retained; baseline line 951; U+2705
+docs/lattice/chaos-tests.md	52F21B2DB8D3855CF24ECE176DC355308D28CEC4A02AAE5947618B6F40DEE1A3	1	Existing rendered reference, diagram or authoring example retained; baseline line 951; U+2705
 docs/lattice/chaos-tests.md	E5F844CEDF9CCE0AECE5284B7639F764939F4AB1B3ADBA34594B5CC615309964	1	Existing rendered reference, diagram or authoring example retained; baseline line 957; U+2705
 docs/lattice/chaos-tests.md	46522F27145B0EB2BDC179591CFCF99FD6A906246F375239F34CAEF47F948150	1	Existing rendered reference, diagram or authoring example retained; baseline line 958; U+2705
 docs/lattice/chaos-tests.md	E7A0693FCD84BA0F323557A21678D757744F3AD105DB4F8451E174F6461D9794	1	Existing rendered reference, diagram or authoring example retained; baseline line 959; U+2705
@@ -343,12 +341,12 @@ docs/lattice/chaos-tests.md	7FF62B74A85F73133DDAFC3433C2763DB5DD096D9B0FC3295634
 docs/lattice/chaos-tests.md	9678CBFB7405FEAFAFC85A405D72632BDD67E1A2DEC3F5D79BBF6397A4EE00CD	1	Existing rendered reference, diagram or authoring example retained; baseline line 987; U+2705
 docs/lattice/chaos-tests.md	02A9851005689943D029DB39CF8910102E2D6170204CF03D9B177F13AEB591F8	1	Existing rendered reference, diagram or authoring example retained; baseline line 988; U+2705
 docs/lattice/chaos-tests.md	825C231303123B771C9BFFB66A94E4DED7E1F47906D0FB7DAD7EAEAAA36532CE	1	Existing rendered reference, diagram or authoring example retained; baseline line 989; U+2705
-docs/lattice/chaos-tests.md	7C12AA9B2090303DDEE97F76ED4C5DB035287A90E7A113AB4199F0D953EC3C77	1	Existing rendered reference, diagram or authoring example retained; baseline line 990; U+2705
+docs/lattice/chaos-tests.md	271A520C707D8967607DB86E9447FDC686138DFDF674CDE217CE68B348B6EE74	1	Existing rendered reference, diagram or authoring example retained; baseline line 990; U+2705
 docs/lattice/chaos-tests.md	582417C8007E7B56977C05872EC7F2EC6C1E01FF71F4A12856608687C014E8D5	1	Existing rendered reference, diagram or authoring example retained; baseline line 991; U+2705
 docs/lattice/chaos-tests.md	67EB98DD4F8393C45357961F111ED6ABBCB4FDBEA5F649DD91F7C79E70E8A5BB	1	Existing rendered reference, diagram or authoring example retained; baseline line 992; U+2705
 docs/lattice/chaos-tests.md	EB390718EA076514BD69E2E8406B131E718E4BEFBABBA61F7DB1BC3C04313946	1	Existing rendered reference, diagram or authoring example retained; baseline line 993; U+2705
-docs/lattice/chaos-tests.md	5408B79DD6B37E9C8D6F03CE3DE94A050DDB6B14ED76D5B4B712C6DCB63BEE50	1	Existing rendered reference, diagram or authoring example retained; baseline line 994; U+2705
-docs/lattice/chaos-tests.md	00B21FFBC88B80881D82191B128B1AF672A3F97F75EC433BA6427CDA99AB3475	1	Existing rendered reference, diagram or authoring example retained; baseline line 995; U+2705
+docs/lattice/chaos-tests.md	225696279160375CFF17B9382E9CB9E1131E5D4A15745F5DF3BD37557481F0FA	1	Existing rendered reference, diagram or authoring example retained; baseline line 994; U+2705
+docs/lattice/chaos-tests.md	D29BAC1D49665B32564EB4D60EF403DDA1B94068DCA4B88ABC29FDC87DC87403	1	Existing rendered reference, diagram or authoring example retained; baseline line 995; U+2705
 docs/lattice/chaos-tests.md	36F6BD38368D292786712BADE12EDB7818A82A4B5D2F74E52D848983DD9CFBCB	1	Existing rendered reference, diagram or authoring example retained; baseline line 996; U+2705
 docs/lattice/chaos-tests.md	05FB54CDE03D8F3C31D889BC0DFC6579F9A980C439577F0A9C50D37F238F3017	1	Existing rendered reference, diagram or authoring example retained; baseline line 997; U+2705
 docs/lattice/chaos-tests.md	2B1A842CF47BAEC11CB97DB7BCA57C9E027671789AB0EB29A5DB91B38FF9F845	1	Existing rendered reference, diagram or authoring example retained; baseline line 998; U+2705
@@ -358,8 +356,6 @@ docs/lattice/chaos-tests.md	E744B0194E757F164FB15789FD01EC54C828AFFEA444C7D1E137
 docs/lattice/compression.md	D51C41FF6D10EED6F0AC690E4FEE73EDCBB397E75A225A1707892E14EC21D701	1	Existing rendered reference, diagram or authoring example retained; baseline line 334; U+00B5
 docs/lattice/compression.md	51DE994D2AB018305BD0DA01B29CC884940196AD3703AD8FB13D975F6E9CD427	1	Existing rendered reference, diagram or authoring example retained; baseline line 345; U+00B5
 docs/lattice/tree-deletion.md	0F42A2645860EEEB360081960A543A43F2158A4C996E2C903710BABF85E256A0	1	Existing rendered reference, diagram or authoring example retained; baseline line 53; U+23F3
-docs/lattice/tree-deletion.md	DB9DEF518678B23658893A2B40BE82276A67784B86A72767C5C3603002866FEE	1	Existing rendered reference, diagram or authoring example retained; baseline line 63; U+2192
-docs/lattice/tree-deletion.md	DBDE122469E8AB6FA8799D585D16724EA5BFF93376DD7D4894F66848678161DF	1	Existing rendered reference, diagram or authoring example retained; baseline line 64; U+2192
 docs/lattice/tree-deletion.md	6725561D0EB98920DC201CA80927BAB61D4A0AD476DE53BC223C64AB05987656	1	Existing rendered reference, diagram or authoring example retained; baseline line 158; U+2705
 docs/lattice/tree-deletion.md	71D81E933528DACEBF4FA12882F6E65CAFA29A5E93773E2F24640CAAFA30D3D2	1	Existing rendered reference, diagram or authoring example retained; baseline line 212; U+2705
 docs/lattice/tree-deletion.md	D83D23EAC7E495CF20E06ACE9FD65F07CDD83C0F2133410B11703BA41382FD59	1	Existing rendered reference, diagram or authoring example retained; baseline line 213; U+2705
@@ -576,7 +572,6 @@ src/lattice.replication/Grains/ILatticeBootstrapCoordinatorGrain.cs	B188C05B71CB
 src/lattice.replication/Grains/ReplicationShipperGrain.cs	17AEDF8F0F6A69182202D9527DB9CFD942E99503F0972A703C60E8AEC89E65AD	1	Existing section-rule banner retained without unrelated source churn; baseline line 503; U+2500
 src/lattice.replication/Grains/ReplicationShipperGrain.cs	1628B726AF75DD56E59B958DBE30504EAA0AD565F6A4DFC0B110A4B75D118B98	1	Existing comment cross-reference or mathematical notation retained; baseline line 1682; U+00D7
 src/lattice.replication/ILatticeBootstrapCoordinator.cs	2897BAC995C4FE2C92361022B02D8A89CBEF9FC50165C53127EBF81D7A80B59E	1	Existing comment cross-reference or mathematical notation retained; baseline line 21; U+00E7
-src/lattice.replication/ISnapshotProvider.cs	9C06D0F83236F6D7DA453E04DFA4EA4B7C9A9A80D6C4ACD20CFEF993B81EB0D1	1	Existing comment cross-reference or mathematical notation retained; baseline line 50; U+2264
 src/lattice.replication/LatticeBootstrapState.cs	D7103E57884B00955524EEC5A876D0EA897CF8A6D1DBDB0DE3B32D3F98289E35	1	Existing comment cross-reference or mathematical notation retained; baseline line 6; U+2192
 src/lattice.replication/LatticeBootstrapState.cs	578890A900B8692074A69124116680D3708CA3067543BAB7A0B417D43AA110EE	1	Existing comment cross-reference or mathematical notation retained; baseline line 7; U+2192
 src/lattice.replication/LatticeBootstrapState.cs	0E69C285D3CACC06A8AC0FB5DD04493691587A1E0D823AA90A6B1A13E7671087	1	Existing comment cross-reference or mathematical notation retained; baseline line 8; U+2192

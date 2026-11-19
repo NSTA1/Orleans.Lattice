@@ -32,7 +32,8 @@ connection, configuration store and optional first-run environment bootstrap,
 protected browser preference store, authentication and credential storage,
 tenant view, app-frame host and native areas. `MapLatticeExplorer` installs
 security response headers and maps static assets, authentication form posts,
-the app-frame bootstrap route and Razor endpoints. A non-root `BasePath` is
+the download endpoint for files the console produces, the app-frame bootstrap
+route and Razor endpoints. A non-root `BasePath` is
 implemented by an isolated branch so component routes remain root-relative and
 the Explorer does not claim host routes outside its mount.
 

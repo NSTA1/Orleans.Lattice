@@ -20,7 +20,17 @@ Each cache entry is a single block blob whose name is the SHA-256 hash of the ca
 - **Provisionless and self-pruning.** The container is created on first use (idempotent); expired entries are removed lazily when read.
 - **Deterministic expiry.** Absolute and sliding expiry arithmetic is pure and clock-injectable via `TimeProvider`, so behaviour is testable without wall-clock waits.
 
-## Setup
+## Features
+
+| Feature | What it gives you | Docs |
+|---|---|---|
+| **Blob-backed `IDistributedCache`** | One block blob per entry, named by the SHA-256 of the key under an optional `KeyPrefix`. | [Architecture](architecture.md#blob-layout) |
+| **Authentication modes** | Connection string, service URI plus token credential, service URI plus shared key, or a pre-built `BlobServiceClient`. | [Configuration](configuration.md#authentication-mode-rules) |
+| **Absolute and sliding expiry** | Expiry kept in blob metadata, enforced lazily on read, with sliding renewals capped at the absolute expiration. | [Architecture](architecture.md#expiry-protocol) |
+| **Conditional renewals and evictions** | Sliding renewals and expired-entry deletes carry `If-Match` on the ETag read, so a concurrent `Set` always wins. | [Architecture](architecture.md#concurrency-and-failure-semantics) |
+| **Provisionless container** | The container is created on first use, once per process. | [Architecture](architecture.md#container-lifecycle) |
+
+## Quick Start
 
 Register the cache once on the host. Because it is the standard `IDistributedCache`, downstream consumers pick it up automatically.
 

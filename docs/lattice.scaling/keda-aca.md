@@ -7,7 +7,10 @@ agent_spec: "docs/agents/deployment.yaml"
 An end-to-end walkthrough for autoscaling an Orleans.Lattice cluster on Azure
 Container Apps (ACA) using the scaling signal as a KEDA custom metric. The
 [`ClusterScaling` sample](../../samples/ClusterScaling/README.md) is a complete,
-deployable implementation of everything below.
+deployable implementation of everything below, and the package ships reference
+copies of the scale rule (`aca-scale-rule.json` and `aca-scale-rule.bicep`)
+in its `deploy/` folder - see
+[`src/lattice.scaling/deploy/README.md`](../../src/lattice.scaling/deploy/README.md).
 
 ## The shape
 

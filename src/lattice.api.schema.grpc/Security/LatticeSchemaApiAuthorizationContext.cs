@@ -52,8 +52,9 @@ public enum LatticeSchemaApiOperation
     /// </summary>
     Unknown,
 
-    // The values below were appended after Unknown (#4126) so the shipped numeric
-    // values of every earlier member, Unknown included, stay stable.
+    // The values below were appended after Unknown (#4126). Removing the deprecated
+    // blocking operations (#4749) renumbered the members that followed them, so the
+    // numeric values are not stable across releases; compare by member name.
 
     /// <summary>The read-only accept-then-poll <c>StartComplianceScan</c> RPC.</summary>
     StartComplianceScan,
@@ -95,7 +96,8 @@ public enum LatticeSchemaApiOperation
 /// <see cref="ILatticeSchemaApiAuthorizer.IsAuthorizedAsync"/>. Carries the
 /// <see cref="Operation"/> being invoked, an optional <see cref="TargetId"/>
 /// (the governed tree id the call targets; <see langword="null"/> for the
-/// unauthenticated discovery operation), and the underlying gRPC
+/// tracked-operation status, list and cancel calls, which name an operation
+/// rather than a tree, and for an unrecognised request), and the underlying gRPC
 /// <see cref="ServerCallContext"/> for header / identity / peer inspection.
 /// </summary>
 public readonly struct LatticeSchemaApiAuthorizationContext

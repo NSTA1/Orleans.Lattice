@@ -8,7 +8,7 @@ The package provides opt-in schema enforcement and value versioning, a serializa
 
 ## Registration and administration
 
-Register `AddLatticeSchemaEnforcement` and/or `AddLatticeSchemaVersioning` after `AddLattice`. When both are present they may be registered in either order; validation always runs before envelope stamping. See [configuration](configuration.md) for all seven option properties and the registration-only merge observer.
+Register `AddLatticeSchemaEnforcement` and/or `AddLatticeSchemaVersioning` after `AddLattice`. When both are present they may be registered in either order; validation always runs before envelope stamping. See [configuration](configuration.md) for all eight option properties and the registration-only merge observer.
 
 `ILatticeSchemaAdmin`, `ILatticeSchemaVersionAdmin` and `ILatticeSchemaRemediationAdmin` are trusted host-side control services, not independently authorized remote endpoints. Put caller-facing changes behind [the Schema facade](../lattice.api.schema/README.md). `ILatticeSchemaComplianceAdmin` scans via the ordinary data plane, so caller read authority still applies.
 
@@ -89,7 +89,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Schema.ILatticeSchemaRemediationAdmin`
 
-[Source](../../src/lattice.schema/ILatticeSchemaRemediationAdmin.cs) (line 15).
+[Source](../../src/lattice.schema/ILatticeSchemaRemediationAdmin.cs) (line 28).
 
 `public interface ILatticeSchemaRemediationAdmin`
 
@@ -98,7 +98,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Schema.ILatticeSchemaVersionAdmin`
 
-[Source](../../src/lattice.schema/ILatticeSchemaVersionAdmin.cs) (line 17).
+[Source](../../src/lattice.schema/ILatticeSchemaVersionAdmin.cs) (line 19).
 
 `public interface ILatticeSchemaVersionAdmin`
 

@@ -466,8 +466,8 @@ The safe technique for editing long markdown files (`docs/**/*.md`) - determinis
   - **CI runs on epic-targeted and release-line pull requests.**
     `.github/workflows/ci.yml` triggers on
     `pull_request: branches: [main, '*/epic/**', 'release/**']`, and the
-    advisory `ui-tests.yml` and `videos.yml` lanes mirror that
-    branch list behind their own `paths:` filters. Without the second pattern a
+    advisory `ui-tests.yml`, `videos.yml` and `explorer-journeys.yml` lanes
+    mirror that branch list behind their own `paths:` filters. Without the second pattern a
     pull request
     into an epic branch would run no checks at all, which trades serialisation
     for no validation; without the third, neither would a patch wave assembled
@@ -475,13 +475,14 @@ The safe technique for editing long markdown files (`docs/**/*.md`) - determinis
     patch ships straight to NuGet without ever being built on trunk - keep both
     when editing any of those triggers. (`docs.yml` has
     no `branches:` filter and so already covers every base; `coverage.yml` runs
-    nightly on a schedule, `coverage-catch-up.yml` runs on `push` to `main`
-    only, `publish.yml` is push-triggered, and
+    nightly on a schedule, `coverage-catch-up.yml` and `formal-receipts.yml`
+    run on `push` to `main` only, `formal-perturbations.yml` runs weekly on a
+    schedule, `publish.yml` is push-triggered, and
     `ci-serial-old.yml` and `promote-videos.yml` are manual-dispatch only, so
     none of them is affected.)
-    The same three workflows also run on `push` to `*/epic/**`: an advisory
+    The same four workflows also run on `push` to `*/epic/**`: an advisory
     integration-branch lane that evaluates the bucket itself after each member
-    merge - `ci.yml` unconditionally, the other two only when that merge touched
+    merge - `ci.yml` unconditionally, the other three only when that merge touched
     their `paths:` - and blocks nothing. `ci.yml` additionally runs on `push` to
     `release/**`; those runs execute the full suite and exhaustive TLC. `Publish`
     requires a successful `build-and-test` run on the exact tag SHA before it can
@@ -490,7 +491,7 @@ The safe technique for editing long markdown files (`docs/**/*.md`) - determinis
     epic pull requests lacks that push trigger. Because `*/epic/**` also
     matches every member branch, and no branch filter can tell a bucket from
     its `<slug>-<item>` members, a member push still creates a run - but each
-    of the three classifies the pushed ref with `ci.yml`'s `pushref` rule in one
+    of the four classifies the pushed ref with `ci.yml`'s `pushref` rule in one
     small job and skips every other job, so a member push costs that one job
     (its own pull request already gates the commit). In `ci.yml` the classifier
     is the push-only `classify` job, and `plan`, `content-gates` and

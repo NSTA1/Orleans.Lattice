@@ -15,10 +15,15 @@ namespace Orleans.Lattice.Api.Schema.Grpc;
 /// <c>ClearPolicy</c>, <c>GetPolicy</c>, <c>CountDeadLetters</c>,
 /// <c>SetVersionConfig</c>, <c>GetVersionConfig</c>, <c>AdvanceTargetVersion</c>,
 /// <c>ClearVersionConfig</c>, <c>GetRemediationStatus</c>,
-/// <c>ProbeCapabilities</c>, <c>GetAuthScheme</c>, and the
-/// accept-then-poll <c>StartComplianceScan</c>, <c>GetComplianceScanStatus</c>,
-/// <c>ListComplianceScans</c> and <c>CancelComplianceScan</c>) and the
-/// server-streaming RPC (<c>StreamDeadLetters</c>).
+/// <c>ProbeCapabilities</c>, <c>GetAuthScheme</c>, the runtime-registry
+/// <c>GetRegistry</c> and <c>RegisterSchema</c>, the accept-then-poll compliance
+/// scans <c>StartComplianceScan</c>, <c>GetComplianceScanStatus</c>,
+/// <c>ListComplianceScans</c> and <c>CancelComplianceScan</c>, and the
+/// accept-then-poll schema operations <c>StartRemediation</c>,
+/// <c>StartMigration</c>, <c>StartAdvanceAndMigrate</c>,
+/// <c>GetSchemaOperationStatus</c>, <c>ListSchemaOperations</c> and
+/// <c>CancelSchemaOperation</c>) and the server-streaming RPC
+/// (<c>StreamDeadLetters</c>).
 /// </summary>
 /// <remarks>
 /// The base/derived split mirrors the codegen shape <c>Grpc.Tools</c> produces

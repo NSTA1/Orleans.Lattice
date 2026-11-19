@@ -43,7 +43,7 @@ The kinds are the `BackupOperationKinds` constants and every one starts with `ba
 | `backup.catalog-rebuild` | `RebuildingCatalog` | `manifests` re-registered; no total, because the sink's manifests are streamed. |
 | `backup.catalog-scrub` | `ScrubbingCatalog`, `PruningOrphans` | `manifests` probed, with no total; then, only when pruning and orphans were found, `manifests` removed against the orphan count. |
 
-A restore into a replicated tree is promoted to the coordinated cross-cluster restore, which reports no units. A cold restore's own catalog rebuild reports nothing of its own, so it stays in `Cataloguing`.
+A restore into a replicated tree is promoted to the coordinated cross-cluster restore, which reports no units. A cold restore's own catalog rebuild reports nothing of its own, so it stays in `Cataloguing`. Two further `BackupOperationPhases` constants, `ResolvingMembers` and `ApplyingRetention`, belong to no operation kind above: they are reported only by a backup-set schedule's run progress (`BackupSetScheduleRunProgress`, read with `GetBackupSetScheduleProgressAsync`).
 
 ## Results
 

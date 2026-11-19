@@ -49,12 +49,15 @@ internal static class LatticeConstants
     /// <para>
     /// Unlike <see cref="SystemTreePrefix"/> and its subsumed prefixes, this is
     /// <b>not</b> a silo-internal name: it is the user-facing tree a view is read
-    /// through. It is reserved only against direct <em>writes</em> - the public
+    /// through. It is reserved against direct <em>writes</em> - the public
     /// <see cref="ILattice"/> mutating surface rejects writes to any
     /// <c>view-*</c> tree that do not originate from the view maintainer (see the
     /// view-write capability), because a materialised view is derived state owned
     /// by its maintainer and a direct write would corrupt the view's drift digest
-    /// and trigger a spurious rebuild. Reads remain unrestricted.
+    /// and trigger a spurious rebuild. Direct content reads are rejected too unless
+    /// they run under an authorised view read or write scope: a rebuild can swap the
+    /// active view-tree generation underneath a raw <c>view-*</c> bind, so callers
+    /// read through an <see cref="ILatticeView"/> handle instead.
     /// </para>
     /// </summary>
     public const string ViewTreePrefix = "view-";

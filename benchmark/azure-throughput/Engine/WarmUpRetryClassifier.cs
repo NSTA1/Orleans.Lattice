@@ -65,8 +65,8 @@ public static class WarmUpRetryClassifier
     /// milliseconds later succeeds once membership converges.
     /// </para>
     /// <para>
-    /// Before Orleans 10.2.2 the early call was tolerated and this exception did
-    /// not surface; on 10.2.2 it does, so without classifying it the warm-up
+    /// Before the Orleans package bump in #1598 the early call was tolerated and
+    /// this exception did not surface; since then it does, so without classifying it the warm-up
     /// loop drops to its fatal branch and - because the silo runs with
     /// <c>BackgroundServiceExceptionBehavior.StopHost</c> - the whole host
     /// aborts, producing a spurious WEDGE (no FINAL emitted) on every cohort.

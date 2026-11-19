@@ -26,7 +26,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// keep working on the older silo.
 /// <para>
 /// The older build is simulated, not run (#5605 review, N5): the pinned
-/// <see cref="TypeLoadException"/> shape is what this build's Orleans 10.2.2
+/// <see cref="TypeLoadException"/> shape is what this build's pinned Orleans runtime
 /// produces for an invokable missing from the receiver's manifest. It is inferred
 /// to be 10.2.0's shape - the same Orleans version, and the same manifest minus the
 /// new invokables - not observed against the <c>lattice-v10.2.0</c> binary.

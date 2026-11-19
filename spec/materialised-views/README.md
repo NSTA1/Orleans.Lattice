@@ -61,10 +61,12 @@ was interrupted after it began scanning may have left behind (`shadow`).
 
 Decommission is modelled as waiting for an idle maintainer, and that is the
 production behaviour rather than a scope cut. `ViewMaintainerGrain` is not
-`[Reentrant]`. Its two `[AlwaysInterleave]` methods mutate nothing a rebuild
-reads: `GetDurableReadPositionsAsync` reads an immutable published snapshot, and
+`[Reentrant]`. Its `[AlwaysInterleave]` methods mutate nothing a rebuild reads:
+`GetDurableReadPositionsAsync` reads an immutable published snapshot,
+`GetLagAsync`, `GetActiveTreeIdAsync` and `GetStatusAsync` only read, and
 `NotifySourceIdentityChangedAsync` only records that the source binding is
-stale for the next drain to re-resolve. Its drain timer does not interleave. A `DecommissionAsync`
+stale for the next drain to re-resolve. Its keepalive reminder interleaves only
+to queue a non-interleaving self-call, and its drain timer does not interleave. A `DecommissionAsync`
 call therefore queues behind an in-progress rebuild turn and runs after it. The
 one way a rebuild can stop part-way is for the activation to fail or crash,
 which is the model's `Crash` with `shadow` still set; the next activation's
@@ -221,8 +223,9 @@ property checks each intermediate cutover, not merely eventual self-heal.
 `NoCrash` isolates the same interactions without activation failure and reaches
 8,143 distinct states. See [RefinementRebind.md](RefinementRebind.md).
 
-Both companions are bounded intended protocols. Aggregation production refinement
-remains pending. Rebind now has accepted captured-tuple, restart, actual GC,
+Both companions are bounded intended protocols. Every Aggregation behaviour row
+now cites a production detector, including the Count/Sum intent-composition
+runtime cases; see [RefinementAggregation.md](RefinementAggregation.md). Rebind now has accepted captured-tuple, restart, actual GC,
 physical staging and moving-log resume detectors, with anchored negative controls;
 controlled grain transport does not establish cluster or registry durability.
 Neither companion contains a resolved transaction cache. The separate
@@ -232,7 +235,9 @@ uncertain publication responses. Its queue-only production discriminator reaches
 the real cache capacity, without claiming a full eviction-algorithm proof.
 [ReadyClosure and SourceAdmission](../view-staging/README.md) separately check
 independent-clock replacement closure and coherent source admission; their
-production refinement remains pending. A clean finite model never substitutes
+refinement notes map every behaviour row to bounded production controls (see
+that README's [evidence and acceptance](../view-staging/README.md#evidence-and-acceptance)).
+A clean finite model never substitutes
 for discriminating production evidence.
 
 ### Measured independent shard weights
@@ -247,5 +252,5 @@ measurements are whole-command wall times, not sums of individual test durations
 | `MaterialisedViewAggregation` | 20 (18 paired mutations, base, Delete) | 95.42 | 24,072 / 7,176 |
 | `MaterialisedViewRebind` | 22 (20 paired mutations, base, NoCrash) | 117.55 | 21,086 / 8,143 |
 
-These are separate shard groups, not one directory-wide materialised-view group.
-The repository CI routing and final matrix balance are integrated separately.
+These are separate shard groups, not one directory-wide materialised-view group;
+each has its own entry in `.github/workflows/test-shards.json`.

@@ -16,17 +16,23 @@ namespace Orleans.Lattice.Replication;
 public readonly record struct ReplicationAck
 {
     /// <summary>
-    /// <see langword="true"/> when the receiver successfully received and
-    /// processed the batch. <see langword="false"/> when the receiver
-    /// rejected the batch outright (transport-level error, schema
-    /// mismatch, unknown tree, etc.) and the sender should not advance
-    /// its cursor past the batch's start.
+    /// <see langword="true"/> when the receiver processed the batch.
+    /// <see langword="false"/> when the receiver did not finish it and the
+    /// sender should not advance its cursor past the batch's start: the
+    /// canonical gRPC receiver returns <see langword="false"/> when it deferred
+    /// the batch (for example while a coordinated restore's receive fence holds
+    /// the tree, or while an earlier delivery of one of its entries is still in
+    /// flight), when it refused a batch read under a source lineage its tree no
+    /// longer holds (<see cref="SourceLineageRefused"/>), and when it refused a
+    /// saga record pushed while it is re-seeding from that sender. An apply
+    /// fault surfaces as a failed call, not as <see langword="false"/>.
     /// <para>
     /// Note that <see cref="Accepted"/> is <see langword="true"/> even
-    /// when every entry in the batch was de-duplicated - matched in the recent
-    /// exact-identity cache, or re-applied idempotently at the leaf -
-    /// because dedup is a successful idempotent apply, not a
-    /// rejection. In that case <see cref="HighestAppliedHlc"/> still
+    /// when every entry in the batch was de-duplicated - dropped below a
+    /// completed bootstrap's drop floor, matched in the recent exact-identity
+    /// cache, or re-applied idempotently at the leaf - or filtered by a
+    /// receiver gate (an unenrolled tree, for example), because none of those
+    /// is a reason to re-ship. In that case <see cref="HighestAppliedHlc"/> still
     /// reports the receiver's high-water mark and the sender's cursor
     /// still advances.
     /// </para>

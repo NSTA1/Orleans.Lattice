@@ -39,5 +39,5 @@ Back on Build, next: Scans, filters and cursors. The links are on this episode's
 | G-Set only grows, has no remove operation, and merges by union | [G-Set](../../../docs/crdt/gset.md), "Semantics"; [state primitives](../../../docs/lattice/state-primitives.md), "Grow-Only Set". |
 | `alice` and `bob` are concurrent; neither set contains the other; union produces both | [G-Set join figure](../../../docs-site/figures/join-figures.json), scenario `gset`; [G-Set](../../../docs/crdt/gset.md), "Behaviour". |
 | Union is commutative, associative and idempotent; a re-delivered add is harmless | [G-Set](../../../docs/crdt/gset.md), "Semantics"; [CRDT primitives](../../../docs/crdt/readme.md), "What is a CRDT". |
-| G-Set fits append-only membership; OR-Set and RW-Set support removals | [G-Set](../../../docs/crdt/gset.md), "Example use case"; [CRDT primitives](../../../docs/crdt/readme.md), "The primitives". |
+| G-Set fits append-only membership; OR-Set and RW-Set support removals | [G-Set](../../../docs/crdt/gset.md), "Semantics" ("append-only workloads such as tag sets, seen-ids"); [CRDT primitives](../../../docs/crdt/readme.md), "The primitives". |
 | The ending names the next Build episode | `videos/series.json`, H1 ending. |

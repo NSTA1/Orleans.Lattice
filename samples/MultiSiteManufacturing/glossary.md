@@ -34,7 +34,7 @@ Terms used throughout the sample. Split into the **domain** side
 | **Digital thread** | The ordered, queryable history of every fact recorded against a part across sites. What the sample's UI renders per part. |
 | **Severity lattice** | The totally ordered set of compliance states: `Nominal < UnderInspection < FlaggedForReview < Rework < Scrap`. |
 | **ComplianceState** | Current lattice position of a part, computed by folding its fact log. |
-| **Retest armed** | Internal flag that gates `MrbDisposition(UseAsIs)` demotion of `Rework` -> `Nominal`. Set by a passing post-rework inspection or `ReworkCompleted(retestPassed=true)`; cleared by a failed retest or failed inspection, by any non-conformance, and by any MRB disposition. |
+| **Retest armed** | Internal flag that gates `MrbDisposition(UseAsIs)` demotion of `Rework` -> `Nominal`. Set by a passing post-rework inspection or `ReworkCompleted(retestPassed=true)`; cleared by a failed retest or failed inspection, by any non-conformance, by an MRB `Rework`, `Scrap` or `ReturnToVendor` disposition, and by the `UseAsIs` demotion of `Rework` it gates (any other `UseAsIs` leaves it unchanged). |
 | **Operator** | Human user driving the UI. The sample uses a static `operator:demo` identity - no operator sign-in in v1. |
 
 ---

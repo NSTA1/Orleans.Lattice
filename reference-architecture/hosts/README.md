@@ -3,7 +3,10 @@
 Three minimal, production-shaped reference host projects for the active-active,
 cross-region Orleans.Lattice estate described in the root `reference-architecture.md`.
 Each project references the **published Orleans.Lattice NuGet packages** (from
-nuget.org): all three heads pin the same lockstep release, the Explorer head
+nuget.org): all three heads pin the same minor release line, though not one
+uniform version - the silo and MCP heads pin the core `Orleans.Lattice`
+package at a later patch than the rest of the family - and the Explorer head
+consumes the family
 through the `Orleans.Lattice.Explorer.*` libraries - including
 `Orleans.Lattice.Explorer.Entra.Web` for hosted-web OIDC sign-in - plus
 `Orleans.Lattice.Caching.AzureBlob` for its distributed token cache. Each
@@ -88,7 +91,7 @@ underscore separator, case-insensitive).
 | `Mcp:TreeAdminEndpoint` | `Mcp:StateEndpoint` | Tree-administration and schema-control gRPC endpoint (co-hosted on the silo gRPC port). |
 | `Mcp:RequireAuthorization` | `Entra:Enabled` | Fail-closed toggle on the MCP HTTP endpoint. |
 | `Mcp:EnableDataWrites` / `Mcp:EnableBackupControl` / `Mcp:EnableReplicationControl` / `Mcp:EnableAuthAdministration` | `false` | Advertise the mutating tool verbs of each group. Compute binds the first three to the deployer's Data API, backup-control, and replication-control switches (all on by default); `EnableAuthAdministration` stays `false`. |
-| `Mcp:EnableTreeAdminLifecycle` / `Mcp:EnableTreeAdminSchemaControl` | `true` / `true` | Advertise the mutating tree-lifecycle tools (create, alias, per-tree config, delete / recover / purge, bulk load, restore, reshard, resize, snapshot, WAL moves, view and tag-index maintenance, compaction, retention, orphaned-leaf repair) and the schema-mutation tools. The read-only tree-administration tools are advertised either way, and every call is still gated at the silo. |
+| `Mcp:EnableTreeAdminLifecycle` / `Mcp:EnableTreeAdminSchemaControl` | `true` / `true` | Advertise the mutating tree-lifecycle tools (create, alias, per-tree config, delete / recover / purge, bulk load, restore, reshard, resize, snapshot, WAL moves, view and tag-index maintenance, compaction, retention, orphaned-leaf audit and repair runs, operation cancel) and the schema-mutation tools. The read-only tree-administration tools are advertised either way, and every call is still gated at the silo. |
 | `Mcp:Stateless` | `true` | Stateless streamable-HTTP transport (no per-session server state), so a follow-up request can land on any region or replica behind Front Door. |
 | `Mcp:AdministratorToken` / `Mcp:AdministratorScheme` | - / `Bearer` | Service credential for discovery-time permission introspection of non-administrator callers. |
 | `Mcp:Telemetry:BackendAddress` | - | PromQL backend for the telemetry tool module (only wired when set). |

@@ -25,8 +25,8 @@ namespace Orleans.Lattice.Benchmark.RegistryFanIn;
 /// deadline rather than reconstructed afterwards.
 /// </para>
 /// <para>
-/// Two markers are accepted because the wording is version-dependent: Orleans
-/// 10.2.x renders <c>Status:</c> while earlier versions rendered
+/// Two markers are accepted because the wording is version-dependent: current
+/// Orleans renders <c>Status:</c> while earlier versions rendered
 /// <c>Diagnostics:</c>. Matching only the version in front of you would make the
 /// classifier answer "never served" for every timeout on the other one - a false
 /// reading that points at the wrong remedy rather than failing obviously - so
@@ -35,7 +35,7 @@ namespace Orleans.Lattice.Benchmark.RegistryFanIn;
 /// </summary>
 internal static class OrleansTimeoutText
 {
-    /// <summary>The clause Orleans 10.2.x appends when the target answered a status probe.</summary>
+    /// <summary>The clause current Orleans appends when the target answered a status probe.</summary>
     internal const string StatusMarker = "Status:";
 
     /// <summary>The equivalent clause used by earlier Orleans versions.</summary>

@@ -76,7 +76,10 @@ translator never produces them, so a C# lambda cannot express them. They are
 built directly on `LatticePredicateNode` and reach the cluster wherever a node is
 supplied as is: a schema policy's structured rule (`LatticeSchemaRule.Structured`),
 a value transform's condition, a materialised view's filter (a predicate, fold or
-aggregation view takes one), and `LatticePredicateEvaluation.Matches`.
+aggregation view takes one), `LatticePredicateEvaluation.Matches`, and the
+editor-hidden `ILattice` methods that take a `LatticePredicateNode` directly and
+that the typed overloads on this page delegate to (such as
+`KeysWherePredicateAsync`).
 
 | Kind | Factory | Meaning |
 | --- | --- | --- |

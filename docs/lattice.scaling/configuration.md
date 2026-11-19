@@ -38,7 +38,7 @@ siloBuilder.AddLatticeScalingSignal(options =>
 | Option | Type | Default | Guidance |
 |---|---|---|---|
 | `EndpointPath` | `string` | `/lattice/scale` | The HTTP path `MapLatticeScalingSignal` serves the signal from. `MapLatticeScalingSignal(path)` can override it per-call; keep this and the mapped path in sync. |
-| `MinReplicas` | `int` | `0` | Lower bound applied to both `ScaleValue` and `RecommendedReplicas` - neither is reported below this floor once the first sample lands. Set it to your cluster's minimum viable silo count so scale-in never suggests dropping below quorum. An autoscaler acting on `ScaleValue` divides this floor by its `targetValue` like any other value, so under the shipped `targetValue` of `0.5` a cluster at rest holds `ceil(MinReplicas / 0.5)` replicas - twice the floor - capped at the autoscaler's maximum. For the pool to rest at quorum instead, set the quorum as the autoscaler's own minimum (`minReplicas` / `minReplicaCount`) and keep `MinReplicas` at or below that minimum times `targetValue` (see [the custom scale rule](keda-aca.md#the-custom-scale-rule)). |
+| `MinReplicas` | `int` | `0` | Lower bound applied to both `ScaleValue` and `RecommendedReplicas` - neither is reported below this floor once the first sample lands (a negative value is treated as `0`). Set it to your cluster's minimum viable silo count so scale-in never suggests dropping below quorum. An autoscaler acting on `ScaleValue` divides this floor by its `targetValue` like any other value, so under the shipped `targetValue` of `0.5` a cluster at rest holds `ceil(MinReplicas / 0.5)` replicas - twice the floor - capped at the autoscaler's maximum. For the pool to rest at quorum instead, set the quorum as the autoscaler's own minimum (`minReplicas` / `minReplicaCount`) and keep `MinReplicas` at or below that minimum times `targetValue` (see [the custom scale rule](keda-aca.md#the-custom-scale-rule)). |
 
 ### Compute axis
 
@@ -109,6 +109,12 @@ The `failureStatus` and `tags` arguments to `AddLatticeScalingHealthCheck` are
 the standard ASP.NET Core health-check registration parameters: `failureStatus`
 is the status reported when the check throws (defaults to `Unhealthy`), and
 `tags` let a host filter the check into a readiness or liveness probe group.
+
+The check reads the cached snapshot, so a probe never fans out. Its result
+carries the snapshot in `HealthCheckResult.Data` under `scaleValue`,
+`recommendedReplicas`, `reason`, `computeActivation`, `computeResource`,
+`computeWalDispatch`, `computeWorst`, `walSaturation`, `storageOverThreshold`,
+`storageWalRetainedBytes`, `sampledAt`, and `checkedAt`.
 
 ## See also
 

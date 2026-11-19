@@ -25,7 +25,11 @@ not duplicate the design; it tells you how to run the kit.
 
 - An Azure subscription, and an identity with rights to create resource groups,
   Container Apps, storage accounts, Key Vaults, Azure Monitor workspaces, an
-  Azure Container Registry, and an Azure Front Door profile in that subscription.
+  Azure Container Registry, virtual networks (plus, on the private option, private
+  DNS zones), and an Azure Front Door profile in that subscription, and to create
+  role assignments (for example Owner, or User Access Administrator alongside
+  Contributor): the Bicep grants each region's managed identity its
+  least-privilege data-plane roles.
 - For Entra provisioning: rights to create app registrations and service
   principals, and a Privileged Role Administrator (or Global Administrator) role:
   the Bicep grants tenant admin consent for the silo's Microsoft Graph application
@@ -315,8 +319,11 @@ different region codes).
 ### Observability
 
 - Each region has a managed Prometheus (Azure Monitor workspace) and a
-  self-hosted Grafana head pre-provisioned with the bundled Orleans.Lattice
-  dashboards. Reach Grafana at its per-region ingress; sign in with the
+  self-hosted Grafana head pre-provisioned with nine of the eleven bundled
+  Orleans.Lattice dashboards (Overview, Commit Path, Atomic Writes, Materialised
+  Views, Backup, Authorization, Scaling, Replication and Replication gRPC; the
+  Grain Index and Tenancy dashboards are not provisioned). Reach Grafana at its
+  per-region ingress; sign in with the
   `-GrafanaAdminPassword` you supplied (Prometheus is queried through the
   region's managed identity, no scraped secret).
 

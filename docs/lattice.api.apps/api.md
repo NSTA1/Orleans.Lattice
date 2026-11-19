@@ -652,7 +652,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.Apps.ILatticeAppsControl`
 
-[Source](../../src/lattice.api.abstractions/Apps/ILatticeAppsControl.cs) (line 18).
+[Source](../../src/lattice.api.abstractions/Apps/ILatticeAppsControl.cs) (line 25).
 
 `public interface ILatticeAppsControl`
 

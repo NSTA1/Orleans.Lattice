@@ -128,7 +128,8 @@ rebuild to reproduce the incrementally maintained groups exactly and the next
 ordinary write to be maintained correctly under the new generation. The
 reserved-group retraction is pinned at the applier by
 `AggregationReservedRegroupTests`, which compares incremental application with
-a fresh application of the current value for Count, Sum and Fold.
+a fresh application of the current value for Count, Sum, Min, Max, SetUnion
+and Fold.
 
 `ViewMaintainerAggregationDrainTests` drives the real maintainer's activation
 with a persisted projection version that differs from the registered one and

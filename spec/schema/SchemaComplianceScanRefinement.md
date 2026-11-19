@@ -79,9 +79,8 @@ TotalNeverBelowScanned, ReportOnlyWhenSucceeded and FailsOnlyWhenLost are state
 safety. PolicyFixedForScan, JudgedByStartPolicy and
 UndecodableCountedNonCompliant are action safety. ScanTerminates is temporal
 liveness under weak fairness of the count, the scan step and its end. The
-TwoWrites variant re-checks every state and action check with two writes
-racing the scan; the temporal check is bounded-out there for the TLC liveness
-budget and is retained on the base.
+TwoWrites variant re-checks every check, the temporal one included, with two
+writes racing the scan.
 
 Every experiment is an anchored action perturbation:
 
@@ -121,8 +120,8 @@ count was derived from the failure breakdown, so a fully compliant tree read as
 having no rules. FailsOnlyWhenLostUndecodableFaults is the behaviour #5253
 replaces: the scan read through the decoding enumeration, so one value it could
 not decode faulted the whole scan with no report and no offending key. It is
-fixed in the schema-assurance integration bucket; this is integration-branch
-evidence, not a claim the fix is released.
+fixed in the schema-assurance integration bucket, which landed on `main` with
+#5330 and shipped in the 10.3.0 release.
 
 ## Deliberate abstraction gaps
 

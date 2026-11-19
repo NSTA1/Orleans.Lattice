@@ -1624,6 +1624,7 @@ internal sealed partial class BPlusLeafGrain(
     /// the batched commit; <see langword="false"/> when admission already
     /// cleared the whole batch and that scan would be redundant.
     /// </param>
+    /// <param name="routing">The routing stamp the write was admitted under, carried into the stamped WAL append.</param>
     private async Task<ConditionalSetManyResult> SetManyWherePredicateLocalAsync(
         List<KeyValuePair<string, byte[]>> entries,
         LatticePredicateNode predicate,

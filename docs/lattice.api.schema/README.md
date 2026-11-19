@@ -29,6 +29,17 @@ It is built the same way as the read-only [`Orleans.Lattice.Api.State`](../latti
 
 `AddLatticeSchemaVersioning(...)` is separate and optional. Register it when versioning operations should be available.
 
+## Quick Start
+
+Register the facade on a silo that already has the core library and schema enforcement, then resolve `ILatticeSchemaControl` (or `ILatticeSchemaOperations` / `ILatticeSchemaComplianceOperations`) from the silo's services, or add the [gRPC binding](../lattice.api.schema.grpc/README.md) to serve it remotely:
+
+```csharp
+siloBuilder
+    .AddLatticeSchemaEnforcement()   // after AddLattice(...)
+    .AddLatticeSchemaVersioning()    // optional: version operations and runtime catalogs
+    .AddLatticeSchemaApi();
+```
+
 ## Surface
 
 The facade operations (each projected by the gRPC binding as one RPC when the sibling binding is registered). The blocking `LATTICE0002` facade verbs were removed in this major version; use the operation starts below and the migration tables in [Schema operations](operations.md#migrating-from-the-removed-blocking-scan) and [Schema operations](operations.md#migrating-from-the-removed-blocking-verbs).

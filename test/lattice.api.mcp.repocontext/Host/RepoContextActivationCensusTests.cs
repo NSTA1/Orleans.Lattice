@@ -81,7 +81,7 @@ public sealed class RepoContextActivationCensusTests
     [Test]
     public void Per_grain_type_measurements_are_summed_into_the_silo_wide_residency()
     {
-        // Orleans 10.4 reports the working set once per grain type. Keeping only the
+        // The pinned Orleans runtime reports the working set once per grain type. Keeping only the
         // last measurement would report one grain type's residency as the silo's.
         var probe = ProbeName();
         using var meter = new Meter("probe." + Guid.NewGuid().ToString("N"));

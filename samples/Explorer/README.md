@@ -72,6 +72,8 @@ peer to observe the tenants and acme's Online residency before installing its ap
 
 - `factory-floor` (default tenant): 12 machines, replicated last-writer-wins.
 - `t/acme/orders` and `t/globex/orders`: five orders in each tenant.
+- `t/globex/invoices`: three invoices, the tree where a Platform rule shadows
+  globex's own rule (see [Delegated tenant access](#delegated-tenant-access-globex)).
 - The `task-board` app installed and enabled in tenant `acme`, with three cards.
   Its manifest declares its `tasks` tree for replication, so installing it
   enrolled `t/acme/a/task-board/tasks` in replication.
@@ -88,7 +90,7 @@ so any password signs in.
 | User | What it is |
 |------|------------|
 | `explorer-admin` | Bootstrap administrator and platform operator. The console signs in as it by default. |
-| `acme-admin` | Tenant admin of `acme`. |
+| `acme-admin` | Tenant admin of `acme`, and member of `acme-editors`, the group the task board's `editor` role is bound to in `acme`. |
 | `globex-admin` | Tenant admin of `globex`, and not a platform operator: keeps globex's own groups, members and rules under `/t/globex/access`. |
 | `alice` | Member of `operators` (may read `factory-floor`) and `task-editors`, and of globex's own group `t/globex/operators`. |
 | `bob` | Member of `task-viewers`. |
@@ -426,11 +428,16 @@ console's sign-in. See
 | `SampleBanner.cs` | The console output a started sample prints: every URL, every sample identity and how to drive the estate. |
 | `ExplorerSample.cs` | The estate: both regions, the shared sink, the peer link and the writer. |
 | `SampleRegion.cs` | One region's host: the silo, every facade and gRPC binding, the replication transport and, in `east`, the Explorer console. |
+| `SampleRegionPlan.cs` | What one region runs: its cluster id and ports, its peer when the estate has two regions, and where it serves the console. |
+| `SampleRegionPeer.cs` | The peer a region replicates with: its id, gRPC port and the shared link secret. |
+| `SampleConsolePlan.cs` | Where the console is served, which region's endpoint it dials and who it signs in as. |
+| `SampleLinkSecretSource.cs` | The per-run replication secret both regions present and accept on their link. |
 | `SampleSeeder.cs` | The seeded identities, policy, tenants, data, replication enrolment and the task-board install. |
 | `SampleIdentities.cs` | The fixed names the sample seeds: its sign-in identities, groups, tenants, regions and trees. |
 | `SampleSharedBackupSink.cs` | The backup sink both regions share. |
 | `PeerLink.cs` | The switch that pauses cross-region replication. |
 | `ReplicationWriter.cs` | The bounded background writer. |
+| `ReplicationWriterTarget.cs` | One tree the writer updates and the fixed key set it cycles through. |
 | `DemoBasicAuthenticator.cs` | The trusted-token authenticator behind the Basic sign-in. |
 | `SampleExplorerEnvironment.cs` | The console's first-run endpoint and automatic sign-in, held by the sample rather than the process environment. |
 | `SampleEntraDirectory.cs` | The Entra app registration behind the opt-in Microsoft Graph identity directory. |

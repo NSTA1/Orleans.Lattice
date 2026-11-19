@@ -16,8 +16,10 @@ namespace Orleans.Lattice;
 /// </para>
 /// <para>
 /// Receiver-side conflict resolution is the normal <see cref="Primitives.LwwValue{T}"/>
-/// merge order: compare HLC first and use the origin id only as the equal-HLC
-/// tiebreaker. Apply <em>never</em> goes through a fresh <c>SetAsync</c> - that
+/// merge order: compare HLC first; on an equal HLC break the tie by tombstone
+/// (delete wins), then expiry, then value bytes, and only then by origin id,
+/// which ranks below every field that is a fact about the write because it is
+/// observer-relative. Apply <em>never</em> goes through a fresh <c>SetAsync</c> - that
 /// would stamp a new local HLC and lose the source causality.
 /// </para>
 /// </summary>
@@ -46,7 +48,8 @@ public readonly record struct LwwRegisterDelta
     /// Identifier of the cluster that authored this mutation, or <c>null</c>
     /// for hand-constructed deltas used in tests. Receivers use this to
     /// break replication cycles, to populate per-origin high-water-mark
-    /// dedupe state, and as the lexicographic tiebreaker on equal HLCs.
+    /// dedupe state, and as a late tiebreaker on equal HLCs (after the
+    /// tombstone, expiry, and value comparisons).
     /// </summary>
     [Id(4)] public string? OriginClusterId { get; init; }
 

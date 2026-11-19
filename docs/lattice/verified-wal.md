@@ -43,7 +43,7 @@ directly is the public `InMemoryWalCursorRegistry`.
 
 | Core | Decision it owns |
 |------|------------------|
-| `WalShippingWatermark` | The durable-contiguous tail of a WAL shard that has several flushes in flight and out of completion order - the start of the oldest in-flight flush, or the next offset when none is in flight, which `WalShardGrain` further bounds by every abandoned flush that can still land and by one past the highest stored offset (issue #4621) - and whether an offset may be shown to a cursor-advancing reader (the replication shipper, the view maintainer, leaf replay): only offsets strictly below the tail, so no reader is ever handed an offset above a still-unfilled prefix hole. |
+| `WalShippingWatermark` | The durable-contiguous tail of a WAL shard that has several flushes in flight and out of completion order - the start of the oldest in-flight flush, or the next offset when none is in flight, which the WAL shard further bounds by every abandoned flush that can still land and by one past the highest stored offset (issue #4621) - and whether an offset may be shown to a cursor-advancing reader (the replication shipper, the view maintainer, leaf replay): only offsets strictly below the tail, so no reader is ever handed an offset above a still-unfilled prefix hole. |
 | `WalGcTrimCore.ClassifyEntry` (`IsEntryEligible` is the same predicate without the refusal reason) | Whether one log entry may be trimmed, given the GC's min-acked cursor, the optional retention ceiling, the durable materialiser offset admission (which can also refuse an entry only the in-memory cursor would admit), the causal-stable frontier, the lowest offset an offset-reading consumer such as the replication shipper has not durably consumed (issue #4579), and any buffer-pin blocked-floor - the exact per-entry predicate the GC scan applies. |
 | `InMemoryWalCursorRegistry` (driven directly) | The per-consumer cursor max-merge and the `min(cursor)` GC floor scan - a consumer cursor never regresses under a stale re-delivery, and the floor is the minimum across consumers. |
 | `WalMoveFenceCore` | Whether an append is admitted while a shard move has fenced the log (`!moveFenced`), and whether a stale quiesce observation must abort (`observed > expected`) - the fence check that must be atomic with the offset assignment. It also owns the durable move fence of issue #4525: whether an activation comes up fenced, whether a fence may be raised, renewed, taken over or released, and whether the placement may flip. `WalMoveQuiesceModel` checks only the append fence. |
@@ -52,8 +52,8 @@ directly is the public `InMemoryWalCursorRegistry`.
 | `WalOffsetAllocationCore.RecoveredNextOffset` | The offset a recovering shard activation resumes from: one past the highest stored offset, so a recovered allocator never reissues an acknowledged offset. Activation, the post-failure resync and the test seam all recover through it. |
 | `WalBlockedFloorCore.Meet` | The lowest buffer-pin HLC across consumers - the meet (minimum) each consumer's live pin is folded into, so the GC's blocked floor tracks the slowest buffering consumer and never trims an entry a live buffer still needs. |
 | `WalMoveResumeCore` | Whether a move's target is a clean prefix of the source tail, and the offset a crashed-and-re-driven copy resumes just past - the resume arithmetic that makes an interrupted placement move copy each retained offset exactly once. |
-| `LeafDurablePinCore` | The durable materialiser pin a leaf publishes for a partition: a release for a partition with nothing to lose, the never-written release (#3453), itself bounded by durable snapshot coverage (#4456, #4523), the Zero block pin for a prefix whose only durable copy is the WAL, or a trim entitlement of `min(persisted checkpoint, covered)` - never the pending checkpoint (#3476). `BPlusLeafGrain.ResolveDurablePinForPartition` gathers the inputs and maps the verdict. |
-| `WalOrphanPinRetirementCore` | Whether the GC may remove an orphaned materialiser pin: only on a durable leaf read that is a husk (no record, or no tree id), only for a consumer id the gate reads as a leaf's own, within the pass budget, and - the fence of issue #5358 - only when the pin grain has recorded no merge of the consumer since the retirement's token, on the activation that issued it. The bulk orphan sweep, the starvation drive's retirement and `WalMaterialiserPinGrain.RemoveIfUnmergedSinceAsync` all route through it. |
+| `LeafDurablePinCore` | The durable materialiser pin a leaf publishes for a partition: a release for a partition with nothing to lose, the never-written release (#3453), itself bounded by durable snapshot coverage (#4456, #4523), the Zero block pin for a prefix whose only durable copy is the WAL, or a trim entitlement of `min(persisted checkpoint, covered)` - never the pending checkpoint (#3476). The leaf gathers the inputs and maps the verdict. |
+| `WalOrphanPinRetirementCore` | Whether the GC may remove an orphaned materialiser pin: only on a durable leaf read that is a husk (no record, or no tree id), only for a consumer id the gate reads as a leaf's own, within the pass budget, and - the fence of issue #5358 - only when the pin grain has recorded no merge of the consumer since the retirement's token, on the activation that issued it. The bulk orphan sweep, the starvation drive's retirement and the pin store's fenced removal all route through it. |
 | `WalFallOffCore` | Whether the WAL has been trimmed past the first offset a replay resuming after a checkpoint still needs (`checkpoint >= 0 && tail > checkpoint + 1`; a durably recorded checkpoint of 0 is a real read position, issue #4433). Both the fall-off-log detector and the activation's cold-replay guard route through it, so the two cannot disagree. |
 
 The core files live under `src/lattice/`, `src/lattice/BPlusTree/`, and
@@ -189,7 +189,11 @@ TLA+ specification in [`spec/wal/`](../../spec/wal/README.md):
   configuration lets the environment destroy a leaf's snapshot or its state row,
   and the operator purge a tree, and checks that the loss is never silent: a leaf
   whose evidence is gone fails closed, and only the writes a purge actually
-  deleted are carved out of `ReadPositionHonest`;
+  deleted are carved out of `ReadPositionHonest`. A fourth lets a lost WAL shard
+  activation's successor come up on another silo, which cannot see its
+  predecessor's abandoned calls still in motion (issue #5799), checked against every
+  invariant and the action properties, and a fifth keeps both leaves permanently
+  active with no faults and checks every property;
 - `WalMove.tla`, a shard move with a durable fence, a shard crash and the loss of
   its coordinator, and, through a second configuration, two moves contending for the
   same stream (one taking over the other's lapsed fence);
@@ -244,7 +248,7 @@ construct to production and to tests proven to go red when production regresses.
 
 The specification found four durability defects, each filed with a reproduction and
 kept as a standing mutation until it is fixed. Three were reproduced against the real
-`BPlusLeafGrain` before they were filed; #4467 was reproduced by the model's trace
+leaf grain before they were filed; #4467 was reproduced by the model's trace
 only, and its fix's grain test came with the fix:
 
 | Issue | Defect |
@@ -349,10 +353,10 @@ over.
 
 Because each module checks its side of an edge separately, a guarantee could be stated
 more weakly than the assumption that relies on it. The composite interface check,
-`WalLiveAdvanceComposite` (#5774), closes that gap: one small configuration (131,423
+`WalLiveAdvanceComposite` (#5774), closes that gap: one small configuration (402,394
 distinct states) generates each step freely within the shared vocabulary, keeps it only
 if every producer's guarantee still holds, and checks every consumer's environment guard
-against it, on each of the twelve edges. Its first runs found five places where a module
+against it, on each of its fifteen edge invariants. Its first runs found five places where a module
 assumed more than its producer guaranteed (F1 to F5, in the
 [composite's note](../../spec/wal/LiveAdvanceCompositeRefinement.md#findings)); all were
 closed by widening the consumer or strengthening the producer, and every edge is now
@@ -395,6 +399,16 @@ on `main` as a whole:
 | #5756 | A split donor advanced its own checkpoint past records another author appended. |
 | #5760 | Birth hints stamped the exclusive WAL head as an inclusive checkpoint, so the record at exactly the captured head was skipped. |
 | #5766 | A bulk load applied its birth hint uncapped, so a record another author appended below it, unapplied by the replaced root, was applied by no leaf. |
+
+Extending `WalDurability` to the allocator's re-seed (#5803), and reviewing the
+hand-off fence's pre-arm (#5840), found three more. The model reproduced each before
+its fix, each is kept as a standing mutation, and all three are fixed:
+
+| Issue | Defect |
+|-------|--------|
+| #5810 | A predecessor activation's late batch on another silo, starting at a different offset, landed over a successor's acknowledged batch, so every read yielded the shared offsets twice, and its blind upsert of the Azure Table provider's tail row regressed that row, so the next recovery reissued committed offsets. Fixed by #5811: a batch's commit is conditional on the tail row's ETag the provider instance last observed, under a fence generation that refuses every claim made before a refused write. Reproduced by `OffsetWrittenOnceStaleWriterUnfenced`, `TailMonotoneStaleWriterBlindUpsert` and `RecoverNeverInsideCommittedUnfencedBlindTailUnstamped`. |
+| #5825 | Batches commit in arrival order, so across a silo move a predecessor's lower batch could commit after its successor recovered and readers had passed the offset as a settled hole, and the entry appeared below them; the #5811 fence did not refuse it, because the successor only read the tail row. Fixed by #5827: recovery re-stamps the tail row under the ETag it read before the activation serves a read, which puts the predecessor's view out of date. Reproduced by `LogPrefixAppliedRecoveryLeavesTailUnstamped`. |
+| #5841 | A stale duplicate of a split's donor, still holding the span from before the split, claimed the donor's epoch after the split: its claim overwrote the split's epoch bump, and under pre-arm the split bumped only when its own activation had claimed, so its epoch-only writes of moved keys were fenced by nothing the receiver reads and an acknowledged write could be trimmed. An idle duplicate could do the same under the eager arm. Fixed by a Dekker pair: a claim writes the epoch row and then re-reads the leaf's state, and is stale if it changed; the split persists its narrowed range and then re-reads the row, bumping it whenever it exists. Reproduced by `HandOffBoundStaleDonorArmsAfterSplit5841` in `WalHandOffFence`'s `StaleDonor` and `StaleDonorPreArm` variants. |
 
 **What is not covered.** Each module checks one partition and one owner leaf, with two
 activations at most and each environment step once. The modules model the fences'

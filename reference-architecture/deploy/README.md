@@ -52,7 +52,7 @@ forming a Bicep compile cycle, so the script runs them on a second pass:
   Monitoring Data Reader on the workspace. When the observability lane is absent
   the backend is empty and the host leaves the telemetry tool group off.
 - **Front Door id** (public option) - activates the `X-Azure-FDID` origin lock
-  on every client-facing head. The private option has no Front Door, so this
+  on the silo, MCP, and Explorer heads. The private option has no Front Door, so this
   seam is empty and the lock is not wired.
 
 Because the Prometheus endpoint is per-region and the replication seams are not

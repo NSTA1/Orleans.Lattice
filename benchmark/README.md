@@ -616,11 +616,13 @@ The runner builds and invokes `benchmark/host/Bench.Microbench/`, whose default
 `LatticeMicroBenchmarks` suite exposes `[Benchmark]` methods across the primitive
 operations (`PointRead`, `PointWrite`, `PointGetMany`, `BulkLoad`,
 `SetManyAtomic`, etc.) plus their parameterised / deeper-tree / atomic-tree
-variants. Several dozen narrower suites (allocation trims, fan-out collapses,
+variants. Well over a hundred narrower suites (allocation trims, fan-out collapses,
 replication apply, tag index, tenancy, ...) are opt-in via
 `BENCH_MICROBENCH_SUITE=<name>` (`--suite <name>` when the harness is run
 directly); the suite dispatch in `host/Bench.Microbench/Program.cs` is the
-authoritative list of recognised names. Scope a run via the `-Workloads` CLI
+authoritative list of recognised names, and the
+[opt-in suites table](../docs/lattice/benchmarks.md#opt-in-suites) in the
+benchmarks guide describes what each one covers. Scope a run via the `-Workloads` CLI
 override (comma-separated BDN globs, e.g. `-Workloads '*.PointWrite,*.PointRead'`;
 a few opt-in suites that `Program.cs` dispatches before it builds the filter, such
 as `observer`, ignore it), pick the fidelity via `-Fidelity` (`dry` / `quick` /
@@ -688,11 +690,12 @@ A single invocation:
    `-N` per workload mode (`get-point`, `set-point`, `set-point-mv`, `get-many`,
    `set-many`, `set-many-atomic`, `set-many-atomic-2`, `cross-tree-atomic-2`,
    `cross-tree-atomic-64`) - to produce the sustained-throughput numbers under
-   real Azure Tables latency. The two read modes are never pre-seeded here: neither
-   this script nor `run-cohort.ps1` passes `BENCH_VEHICLE_COUNT` to the silo, whose
-   default of 0 skips the read-mode seed, and every cohort runs against a fresh tree,
-   so the `get-point` and `get-many` rows time lookups of keys that were never
-   written (the miss path), not reads of stored data.
+   real Azure Tables latency. `run-cohort.ps1` hands its `-Vehicles` fleet size to
+   the silo as `BENCH_VEHICLE_COUNT`, so the silo pre-seeds that many keys before a
+   `get-point` or `get-many` cohort, and the report keeps a read cohort only when its
+   retained silo log carries a `[silo] preseed ... entries=N` line covering the
+   offered fleet; a read cohort without that evidence is graded `UNSEEDED` and left
+   out of the aggregate.
 4. Aggregates each cohort (median across N runs, default `N=3`) and rewrites the
    `perf-table:layer1` / `perf-table:layer2` marker blocks in
    `docs/lattice/performance-single-silo.md`, plus the `> Measured ...` provenance
@@ -706,8 +709,8 @@ it provisions an Azure Container Apps rig through
 `azure-throughput/scripts/deploy-aca.ps1` (or reuses one with `-ReuseAca <prefix>`),
 sweeps the same nine workloads across the silo counts in `-SiloCounts` (default
 `1, 2, 4, 6, 8`) with `run-cohort-aca.ps1`, running at least `-N` cohorts (default 3)
-per workload and silo count (unlike Layer 2, its producer seeds the read cohorts'
-keys first), and rewrites the `perf-table:layer3` and
+per workload and silo count (on Layer 3 the producer, not the silo, seeds the read
+cohorts' keys), and rewrites the `perf-table:layer3` and
 `perf-chart:layer3` blocks (plus the `> Measured ...` note after the table) of
 [`docs/lattice/performance-multi-silo.md`](../docs/lattice/performance-multi-silo.md)
 rather than the single-silo doc. When the sweep ends it parks the silos at zero and

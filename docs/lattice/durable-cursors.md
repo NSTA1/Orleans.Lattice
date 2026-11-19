@@ -30,6 +30,7 @@ characteristics.
 | Topology under aggressive splitting, `MaxScanRetries` exhaustion | Durable cursor - each step has its own retry budget; topology churn only affects one step at a time |
 | Cursor ID must be handed off between processes or services | Durable cursor - any client that knows the opaque ID can resume |
 | Multi-page scan that must observe the same saga-decision view across every page | Durable key/entry cursor opened with `pointInTime: true` - see [Point-in-time cursors](#point-in-time-cursors) |
+| Multi-page scan that must observe no write committed after it opened | Snapshot cursor (`OpenSnapshotKeyCursorAsync` / `OpenSnapshotEntryCursorAsync` and their `WherePredicate` variants) - see [Snapshot cursors](snapshot-cursors.md); its open is shed with `LatticeSaturatedException` while the tree's WAL is saturated, unless `LatticeOptions.ShedSnapshotOpensWhenSaturated` is turned off |
 
 ## Architecture
 
@@ -52,7 +53,7 @@ sequenceDiagram
     rect rgb(235,245,255)
         Note over C,P: Open
         C->>L: Open*Async(spec)
-        L->>G: OpenAsync(treeId, spec)
+        L->>G: open(treeId, spec)
         G->>P: WriteStateAsync() - phase=Open, spec frozen
         L-->>C: cursorId (opaque GUID)
     end
@@ -60,19 +61,19 @@ sequenceDiagram
     rect rgb(235,255,240)
         Note over C,S: Next (repeated per page)
         C->>L: Next*Async(cursorId, pageSize)
-        L->>G: Next*Async(pageSize)
+        L->>G: next page(pageSize)
         G->>S: ScanKeysAsync(effStart, effEnd)
         S-->>G: keys (split-ordering preserved)
         G->>P: WriteStateAsync() - advance LastYieldedKey
-        G->>G: SlideTtlAsync() - refresh idle-TTL reminder
+        G->>G: slide the idle-TTL reminder
         L-->>C: LatticeCursorKeysPage
     end
 
     rect rgb(255,245,235)
         Note over C,P: Close
         C->>L: CloseCursorAsync(cursorId)
-        L->>G: CloseAsync()
-        G->>G: UnregisterTtlAsync()
+        L->>G: close
+        G->>G: unregister the idle-TTL reminder
         G->>G: release pins and snapshot baselines
         G->>P: ClearStateAsync()
         G->>G: DeactivateOnIdle()
@@ -89,7 +90,7 @@ sequenceDiagram
 
     Note over G: NotStarted
 
-    C->>G: OpenAsync(treeId, spec)
+    C->>G: Open*Async(...) via ILattice
     Note over G: Open - spec and treeId persisted
 
     loop Until HasMore = false
@@ -104,7 +105,7 @@ sequenceDiagram
         G-->>C: empty page (HasMore = false)
     end
 
-    C->>G: CloseAsync()
+    C->>G: CloseCursorAsync(cursorId) via ILattice
     Note over G: Closed - state cleared, grain deactivates
 ```
 ### Persisted state
@@ -120,9 +121,9 @@ on every step.
 | `Phase` | cursor phase | `NotStarted` / `Open` / `Exhausted` / `Closed` |
 | `LastYieldedKey` | `string?` | Last key returned or tombstoned. `null` before the first step. |
 | `DeletedTotal` | `int` | Cumulative tombstone count (delete-range cursors only) |
-| `PointInTimeSnapshot` | `Dictionary<Guid, TxStatus>?` | The per-tree transaction-registry snapshot captured at `OpenAsync` time. Persisted only for point-in-time cursors; `null` for live-mode cursors. |
+| `PointInTimeSnapshot` | map of saga id (`Guid`) to decision status, or `null` | The per-tree transaction-registry snapshot captured when the cursor opens. Persisted only for point-in-time cursors; `null` for live-mode and snapshot cursors. |
 | `SnapshotPinId` | `Guid` | The pin id the cursor mints at open and registers with the tree's transaction registry so the decisions it captured are retained. Empty for live-mode cursors and for point-in-time cursors whose snapshot captured no decided saga (in-flight entries are never pinned). A snapshot cursor carries a minted id that is never registered, because it pins no registry decisions. |
-| `SnapshotCoordinate` | `LatticeSnapshotCoordinate?` | Tree-wide coordinate captured when a zero-observable-writes snapshot cursor opens: the pinned shard-map version (and, for a multi-shard tree, the map itself), the per-shard, per-partition WAL heads the frozen baselines were captured at, and the per-open baseline token that keys those baselines, so a reactivated cursor keeps serving the view it opened with. A snapshot cursor persists no `PointInTimeSnapshot`: its frozen baselines already fix saga visibility at the captured heads. `null` for non-snapshot cursors. |
+| `SnapshotCoordinate` | `LatticeSnapshotCoordinate?` | Tree-wide coordinate captured when a zero-observable-writes snapshot cursor opens: the pinned shard-map version (and, for a multi-shard tree, the map itself), the physical tree id the capture ran against, the per-shard, per-partition WAL heads the frozen baselines were captured at, and the per-open baseline token that keys those baselines, so a reactivated cursor keeps serving the view it opened with. A snapshot cursor persists no `PointInTimeSnapshot`: its frozen baselines already fix saga visibility at the captured heads. `null` for non-snapshot cursors. |
 | `SnapshotBaselinePersisted` | `bool` | `true` once a snapshot cursor has durably flushed its per-shard frozen baselines. The baselines seed the transient snapshot leaves in memory at open and are flushed lazily only the first time a page reports more results (the cursor must now survive past page 1 across failover or eviction); a cursor that drains in a single page never sets it and can skip the durable baseline delete on close. `false` for non-snapshot cursors. |
 
 ### Step sequence
@@ -137,13 +138,13 @@ sequenceDiagram
     participant S as Shards
 
     C->>L: NextKeysAsync(cursorId, pageSize)
-    L->>G: NextKeysAsync(pageSize)
-    G->>G: EnsureOpenFor(Keys)
-    G->>G: ComputeEffectiveRange() - advance bounds past LastYieldedKey
+    L->>G: next keys page(pageSize)
+    G->>G: check the cursor is open for Keys
+    G->>G: compute the effective range - advance bounds past LastYieldedKey
     G->>S: ScanKeysAsync(effStart, effEnd, reverse)
     S-->>G: streamed keys (up to pageSize, split-ordering preserved)
     G->>G: WriteStateAsync() - checkpoint LastYieldedKey
-    G->>G: SlideTtlAsync() - refresh idle-TTL reminder
+    G->>G: slide the idle-TTL reminder
     G-->>L: LatticeCursorKeysPage{Keys, HasMore}
     L-->>C: LatticeCursorKeysPage
 ```
@@ -216,8 +217,8 @@ finally
 ### How it works
 
 1. **Capture at open.** The open takes one snapshot of the tree's
-   saga-decision registry and persists the resulting
-   `Dictionary<Guid, TxStatus>` as the cursor's `PointInTimeSnapshot` (see
+   saga-decision registry and persists the resulting map of saga id to
+   decision status as the cursor's `PointInTimeSnapshot` (see
    [Persisted state](#persisted-state)).
    Once the tree's registry is sharded (sagas minted while
    `LatticeOptions.TxRegistryShardCount` is above `1`), the snapshot unions every
@@ -226,7 +227,7 @@ finally
    settling after a bounded number of attempts for the latest union - which is
    still exact for every individual saga.
 2. **Pin retention.** If the snapshot recorded a decision for any txid
-   (entries the snapshot read as `InFlight` are excluded - they have no
+   (entries the snapshot read as still in flight are excluded - they have no
    tombstone to protect yet), the cursor mints a pin id and pins those
    txids on each registry shard that owns at least one of them, so the
    registry retains every observed decision (including one it has already
@@ -237,7 +238,7 @@ finally
    disables the cap, so the pin does not expire and is released only when the
    cursor closes or its idle-TTL reminder fires. The pin id is persisted as the cursor's
    `SnapshotPinId`. Entries the snapshot read as
-   `Indeterminate` are pinned too: an indeterminate reading is an
+   indeterminate are pinned too: an indeterminate reading is an
    aged-out tombstone whose decision row is still stored, which is
    exactly the row a pin exists to protect, and because the retention
    mask is pin-aware the pin also restores the recorded outcome to this
@@ -250,15 +251,15 @@ finally
    `GetManyAsync` / `CountAsync` / `CountPerShardAsync`, just held
    across multiple pages. Note what carries the per-step guarantee
    here, because it is easy to credit to the wrong mechanism: inside
-   the scoped leaf read path answers from
-   the captured dictionary and **returns without contacting the
+   the scope, the leaf read path answers from
+   the captured snapshot and **returns without contacting the
    registry**, so a step's per-key readings were fixed at open and no
    amount of registry-side pruning can move them. The pin in step 2 is
    not what makes that true and could not be - there is no registry
    lookup on this path for it to affect. The pin matters for the reads
    that *do* reach the registry: an unscoped read of the same keys
    while the cursor is open, and (per step 2) an entry the snapshot
-   captured as `Indeterminate`.
+   captured as indeterminate.
 4. **Pin refresh.** Each step also refreshes the pin on every registry
    shard that holds it, sliding the registry-side TTL; the refresh succeeds
    only while every one of those shards still holds the pin. A cursor that
@@ -314,7 +315,8 @@ storage row; it does not grow as the cursor pages.
 To prevent cursor state leaking when a client forgets `CloseCursorAsync`,
 every cursor grain registers a sliding idle-TTL reminder (`cursor-ttl`) after
 every successful call. If the reminder fires with no intervening activity, the
-grain clears its persisted state and deactivates.
+grain releases any registry pin and snapshot baselines the cursor holds,
+clears its persisted state and deactivates.
 
 ```mermaid
 sequenceDiagram
@@ -326,7 +328,7 @@ sequenceDiagram
 
     Note over R: CursorIdleTtl elapses with no calls
     R->>G: ReceiveReminder("cursor-ttl")
-    G->>G: OnTtlExpiredAsync() -> state.ClearStateAsync()
+    G->>G: release pins and snapshot baselines, then state.ClearStateAsync()
     G->>R: UnregisterReminder("cursor-ttl")
     G->>G: DeactivateOnIdle()
 ```
@@ -433,6 +435,9 @@ stateless scans, plus the per-step overhead per cursor.
 
 - [API Reference - Stateful Cursors](api.md#stateful-cursors) -
   full method signatures, return types, error surface, and code examples.
+- [Snapshot cursors](snapshot-cursors.md) - the zero-observable-writes
+  cursor family (`OpenSnapshot*CursorAsync`) that shares this cursor
+  lifecycle, and its admission shedding under WAL saturation.
 - [Consistency - Enumeration](consistency.md#enumeration) - the formal
   consistency classification of live-mode and point-in-time cursor steps.
 - [Atomic Writes](atomic-writes.md) - the saga primitive whose

@@ -138,8 +138,8 @@ OneRecordPerDeliveryAppendRetried is also #5285: under a bootstrap hold an
 on-time prepare or a CRDT settle was staged on both copies and judged twice, so
 one delivery appended two records; the mirror pass now reuses the first
 verdict. All are
-fixed in the schema-assurance integration bucket; this is integration-branch
-evidence, not a claim the fixes are released.
+fixed in the schema-assurance integration bucket, which landed on `main` with
+#5330 and shipped in the 10.3.0 release.
 
 ## Deliberate abstraction gaps
 

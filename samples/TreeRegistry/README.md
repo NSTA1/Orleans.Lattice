@@ -4,9 +4,11 @@
 
 Every tree you touch is tracked in a registry. This sample creates three trees
 (a write auto-registers each), enumerates them with `GetAllTreeIdsAsync`, probes
-existence with `TreeExistsAsync`, and reads each tree's **effective per-tree
-configuration** through `IOptionsMonitor<LatticeOptions>` - including overrides
-applied with `ConfigureLattice(treeName, ...)`.
+existence with `TreeExistsAsync`, and reads each tree's **configured per-tree
+options** through `IOptionsMonitor<LatticeOptions>` - including overrides
+applied with `ConfigureLattice(treeName, ...)`. That read does not see the
+per-tree runtime overrides or structural sizing pins held in the tree's registry
+entry (see the feature doc's options-resolution order); this sample sets none.
 
 ## Run it
 

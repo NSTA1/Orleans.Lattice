@@ -34,11 +34,11 @@ One WAL partition of three offsets is shared by two leaves. Every write belongs 
 position. A budget of one fault - a shard crash, an abandoned flush, a leaf stop, a
 failed persist or a failed capture - bounds the environment; the three fault-free intended-design stutters
 (`ActivateLoadFail`, `ActivateRowless`, `ReplayFaultRearm`) cost nothing. The base model
-checks 226,592 distinct states to depth 35 with every safety and liveness property.
+checks 420,229 distinct states to depth 35 with every safety and liveness property.
 The `TwoFaults` variant (`WalDurability.TwoFaults.cfg`) checks every safety invariant
-and both action properties with a budget of two faults: 1,310,600 distinct states to depth 42. The `SnapshotLoss`
+and all four action properties with a budget of two faults: 3,237,411 distinct states to depth 42. The `SnapshotLoss`
 variant lets the environment destroy a leaf's snapshot or its row, and the operator
-purge a tree, at two faults: 6,402,166 distinct states to depth 42. The `WarmLeaf` variant has no
+purge a tree, at two faults: 5,070,839 distinct states to depth 42. The `WarmLeaf` variant has no
 faults: 17,041 distinct states to depth 28, with every property checked.
 
 ## Polling dispatch refinements
@@ -572,7 +572,7 @@ from this specification.**
   owner activation is always the current epoch, so the stale duplicate, the hand-off
   initiator and the unstamped writer that the arming rules exclude are not
   expressible here, and adding an activation dimension to every leaf would push
-  `SnapshotLoss` (already 6,402,166 states) well past CI's budget. The safety argument is
+  `SnapshotLoss` (already 5,070,839 states) well past CI's budget. The safety argument is
   the checked module `WalLiveAdvanceCore` ([`WalLiveAdvanceCore.tla`](WalLiveAdvanceCore.tla),
   mapped in [`LiveAdvanceCoreRefinement.md`](LiveAdvanceCoreRefinement.md)), promoted from
   the design model `WalLiveAdvance` (`spec/wal/design/WalLiveAdvance.tla`): production

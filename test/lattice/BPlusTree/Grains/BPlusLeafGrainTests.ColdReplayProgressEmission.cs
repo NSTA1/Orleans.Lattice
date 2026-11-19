@@ -27,7 +27,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// maintained throughout replay and is already emitted - but only from
 /// <c>RecordDeactivationCheckpointDelta</c>, which runs from
 /// <c>OnDeactivateAsync</c>. Orleans does not run <c>OnDeactivateAsync</c> when
-/// <c>OnActivateAsync</c> throws (measured on Orleans 10.2.2 with a positive
+/// <c>OnActivateAsync</c> throws (measured against the Orleans runtime with a positive
 /// control, and stated on the hook itself), and a cancelled cold replay leaves
 /// activation by throwing. So the quantity was emitted on exactly the path that
 /// never runs when it matters. <c>LeafActivationFailures</c> covers that

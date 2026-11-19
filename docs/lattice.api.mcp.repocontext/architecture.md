@@ -140,10 +140,11 @@ and predictable:
 - `repocontext_reset_index` drops the code index and every derived plane while
   preserving agent memory, so a wedged index is repairable without discarding
   notes, decisions, and gotchas.
-- The self-healing re-derivation may reset one of two rebuildable vector trees -
-  vector metadata or vector membership - when it falls terminally off its
-  write-ahead log (a membership reset also drops the coverage digest that mirrors
-  it), and refuses every other tree outright, so a heal can never become data loss.
+- The self-healing re-derivation may reset one of three rebuildable vector trees -
+  vector metadata, vector membership, or the vector-coverage digest - when it falls
+  terminally off its write-ahead log (a membership reset also drops the coverage
+  digest that mirrors it), and refuses every other tree outright, including the
+  write-once vector payload tree, so a heal can never become data loss.
 - A terminally stale content tree degrades body-text ranking without failing
   ingest or retrieval, because the reconcile knows that content can be
   re-projected later.

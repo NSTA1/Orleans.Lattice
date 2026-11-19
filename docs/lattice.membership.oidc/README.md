@@ -12,15 +12,25 @@ Generic OpenID Connect credential authenticator for [Orleans.Lattice.Membership]
 
 It is an **additive sibling** to [`Orleans.Lattice.Membership.Entra`](../lattice.membership.entra/README.md), not a replacement. Neither package depends on the other, and a silo can register both - plus the JWT and anonymous authenticators - at the same time.
 
-## What it does
+## Core properties
 
 - **Discovery-document-driven metadata and signing-key rotation.** Validation parameters are resolved from the provider's OpenID Connect discovery document. The JSON Web Key Set is cached and refreshed on its own interval through a configuration manager, so signing keys rotate automatically without a metadata fetch on every call.
 - **Exact-issuer selection and validation.** The authenticator claims a credential only when the token's `iss` claim is an ordinal exact match for the configured `Issuer`, or when the credential carries the explicitly configured `SchemeHint`. There is no prefix form, no wildcard, and no catch-all, so, while no `SchemeHint` is set, registering two OIDC issuers on one silo is unambiguous regardless of registration order, and a generic OIDC authenticator never claims an Entra token (a hint claims every credential carrying that scheme - see the security notes below). The same exactness is enforced during validation, not just selection: the issuer the discovery document advertises is *not* accepted unless it is also the configured issuer.
 - **Fail-closed signature-algorithm pinning.** The accepted `alg` set is pinned on every validation. It comes from `Algorithms` when that is populated and from the discovery document's `id_token_signing_alg_values_supported` otherwise. An empty set means *reject every token*, never *accept any algorithm* - which is what closes the algorithm-confusion gap (CWE-347) that an unpinned validator leaves open, including the classic attack of re-signing a token with `HS256` using the provider's published public key as the HMAC secret.
 - **Standard OIDC claim conventions.** The subject is taken from `sub`, and group membership from `groups`, `roles`, and `role`. Both lists are configurable per issuer, so a provider that emits membership under a namespaced claim such as `https://example.com/claims/teams` needs configuration, not code. Every claim the validated token carries - the subject and group claims included - is also copied into the subject's flat claim bag, which is keyed by claim name, so a claim that repeats keeps only its last value.
-- **Reserved-subject safety.** A validated token whose `sub` is missing, collides with a reserved well-known sentinel (`anonymous` or `system`), or falls under the reserved `t/` tenant-group namespace resolves to the anonymous subject with no groups rather than to an anonymous-labelled principal that still carries the token's groups.
+- **Reserved-subject safety.** A validated token whose `sub` is missing or collides with a reserved well-known sentinel (`anonymous` or `system`) maps to no principal and resolves to the anonymous subject with no groups, rather than to an anonymous-labelled principal that still carries the token's groups. A subject under the reserved `t/` tenant-group namespace is resolved the same way by the membership package's default subject mapper.
 
-## Registration
+## Features
+
+| Feature | Public surface | Details |
+|---|---|---|
+| Generic OIDC token authentication | `OidcCredentialAuthenticator`, `LatticeOidcServiceCollectionExtensions.AddLatticeOidc` | [Architecture - Validation](architecture.md#validation) |
+| Exact-issuer selection | `LatticeOidcAuthenticatorOptions` (`Issuer`, `SchemeHint`) | [Architecture - Selection](architecture.md#selection) |
+| Fail-closed signature-algorithm pinning | `LatticeOidcAuthenticatorOptions` (`Algorithms`) | [Security notes](#security-notes) |
+| Configurable subject and group claims | `OidcClaimNames`, `LatticeOidcAuthenticatorOptions` (`SubjectClaimTypes`, `GroupClaimTypes`) | [Configuration - `OidcClaimNames`](configuration.md#oidcclaimnames) |
+| Several issuers on one silo | `LatticeOidcServiceCollectionExtensions.AddLatticeOidc` | [Quick Start](#quick-start) |
+
+## Quick Start
 
 Register the authenticator on the silo builder **after** the base membership services. Registration guards this ordering and fails fast with a clear message when membership is not present. When the add-on is not registered it has zero runtime cost.
 

@@ -30,7 +30,7 @@ namespace Orleans.Lattice.Api.Mcp.RepoContext.Host;
 /// Orleans still publishes it.
 /// </para>
 /// <para>
-/// <b>A sample is the sum of one observation.</b> From Orleans 10.4 the gauge reports
+/// <b>A sample is the sum of one observation.</b> On the pinned Orleans runtime the gauge reports
 /// one measurement per grain type (tagged <c>grain_type</c>) rather than a single
 /// silo-wide value, so each sample sums every measurement a single observation
 /// yields. A published instrument that yields no measurements - a silo with no grain

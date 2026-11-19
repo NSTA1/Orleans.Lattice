@@ -617,7 +617,7 @@ internal sealed partial class BPlusLeafGrain
     /// - a deterministic, persisted signal stamped at prepare time
     /// from <see cref="LatticeOriginContext"/>. The WAL TxPrepare record
     /// carries it (see
-    /// <see cref="BPlusLeafGrain.CommitSetAsync(string, byte[], long)"/>),
+    /// <see cref="BPlusLeafGrain.CommitSetAsync(string, byte[], long, WalRoutingStamp)"/>),
     /// but with an own write's empty origin filled with the tree's resolved
     /// origin by <c>WalCommitLogWriter</c>; replay turns that stamp back into
     /// <see langword="null"/> through <see cref="LatticeRowOrigin"/> (issue

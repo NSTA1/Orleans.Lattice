@@ -144,9 +144,10 @@ public static class LatticeReplicationGrpcServiceCollectionExtensions
         // Register the auth interceptor globally so every gRPC
         // service hosted on this pipeline runs through the
         // shared-secret authenticator. The interceptor itself
-        // scopes enforcement to LatticeReplication methods by
-        // matching on the service-name prefix, so unrelated gRPC
-        // services on the same host are unaffected.
+        // scopes enforcement to the live-replication, remote-snapshot and
+        // saga-control services by matching on their service-name
+        // prefixes, so unrelated gRPC services on the same host are
+        // unaffected.
         services.AddGrpc(options =>
         {
             options.Interceptors.Add<LatticeReplicationGrpcAuthInterceptor>();
@@ -226,9 +227,13 @@ public static class LatticeReplicationGrpcServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Maps the live-push <c>Push</c> route, the snapshot
-    /// <c>GetMetadata</c>/<c>RequestSnapshot</c> routes, and the saga-control routes on the
-    /// supplied <paramref name="endpoints"/>. The host must have
+    /// Maps the three replication gRPC services on the supplied
+    /// <paramref name="endpoints"/>: the live-replication service (the
+    /// <c>Push</c>, <c>ProbeDigest</c>, <c>ProbeMerkleWalk</c>,
+    /// <c>ExchangeContentManifest</c>, <c>PullCompressionDictionary</c> and
+    /// <c>GetPeerHighWaterMark</c> routes), the remote-snapshot service
+    /// (<c>GetMetadata</c>/<c>RequestSnapshot</c>), and the saga-control
+    /// service. The host must have
     /// called <c>AddLatticeReplication</c> (for the
     /// <see cref="IReplicationApplier"/> + encoder dependencies) and
     /// <see cref="AddLatticeReplicationGrpc"/> before this call.

@@ -54,11 +54,12 @@ leave the liveness property on the base for the TLC budget.
 one lapsed lease and one refused start over a one-value remediation; its
 `ThreeOps` variant adds a third operation, the smallest bound where a followed
 remediation can be superseded, and its `TwoParams` variant a second parameter
-set, which reaches the in-band refusal of a different remediation. Both re-check
-every state and action property and leave the liveness properties on the base.
+set, which reaches the in-band refusal of a different remediation. Both drop
+the lapsed lease (`MaxStalls = 0`), re-check every state and action property
+and leave the liveness properties on the base.
 `SchemaComplianceScan` checks two keys, one write and one policy change against
-a scan; its `TwoWrites` variant re-checks every state and action property with
-two writes racing the scan.
+a scan; its `TwoWrites` variant re-checks every property, the liveness property
+included, with two writes racing the scan.
 `SchemaStrictIngest` checks one entry through two failures before the applier parks it, one lost
 acknowledgement and one policy change; its `TwoEntries` variant re-checks every
 state and action property over two entries, and leaves the liveness property on

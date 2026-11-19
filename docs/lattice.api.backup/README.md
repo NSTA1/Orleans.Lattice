@@ -27,6 +27,16 @@ It is built the same way as the read-only [`Orleans.Lattice.Api.State`](../latti
 
 `AddLatticeBackupApi()` must be called **after** `AddLatticeBackup(...)`: the backup engine is the source of truth for the capture, restore, catalog, sink, and authorization seams this facade drives. Calling it first fails fast at registration with an actionable message.
 
+## Quick Start
+
+Register the facade on a silo after the backup engine, then resolve `ILatticeBackupControl` or `ILatticeBackupOperations` from the silo's services, or add the [gRPC binding](../lattice.api.backup.grpc/README.md) to serve it remotely:
+
+```csharp
+siloBuilder
+    .AddLatticeBackup()                          // after AddLattice(...)
+    .AddLatticeBackupApi(o => o.MaxListPageSize = 500);
+```
+
 ## Surface
 
 The facade operations. Long captures, restores, health checks, and catalog rebuild or scrub passes use the accept-then-poll `ILatticeBackupOperations` start verbs, which return a handle immediately and are polled through the shared operation status surface. The blocking `LATTICE0002` verbs were removed in this major version; see [Backup operations](operations.md#migrating-from-the-removed-blocking-verbs) for the old-to-new migration table. The gRPC binding exposes the remote-safe subset as RPCs; inventory stays in-process-only, while tracked catalog rebuild and scrub start over gRPC.
@@ -56,6 +66,14 @@ The facade operations. Long captures, restores, health checks, and catalog rebui
 | Is health monitoring available | Report whether backup-health monitoring applies for the configured sink. |
 | Get backup health | Read the latest stored health report. |
 | Configure backup health | Override one backup's periodic health-monitor settings. |
+| Get backup health config | Read one backup's effective health-monitor settings: its stored override, else the deployment default. |
+| Schedule backup set | Register or update a named recurring backup-set schedule that captures one backup set per interval. |
+| Cancel backup-set schedule | Pause a backup-set schedule; its retained sets stay restorable. |
+| Remove backup-set schedule | Forget a backup-set schedule and lift its retention holds, optionally deleting its retained sets' backups. |
+| Get backup-set schedule status | Read a backup-set schedule's configuration, member trees, next run, recent runs and retained sets. |
+| Get backup-set schedule progress | Read only the in-flight run's progress, the lightweight read for polling a run. |
+| List backup-set schedules | List the caller's tenant's backup-set schedules the caller may read, in name order. |
+| Run backup-set schedule now | Start one run of a backup-set schedule immediately, joining a run already in flight. |
 
 ## Reference
 

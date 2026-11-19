@@ -166,7 +166,10 @@ siloBuilder.AddLatticeViews(views => views.AddRuntimeProjectionProvider(
 `ILatticeTreeAdmin.ListViewProvidersAsync(sourceTreeId)` lists the registered
 providers, ordered by key, to a caller holding admin authority over the source -
 the same authority creating a view needs. The library's built-in filter provider
-is never listed, because its payload is a private codec. A provider registered
+is never listed, because its payload is a private codec; the built-in
+change-history provider (`LatticeHistoryView.ProviderKey`, see
+[history views](history-views.md#without-host-code-the-built-in-provider)) is
+listed alongside the host's own. A provider registered
 without a description is listed by key alone. `AddLatticeViews` may be called
 more than once (the auth, membership, backup and tenancy packages call it
 themselves); every call's providers and views accumulate.
@@ -206,7 +209,9 @@ its own. The superseded generation is still reclaimed on the normal grace cadenc
 A superseded generation is deleted through the ordinary tree-deletion path once
 `OldGenerationReclaimGrace` has elapsed, which stops its shard healing, hot-shard
 monitoring and tombstone compaction at once and purges its shards and log after
-`SoftDeleteDuration`. Deletions are paced to one at a time per silo, and the same
+`SoftDeleteDuration`. Each silo paces these deletions across all of its views,
+admitting at most one reclamation pass (at most one tree deletion) every two
+seconds, and the same
 sweep retires the generations earlier releases only emptied and left registered.
 
 ### Multi-tenancy
@@ -1272,7 +1277,7 @@ meter, each tagged `view` (the view name) plus the derived `tenant` label:
 | `orleans.lattice.view.aggregation_applied` | Counter (`{contribution}`) | Aggregation contributions folded into the view. |
 | `orleans.lattice.view.aggregation_rejected` | Counter (`{contribution}`) | Aggregation contributions dropped for producing a reserved (empty or NUL-prefixed) group key. |
 | `orleans.lattice.view.atomic_staging_backstop` | Counter (`{rebuild}`) | Times the bounded-buffer / retention backstop abandoned atomic staging and forced a rebuild. |
-| `orleans.lattice.view.cross_tree_joint_violation` | Counter (`{degradation}`) | Cross-tree view batches that degraded to per-tree atomicity because a participant view did not become ready in time. |
+| `orleans.lattice.view.cross_tree_joint_violation` | Counter (`{degradation}`) | Cross-tree view batches that degraded to per-tree atomicity because a participant view did not become ready in time, or because the atomic-staging backstop discarded the view's registered slice. |
 | `orleans.lattice.view.lag_budget_eviction` | Counter (`{eviction}`) | Views force-evicted (WAL unpinned and rebuilt) for exceeding their `MaxLagBudget`. |
 | `orleans.lattice.view.source_backpressure` | Counter (`{pass}`) | Drain passes of any trigger - read-your-writes barrier drains included, not only background ticks - that shrank their batch because the source tree was under WAL saturation back-pressure. Also tagged `state` with the observed source regime (`throttled` / `saturated`). |
 

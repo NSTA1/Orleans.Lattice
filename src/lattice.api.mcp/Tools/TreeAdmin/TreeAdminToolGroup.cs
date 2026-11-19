@@ -14,7 +14,10 @@ namespace Orleans.Lattice.Api.Mcp;
 /// remediation-status / compliance / capability reads) are always contributed, and
 /// the mutating schema-management verbs (set / clear policy, version-config change,
 /// version advance / migrate, remediation) only when the host opts them in through
-/// <see cref="LatticeApiMcpOptions.EnableTreeAdminSchemaControlTools"/>.
+/// <see cref="LatticeApiMcpOptions.EnableTreeAdminSchemaControlTools"/>. It also
+/// contributes the tree lifecycle and control tools over the tree-administration
+/// facade, whose mutating verbs are opted in through
+/// <see cref="LatticeApiMcpOptions.EnableTreeAdminLifecycleTools"/>.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -27,13 +30,18 @@ namespace Orleans.Lattice.Api.Mcp;
 /// </para>
 /// <para>
 /// <b>Capability-gated end to end, but not on <c>Admin</c> alone.</b> The discovery
-/// core's capability map requires <c>Admin | TreeLifecycle | BulkLoad | Restore</c>
-/// for this group, and <c>AuthAdminMcpPermissionResolver.GroupIsGranted</c> matches
-/// that mask <b>disjunctively</b> - <c>(rule.Operations &amp; mask) != None</c> - so
-/// <b>any one</b> of those four capabilities makes the whole group discoverable. A
-/// caller granted only <c>BulkLoad</c> is therefore offered these tools; it is not
-/// true that the group is offered only to an administrator, and earlier revisions of
-/// this remark saying so were wrong. Should a caller reach an invocation regardless,
+/// core's capability map requires
+/// <c>Admin | TreeLifecycle | BulkLoad | Restore | Read | SchemaAdmin</c> for this
+/// group, and <c>AuthAdminMcpPermissionResolver.GroupIsGranted</c> matches that mask
+/// <b>disjunctively</b> - <c>(rule.Operations &amp; mask) != None</c> - so <b>any one</b>
+/// of those six capabilities makes the group discoverable. Each tool is then offered
+/// against its own minimum (<see cref="RequiredOperationsFor"/>): the schema read
+/// tools need only <c>Read</c>, the other schema tools <c>SchemaAdmin</c>, and the
+/// lifecycle and control tools any of <c>Admin | TreeLifecycle | BulkLoad | Restore</c>.
+/// A caller granted only <c>BulkLoad</c> is therefore offered the lifecycle and control
+/// tools; it is not true that the group is offered only to an administrator, and
+/// earlier revisions of this remark saying so were wrong. Should a caller reach an
+/// invocation regardless,
 /// the facade's own fail-closed access gate refuses it per tree and per verb, and the
 /// grain re-enforces its own gate behind that. The module itself adds no
 /// authorization logic, which is exactly why the coarse discovery mask must not be

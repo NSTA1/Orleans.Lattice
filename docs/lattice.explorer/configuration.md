@@ -4,12 +4,13 @@ agent_spec: "docs/agents/capabilities.yaml"
 
 # Orleans.Lattice.Explorer configuration
 
-The Explorer rewrite exposes these public options types in the core web packages:
-`ExplorerConfigStoreOptions`, `LatticeExplorerWebOptions`,
-`ExplorerReauthOptions`, `ExplorerSignOutOptions`, and
-`ExplorerContentSecurityPolicyOptions`. The UI sign-in chrome uses an internal
-server-form-post option object; hosts configure it indirectly through the web
-head and through the public re-authentication and sign-out options below.
+The Explorer exposes five public options types: `ExplorerConfigStoreOptions`,
+`ExplorerReauthOptions`, `ExplorerSignOutOptions` and
+`ExplorerContentSecurityPolicyOptions` in `Orleans.Lattice.Explorer.Core`, and
+`LatticeExplorerWebOptions` in `Orleans.Lattice.Explorer.Web`. The UI sign-in
+chrome uses an internal server-form-post option object; hosts configure it
+indirectly through the web head and through the public re-authentication and
+sign-out options below.
 
 This page also documents the launcher environment variables, the persisted JSON
 configuration document, and `LatticeConnectionSettings`. Optional Entra packages
@@ -98,7 +99,10 @@ server endpoint.
 
 Carries extra Content-Security-Policy source expressions that the web head folds
 into the `form-action` directive. Federated sign-out providers use this when a
-local sign-out `POST` redirects to an identity-provider end-session URL.
+local sign-out `POST` redirects to an identity-provider end-session URL. A
+provider contributes through
+`services.Configure<ExplorerContentSecurityPolicyOptions>(...)`; the web head's
+security-header middleware reads the accumulated set once, when it is built.
 
 | Property | Type | Default | Meaning |
 |---|---|---|---|

@@ -7,18 +7,21 @@ agent_spec: "docs/agents/capabilities.yaml"
 The Explorer is made from nine built-in areas. Each area owns one top-level
 address, reads only the cluster facades named below, and appears in the spine
 only after its availability probe succeeds or returns a user-actionable
-Unavailable reason. Every field below that names an existing tree, region, subject,
+Unavailable reason; an area whose probe the cluster did not answer is shown,
+demoted, as not checked (see [Area availability](area-availability.md)). Every
+field below that names an existing tree, region, subject,
 tenant or key is a type-ahead [picker](navigation-model.md#pickers).
 
 ## Declared route inventory
 
-The complete route inventory below contains the 70 unique `@page` route patterns and the additional attribute-declared tenant Members route in the current UI source. Tenant-scoped pages list both plain and tenant-rooted routes; aliases are kept explicit.
+The complete route inventory below contains the 71 unique `@page` route patterns and the additional attribute-declared tenant Members route in the current UI source. Tenant-scoped pages list both plain and tenant-rooted routes; aliases are kept explicit.
 
 - **Home**
   - `/`
   - `/t/{tenant}`
 - **Session reset**
   - `/reset`
+  - `/t/{tenant}/reset`
 - **Not found**
   - `/not-found`
 - **Data**
@@ -97,11 +100,12 @@ The complete route inventory below contains the 70 unique `@page` route patterns
   - `/t/{tenant}/cluster`
   - `/cluster/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}/{p7?}/{p8?}`
   - `/t/{tenant}/cluster/{p1}/{p2?}/{p3?}/{p4?}/{p5?}/{p6?}/{p7?}/{p8?}`
+
 | Area | Key and root address | Facades read or driven | Scope | Visibility probe |
 | --- | --- | --- | --- | --- |
-| Data | `data`, `/data` | State API, including `ILatticeStateClient`; `ILatticeTreeAdmin` for tag-index and view actions; `ILatticeDataApi`: its range read for **Export...**, and its writes and write-capability probe to create, edit and delete entries; `ILatticeSchemaControl` for the value editor's schema preview | Tenant-scoped | No state reader makes the area Hidden. Before a catalogue is loaded for the current caller and endpoint, a disconnected connection is Unavailable with a sign-in or connect reason; a denied catalogue probe is Hidden, and other read failures are Unavailable with a fixed, action-specific reason. A loaded catalogue keeps the area Visible until its caller-scoped memo is invalidated or refreshed. |
+| Data | `data`, `/data` | State API, including `ILatticeStateClient`; `ILatticeTreeAdmin` for tag-index and view actions, tree delete and recover, and seeding an empty tree from a file; `ILatticeDataApi`: its range read for **Export...**, its writes and write-capability probe to create, edit and delete entries, and its streamed upsert for **Import...**; `ILatticeSchemaControl` for the value editor's schema preview | Tenant-scoped | No state reader makes the area Hidden. Before a catalogue is loaded for the current caller and endpoint, a disconnected connection is Unavailable with a sign-in or connect reason; a denied catalogue probe is Hidden, and other read failures are Unavailable with a fixed, action-specific reason. A loaded catalogue keeps the area Visible until its caller-scoped memo is invalidated or refreshed. |
 | Apps | `apps`, `/apps` | `ILatticeAppWorkspace`, `ILatticeAppsControl`, `ILatticeAppCatalog`, and `ILatticeAuthAdmin` for role binding | Tenant-scoped | Probes workspace apps, catalogue capabilities and control capabilities. It is Visible when the caller has a workspace answer, can browse the catalogue, or can list installed apps. Probe faults and missing facades deny the relevant flags, so a head serving none of them is Hidden; a capability probe the cluster did not answer leaves an area that shows nothing not checked, and is not remembered. The answer is held for the circuit for ten seconds at most: the first navigation or completion after that re-reads it in the background, so an app installed, bound or granted elsewhere reaches the spine badge, Home, `a/` completions and the open Apps page without a reload. |
-| Access | `access`, `/access` and `/t/{tenant}/access` | `ILatticeAuthAdmin`; delegated tenant policy and directory facades | Mixed: `/access` is cluster-wide; `/t/{tenant}/access` is tenant-rooted and filters rules/groups for that tenant, with delegated groups, members and rules available when enabled | The smallest cluster group-catalogue page admits cluster access administrators. Only a Hidden result falls through to delegated access: a valid non-default asserted tenant with delegated access enabled can admit its administrator. Missing both surfaces or a denied/faulted tenant posture hides the area; an anonymous cluster-wide denial is Unavailable with "Sign in to administer access on this cluster."; a cluster probe the cluster did not answer is not checked and not remembered. |
+| Access | `access`, `/access` and `/t/{tenant}/access` | `ILatticeAuthAdmin`; delegated tenant policy and directory facades | Mixed: `/access` is cluster-wide; `/t/{tenant}/access` is tenant-rooted and filters rules/groups for that tenant, with delegated groups, members and rules available when enabled | The smallest cluster group-catalogue page admits cluster access administrators. A Hidden or not-checked cluster result falls through to delegated access: a valid non-default asserted tenant with delegated access enabled can admit its administrator. Missing both surfaces or a denied/faulted tenant posture hides the area; an anonymous cluster-wide denial is Unavailable with "Sign in to administer access on this cluster."; a cluster probe the cluster did not answer is not checked and not remembered. |
 | Schema | `schema`, `/schema` | `ILatticeSchemaControl` | Tenant-scoped | Probes schema capabilities against a reserved, side-effect-free tree id. Any schema grant makes the area Visible. When that probe grants nothing, a signed-in caller is also admitted by a schema grant on one of the first 64 trees its catalogue lists, probed eight at a time, so a reader of named trees sees their schema. A refused anonymous caller sees Unavailable with "Sign in to manage schema on this cluster."; a signed-in refusal, missing facade, unserved cluster or definite fault is Hidden; a probe the cluster did not answer is not checked. |
 | Tenancy | `tenancy`, `/tenancy` and `/t/{tenant}/tenancy` | Tenant self-service, lifecycle, access, grant, region and quota facades; apps control for installed-app counts | Mixed: the directory is cluster-wide; `/t/{tenant}/tenancy` follows the active tenant | Requires tenancy to be active and the self-service facade to exist. It proves whether the caller is an operator or administers the scoped tenant. Operators and scoped tenant admins see it; refused anonymous callers see Unavailable with "Sign in to see the tenants you administer."; refused signed-in callers and other definite faults are Hidden; a probe the cluster did not answer is not checked. |
 | Replication | `replication`, `/replication` | `ILatticeReplicationStatus`, `ILatticeReplicationControl` | Tenant-scoped addresses, over the caller's admitted replication view | Reads the peer-status report, or falls back to the enrolment report. Status success makes the area Visible. If status fails but enrolment names at least one manageable tree, it is Visible. Missing facades, denied reads and other definite faults are Hidden; when neither read admits and either one met no answer, the area is not checked and that read is not reused. |
@@ -431,6 +435,7 @@ The Data palette commands are:
 | Command id | Label | Effect |
 | --- | --- | --- |
 | `data.refresh` | Refresh the tree directory | Drops the circuit's loaded tree and view list, reloads it, and updates the directory and workspace surfaces. |
+| `data.create-view` | New view... | Offered only while a tree workspace whose source tree the caller administers is open. Opens that tree's Views tab with the New view dialog (`?tab=views&new=view`). |
 | `data.export` | Export... | Opens the Export dialog of the open tree workspace (see [Exporting a tree](#exporting-a-tree)). The palette offers it only while a tree workspace that draws **Export...** is open - the same verdict, for the same caller - and leaves it out everywhere else. |
 | `data.import` | Import... | Opens the Import dialog of the open tree workspace (see [Importing into a tree](#importing-into-a-tree)). The palette offers it only while a tree workspace that draws **Import...** is open, for the same caller. |
 | `data.new-entry` | New entry... | Offered while a tree workspace whose caller may write it is open. Opens the value editor for a new key. |
@@ -474,6 +479,14 @@ caller. Its commands are `apps.install`, plus per-app `apps.upgrade.{slug}` and
 actions. See [Lattice Apps](lattice-apps.md) for the app frame, catalogue,
 review and lifecycle flows.
 
+| Address | What it shows |
+| --- | --- |
+| `/apps`, `/t/{tenant}/apps` | "Your apps": the enabled apps in which the caller holds a role, for every signed-in user, plus, for an `AppInstall` holder, the link to the catalogue, **Install app...** and a call-out for any installed app whose activation failed. |
+| `/apps/catalogue`, plus the tenant-rooted equivalent | The source catalogue, filtered by `?source=`, `?filter=` (`all`, `installed`, `available` or `updates`) and the text in `?q=`. |
+| `/apps/catalogue/{source}/{slug}[@{version}]`, plus the tenant-rooted equivalent | The pre-install review of one app as a source offers it: its newest version, or the version after `@`. |
+| `/apps/{slug}`, plus the tenant-rooted equivalent | One installed app's page, with the tabs Overview, Trees, Roles, Tools, Subscriptions, Replication and, for an `AppInstall` holder only, Consent, each at `/apps/{slug}/{tab}`. |
+| `/apps/{slug}/window` | The app's own UI alone in a browser window of its own, without the console's header, address line or spine. The overview's **Open {app name}** control launches it, only for an app that ships a UI and is among the caller's own apps. |
+
 ## Access
 
 Access is the policy area for auth rules, groups and explaining an access
@@ -500,7 +513,9 @@ subject picking and explain output.
 Schema covers schema policy, version configuration, compliance, remediation and
 dead letters for each tree the caller can manage through `ILatticeSchemaControl`.
 The area-wide probe asks for capabilities on a reserved tree id and admits the
-area only when at least one schema capability is present. Its commands are
+area when at least one schema capability is present; when it grants nothing, a
+schema grant on one of the first 64 trees the catalogue lists admits it too.
+Its commands are
 `schema.scan-compliance` and `schema.all-trees`. See
 [Managing schema](managing-schema.md) for the directory, tree pages and
 operation model.

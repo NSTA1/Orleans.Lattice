@@ -20,17 +20,21 @@ WAL-move surface yourself. Nothing on this axis ever changes the compute
   ceiling to that sum rather than one silo-wide value, and the comparison is
   made once over the summed bytes and ceilings, not tree by tree; a tree with
   no ceiling contributes neither bytes nor budget to the comparison.
-- `WalRetainedBytes` - total retained WAL bytes across every catalogue key.
+- `WalRetainedBytes` - total retained WAL bytes across every catalogue key,
+  over the trees whose figure was complete (see `ExcludedPartialTrees`).
 - `Accounts` - a `WalAccountPressure` per `IWalStorageProviderCatalog` key that
-  backs a WAL partition (never `null`; empty when nothing is tracked).
+  backs a WAL partition, ordered by key (never `null`; empty when nothing is
+  tracked).
 - `Recommendation` - an optional `WalRebalanceRecommendation`, or `null` when no
   rebalance is warranted or `StorageRecommendationsEnabled` is `false`.
-- `ExcludedPartialTrees` - how many trees were left out because their WAL byte
-  figure was partial: some partition did not answer and had no recent figure to
-  stand in, so the figure is a lower bound. Weighing it would understate the
-  pressure on exactly the account too busy to answer, so the tree's bytes and
-  ceiling are left out of every byte and capacity comparison; its saturation
-  still counts toward throughput classification (issue #6017).
+- `ExcludedPartialTrees` - how many trees were left out because their
+  storage-usage report was partial, so its byte figure is a lower bound: a WAL
+  partition or shard root did not answer (for a WAL partition, with no recent
+  figure to stand in), a storage surface does not support byte accounting, or
+  the cluster roll-up could not reach the tree at all. Weighing such a tree
+  would understate the pressure on exactly the account too busy to answer, so
+  its bytes and ceiling are left out of every byte and capacity comparison; its
+  saturation still counts toward throughput classification (issue #6017).
 
 ## Throughput-bound versus capacity-bound
 
@@ -47,6 +51,12 @@ An account that is both saturated for the window and over its retained-bytes
 threshold is classified `ThroughputBound`; its `OverThreshold` flag still reads
 `true`.
 
+The saturation input is the answering silo's own WAL saturation signal, read
+per tree, and the answering silo tracks how long each tree has stayed
+non-`Healthy` across its own samples; an account takes the worst state and the
+longest such run among the trees with partitions on it. Two silos can therefore
+classify the same account differently.
+
 `WalAccountPressure.OverThreshold` is the capacity-bound trigger specifically -
 `true` when that account's budgeted retained bytes crossed the advisory fraction
 of its budget. The budget is the sum of the effective per-tree ceilings
@@ -57,9 +67,16 @@ trees sharing an account are weighed together against their summed budget.
 ## The rebalance recommendation
 
 When a hot account is found and recommendations are enabled, the collector emits
-one `WalRebalanceRecommendation` naming:
+one `WalRebalanceRecommendation`. A throughput-bound account takes precedence
+over a capacity-bound one; among throughput-bound accounts the worst saturation
+wins, then the most retained bytes, and among capacity-bound accounts the most
+retained bytes, with ties broken by key. The target is the first registered key
+(in ordinal order) other than the hot one whose account is classified `None`,
+or that backs no partition at all. The recommendation names:
 
-- `Tree` and `Partition` - the WAL partition to relocate.
+- `Tree` and `Partition` - the WAL partition to relocate: a partition on the
+  hot account, preferring one whose tree is not `Healthy` when the account is
+  throughput-bound.
 - `CurrentProviderKey` - the catalogue key that backs it today.
 - `TargetProviderKey` - a registered key with spare headroom to accept it, when
   `HasHeadroom` is `true`.

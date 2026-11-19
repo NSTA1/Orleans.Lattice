@@ -98,7 +98,7 @@ The fence adds no round trip to the steady path. The tail write rides in the com
 
 #### Releases affected
 
-Every released `Orleans.Lattice.Storage.AzureTable` up to and including 10.2.0 is exposed: releases with the overlap rejection above check within one provider instance only, and earlier releases do not check at all. Exposure needs two writers on one WAL partition at the same time, which the WAL grain's single activation normally prevents, so it arises only around a silo failure or a WAL placement move. Its effects are an offset read back twice with two different records, so replicas that apply different ones can diverge, and, after a lowered tail, a recovering writer storing committed offsets a second time. No configuration avoids it; upgrade.
+Every released `Orleans.Lattice.Storage.AzureTable` up to and including 10.2.0 is exposed: releases with the overlap rejection above check within one provider instance only, and earlier releases do not check at all. Exposure needs two writers on one WAL partition at the same time, which the WAL grain's single activation normally prevents, so it arises only around a silo failure or a WAL placement move. Its effects are an offset read back twice with two different records, so replicas that apply different ones can diverge, and, after a lowered tail, a recovering writer storing committed offsets a second time. No configuration avoids it; upgrade to 10.3.0 or later, the first release that carries the fence.
 
 #### Rolling upgrade
 
@@ -127,7 +127,7 @@ Reads enumerate committed batch metadata in offset order, then stream entry rows
 
 The filtered replay read (`ReadFilteredAsync`, issue #3565) walks the same metadata, and bounds each batch query above by the window's last row key as well. It classifies each row from the routing prefix of its payload before decoding it: a compressed row is inflated into a pooled buffer rather than a new array, and a row the reader's filter excludes is neither decoded nor retained - except the window's last examined row, which, when excluded, is projected routing-only at the end of the scan so a resuming reader moves past it. The table service still returns every row in the window - the key lives inside the payload, so the service cannot select on it - which makes the saving the per-row decode and its allocations, not the transfer. The classification needs the routing reader `AddAzureTableWalStorage` supplies; a provider built through a public constructor decodes every row it examines, and returns the same rows.
 
-Trim first raises the shard's durable trim watermark to the trimmed offset (capped at the committed tail), then deletes old retained entry rows in bounded Azure Table transactions and removes matching commit metadata in order; see [Trim and the sweep](#trim-and-the-sweep). A crash during trim can leave a stale retained prefix below the watermark, but not a gap in the live tail; reads on an instance that knows the watermark never return an entry at or below it, and a later trim can resume cleanup. `GetTrimWatermarkAsync` reports the larger of the recorded watermark and the offset just below the lowest stored entry, so a shard trimmed before the watermark row existed still answers exactly. A shard with no stored entry was trimmed through its committed `TAIL`, never through the highest offset, which also counts accepted batches whose phase 2 has not landed; inferring from that cached those batches as trimmed and hid them from every later read on the instance (issue #6036). `RefreshTrimWatermarkAsync` replaces the cached value with the stored one.
+Trim first raises the shard's durable trim watermark to the trimmed offset (capped at the highest offset the provider reports for the shard), then deletes old retained entry rows in bounded Azure Table transactions and removes matching commit metadata in order; see [Trim and the sweep](#trim-and-the-sweep). A crash during trim can leave a stale retained prefix below the watermark, but not a gap in the live tail; reads on an instance that knows the watermark never return an entry at or below it, and a later trim can resume cleanup. `GetTrimWatermarkAsync` reports the larger of the recorded watermark and the offset just below the lowest stored entry, so a shard trimmed before the watermark row existed still answers exactly. A shard with no stored entry was trimmed through its committed `TAIL`, never through the highest offset, which also counts accepted batches whose phase 2 has not landed; inferring from that cached those batches as trimmed and hid them from every later read on the instance (issue #6036). `RefreshTrimWatermarkAsync` replaces the cached value with the stored one.
 
 ### Hidden committed entries (issue #6036)
 
@@ -135,7 +135,7 @@ Every read clamps to the trim watermark the provider instance has cached, so a c
 
 #### Releases affected
 
-Every `Orleans.Lattice.Storage.AzureTable` release from 10.0.0 to 10.2.0 with pipelined phase-2 commits, the default. On a silo that cached such a watermark, reads skipped the batch until the silo restarted or the WAL partition moved: a view stalled on the partition, and once a later entry landed, view subscribers and the replication shipper read past the range, so views missed those writes and peers never received them. A leaf that replayed the range on reactivation could lose acknowledged writes its snapshot did not hold. The upgrade's restart clears any cached value.
+Every `Orleans.Lattice.Storage.AzureTable` release from 10.0.0 to 10.2.0 with pipelined phase-2 commits, the default. On a silo that cached such a watermark, reads skipped the batch until the silo restarted or the WAL partition moved: a view stalled on the partition, and once a later entry landed, view subscribers and the replication shipper read past the range, so views missed those writes and peers never received them. A leaf that replayed the range on reactivation could lose acknowledged writes its snapshot did not hold. 10.3.0 is the first release with the fix, and the upgrade's restart clears any cached value.
 
 #### Remediation after upgrading
 
@@ -172,6 +172,24 @@ Capacity planning is shared with core WAL tuning:
 Stored payload compression is per row. A row records enough metadata to decode itself, so changing `Compression`, `CompressionMinPayloadBytes`, or the registered compressor affects new rows only. Older rows remain readable as long as a compressor for their recorded algorithm is still registered; a row whose algorithm has none fails its read with `NotSupportedException`. The Zstandard fallback that `AddAzureTableWalStorage` registers keeps Zstd rows readable.
 
 When the provider constructs its own Azure SDK client, it attaches `RetryAttemptTrackingPolicy` for retry telemetry. When `HonorSaturationSignal` is enabled and `IWalSaturationSignal` is available, it also attaches `SaturationAwareRetryPolicy` so retry attempts can short-circuit during saturated WAL pressure. A pre-built `TableServiceClient` bypasses provider-owned pipeline construction; the host owns any equivalent policies in that mode.
+
+## Telemetry
+
+The provider declares no meter of its own: it publishes onto the core `orleans.lattice` meter (`LatticeMetrics`), so the instruments below are documented with the rest of that meter in [Metrics](../lattice/metrics.md).
+
+| Instrument | Kind | Unit | Emitted when |
+|---|---|---|---|
+| `orleans.lattice.provider.commit.duration` | Histogram | `ms` | A phase-1 entry transaction or a phase-2 commit transaction finishes, tagged by phase and by `PipelinePhaseTwoCommits`. |
+| `orleans.lattice.provider.phase2.batch_size` | Histogram | `{commit}` | A phase-2 transaction is submitted, recording how many batches it coalesced. |
+| `orleans.lattice.provider.phase2.commit.timeouts` | Counter | `{commit}` | A phase-2 transaction is abandoned on `PhaseTwoCommitTimeout`. |
+| `orleans.lattice.provider.retry.attempts` | Counter | `{attempt}` | `RetryAttemptTrackingPolicy` observes an Azure SDK retry attempt. |
+| `orleans.lattice.provider.retry.exhausted` | Counter | `{call}` | A commit call surfaces a fault after the Azure SDK retry budget is spent. |
+| `orleans.lattice.provider.retry.short_circuited` | Counter | `{attempt}` | `SaturationAwareRetryPolicy` abandons a retry attempt. |
+| `orleans.lattice.provider.idempotent_replays` | Counter | `{call}` | A conflict on a phase-1 or phase-2 transaction is proven to be a replay of a write that had already landed, and is resolved as a success. |
+| `orleans.lattice.provider.phase1.transient_retries` | Counter | `{attempt}` | A phase-1 transaction is resubmitted in place after a transient fault (`PhaseOneTransientRetryMaxAttempts`). |
+| `orleans.lattice.storage.wal.uncompressed_bytes` | Counter | `By` | A batch's entry rows land; adds the batch's encoded payload bytes before compression. |
+| `orleans.lattice.storage.wal.stored_bytes` | Counter | `By` | A batch's entry rows land; adds the payload bytes actually stored, after compression. |
+| `orleans.lattice.storage.wal.compression_skipped` | Counter | `{row}` | A row is stored verbatim, tagged by reason: compression disabled, payload below `CompressionMinPayloadBytes`, or compression would not shrink it. |
 
 ## Relationship to replication
 

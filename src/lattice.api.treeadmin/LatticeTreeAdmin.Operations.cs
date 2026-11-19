@@ -9,10 +9,9 @@ namespace Orleans.Lattice.Api.TreeAdmin;
 
 /// <summary>
 /// The accept-then-poll half of the tree-administration facade (#4124): the
-/// <see cref="ILatticeTreeAdminOperations"/> verbs, and the start cores the
-/// deprecated blocking verbs wrap. Every start composes the caller's names and
-/// authorizes exactly as the blocking verb always has, on the same effective
-/// tree, before the work is handed to the shared coordinator.
+/// <see cref="ILatticeTreeAdminOperations"/> verbs and their start cores. Every
+/// start composes the caller's names and authorizes on the effective
+/// tree before the work is handed to the shared coordinator.
 /// </summary>
 /// <remarks>
 /// A view rebuild or reconcile, a tag-index sweep and a WAL move each run as one
@@ -42,7 +41,7 @@ internal sealed partial class LatticeTreeAdmin
 
     private static readonly IReadOnlyList<string> OrphanedLeafPhases = [TreeAdminOperationPhases.Walking];
 
-    /// <summary>A started view operation and the resolution its blocking twin reports from.</summary>
+    /// <summary>A started view operation and the effective view and source-tree resolution it ran against.</summary>
     private readonly record struct ViewStart(
         string TenantId,
         LatticeOperationLaunch<bool> Launch,
@@ -387,10 +386,9 @@ internal sealed partial class LatticeTreeAdmin
     }
 
     /// <summary>
-    /// The deprecated blocking verbs' wait: awaits the in-process work this call
-    /// started and returns the engine's own result or rethrows its own exception.
-    /// Cancelling <paramref name="cancellationToken"/> cancels the operation, as
-    /// cancelling a blocking call always cancelled its work.
+    /// Awaits the in-process work this call started and returns the engine's own
+    /// result or rethrows its own exception. Cancelling
+    /// <paramref name="cancellationToken"/> cancels the operation.
     /// </summary>
     private async Task<TResult> AwaitOperationAsync<TResult>(
         string tenantId, LatticeOperationLaunch<TResult> launch, CancellationToken cancellationToken)

@@ -61,6 +61,21 @@ The two byte figures a shard reports are therefore not interchangeable. `GetReta
 
 `AddFileWalStorage` also registers the same durable-WAL GC wiring the Azure Table provider installs - the WAL cursor registry, the leaf reporter, and the WAL GC. The cursor registry itself stays the process-local `InMemoryWalCursorRegistry` that `AddLattice` installs unless the host registers its own; what the wiring adds is a leaf reporter that also mirrors each leaf's applied frontier into cluster-wide pins persisted through the configured grain storage, which the GC consults, so a restart that wipes the registry cannot let it trim entries a not-yet-reactivated leaf still needs. All three are registered idempotently, so a host that already supplied its own keeps it.
 
+## Telemetry
+
+The provider declares no meter of its own: it publishes onto the core `orleans.lattice` meter (`LatticeMetrics`), so the instruments below are documented with the rest of that meter in [Metrics](../lattice/metrics.md). Each is tagged by tree and by WAL partition, and the counters are zero-primed per partition when its log is first loaded.
+
+| Instrument | Kind | Unit | Emitted when |
+|---|---|---|---|
+| `orleans.lattice.wal.compactions` | Counter | `{compaction}` | A partition's segment file is rewritten, tagged by `trigger`: `ratio` (`CompactionThreshold`), `ceiling` (`CompactionMaximumDeadBytes`), or `reconcile`. |
+| `orleans.lattice.wal.compaction.reclaimed_bytes` | Counter | `By` | A compaction returns dead bytes to the filesystem, tagged by the same `trigger`. |
+| `orleans.lattice.wal.compaction.eval.retained_bytes` | Histogram | `By` | A compaction evaluation samples the partition's live payload bytes, before any trigger is tested. |
+| `orleans.lattice.wal.compaction.eval.dead_bytes` | Histogram | `By` | The same evaluation samples the partition's dead payload bytes. |
+| `orleans.lattice.wal.compaction.eval.retained_entries` | Histogram | `{entry}` | The same evaluation samples the partition's live entry count. |
+| `orleans.lattice.wal.compaction.eval.dead_entries` | Histogram | `{entry}` | The same evaluation samples the partition's dead entry count. |
+| `orleans.lattice.wal.recovery.torn_tail_bytes` | Counter | `By` | Recovery truncates bytes that no commit trailer sealed. |
+| `orleans.lattice.wal.recovery.torn_tail_records` | Counter | `{record}` | Recovery discards complete data records that no commit trailer sealed. |
+
 ## Related
 
 - [Public API](api.md) - the public types and what `AddFileWalStorage` registers.
