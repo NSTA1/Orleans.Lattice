@@ -63,6 +63,13 @@ public partial class ClusterToolsPage : IDisposable
     [Inject]
     private LtToastService Toasts { get; set; } = default!;
 
+    /// <summary>The layout's location, whose directory decides whether the Data area is linked.</summary>
+    [CascadingParameter]
+    internal Navigation.ExplorerLocation? Location { get; set; }
+
+    /// <summary>Whether the directory shows the Data area, so the seed-from-file link would open.</summary>
+    private bool DataShown => Location?.Shows(Data.DataArea.AreaKey) == true;
+
     private int ChunkCount => (_entries.Count + ChunkSize - 1) / ChunkSize;
 
     /// <summary>

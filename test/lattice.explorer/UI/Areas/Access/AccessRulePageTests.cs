@@ -47,7 +47,7 @@ public sealed class AccessRulePageTests : AccessTestContext
         var rule = AppRule("crm", "viewer");
         Admin.WithRule(rule);
 
-        var cut = RenderAt<AccessRulePage>(AccessRoutes.Rule(rule.RuleId, rule.Scope.TreeId).ToHref());
+        var cut = RenderAt<AccessRulePage>(AccessRoutes.Rule(rule.RuleId, rule.Scope.TreeId).ToHref(), null, new FakeArea("apps", "Apps"));
 
         cut.WaitUntil(() =>
         {
@@ -58,6 +58,15 @@ public sealed class AccessRulePageTests : AccessTestContext
             Assert.That(cut.FindAll("a.lt-btn").Single(link => link.TextContent == "Open crm roles").GetAttribute("href"), Is.EqualTo("apps/crm/roles"));
             Assert.That(cut.FindAll("button").Select(button => button.TextContent.Trim()), Has.None.EqualTo("Edit rule").And.None.EqualTo("Delete rule"));
             Assert.That(cut.FindAll(".lt-confirm"), Is.Empty);
+        });
+
+        var hidden = RenderAt<AccessRulePage>(AccessRoutes.Rule(rule.RuleId, rule.Scope.TreeId).ToHref());
+        hidden.WaitUntil(() =>
+        {
+            var note = hidden.Find("[data-lt-app-owned]");
+            Assert.That(note.TextContent, Does.Contain("owned by").And.Contain("the crm app"));
+            Assert.That(note.QuerySelector("a"), Is.Null, "the Apps area is not shown, so its roles are not linked");
+            Assert.That(hidden.FindAll("a.lt-btn").Select(link => link.TextContent), Has.None.EqualTo("Open crm roles"));
         });
     }
 

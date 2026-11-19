@@ -1,3 +1,4 @@
+using Orleans.Lattice.Explorer.UI.Design.Tokens;
 using Bunit;
 using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
@@ -23,7 +24,7 @@ public sealed partial class AppReviewPageTests
     {
         SignInAs(Admin, "admins");
         Offer(AppsTestData.TaskBoard());
-        var cut = AtBindRoles();
+        var cut = AtBindRoles(new FakeArea("access", "Access"));
 
         BindBoth(cut, "operators");
 
@@ -38,6 +39,23 @@ public sealed partial class AppReviewPageTests
             Assert.That(Button(cut, "Continue").HasAttribute("disabled"), Is.False, "the warning is advisory and never blocks");
         });
         Auth.Received().ListSubjectGroupsAsync(Admin, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public void Without_the_access_area_shown_the_warning_offers_only_a_rebinding()
+    {
+        SignInAs(Admin, "admins");
+        Offer(AppsTestData.TaskBoard());
+        var cut = AtBindRoles();
+
+        BindBoth(cut, "operators");
+
+        cut.WaitUntil(() => Assert.That(cut.FindAll("[data-lt-holding=not-member]"), Has.Count.EqualTo(2)));
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.FindAll("a[data-lt-join]"), Is.Empty, "joining a group is offered only while the directory shows Access");
+            Assert.That(cut.Find("[data-lt-holding=not-member]").TextContent, Does.Contain("so you will not hold the viewer role.").And.Contain("Bind it to a group you are in."));
+        });
     }
 
     [Test]
@@ -117,7 +135,7 @@ public sealed partial class AppReviewPageTests
         UseTenancy("globex");
         SignInAs(Admin, "admins");
         Offer(AppsTestData.TaskBoard());
-        var cut = RenderReady("/t/globex/apps/catalogue/in-image/task-board");
+        var cut = RenderReady("/t/globex/apps/catalogue/in-image/task-board", LtBreakpoint.Expanded, new FakeArea("access", "Access"));
         Button(cut, "Install...").Click();
         cut.WaitUntil(() => Assert.That(cut.FindAll("section[aria-labelledby=lt-apps-bind]"), Has.Count.EqualTo(1)));
         BindBoth(cut, "operators");

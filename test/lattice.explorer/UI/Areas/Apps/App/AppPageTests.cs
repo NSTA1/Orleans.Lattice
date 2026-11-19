@@ -337,7 +337,7 @@ public sealed partial class AppPageTests : AppPageTestContext
         Workspace.Grant(Workspace());
 
         var overview = RenderAt("t/acme/apps/crm/overview");
-        var trees = RenderAt("t/acme/apps/crm/trees");
+        var trees = RenderAt("t/acme/apps/crm/trees", shown: new FakeArea("data", "Data"));
 
         Assert.Multiple(() =>
         {

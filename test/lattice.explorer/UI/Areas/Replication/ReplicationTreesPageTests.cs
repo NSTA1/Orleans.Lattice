@@ -65,7 +65,8 @@ public sealed partial class ReplicationTreesPageTests : ReplicationTestContext
     {
         UseTrees();
 
-        var cut = RenderAt<ReplicationTreesPage>("replication/trees");
+        var cut = RenderAt<ReplicationTreesPage>("replication/trees", alsoShown: new FakeArea("apps", "Apps"));
+        var hidden = RenderAt<ReplicationTreesPage>("replication/trees");
 
         cut.WaitUntil(() =>
         {
@@ -76,6 +77,13 @@ public sealed partial class ReplicationTreesPageTests : ReplicationTestContext
             Assert.That(row.QuerySelector("[data-lt-replication-app]")!.TextContent, Is.EqualTo("Managed by crm"));
             Assert.That(Cells(row)[4], Is.EqualTo("App crm"));
             Assert.That(Cells(row)[5], Is.EqualTo("Stalled"));
+        });
+        hidden.WaitUntil(() =>
+        {
+            var row = Row(hidden, "a/crm/contacts");
+            Assert.That(row.QuerySelectorAll("a").Select(link => link.GetAttribute("href")), Is.EqualTo(new[] { "replication/trees/a/crm/contacts" }), "the Apps area is not shown, so the app is not linked");
+            Assert.That(row.QuerySelector("[data-lt-replication-app]")!.TextContent, Is.EqualTo("Managed by crm"));
+            Assert.That(Cells(row)[4], Is.EqualTo("App crm"));
         });
     }
 
@@ -348,7 +356,7 @@ public sealed partial class ReplicationTreesPageTests : ReplicationTestContext
     {
         UseTrees();
 
-        var cut = RenderAt<ReplicationTreesPage>("replication/trees", LtBreakpoint.Compact);
+        var cut = RenderAt<ReplicationTreesPage>("replication/trees", LtBreakpoint.Compact, alsoShown: new FakeArea("apps", "Apps"));
         cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-table-list__open"), Has.Count.EqualTo(6)));
 
         var crm = cut.FindAll(".lt-table-list__open")[0];
@@ -378,7 +386,7 @@ public sealed partial class ReplicationTreesPageTests : ReplicationTestContext
         UseTenancy("acme");
         UseTrees();
 
-        var cut = RenderAt<ReplicationTreesPage>("t/acme/replication/trees", tenancy: true);
+        var cut = RenderAt<ReplicationTreesPage>("t/acme/replication/trees", tenancy: true, alsoShown: new FakeArea("apps", "Apps"));
 
         cut.WaitUntil(() =>
         {

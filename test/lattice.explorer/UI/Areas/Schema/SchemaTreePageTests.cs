@@ -19,7 +19,7 @@ public sealed class SchemaTreePageTests : SchemaTestContext
         UseEstate();
         Schema.Policies["a/crm/orders"] = SchemaTestData.Policy();
 
-        var cut = RenderAt<SchemaTreePage>("schema/a/crm/orders");
+        var cut = RenderAt<SchemaTreePage>("schema/a/crm/orders", alsoShown: new FakeArea("apps", "Apps"));
 
         cut.WaitUntil(() =>
         {
@@ -134,11 +134,23 @@ public sealed class SchemaTreePageTests : SchemaTestContext
     }
 
     [Test]
+    public void Without_the_apps_area_shown_the_declaring_app_is_named_without_a_link()
+    {
+        UseEstate();
+        Schema.Policies["a/crm/orders"] = SchemaTestData.Policy();
+
+        var cut = RenderAt<SchemaTreePage>("schema/a/crm/orders");
+
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-schema-meta").TextContent, Does.Contain("Declared by app crm 2.1.0")));
+        Assert.That(cut.Find(".lt-schema-meta").QuerySelectorAll("a"), Is.Empty);
+    }
+
+    [Test]
     public void Under_tenancy_the_tabs_and_the_app_link_stay_in_the_tenant()
     {
         UseEstate();
         UseTenancy("acme");
-        var cut = RenderAt<SchemaTreePage>("t/acme/schema/a/crm/orders", tenancy: true);
+        var cut = RenderAt<SchemaTreePage>("t/acme/schema/a/crm/orders", tenancy: true, alsoShown: new FakeArea("apps", "Apps"));
         cut.WaitUntil(() => Assert.That(cut.FindAll("[role=tab]"), Has.Count.EqualTo(5)));
 
         Assert.That(cut.Find(".lt-schema-meta a").GetAttribute("href"), Is.EqualTo("t/acme/apps/crm"));

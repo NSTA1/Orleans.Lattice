@@ -168,6 +168,11 @@ How an area decides between these is described in
 navigation, and whenever sign-in, the connection or the configuration changes,
 because each of those can change which areas you may see.
 
+Pages follow the spine when they link into another area: a link to an app,
+a tree in Data, Replication, Access or Tenancy is drawn only while the spine
+shows that area as visible. Otherwise the name stays as plain text, or a
+call to action is left out.
+
 Home shows the same stops as an estate overview, each with a one-line status
 under its name, such as how many trees there are. Each status arrives
 independently under its own time bound, so a slow area never delays the others.

@@ -214,6 +214,17 @@ public sealed class ClusterToolsPageTests : ClusterTestContext
     }
 
     [Test]
+    public void Seeding_from_a_file_links_to_the_data_import_only_while_data_is_shown()
+    {
+        var hidden = RenderAt(Address);
+        hidden.WaitUntil(() => Assert.That(hidden.FindAll("textarea"), Has.Count.EqualTo(1)));
+        Assert.That(hidden.FindAll("[data-lt-bulk-from-file]"), Is.Empty);
+
+        var shown = RenderAt(Address, null, new FakeArea("data", "Data"));
+        shown.WaitUntil(() => Assert.That(shown.Find("[data-lt-bulk-from-file]").GetAttribute("href"), Does.StartWith("data/orders?")));
+    }
+
+    [Test]
     public void A_failed_digest_read_is_shown_at_its_field()
     {
         Admin.GetProjectionDigestAsync(TreeId, 0, Arg.Any<CancellationToken>()).ThrowsAsync(new NotSupportedException("Digests are disabled for this tree."));

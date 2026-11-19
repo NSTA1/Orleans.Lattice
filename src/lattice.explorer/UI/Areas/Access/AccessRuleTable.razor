@@ -23,9 +23,13 @@
         <LtColumn TItem="LatticeAuthorizationRule" Title="Owner">
             @if (AccessAppRule.TryParse(context.RuleId, out var owner))
             {
-                @if (owner.HasSlug)
+                @if (owner.HasSlug && AppsShown)
                 {
                     <a href="@AppRolesHref(owner.Slug)">app @owner.Slug</a>
+                }
+                else if (owner.HasSlug)
+                {
+                    <span>app @owner.Slug</span>
                 }
                 else
                 {

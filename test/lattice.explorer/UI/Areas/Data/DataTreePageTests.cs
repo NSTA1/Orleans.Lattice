@@ -19,7 +19,7 @@ public sealed class DataTreePageTests : DataTestContext
         Client.WithTree("a/crm/orders", keys: 3, shards: 64);
         Client.Metrics["a/crm/orders"] = new TreeMetrics { TreeId = "a/crm/orders", ShardCount = 64, LiveKeys = 48_210 };
 
-        var cut = RenderAt("data/a/crm/orders");
+        var cut = RenderAt("data/a/crm/orders", shown: new FakeArea("apps", "Apps"));
 
         cut.WaitUntil(() =>
         {
@@ -32,6 +32,17 @@ public sealed class DataTreePageTests : DataTestContext
             Assert.That(cut.FindAll("[role=tab]").Select(tab => tab.TextContent), Is.EqualTo(new[] { "Keys", "History", "Metrics", "Dead letters", "Tag indexes", "Views" }));
             Assert.That(cut.Find("[role=tab][aria-selected=true]").TextContent, Is.EqualTo("Keys"));
         });
+    }
+
+    [Test]
+    public void Without_the_apps_area_shown_the_owning_app_is_named_without_a_link()
+    {
+        Client.WithTree("a/crm/orders", keys: 3);
+
+        var cut = RenderAt("data/a/crm/orders");
+
+        cut.WaitUntil(() => Assert.That(cut.Find(".lt-data-meta").TextContent, Does.Contain("Owned by app crm")));
+        Assert.That(cut.Find(".lt-data-meta").QuerySelectorAll("a[href='apps/crm']"), Is.Empty);
     }
 
     [Test]

@@ -78,9 +78,13 @@ else
                     <LtStatusPill State="@ComplianceState(row)" Text="@ComplianceText(row)" />
                 </LtColumn>
                 <LtColumn TItem="SchemaTreeRow" Context="row" Title="Declared by">
-                    @if (row.Declaration is { } declaration)
+                    @if (row.Declaration is { } declaration && Shows(SchemaAddresses.AppsAreaKey))
                     {
                         <a class="lt-schema-app-link" href="@Href(SchemaAddresses.App(declaration.Slug))">app <span class="lt-shell-mono">@declaration.Slug</span></a>
+                    }
+                    else if (row.Declaration is { } plainDeclaration)
+                    {
+                        <span>app <span class="lt-shell-mono">@plainDeclaration.Slug</span></span>
                     }
                     else
                     {

@@ -29,6 +29,10 @@ internal sealed class DataPageHost : ComponentBase, IDisposable
     [Parameter]
     public bool TenancyActive { get; set; }
 
+    /// <summary>The areas the directory shows as visible, so links into them are offered.</summary>
+    [Parameter]
+    public IReadOnlyList<IExplorerArea> Shown { get; set; } = [];
+
     /// <inheritdoc />
     public void Dispose() => Navigation.LocationChanged -= OnLocationChanged;
 
@@ -39,7 +43,7 @@ internal sealed class DataPageHost : ComponentBase, IDisposable
     protected override void BuildRenderTree(RenderTreeBuilder builder)
     {
         var address = ExplorerAddress.TryFromUri(Navigation.Uri, Navigation.BaseUri, out var parsed) ? parsed : ExplorerAddress.Home;
-        var location = new ExplorerLocation(address, [], EntriesLoaded: true, TenancyActive);
+        var location = new ExplorerLocation(address, [.. Shown.Select(area => new ExplorerAreaEntry(area, AreaAvailability.Visible))], EntriesLoaded: true, TenancyActive);
         var page = address.TreeId is null ? typeof(DataDirectoryPage) : typeof(DataTreePage);
 
         builder.OpenComponent<CascadingValue<ExplorerLocation>>(0);

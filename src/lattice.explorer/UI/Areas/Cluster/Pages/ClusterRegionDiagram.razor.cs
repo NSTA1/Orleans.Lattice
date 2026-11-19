@@ -36,8 +36,7 @@ public partial class ClusterRegionDiagram : IDisposable
     /// Whether the directory shows the Replication area as openable, so the link
     /// never points at an area this host does not serve or this caller cannot see.
     /// </summary>
-    private bool ReplicationShown =>
-        Location?.Entries.Any(entry => entry.IsVisible && string.Equals(entry.Area.Key, ReplicationAreaKey, StringComparison.Ordinal)) == true;
+    private bool ReplicationShown => Location?.Shows(ReplicationAreaKey) == true;
 
     /// <inheritdoc />
     public void Dispose()

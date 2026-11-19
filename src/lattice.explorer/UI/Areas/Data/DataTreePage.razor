@@ -66,7 +66,14 @@ else
         }
         @if (_tree.AppSlug is { } owner)
         {
-            <span>Owned by app <a class="lt-shell-mono lt-data-key" href="@_workspace.Href(ExplorerAddress.ForArea(DataArea.AppsAreaKey, owner))">@owner</a></span>
+            @if (Shows(DataArea.AppsAreaKey))
+            {
+                <span>Owned by app <a class="lt-shell-mono lt-data-key" href="@_workspace.Href(ExplorerAddress.ForArea(DataArea.AppsAreaKey, owner))">@owner</a></span>
+            }
+            else
+            {
+                <span>Owned by app <span class="lt-shell-mono lt-data-key">@owner</span></span>
+            }
         }
         @if (_tree.Kind == DataTreeKind.View)
         {

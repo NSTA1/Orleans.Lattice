@@ -1,5 +1,6 @@
 using Bunit;
 using Orleans.Lattice.Api.Apps;
+using Orleans.Lattice.Explorer.Tests.UI.Navigation;
 using static Orleans.Lattice.Explorer.Tests.UI.Areas.Apps.App.AppPageTestData;
 
 namespace Orleans.Lattice.Explorer.Tests.UI.Areas.Apps.App;
@@ -18,11 +19,14 @@ public sealed partial class AppPageTests
     {
         Workspace.Grant(Workspace());
 
-        var cut = RenderAt("apps/crm/trees");
+        var cut = RenderAt("apps/crm/trees", shown: new FakeArea("data", "Data"));
         var rows = cut.FindAll("tbody tr");
+        var hidden = RenderAt("apps/crm/trees").FindAll("tbody tr");
 
         Assert.Multiple(() =>
         {
+            Assert.That(hidden[0].QuerySelector("a"), Is.Null, "the Data area is not shown, so a tree is named without a link");
+            Assert.That(Cells(hidden[0])[0], Is.EqualTo("orders"));
             Assert.That(cut.FindAll("thead th").Select(header => header.TextContent.Trim()),
                 Is.EqualTo(new[] { "Tree", "Adopted", "Shards", "Retention", "Leaf keys", "Internal children", "WAL partitions", "Rebuildable" }));
             Assert.That(rows, Has.Count.EqualTo(2));
@@ -126,12 +130,14 @@ public sealed partial class AppPageTests
     {
         Workspace.Grant(Workspace());
 
-        var cut = RenderAt("apps/crm/replication");
+        var cut = RenderAt("apps/crm/replication", shown: new FakeArea("replication", "Replication"));
+        var hidden = RenderAt("apps/crm/replication");
 
         Assert.Multiple(() =>
         {
             Assert.That(Cells(cut.Find("tbody tr")), Is.EqualTo(new[] { "orders", "LwwRegister" }));
             Assert.That(cut.Find(".lt-app-actions a").GetAttribute("href"), Is.EqualTo("replication?app=crm"));
+            Assert.That(hidden.FindAll(".lt-app-actions a"), Is.Empty, "the Replication area is not shown, so it is not linked");
         });
     }
 
@@ -263,7 +269,7 @@ public sealed partial class AppPageTests
     {
         Workspace.Grant(Workspace());
 
-        var cut = RenderAt("apps/crm/trees", compact: true);
+        var cut = RenderAt("apps/crm/trees", compact: true, new FakeArea("data", "Data"));
         var first = cut.Find(".lt-table-list__open");
 
         Assert.That(first.TextContent, Does.Contain("orders").And.Contain("Owned, 4 shards, retention 30 days"));
@@ -276,6 +282,13 @@ public sealed partial class AppPageTests
             Assert.That(sheet.QuerySelector("a.lt-btn")!.GetAttribute("href"), Is.EqualTo("data/a/crm/orders"));
             Assert.That(sheet.QuerySelector("a.lt-btn")!.TextContent, Is.EqualTo("Open in Data"));
         });
+
+        var hidden = RenderAt("apps/crm/trees", compact: true);
+        hidden.Find(".lt-table-list__open").Click();
+        hidden.WaitForAssertion(() => Assert.That(
+            hidden.Find("[role=dialog]").QuerySelectorAll("a.lt-btn").Select(link => link.TextContent),
+            Has.None.EqualTo("Open in Data"),
+            "the Data area is not shown, so the sheet does not offer it"));
     }
 
     private static string[] Cells(AngleSharp.Dom.IElement row) =>

@@ -73,6 +73,13 @@ else
     [Inject]
     internal ExplorerNavigator Navigator { get; set; } = default!;
 
+    /// <summary>The layout's location, whose directory decides whether the Access area is linked.</summary>
+    [CascadingParameter]
+    internal ExplorerLocation? Location { get; set; }
+
+    /// <summary>Whether the directory shows the Access area, so a join link would open.</summary>
+    private bool AccessShown => Location?.Shows(Access.AccessRoutes.AreaKey) == true;
+
     private string State => Assessment.HoldsAny switch
     {
         true => "member",
@@ -93,7 +100,7 @@ else
     };
 
     private RenderFragment Fixes => @<text>
-        @if (Assessment.MembershipKnown)
+        @if (Assessment.MembershipKnown && AccessShown)
         {
             @foreach (var group in Assessment.MissingGroups)
             {

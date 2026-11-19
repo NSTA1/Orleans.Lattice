@@ -81,7 +81,10 @@ else
             <a class="lt-btn" href="@Href(TenancyRoutes.Tenant(context.TenantId))">Administer</a>
             <a class="lt-btn" href="@Href(TenancyRoutes.TenantRegions(context.TenantId))">Regions</a>
             <a class="lt-btn" href="@Href(TenancyRoutes.MyTenant(context.TenantId))">@(IsActive(context) ? "Open workspace" : "Scope to tenant")</a>
-            <a class="lt-btn" href="@Href(TenancyRoutes.Apps(context.TenantId))">@AppsText(context)</a>
+            @if (Shows(Apps.Catalogue.AppsRoutes.AreaKey))
+            {
+                <a class="lt-btn" href="@Href(TenancyRoutes.Apps(context.TenantId))">@AppsText(context)</a>
+            }
         </DetailActions>
     </LtTable>
 }

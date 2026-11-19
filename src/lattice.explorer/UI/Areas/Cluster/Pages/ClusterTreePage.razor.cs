@@ -37,6 +37,13 @@ public partial class ClusterTreePage : IDisposable
     [CascadingParameter(Name = ClusterScope.CascadeName)]
     internal string? Scope { get; set; }
 
+    /// <summary>The layout's location, whose directory decides whether the Data area is linked.</summary>
+    [CascadingParameter]
+    internal ExplorerLocation? Location { get; set; }
+
+    /// <summary>Whether the directory shows the Data area, so the "Browse it in Data" link would open.</summary>
+    private bool DataShown => Location?.Shows(DataArea.AreaKey) == true;
+
     [Inject]
     private ClusterFacades Facades { get; set; } = default!;
 

@@ -33,8 +33,11 @@ public sealed class SchemaDirectoryPageTests : SchemaTestContext
         Ledger.Record("orders", SchemaTestData.Report("orders", 90, 10), Time.GetUtcNow());
         Ledger.Record("audit", SchemaTestData.Report("audit", 12, 0), Time.GetUtcNow());
 
-        var cut = RenderAt<SchemaDirectoryPage>("schema");
+        var cut = RenderAt<SchemaDirectoryPage>("schema", alsoShown: new FakeArea("apps", "Apps"));
+        var hidden = RenderAt<SchemaDirectoryPage>("schema");
 
+        hidden.WaitUntil(() => Assert.That(Cells(Row(hidden, "a/crm/orders"))[^1], Is.EqualTo("app crm")));
+        Assert.That(Row(hidden, "a/crm/orders").QuerySelector("td a"), Is.Null, "the Apps area is not shown, so the app is named without a link");
         cut.WaitUntil(() =>
         {
             Assert.That(cut.Find("h1").TextContent, Is.EqualTo("Schema"));
@@ -324,7 +327,7 @@ public sealed class SchemaDirectoryPageTests : SchemaTestContext
         UseEstate();
         UseTenancy("acme");
 
-        var cut = RenderAt<SchemaDirectoryPage>("t/acme/schema", tenancy: true);
+        var cut = RenderAt<SchemaDirectoryPage>("t/acme/schema", tenancy: true, alsoShown: new FakeArea("apps", "Apps"));
 
         cut.WaitUntil(() =>
         {

@@ -97,11 +97,13 @@ public abstract class DataTestContext : ShellChromeTestContext
     /// <summary>Navigates to <paramref name="relative"/> and renders the Data page there.</summary>
     /// <param name="relative">The base-relative address, such as <c>data/orders</c>.</param>
     /// <param name="compact">Whether to render at the compact width band.</param>
-    internal IRenderedComponent<DataPageHost> RenderAt(string relative, bool compact = false)
+    /// <param name="shown">The areas the directory shows as visible, so links into them are offered.</param>
+    internal IRenderedComponent<DataPageHost> RenderAt(string relative, bool compact = false, params IExplorerArea[] shown)
     {
         Navigation.NavigateTo(relative);
         return Render<DataPageHost>(parameters => parameters
             .Add(host => host.Compact, compact)
+            .Add(host => host.Shown, shown)
             .Add(host => host.TenancyActive, Services.GetRequiredService<ExplorerTenancy>().IsActive));
     }
 

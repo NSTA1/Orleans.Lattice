@@ -20,7 +20,7 @@ public sealed class DataDirectoryPageTests : DataTestContext
         Client.WithTree("a/crm/orders", shards: 64).WithTree("customers");
         Client.Views.Add(new ViewStateSummary { ViewName = "orders-by-status", SourceTreeId = "a/crm/orders", IsAggregation = true });
 
-        var cut = RenderAt("data");
+        var cut = RenderAt("data", shown: new FakeArea("apps", "Apps"));
 
         cut.WaitUntil(() =>
         {
@@ -35,6 +35,21 @@ public sealed class DataDirectoryPageTests : DataTestContext
             Assert.That(view.TextContent, Does.Contain("Aggregation view"));
             Assert.That(view.QuerySelectorAll("a").Select(link => link.GetAttribute("href")), Does.Contain("data/a/crm/orders"));
             Assert.That(cut.Find(".lt-data-toolbar__status").TextContent, Is.EqualTo("3 trees and views"));
+        });
+    }
+
+    [Test]
+    public void Without_the_apps_area_shown_an_app_is_named_without_a_link()
+    {
+        Client.WithTree("a/crm/orders");
+
+        var cut = RenderAt("data");
+
+        cut.WaitUntil(() => Assert.That(cut.FindAll("tbody tr.lt-table__row"), Has.Count.EqualTo(1)));
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.FindAll("a[href='apps/crm']"), Is.Empty);
+            Assert.That(cut.FindAll("tbody span.lt-data-key").Select(app => app.TextContent), Does.Contain("crm"));
         });
     }
 

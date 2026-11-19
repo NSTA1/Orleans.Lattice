@@ -67,6 +67,13 @@ public partial class AccessRuleTable
 
     private string AppRolesHref(string slug) => Navigator.Canonicalize(AccessRoutes.AppRoles(slug)).ToHref();
 
+    /// <summary>Whether the directory shows the Apps area, so an app's roles link would open.</summary>
+    private bool AppsShown => Location?.Shows(Apps.Catalogue.AppsRoutes.AreaKey) == true;
+
+    /// <summary>The layout's location, whose directory decides whether the Apps area is linked.</summary>
+    [CascadingParameter]
+    internal ExplorerLocation? Location { get; set; }
+
     /// <summary>The link to <paramref name="tenant"/>'s own rules, or <see langword="null"/> when this Explorer has no tenant-rooted addresses.</summary>
     private string? TenantRulesHref(string tenant) =>
         TenantId.TryParse(tenant, out _) && Navigator.Canonicalize(AccessRoutes.TenantRules(tenant)) is { Tenant: not null } address

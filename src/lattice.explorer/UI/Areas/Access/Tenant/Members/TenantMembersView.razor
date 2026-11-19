@@ -121,7 +121,14 @@
 
     <section class="lt-access-section" aria-labelledby="lt-access-tenant-admins" data-lt-implicit-members="@AdminsState">
         <h2 id="lt-access-tenant-admins" class="lt-access-section__title">Administrators</h2>
-        <p class="lt-access-caveat">Tenant @Tenant's administrators are members too. They are changed in <a href="@AdminsHref">Tenancy, Admins</a>.</p>
+        <p class="lt-access-caveat">Tenant @Tenant's administrators are members too. They are changed in @if (TenancyShown)
+            {
+                <a href="@AdminsHref">Tenancy, Admins</a>
+            }
+            else
+            {
+                <text>Tenancy, Admins</text>
+            }.</p>
         @if (_admins is { } admins)
         {
             @if (admins.Count == 0)

@@ -129,8 +129,9 @@ public sealed class ClusterTreeCreateDialogTests : ClusterTestContext
         Assert.That(cut.FindAll("[data-lt-create-tree=review]"), Is.Empty);
     }
 
-    [Test]
-    public void Review_create_and_land_on_the_new_trees_summary_with_what_to_do_next()
+    [TestCase(true)]
+    [TestCase(false)]
+    public void Review_create_and_land_on_the_new_trees_summary_with_what_to_do_next(bool dataShown)
     {
         var cut = OpenDialog();
         var inputs = cut.FindAll(".lt-dialog input");
@@ -148,14 +149,14 @@ public sealed class ClusterTreeCreateDialogTests : ClusterTestContext
         Admin.Received(1).CreateTreeAsync(NewTree, 4, 128, 128, Arg.Any<CancellationToken>());
         Assert.That(Toasts, Does.Contain("Tree factory-orders created."));
 
-        var page = RenderAt("/cluster/trees/" + NewTree);
+        var page = dataShown ? RenderAt("/cluster/trees/" + NewTree, null, new FakeArea("data", "Data")) : RenderAt("/cluster/trees/" + NewTree);
         page.WaitUntil(() =>
         {
             var created = page.Find("[data-lt-tree-created]");
             Assert.That(created.TextContent, Does.Contain("factory-orders is new and empty, with 4 physical shards, 128 keys per leaf and 128 children per internal node."));
             Assert.That(created.QuerySelector("a[href=\"cluster/trees/factory-orders/tools\"]")!.TextContent, Is.EqualTo("Seed it with a bulk load"));
             Assert.That(created.QuerySelector("[data-lt-tree-created-next=configuration]")!.GetAttribute("href"), Is.EqualTo("cluster/trees/factory-orders?tab=configuration"));
-            Assert.That(created.QuerySelector("[data-lt-tree-created-next=data]")!.GetAttribute("href"), Is.EqualTo("data/factory-orders"));
+            Assert.That(created.QuerySelector("[data-lt-tree-created-next=data]")?.GetAttribute("href"), dataShown ? Is.EqualTo("data/factory-orders") : Is.Null, "browsing in Data is offered only while the directory shows Data");
         });
 
         var again = RenderAt("/cluster/trees/" + NewTree);
