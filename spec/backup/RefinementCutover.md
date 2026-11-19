@@ -89,7 +89,9 @@ Each item below is checked elsewhere, or argued here; none is an unchecked claim
   before the swap, which `Crash` covers.
 - **Retiring copies no revert can reach (#6103).** The model has one restore and
   its revert, so it has no superseded restore and never retires a copy.
-  Retirement is outside it and argued here: `RestoreCopyRetirement.RetireAsync`
+  Retirement is outside it and argued here: `RestoreCopyRetirementGrain`, which
+  the restore, the revert and the estate-wide `RestoreCopySweepGrain` schedule,
+  retires through `RestoreCopyRetirement.RetireAsync`, which
   takes the same alias reservation as `Build` and `RevertBegin`, re-plans under it
   with `RestoreCopyPlanner.PlanAsync`, and never retires the alias target or the
   copy the current restore's revert returns to; a revert that could only reach a
