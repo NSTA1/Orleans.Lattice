@@ -239,9 +239,16 @@ internal sealed class ReplicationDigestProbeGrain(
         // transport, so each peer re-establishes its own scope server-side).
         using var systemOrigin = LatticeAccessGateContext.EnterSystemOrigin();
 
+        // The snapshot above is held for the whole serial pass. A copy an alias
+        // cutover left retained still answers these unstamped reads with its
+        // frozen digest, so the first mismatch re-checks the alias before it is
+        // recorded, and the end of the pass checks again before advancing.
+        var mismatchRoutingChecked = false;
+        var routingMoved = false;
+
         foreach (var shard in shardIndices)
         {
-            if (latched)
+            if (latched || routingMoved)
             {
                 break;
             }
@@ -288,6 +295,19 @@ internal sealed class ReplicationDigestProbeGrain(
                         .ConfigureAwait(true);
 
                     var outcome = DigestProbeComparer.Compare(local, response);
+                    if (outcome == DigestProbeOutcome.Mismatch && !mismatchRoutingChecked)
+                    {
+                        // Checked once per pass so persistent real drift costs one
+                        // resolve, not one per mismatched shard. An unconfirmed
+                        // check (null) still reports the mismatch.
+                        mismatchRoutingChecked = true;
+                        if (await HasPhysicalTreeMovedAsync(physicalTreeId).ConfigureAwait(true) == true)
+                        {
+                            routingMoved = true;
+                            break;
+                        }
+                    }
+
                     RecordCompared(TreeName, shard, peer, outcome);
                     if (outcome == DigestProbeOutcome.Mismatch)
                     {
@@ -324,7 +344,50 @@ internal sealed class ReplicationDigestProbeGrain(
             return;
         }
 
+        // A pass that spanned an alias move (or whose end-of-pass check could
+        // not be confirmed) compared some shards against a copy routing no
+        // longer names; leave the cadence so the next phase tick re-probes.
+        if (routingMoved || await HasPhysicalTreeMovedAsync(physicalTreeId).ConfigureAwait(true) != false)
+        {
+            return;
+        }
+
         await AdvanceCadenceAsync(nowTicks).ConfigureAwait(true);
+    }
+
+    /// <summary>
+    /// Re-resolves the tree's routing (forced) and reports whether its physical
+    /// tree id still equals <paramref name="physicalTreeId"/>, the id the pass
+    /// read its local digests from.
+    /// </summary>
+    /// <param name="physicalTreeId">The physical tree id resolved at the start of the pass.</param>
+    /// <returns>
+    /// <see langword="true"/> when an alias change moved the tree to another
+    /// copy, <see langword="false"/> when it is unchanged, and
+    /// <see langword="null"/> when routing could not be resolved.
+    /// </returns>
+    private async Task<bool?> HasPhysicalTreeMovedAsync(string physicalTreeId)
+    {
+        try
+        {
+            var routing = await _shardCounts.GetShardRoutingAsync(TreeName, CancellationToken.None).ConfigureAwait(true);
+            if (string.Equals(routing.PhysicalTreeId, physicalTreeId, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            Logger.LogInformation(
+                "The physical tree for {Context} moved from {PreviousPhysicalTreeId} to {PhysicalTreeId} during a digest probe pass; the pass is discarded and re-runs on the next phase tick",
+                LogContext, physicalTreeId, routing.PhysicalTreeId);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex,
+                "Re-resolving the routing for {Context} failed while confirming a digest probe pass; the pass is not treated as current",
+                LogContext);
+            return null;
+        }
     }
 
     private long EnsureJitteredInterval(LatticeReplicationOptions options)

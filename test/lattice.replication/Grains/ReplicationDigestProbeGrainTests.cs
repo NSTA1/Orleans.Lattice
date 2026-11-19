@@ -324,7 +324,8 @@ public partial class ReplicationDigestProbeGrainTests
 
         await grain.ProcessNextPhaseAsync();
 
-        await shardCounts.Received(1).GetShardRoutingAsync(Tree, Arg.Any<CancellationToken>());
+        // One resolve to start the pass and one to confirm it before advancing.
+        await shardCounts.Received(2).GetShardRoutingAsync(Tree, Arg.Any<CancellationToken>());
         await digests.Received(1).GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>());
         await digests.Received(1).GetLeafProjectionDigestAsync(1, Arg.Any<CancellationToken>());
         await digests.Received(1).GetLeafProjectionDigestAsync(2, Arg.Any<CancellationToken>());
