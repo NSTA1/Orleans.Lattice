@@ -162,6 +162,11 @@ jobs:
           ffmpeg -version | head -n 1
 
       - name: Install the pinned workspace toolchain
+        # onnxruntime-node's install script fetches optional CUDA binaries on
+        # linux-x64, and that release asset now returns 404. The lane runs the
+        # CPU provider only, so skip the CUDA download.
+        env:
+          ONNXRUNTIME_NODE_INSTALL_CUDA: skip
         run: npm ci
 
       - name: Unit tests for the workspace tools
