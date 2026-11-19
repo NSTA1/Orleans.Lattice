@@ -40,6 +40,12 @@ public partial class LatticeTagIndexRoundTripBatchingTests
         public int ExistsAsyncCalls;
         public int GateAccountedCalls;
         public int ApplyCrdtDeltaCalls;
+        public int TreeExistsAsyncCalls;
+
+        /// <summary>What <c>TreeExistsAsync</c> reports for the subject tree.</summary>
+        public bool TreeExists = true;
+        /// <summary>When set, every batched write fails with this exception and writes nothing.</summary>
+        public Exception? FailSetMany;
         public readonly List<int> SetManyWidths = [];
         public readonly List<int> GetManyWidths = [];
         public readonly List<int> GateAccountedWidths = [];
@@ -75,7 +81,11 @@ public partial class LatticeTagIndexRoundTripBatchingTests
         {
             var tree = Substitute.For<ILattice>();
 
-            tree.TreeExistsAsync(Arg.Any<CancellationToken>()).Returns(_ => Task.FromResult(true));
+            tree.TreeExistsAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+            {
+                Interlocked.Increment(ref TreeExistsAsyncCalls);
+                return Task.FromResult(TreeExists);
+            });
 
             tree.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
                 .Returns(ci =>
@@ -146,6 +156,10 @@ public partial class LatticeTagIndexRoundTripBatchingTests
                     var entries = ci.Arg<List<KeyValuePair<string, byte[]>>>();
                     SetManyAsyncCalls++;
                     SetManyWidths.Add(entries.Count);
+                    if (FailSetMany is { } failure)
+                    {
+                        return Task.FromException(failure);
+                    }
                     foreach (var entry in entries)
                     {
                         Data[entry.Key] = entry.Value;
@@ -260,15 +274,13 @@ public partial class LatticeTagIndexRoundTripBatchingTests
         Assert.Multiple(() =>
         {
             // One batch, carrying the tag-major row and its key-major mirror
-            // for each of the five tags. Before batching this path issued ten
-            // separate SetAsync calls.
+            // for each of the five tags, plus the covered-tree marker the
+            // first add to a tree writes. Before batching this path issued ten
+            // separate SetAsync calls and then a separate marker write.
             Assert.That(tree.SetManyAsyncCalls, Is.EqualTo(1));
-            Assert.That(tree.SetManyWidths, Is.EqualTo(new[] { tags.Length * 2 }));
-
-            // The only remaining single write is the covered-tree marker, which
-            // is written once per tree and is not part of the tag fan-out.
-            Assert.That(tree.SetAsyncCalls, Is.EqualTo(1));
-            Assert.That(tree.TotalWriteCalls, Is.EqualTo(2), "a five-tag add cost eleven writes before batching");
+            Assert.That(tree.SetManyWidths, Is.EqualTo(new[] { (tags.Length * 2) + 1 }));
+            Assert.That(tree.SetAsyncCalls, Is.Zero);
+            Assert.That(tree.TotalWriteCalls, Is.EqualTo(1), "a five-tag add cost eleven writes before batching");
         });
     }
 
