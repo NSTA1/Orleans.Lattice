@@ -142,6 +142,15 @@ public partial class BPlusLeafGrainTests
     /// default. Issue #5877's hinted-sibling fixtures pass a long one so a birth hint stays
     /// pending until a flush.
     /// </param>
+    /// <param name="treeDeletion">
+    /// The tree deletion grain the leaf reads its physical tree's retention from, or
+    /// <see langword="null"/> for an auto-substitute that reports a live tree. Issue
+    /// #6058's retired-tree fixtures supply one.
+    /// </param>
+    /// <param name="loggerFactory">
+    /// A logger factory registered on the activation services, or
+    /// <see langword="null"/> for none.
+    /// </param>
     private static (BPlusLeafGrain Grain,
         FakePersistentState<LeafNodeState> State,
         ILeafSnapshotStorageGrain SnapshotStub,
@@ -163,7 +172,9 @@ public partial class BPlusLeafGrainTests
             LiveAdvanceRig? liveAdvance = null,
             TimeSpan? materialiserCheckpointInterval = null,
             FakePersistentState<LeafNodeState>? reactivateState = null,
-            ILeafSnapshotStorageGrain? reactivateSnapshot = null)
+            ILeafSnapshotStorageGrain? reactivateSnapshot = null,
+            ITreeDeletionGrain? treeDeletion = null,
+            Microsoft.Extensions.Logging.ILoggerFactory? loggerFactory = null)
     {
         var saved = new List<LeafSnapshotBlob>();
 
@@ -239,6 +250,11 @@ public partial class BPlusLeafGrainTests
         var grainFactory = Substitute.For<IGrainFactory>();
         grainFactory.GetGrain<ILeafSnapshotStorageGrain>(Arg.Any<Guid>()).Returns(snapshotStub);
         grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(Arg.Any<string>()).Returns(coord);
+        if (treeDeletion is not null)
+        {
+            grainFactory.GetGrain<ITreeDeletionGrain>(Arg.Any<string>()).Returns(treeDeletion);
+        }
+
         liveAdvance?.Configure(grainFactory);
 
         var sc = new ServiceCollection();
@@ -249,6 +265,11 @@ public partial class BPlusLeafGrainTests
             sc.AddSingleton(commitLogWriter);
         }
         sc.AddSingleton(detector);
+        if (loggerFactory is not null)
+        {
+            sc.AddSingleton(loggerFactory);
+        }
+
         liveAdvance?.Register(sc);
         var services = sc.BuildServiceProvider();
 

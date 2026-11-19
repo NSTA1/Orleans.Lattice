@@ -816,6 +816,18 @@ survives. So, before the activation is lost:
 3. Restore the tree from that backup. For a tree that is derived from
    another source, delete it and re-derive it instead.
 
+A leaf of a *retired* physical tree is the exception (issue #6058). A
+tree superseded by a resize, discarded by an undone resize, or
+soft-deleted has released its WAL along with it, so a stale verdict
+there is expected and loses nothing that live data needs. The
+coverage-lag timer reads the tree's retention from the same tree
+deletion grain the WAL GC sweep consults and does not drive such a
+leaf: it stops the leaf's timer and lets the activation deactivate.
+A drive the sweep still makes latches as above, but logs at
+`Information` instead of `Error`. If the deletion grain cannot answer
+within five seconds the leaf is treated as live, so a probe failure
+never hides an alarm.
+
 ### Configuration
 
 ```csharp verify

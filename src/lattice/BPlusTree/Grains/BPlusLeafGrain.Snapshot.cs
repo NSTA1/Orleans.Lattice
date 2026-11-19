@@ -2832,7 +2832,9 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private async Task EnsureCoverageLagTimerAsync()
     {
-        if (_coverageLagTimer is not null || state.State.TreeId is not { Length: > 0 })
+        if (_coverageLagTimer is not null
+            || _physicalTreeDiscarded
+            || state.State.TreeId is not { Length: > 0 })
         {
             return;
         }
