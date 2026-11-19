@@ -125,6 +125,27 @@ public sealed partial class LatticeStateApiEdgeCaseTests
         });
     }
 
+    [TestCase(0)]
+    [TestCase(-5)]
+    public void Page_and_history_clamps_floor_at_one_when_the_configured_bounds_are_not_positive(int bound)
+    {
+        var query = CreateQuery(apiOptions: new LatticeApiStateOptions
+        {
+            DefaultScanPageSize = bound,
+            MaxScanPageSize = bound,
+            DefaultHistoryPageSize = bound,
+            MaxHistoryPageSize = bound,
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(InvokeInstance<int>(query, "ClampPageSize", 0), Is.EqualTo(1));
+            Assert.That(InvokeInstance<int>(query, "ClampPageSize", 25), Is.EqualTo(1));
+            Assert.That(InvokeInstance<int>(query, "ClampHistoryLimit", 0), Is.EqualTo(1));
+            Assert.That(InvokeInstance<int>(query, "ClampHistoryLimit", 25), Is.EqualTo(1));
+        });
+    }
+
     [Test]
     public void History_bound_maps_view_truncated_and_fallback_sources()
     {

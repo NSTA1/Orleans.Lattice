@@ -264,11 +264,27 @@ public partial class DataExportDialog : IDisposable
         _ => "The download was withdrawn: you signed in or out, or changed cluster. Prepare it again.",
     };
 
-    internal static string Size(long bytes) => bytes switch
+    internal static string Size(long bytes)
     {
-        < 1024 => string.Create(CultureInfo.InvariantCulture, $"{bytes:N0} bytes"),
-        < 1024 * 1024 => string.Create(CultureInfo.InvariantCulture, $"{bytes / 1024.0:N1} KB"),
-        < 1024L * 1024 * 1024 => string.Create(CultureInfo.InvariantCulture, $"{bytes / (1024.0 * 1024):N1} MB"),
-        _ => string.Create(CultureInfo.InvariantCulture, $"{bytes / (1024.0 * 1024 * 1024):N2} GB"),
-    };
+        if (bytes < 1024)
+        {
+            return string.Create(CultureInfo.InvariantCulture, $"{bytes:N0} bytes");
+        }
+
+        // The unit is chosen on the figure as written, so a size that rounds up to
+        // 1024 moves to the next unit rather than reading "1,024.0 KB" (#4355).
+        var kb = bytes / 1024.0;
+        if (Math.Round(kb, 1, MidpointRounding.AwayFromZero) < 1024)
+        {
+            return string.Create(CultureInfo.InvariantCulture, $"{kb:N1} KB");
+        }
+
+        var mb = kb / 1024.0;
+        if (Math.Round(mb, 1, MidpointRounding.AwayFromZero) < 1024)
+        {
+            return string.Create(CultureInfo.InvariantCulture, $"{mb:N1} MB");
+        }
+
+        return string.Create(CultureInfo.InvariantCulture, $"{mb / 1024.0:N2} GB");
+    }
 }

@@ -189,9 +189,13 @@ internal sealed partial class LatticeBackupControl : ILatticeBackupControl, ILat
     {
         ArgumentNullException.ThrowIfNull(request);
 
-        var pageSize = request.PageSize <= 0
-            ? _options.DefaultListPageSize
-            : Math.Min(request.PageSize, _options.MaxListPageSize);
+        // Floored at one and capped at the maximum on both branches: nothing
+        // validates the options, so a non-positive bound would otherwise yield a
+        // zero page whose continuation read indexes an empty list, and an unset
+        // request would otherwise take a default above MaxListPageSize.
+        var pageSize = Math.Max(1, Math.Min(
+            request.PageSize <= 0 ? _options.DefaultListPageSize : request.PageSize,
+            _options.MaxListPageSize));
 
         // Narrowed to the caller's resolved active tenant on request: the tenant
         // is never read from the request, and a denied assertion fails closed.
