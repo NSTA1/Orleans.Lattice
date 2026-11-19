@@ -80,10 +80,14 @@ public sealed partial class ShardRootGrainOptimisticReadTests
     [Test]
     public void ClassifyIncomingTurn_treats_a_foreign_interface_without_the_attribute_as_serial()
     {
+        var method = typeof(IRemindable).GetMethod(
+            nameof(IRemindable.ReceiveReminder), [typeof(string), typeof(Orleans.Runtime.TickStatus)]);
+        Assert.That(method, Is.Not.Null, "The reminder signature changed; update this classification probe.");
+
         var request = Substitute.For<IInvokable>();
         request.GetInterfaceType().Returns(typeof(IRemindable));
         request.GetMethodName().Returns(nameof(IRemindable.ReceiveReminder));
-        request.GetMethod().Returns(typeof(IRemindable).GetMethod(nameof(IRemindable.ReceiveReminder)));
+        request.GetMethod().Returns(method);
 
         Assert.That(ShardRootGrain.ClassifyIncomingTurn(request), Is.EqualTo(ShardRootGrain.IncomingTurnKind.Serial));
     }
