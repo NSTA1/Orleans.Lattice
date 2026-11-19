@@ -81,6 +81,53 @@ public sealed class LatticeWalStorageStateSourceTests
     }
 
     [Test]
+    public async Task A_resized_tree_reads_saturation_under_its_physical_wal_tree_id()
+    {
+        var admin = Substitute.For<ILatticeAdmin>();
+        admin.GetTotalStorageUsageAsync(Arg.Any<CancellationToken>()).Returns(ClusterReport(("orders", 500)));
+        admin.GetWalPlacementAsync("orders", Arg.Any<CancellationToken>()).Returns(Placement("orders", (0, "acct-a")));
+        var lattice = Substitute.For<ILattice>();
+        lattice.GetRoutingAsync(true, Arg.Any<CancellationToken>())
+            .Returns(new RoutingInfo("orders/resized/op1", null!));
+        var factory = FactoryFor(admin);
+        factory.GetGrain<ILattice>("orders").Returns(lattice);
+
+        var saturation = Substitute.For<IWalSaturationSignal>();
+        saturation.GetCurrentState("orders").Returns(WalSaturationState.Healthy);
+        saturation.GetCurrentState("orders/resized/op1").Returns(WalSaturationState.Saturated);
+
+        var sample = await new LatticeWalStorageStateSource(new MutableTimeProvider(T0), Catalog("acct-a"), saturation, factory)
+            .SampleAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(sample.Trees[0].TreeId, Is.EqualTo("orders"));
+            Assert.That(sample.Trees[0].Saturation, Is.EqualTo(WalSaturationState.Saturated));
+        });
+    }
+
+    [Test]
+    public async Task A_failed_routing_resolve_reads_saturation_under_the_reported_tree_id()
+    {
+        var admin = Substitute.For<ILatticeAdmin>();
+        admin.GetTotalStorageUsageAsync(Arg.Any<CancellationToken>()).Returns(ClusterReport(("t1", 500)));
+        admin.GetWalPlacementAsync("t1", Arg.Any<CancellationToken>()).Returns(Placement("t1", (0, "acct-a")));
+        var lattice = Substitute.For<ILattice>();
+        lattice.GetRoutingAsync(true, Arg.Any<CancellationToken>())
+            .Returns<RoutingInfo>(_ => throw new InvalidOperationException("boom"));
+        var factory = FactoryFor(admin);
+        factory.GetGrain<ILattice>("t1").Returns(lattice);
+
+        var saturation = Substitute.For<IWalSaturationSignal>();
+        saturation.GetCurrentState("t1").Returns(WalSaturationState.Throttled);
+
+        var sample = await new LatticeWalStorageStateSource(new MutableTimeProvider(T0), Catalog("acct-a"), saturation, factory)
+            .SampleAsync(CancellationToken.None);
+
+        Assert.That(sample.Trees[0].Saturation, Is.EqualTo(WalSaturationState.Throttled));
+    }
+
+    [Test]
     public async Task Maps_trees_placement_saturation_and_catalog_keys()
     {
         var admin = Substitute.For<ILatticeAdmin>();

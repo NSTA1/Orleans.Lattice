@@ -277,7 +277,7 @@ internal sealed partial class ReplicationApplier(
                     }
 
                     outcome = LatticeReplicationMetrics.OutcomeRejectedModeMismatch;
-                    return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero };
+                    return new ApplyResult { Applied = false, HighWaterMark = HybridLogicalClock.Zero, DeadLettered = true };
             }
 
             // RECEIVER-SIDE TENANT-ISOLATION GATE (issue #1633). After the tree is
@@ -323,6 +323,7 @@ internal sealed partial class ReplicationApplier(
                     {
                         Applied = false,
                         HighWaterMark = HybridLogicalClock.Zero,
+                        DeadLettered = true,
                         TenantIsolationRefused = decision is ReplicationTenantIsolationDecision.RejectSourceNotResident
                             or ReplicationTenantIsolationDecision.RejectMissingSourceIdentity,
                     };
@@ -369,6 +370,7 @@ internal sealed partial class ReplicationApplier(
                         Applied = false,
                         HighWaterMark = HybridLogicalClock.Zero,
                         Deferred = true,
+                        ReceiveFenced = true,
                     };
                 }
 
@@ -665,7 +667,7 @@ internal sealed partial class ReplicationApplier(
                         }
 
                         outcome = LatticeReplicationMetrics.OutcomeRejectedDependencyLost;
-                        return new ApplyResult { Applied = false, HighWaterMark = hwm };
+                        return new ApplyResult { Applied = false, HighWaterMark = hwm, DeadLettered = true };
                     }
 
                     if (verdict == CausalDependencyVerdict.Unmet)

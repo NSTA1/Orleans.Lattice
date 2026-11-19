@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Api.Apps;
 using Orleans.Lattice.Explorer.UI;
 using Orleans.Lattice.Explorer.UI.Framing;
+using Orleans.Lattice.Explorer.UI.Layout.Appearance;
 using Orleans.Lattice.Explorer.Tests.UI.Design;
 using Orleans.Lattice.Explorer.Tests.UI.Navigation;
 using static Orleans.Lattice.Explorer.Tests.UI.Framing.AppFrameTestData;
@@ -326,6 +327,31 @@ public sealed partial class AppFrameComponentTests : ShellDesignTestContext
 
         var message = JsonDocument.Parse((string)_module.Invocations["post"].Single().Arguments[1]!).RootElement;
         Assert.That(message.GetProperty("type").GetString(), Is.EqualTo("context.changed"));
+    }
+
+    [Test]
+    public async Task A_shell_appearance_change_is_posted_to_a_running_frame_as_context_changed()
+    {
+        var appearance = Services.GetRequiredService<ShellAppearance>();
+        var cut = RenderFrame();
+        await cut.InvokeAsync(() => appearance.SetThemeAsync(ShellTheme.Board));
+        Assert.That(_module.Invocations["post"], Is.Empty, "a frame that is not running is told nothing");
+
+        await ReadyAsync(cut);
+        _readAppearance.SetResult(["board", "more", "compact", "reduce"]);
+        await cut.InvokeAsync(() => appearance.SetThemeAsync(ShellTheme.Board));
+        await cut.InvokeAsync(() => appearance.SetDensityAsync(Orleans.Lattice.Explorer.UI.Design.Tokens.LtDensity.Compact));
+
+        var changes = _module.Invocations["post"]
+            .Select(invocation => JsonDocument.Parse((string)invocation.Arguments[1]!).RootElement)
+            .Where(message => message.GetProperty("type").GetString() == "context.changed")
+            .ToList();
+        Assert.Multiple(() =>
+        {
+            Assert.That(changes, Has.Count.EqualTo(1), "an unchanged re-read posts nothing");
+            Assert.That(changes[0].GetProperty("data").GetProperty("theme").GetString(), Is.EqualTo("board"));
+            Assert.That(changes[0].GetProperty("data").GetProperty("density").GetString(), Is.EqualTo("compact"));
+        });
     }
 
     private IRenderedComponent<AppFrame> RenderFrame(Action<ComponentParameterCollectionBuilder<AppFrame>>? configure = null, bool attach = true)

@@ -85,8 +85,11 @@ internal sealed class LatticeReplicationDeadLetters(
         // stays parked for a later replay (issue #3757). A source-lineage
         // refusal is not terminal either (issue #4707): the entry was read under
         // a lineage this tree no longer holds, and it stays parked for the
-        // operator to discard.
-        if (result.Deferred || result.SourceLineageRefused || result.TenantIsolationRefused)
+        // operator to discard. Nor is a refusal the applier dead-letters again
+        // (a mode mismatch, a tenant-isolation refusal, a lost dependency): the
+        // queue is idempotent on the entry's identity, so the re-park found this
+        // very entry, and removing it would discard the only parked copy.
+        if (result.Deferred || result.SourceLineageRefused || result.TenantIsolationRefused || result.DeadLettered)
         {
             return result;
         }

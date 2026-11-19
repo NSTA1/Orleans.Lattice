@@ -1165,20 +1165,20 @@ public class LatticeReplicationOptions
     public LatticeCompression FramingCompression { get; set; } = DefaultFramingCompression;
 
     /// <summary>
-    /// Intended compression level for the algorithm-specific
+    /// Compression level the framing encoder compresses at with the algorithm-specific
     /// <see cref="ILatticeCompressor"/> when
     /// <see cref="FramingCompression"/> is non-<see cref="LatticeCompression.None"/>.
-    /// <b>Validated but not applied:</b> nothing reads this value when a batch
-    /// is compressed. The level is fixed when the compressor is constructed -
-    /// the built-in Zstd registration uses <see cref="DefaultFramingCompressionLevel"/>,
-    /// and <c>AddLatticeZstdDictionaryCompressor</c> takes its own
-    /// <c>compressionLevel</c> argument - so a host that wants another level
-    /// registers its own <see cref="ILatticeCompressor"/> before calling
-    /// <c>AddLatticeReplication</c>. When <see cref="FramingCompression"/> is
-    /// <see cref="LatticeCompression.Zstd"/> or
-    /// <see cref="LatticeCompression.ZstdDictionary"/>, the options validator
-    /// still rejects a value outside <c>1</c> to <c>22</c>. Defaults to
-    /// <see cref="DefaultFramingCompressionLevel"/>.
+    /// Interpreted by the algorithm: for <see cref="LatticeCompression.Zstd"/>
+    /// the valid range is <c>1</c> (fastest, lowest ratio) to
+    /// <c>22</c> (slowest, highest ratio); the canonical default is
+    /// <c>3</c>. Defaults to <see cref="DefaultFramingCompressionLevel"/>.
+    /// <para>
+    /// The level is host-wide: the framing encoder reads it from the default
+    /// (unnamed) options instance when it is constructed, so a per-tree
+    /// override has no effect. It applies to the stock
+    /// <see cref="ZstdLatticeCompressor"/> only; the shared-dictionary
+    /// compressor keeps the level it was registered with.
+    /// </para>
     /// </summary>
     public int FramingCompressionLevel { get; set; } = DefaultFramingCompressionLevel;
 

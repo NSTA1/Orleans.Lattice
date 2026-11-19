@@ -2926,9 +2926,15 @@ internal sealed partial class ReplicationShipperGrain(
 
         // Resolve the tree's declared mode once (a cached dictionary read)
         // and dispatch. A tree disabled or made ambiguous at runtime keeps its
-        // active shipper, so the null case is reachable and collapses to the LWW
-        // default.
-        var mode = _modeResolver.Resolve(_treeName) ?? LatticeMergeMode.LwwRegister;
+        // active shipper, so the null case is reachable. Ship it verbatim: the
+        // tree may be a CRDT tree whose deltas each carry a contribution, and
+        // the header can be stamped after the mode resolves again, so an LWW
+        // pass here could elide deltas the receiver then folds without.
+        if (_modeResolver.Resolve(_treeName) is not { } mode)
+        {
+            return;
+        }
+
         if (mode == LatticeMergeMode.LwwRegister)
         {
             CoalesceLwwDrainBuffer();

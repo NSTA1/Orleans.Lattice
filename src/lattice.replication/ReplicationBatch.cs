@@ -132,9 +132,11 @@ public readonly record struct ReplicationBatch
     /// epoch, and echoes its last completed epoch in
     /// <see cref="ReplicationAck.BootstrapEpoch"/>. Carried out of band by the
     /// transport (the gRPC transport sends it as a call header), so the batch
-    /// framing is unchanged.
+    /// framing is unchanged. A custom transport carries it beside the batch the
+    /// same way and answers it at the receiving end through
+    /// <see cref="IReplicationReseedResponder"/>.
     /// </summary>
-    internal long? ReseedAfterEpoch { get; init; }
+    public long? ReseedAfterEpoch { get; init; }
 
     /// <summary>
     /// The sender's applied low watermark for this batch's tree at the

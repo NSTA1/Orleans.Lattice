@@ -36,6 +36,9 @@ public partial class ReplicationShipperGrainTests
         return resolver;
     }
 
+    /// <summary>A resolver that reports every tree as a declared last-writer-wins tree.</summary>
+    private static ILatticeMergeModeResolver Lww => ResolverFor(LatticeMergeMode.LwwRegister);
+
     private static WalRecord MakeDelete(string key, long ticks)
         => new()
         {
@@ -142,7 +145,7 @@ public partial class ReplicationShipperGrainTests
     [Test]
     public async Task PumpOnceAsync_with_coalescing_enabled_keeps_only_highest_hlc_per_key()
     {
-        var (grain, _, feed, transport, _, _, _) = Create(CoalesceOptions());
+        var (grain, _, feed, transport, _, _, _) = Create(CoalesceOptions(), modeResolver: Lww);
         feed.Append(MakeEntry("hot", ticks: 1));
         feed.Append(MakeEntry("hot", ticks: 2));
         feed.Append(MakeEntry("hot", ticks: 3));
@@ -157,7 +160,7 @@ public partial class ReplicationShipperGrainTests
     [Test]
     public async Task PumpOnceAsync_with_coalescing_enabled_does_not_elide_distinct_keys()
     {
-        var (grain, _, feed, transport, _, _, _) = Create(CoalesceOptions());
+        var (grain, _, feed, transport, _, _, _) = Create(CoalesceOptions(), modeResolver: Lww);
         feed.Append(MakeEntry("a", ticks: 1));
         feed.Append(MakeEntry("b", ticks: 2));
         feed.Append(MakeEntry("c", ticks: 3));
@@ -171,7 +174,7 @@ public partial class ReplicationShipperGrainTests
     [Test]
     public async Task PumpOnceAsync_with_coalescing_enabled_later_delete_supersedes_earlier_set()
     {
-        var (grain, _, feed, transport, _, _, _) = Create(CoalesceOptions());
+        var (grain, _, feed, transport, _, _, _) = Create(CoalesceOptions(), modeResolver: Lww);
         feed.Append(MakeEntry("k", ticks: 1));
         feed.Append(MakeEntry("k", ticks: 2));
         feed.Append(MakeDelete("k", ticks: 3));
@@ -180,6 +183,24 @@ public partial class ReplicationShipperGrainTests
 
         Assert.That(LastShippedEntryCount(transport), Is.EqualTo(1),
             "the highest-HLC point write for the key is the delete, so only it survives");
+    }
+
+    [Test]
+    public async Task PumpOnceAsync_with_an_unresolved_mode_ships_every_version_verbatim()
+    {
+        // A tree disabled or made ambiguous at runtime resolves no mode while its
+        // shipper keeps running. It may be a CRDT tree, so collapsing its
+        // same-key run as last-writer-wins would drop delta contributions.
+        var resolver = Substitute.For<ILatticeMergeModeResolver>();
+        resolver.Resolve(Arg.Any<string>()).Returns((LatticeMergeMode?)null);
+        var (grain, _, feed, transport, _, _, _) = Create(CoalesceOptions(), modeResolver: resolver);
+        feed.Append(MakeEntry("hot", ticks: 1));
+        feed.Append(MakeEntry("hot", ticks: 2));
+        feed.Append(MakeEntry("hot", ticks: 3));
+
+        await grain.PumpForTestingAsync(CancellationToken.None);
+
+        Assert.That(LastShippedEntryCount(transport), Is.EqualTo(3));
     }
 
     [Test]
@@ -201,7 +222,7 @@ public partial class ReplicationShipperGrainTests
     [Test]
     public async Task PumpOnceAsync_with_coalescing_enabled_never_elides_range_delete()
     {
-        var (grain, _, feed, transport, _, _, _) = Create(CoalesceOptions());
+        var (grain, _, feed, transport, _, _, _) = Create(CoalesceOptions(), modeResolver: Lww);
         feed.Append(MakeEntry("k", ticks: 1));
         feed.Append(MakeEntry("k", ticks: 2));
         feed.Append(MakeRangeDelete("a", "z"));
@@ -217,7 +238,7 @@ public partial class ReplicationShipperGrainTests
     [Test]
     public async Task PumpOnceAsync_with_coalescing_enabled_never_elides_zero_hlc_entries()
     {
-        var (grain, _, feed, transport, _, _, _) = Create(CoalesceOptions());
+        var (grain, _, feed, transport, _, _, _) = Create(CoalesceOptions(), modeResolver: Lww);
         feed.Append(MakeZeroHlcSet("k"));
         feed.Append(MakeEntry("k", ticks: 2));
 
@@ -232,7 +253,7 @@ public partial class ReplicationShipperGrainTests
     [Test]
     public async Task PumpOnceAsync_with_coalescing_enabled_never_elides_prepared_atomic_entries()
     {
-        var (grain, _, feed, transport, _, _, _) = Create(CoalesceOptions());
+        var (grain, _, feed, transport, _, _, _) = Create(CoalesceOptions(), modeResolver: Lww);
         var txId = Guid.NewGuid();
         feed.Append(MakePreparedSet("k", ticks: 1, txId, batchSize: 2, batchIndex: 0));
         feed.Append(MakePreparedSet("k", ticks: 2, txId, batchSize: 2, batchIndex: 1));
@@ -246,7 +267,7 @@ public partial class ReplicationShipperGrainTests
     [Test]
     public async Task PumpOnceAsync_with_coalescing_enabled_advances_cursor_past_every_elided_entry()
     {
-        var (grain, state, feed, transport, _, _, _) = Create(CoalesceOptions());
+        var (grain, state, feed, transport, _, _, _) = Create(CoalesceOptions(), modeResolver: Lww);
         var ackHlc = new HybridLogicalClock { WallClockTicks = 3 };
         transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
             .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = ackHlc });
@@ -271,7 +292,7 @@ public partial class ReplicationShipperGrainTests
     [Test]
     public async Task PumpOnceAsync_with_coalescing_enabled_increments_elided_counters()
     {
-        var (grain, _, feed, transport, _, _, _) = Create(CoalesceOptions());
+        var (grain, _, feed, transport, _, _, _) = Create(CoalesceOptions(), modeResolver: Lww);
         feed.Append(MakeEntry("hot", ticks: 1));
         feed.Append(MakeEntry("hot", ticks: 2));
         feed.Append(MakeEntry("hot", ticks: 3));
@@ -292,7 +313,7 @@ public partial class ReplicationShipperGrainTests
     [Test]
     public async Task PumpOnceAsync_with_coalescing_enabled_no_redundancy_does_not_increment_counter()
     {
-        var (grain, _, feed, transport, _, _, _) = Create(CoalesceOptions());
+        var (grain, _, feed, transport, _, _, _) = Create(CoalesceOptions(), modeResolver: Lww);
         feed.Append(MakeEntry("a", ticks: 1));
         feed.Append(MakeEntry("b", ticks: 2));
 

@@ -78,4 +78,21 @@ public readonly record struct ApplyResult
     /// authorized cannot consume the durable entry.
     /// </summary>
     [Id(4)] public bool TenantIsolationRefused { get; init; }
+
+    /// <summary>
+    /// <c>true</c> when the applier refused the entry as terminal and holds it in
+    /// the tree's dead-letter queue: a merge-mode mismatch, a tenant-isolation
+    /// refusal, or a causal dependency that was lost for good. The queue is
+    /// idempotent on the entry's identity, so a dead-letter replay that is refused
+    /// again finds the entry already parked; that replay leaves it parked rather
+    /// than removing the only copy. Defaults to <c>false</c>.
+    /// </summary>
+    [Id(5)] public bool DeadLettered { get; init; }
+
+    /// <summary>
+    /// <c>true</c> when the durable receive fence deferred the entry. Lets the
+    /// single-entry receive paths skip recording inbound contact exactly as the
+    /// batch path skips it for a fenced run.
+    /// </summary>
+    [Id(6)] internal bool ReceiveFenced { get; init; }
 }

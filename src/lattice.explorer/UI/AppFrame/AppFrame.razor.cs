@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.JSInterop;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Framing.Broker;
+using Orleans.Lattice.Explorer.UI.Layout.Appearance;
 
 namespace Orleans.Lattice.Explorer.UI.Framing;
 
@@ -99,6 +100,9 @@ public sealed partial class AppFrame : IAsyncDisposable
     private IAppFrameHostContext HostContext { get; set; } = default!;
 
     [Inject]
+    private ShellAppearance Appearance { get; set; } = default!;
+
+    [Inject]
     private IJSRuntime JS { get; set; } = default!;
 
     [Inject]
@@ -133,6 +137,7 @@ public sealed partial class AppFrame : IAsyncDisposable
     /// <inheritdoc />
     public async ValueTask DisposeAsync()
     {
+        Appearance.Changed -= OnAppearanceChanged;
         _generation++;
         _disposal.Leave();
 
@@ -152,6 +157,9 @@ public sealed partial class AppFrame : IAsyncDisposable
 
         _interop?.Dispose();
     }
+
+    /// <inheritdoc />
+    protected override void OnInitialized() => Appearance.Changed += OnAppearanceChanged;
 
     /// <inheritdoc />
     protected override async Task OnParametersSetAsync()
@@ -473,6 +481,26 @@ public sealed partial class AppFrame : IAsyncDisposable
         catch (Exception exception) when (exception is JSException or JSDisconnectedException or TaskCanceledException or System.Text.Json.JsonException or InvalidOperationException)
         {
             // Anything the page answers that is not a well-formed read keeps the appearance as it was.
+        }
+    }
+
+    // The shell raises Changed after it has put the new appearance on the page, so
+    // re-reading the page picks up "follow the system" resolved as the page resolved it.
+    private void OnAppearanceChanged() => _ = InvokeAsync(RefreshAppearanceAsync);
+
+    private async Task RefreshAppearanceAsync()
+    {
+        if (_phase != Phase.Running)
+        {
+            return;
+        }
+
+        var generation = _generation;
+        var before = HostContext.Appearance;
+        await ObserveAppearanceAsync().ConfigureAwait(true);
+        if (generation == _generation && HostContext.Appearance != before)
+        {
+            await NotifyContextChangedAsync().ConfigureAwait(true);
         }
     }
 
