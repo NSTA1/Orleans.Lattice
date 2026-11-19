@@ -21,7 +21,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\lattice\Orleans.Lattice.csproj" />
-    <PackageReference Include="System.IO.Hashing" Version="10.0.11" />
+    <PackageReference Include="System.IO.Hashing" Version="10.0.15" />
   </ItemGroup>
 
 </Project>

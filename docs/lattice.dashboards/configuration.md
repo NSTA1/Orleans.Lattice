@@ -66,14 +66,15 @@ Two details are worth getting right rather than assuming:
 
 ### Cardinality cost
 
-Measured on a single silo rather than estimated: `Microsoft.Orleans` produced 54
-distinct series and `System.Runtime` 29.
+Measured on a single silo under Orleans 10.2.2 rather than estimated:
+`Microsoft.Orleans` produced 54 distinct series and `System.Runtime` 29.
 
 Every `System.Runtime` dimension is a fixed enumeration (GC generation, CPU
-mode), so its cost does not grow with load at all. The only Orleans dimension
-that grows is the `type` tag on `orleans-grains` and `orleans-system-targets`,
-which is bounded by the number of grain **types** in the image - a compile-time
-constant - not by the number of grain activations. Neither meter carries a
+mode), so its cost does not grow with load at all. The only Orleans dimensions
+that grow are the grain-type tags: `grain_type` on `orleans-grains` (and, from
+Orleans 10.4, on the per-type activation and working-set gauges) and `type` on
+`orleans-system-targets`. Both are bounded by the number of grain **types** in
+the image - a compile-time constant - not by the number of grain activations. Neither meter carries a
 per-key, per-tree, or per-activation tag, so neither is a cardinality risk on a
 large keyspace.
 

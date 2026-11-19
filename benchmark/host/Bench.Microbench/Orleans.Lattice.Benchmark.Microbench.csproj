@@ -92,8 +92,8 @@
     <!-- NSubstitute drives IGrainContext / IGrainFactory / IOptionsMonitor mocks
          in the same shape as the unit-test fakes under test/lattice/Fakes/. -->
     <PackageReference Include="NSubstitute" Version="6.2.0" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" />
-    <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.15" />
+    <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.15" />
     <!-- EventPipe-driven per-method allocation and CPU-sample profiler. The
          NETCore.Client package opens an in-process EventPipe session against
          the current PID; TraceEvent parses the streaming .nettrace event
@@ -102,7 +102,7 @@
          per-method allocation and sample distributions as profile.json next
          to the run's results.json. Disabled by default - opt in via
          BENCH_MICROBENCH_PROFILE=alloc|cpu|both. -->
-    <PackageReference Include="Microsoft.Diagnostics.NETCore.Client" Version="0.2.661903" />
+    <PackageReference Include="Microsoft.Diagnostics.NETCore.Client" Version="0.2.750501" />
     <PackageReference Include="Microsoft.Diagnostics.Tracing.TraceEvent" Version="3.2.6" />
   </ItemGroup>
 

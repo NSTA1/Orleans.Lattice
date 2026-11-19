@@ -29,7 +29,7 @@
     <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.0.0" />
     <!-- Pin the patched Microsoft.Bcl.Memory to override the vulnerable 9.0.4 that
          Microsoft.ML.Tokenizers 2.0.0 pulls transitively (NU1903, GHSA-73j8-2gch-69rq). -->
-    <PackageReference Include="Microsoft.Bcl.Memory" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Bcl.Memory" Version="10.0.15" />
     <!-- Managed git transport for the opt-in hub-only git-ref source strategy. It
          bundles a native library, which is why the git source is opt-in and the
          mounted workspace remains the default. -->
@@ -37,8 +37,8 @@
     <PackageReference Include="Microsoft.ML.Tokenizers" Version="2.0.0" />
     <PackageReference Include="Microsoft.ML.Tokenizers.Data.Cl100kBase" Version="2.0.0" />
     <PackageReference Include="Microsoft.ML.Tokenizers.Data.O200kBase" Version="2.0.0" />
-    <PackageReference Include="Microsoft.Orleans.Reminders" Version="10.2.2" />
-    <PackageReference Include="System.IO.Hashing" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Orleans.Reminders" Version="10.4.2" />
+    <PackageReference Include="System.IO.Hashing" Version="10.0.15" />
   </ItemGroup>
 
   <ItemGroup>

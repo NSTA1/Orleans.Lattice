@@ -40,8 +40,8 @@
          test/lattice/Fakes/ and the Bench.Microbench harness. The per-read hot
          path is deliberately kept off these mocks (see Program.cs). -->
     <PackageReference Include="NSubstitute" Version="6.2.0" />
-    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.11" />
-    <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.11" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.15" />
+    <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.15" />
   </ItemGroup>
 
 </Project>

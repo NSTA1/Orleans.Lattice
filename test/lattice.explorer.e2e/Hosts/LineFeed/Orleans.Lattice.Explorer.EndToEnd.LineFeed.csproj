@@ -16,7 +16,7 @@
     authenticated as the service identity line-feed.
   -->
   <ItemGroup>
-    <PackageReference Include="Grpc.Net.Client" Version="2.83.0" />
+    <PackageReference Include="Grpc.Net.Client" Version="2.85.0" />
   </ItemGroup>
 
   <ItemGroup>

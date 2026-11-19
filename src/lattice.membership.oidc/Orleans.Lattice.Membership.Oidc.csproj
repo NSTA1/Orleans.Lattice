@@ -22,10 +22,10 @@
   <ItemGroup>
     <ProjectReference Include="..\lattice\Orleans.Lattice.csproj" />
     <ProjectReference Include="..\lattice.membership\Orleans.Lattice.Membership.csproj" />
-    <PackageReference Include="Microsoft.Orleans.Sdk" Version="10.2.2" />
-    <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" Version="8.22.0" />
-    <PackageReference Include="Microsoft.IdentityModel.Tokens" Version="8.22.0" />
-    <PackageReference Include="Microsoft.IdentityModel.Protocols.OpenIdConnect" Version="8.22.0" />
+    <PackageReference Include="Microsoft.Orleans.Sdk" Version="10.4.2" />
+    <PackageReference Include="Microsoft.IdentityModel.JsonWebTokens" Version="8.23.0" />
+    <PackageReference Include="Microsoft.IdentityModel.Tokens" Version="8.23.0" />
+    <PackageReference Include="Microsoft.IdentityModel.Protocols.OpenIdConnect" Version="8.23.0" />
   </ItemGroup>
 
 </Project>
