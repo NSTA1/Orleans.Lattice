@@ -117,7 +117,7 @@
                               OpenChanged="OnDirectoryOpenChanged"
                               Title="Directory"
                               Placement="LtDialogPlacement.Start"
-                              ReturnFocus="_directoryToggle">
+                              ReturnFocus="DirectoryReturnFocus">
                         <TenantSwitcher Stacked="true" />
                         <DirectorySpine OnNavigate="CloseDirectory" />
                     </LtDialog>
@@ -125,7 +125,7 @@
                               OpenChanged="OnMenuOpenChanged"
                               Title="Menu"
                               Placement="LtDialogPlacement.End"
-                              ReturnFocus="_menuToggle">
+                              ReturnFocus="MenuReturnFocus">
                         @* The sheet exists only in the compact form, so its slots fold whether or not the width has been reported yet. *@
                         <CascadingValue Name="@LtBreakpointCascade.Name" Value="CompactBand">
                             <div class="lt-shell-overflow" @onclick="CloseMenu">

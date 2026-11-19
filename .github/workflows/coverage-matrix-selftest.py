@@ -438,6 +438,7 @@ class BrowserInstallTests(unittest.TestCase):
         self.assertEqual(7, result.returncode, result.stdout + result.stderr)
         self.assertEqual("3", (self.root / "calls").read_text().strip())
         self.assertIn("::error::", result.stdout)
+        self.assertNotIn("Reconfiguring packages", result.stdout)
         self.assertNotIn("install chromium", (self.root / "arguments").read_text())
 
     def test_hung_installer_ignoring_term_is_killed_and_exhausts_three_attempts(self):
@@ -447,6 +448,8 @@ class BrowserInstallTests(unittest.TestCase):
         self.assertEqual("3", (self.root / "calls").read_text().strip())
         self.assertIn("failed after three bounded attempts", result.stdout)
         self.assertEqual(["1", "2"], (self.root / "mirrors").read_text().splitlines())
+        # A killed attempt leaves dpkg interrupted; each retry repairs it first.
+        self.assertEqual(2, result.stdout.count("Reconfiguring packages"))
 
     def test_missing_build_output_or_empty_browser_selection_fails_before_install(self):
         (self.root / "test/lattice.explorer.uitests/bin/Release/net10.0/playwright.ps1").unlink()

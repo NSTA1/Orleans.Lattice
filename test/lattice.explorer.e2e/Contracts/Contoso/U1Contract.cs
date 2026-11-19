@@ -93,20 +93,32 @@ public sealed class U1Contract() : ChapterContract("U1")
     public static StoryEntry RefusedOrder101 { get; } = new(
         Names.Orders.Order101, StoryData.OrderJson(101, StoryData.SeededTotal(101), StoryData.InvalidStatus));
 
-    /// <summary>Writes <paramref name="entry"/> to <c>factory-orders</c>; a refusal by the policy is the expected outcome for an invalid one.</summary>
+    /// <summary>
+    /// Writes <paramref name="entry"/> to <c>factory-orders</c>; a refusal by the policy is the
+    /// expected outcome for an invalid one. A transient failure is retried (and recorded through
+    /// <see cref="ContractRetries"/>): writing one fixed value is idempotent, so a retry after a
+    /// <see cref="Grpc.Core.StatusCode.DeadlineExceeded"/> that did apply only writes it again.
+    /// </summary>
     /// <param name="data">The Data API.</param>
     /// <param name="entry">The entry.</param>
     /// <returns>Whether the write landed.</returns>
     public static async Task<bool> TrySetAsync(LatticeDataApiGrpcClient data, StoryEntry entry)
     {
-        try
+        var landed = false;
+        await ContractWait.UntilAsync($"the write of {entry.Key}", async () =>
         {
-            await data.SetAsync(new DataSetRequest { TreeId = Names.Trees.FactoryOrders, Key = entry.Key, Value = entry.Value });
+            try
+            {
+                await data.SetAsync(new DataSetRequest { TreeId = Names.Trees.FactoryOrders, Key = entry.Key, Value = entry.Value });
+                landed = true;
+            }
+            catch (Grpc.Core.RpcException ex) when (!ContractWait.IsTransient(ex.StatusCode))
+            {
+                landed = false;
+            }
+
             return true;
-        }
-        catch (Grpc.Core.RpcException ex) when (!ContractWait.IsTransient(ex.StatusCode))
-        {
-            return false;
-        }
+        }, TimeSpan.FromMinutes(5));
+        return landed;
     }
 }

@@ -183,7 +183,8 @@ public sealed class A10Contract() : ChapterContract("A10")
         var id = (await ContractCalls.FindBackupAsync(backup, name, scope.TreeId))?.Id;
         if (id is null)
         {
-            var handle = await backup.StartBackupAsync(new LatticeBackupCaptureRequest(name, scope));
+            var handle = await ContractCalls.StartOperationAsync(
+                $"the {name} capture", operationId => backup.StartBackupAsync(new LatticeBackupCaptureRequest(name, scope), operationId));
             id = await ContractCalls.CapturedBackupIdAsync(backup, handle.OperationId, $"the {name} capture");
         }
 
@@ -194,7 +195,8 @@ public sealed class A10Contract() : ChapterContract("A10")
     private static async Task RestoreAsync(ChapterContext context, bool cold, LatticeRestoreRequest request, string what)
     {
         var backup = ContractFacades.Of(context).Backup;
-        var handle = cold ? await backup.StartColdRestoreAsync(request) : await backup.StartRestoreAsync(request);
+        var handle = await ContractCalls.StartOperationAsync(
+            what, operationId => cold ? backup.StartColdRestoreAsync(request, operationId) : backup.StartRestoreAsync(request, operationId));
         await ContractWait.SucceededAsync(what, () => backup.GetBackupOperationStatusAsync(handle.OperationId), TimeSpan.FromMinutes(5));
     }
 

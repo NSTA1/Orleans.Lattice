@@ -5,6 +5,7 @@ using Orleans.Lattice.Api.Backup;
 using Orleans.Lattice.Api.Backup.Grpc;
 using Orleans.Lattice.Api.Data;
 using Orleans.Lattice.Api.Data.Grpc;
+using Orleans.Lattice.Api.Operations;
 using Orleans.Lattice.Api.TreeAdmin.Grpc;
 using Orleans.Lattice.Auth;
 using Orleans.Lattice.Backup;
@@ -346,6 +347,29 @@ public static class ContractCalls
         return status.Result.TryGetValue(BackupOperationResultKeys.BackupId, out var id) && !string.IsNullOrEmpty(id)
             ? id
             : throw new InvalidOperationException($"{what} succeeded but recorded no backup id.");
+    }
+
+    /// <summary>
+    /// Starts a tracked operation under one caller-chosen operation id, retrying a transient
+    /// failure of the start call. A start with an id that already exists returns that operation
+    /// and starts nothing, so a retry after a <see cref="StatusCode.DeadlineExceeded"/> that did
+    /// apply re-attaches to the operation it began rather than launching a second one. Every
+    /// retry is recorded through <see cref="ContractRetries"/>.
+    /// </summary>
+    /// <param name="what">The operation, for the retry log and the timeout message.</param>
+    /// <param name="start">Starts the operation under the operation id it is given.</param>
+    /// <returns>The operation's handle.</returns>
+    public static async Task<LatticeOperationHandle> StartOperationAsync(string what, Func<string, Task<LatticeOperationHandle>> start)
+    {
+        ArgumentNullException.ThrowIfNull(start);
+        var operationId = Guid.NewGuid().ToString("N");
+        LatticeOperationHandle? handle = null;
+        await ContractWait.UntilAsync($"starting {what}", async () =>
+        {
+            handle = await start(operationId);
+            return true;
+        });
+        return handle!;
     }
 
     /// <summary>Whether <paramref name="exception"/> says the target does not exist.</summary>

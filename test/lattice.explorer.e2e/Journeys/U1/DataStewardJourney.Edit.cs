@@ -192,7 +192,9 @@ public sealed partial class DataStewardJourney
         var kinds = _priya.Shell.Content.Locator(".lt-data-timeline__kind");
         if (await WaitForHistoryRevisionsAsync(Names.Orders.Scratch, 2))
         {
-            await Expect(kinds.First).ToHaveTextAsync("Deleted");
+            // The newest revision is the tombstone, shown as "Live delete" while it is still served
+            // from the live tail and as "Deleted" once the change-history view materialises it.
+            await Expect(kinds.First).ToHaveTextAsync(new Regex("^(Deleted|Live delete)$"));
             await CheckpointAsync("7", "tombstone", "History keeps the deletion as a tombstone");
         }
         else

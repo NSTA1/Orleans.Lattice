@@ -55,8 +55,10 @@ public sealed class C1Contract() : ChapterContract("C1")
         await feed.WaitUntilAsync(status => status.WrongPricesWritten >= wrong + SeederBurst, TimeSpan.FromMinutes(2));
 
         var backup = olivia.Backup;
-        var restore = await backup.StartRestoreAsync(new LatticeRestoreRequest(
-            context.Recall(StoryKeys.OrdersBaselineBackup), Names.Trees.FactoryOrders, mode: LatticeRestoreMode.ShadowCutover));
+        var restoreRequest = new LatticeRestoreRequest(
+            context.Recall(StoryKeys.OrdersBaselineBackup), Names.Trees.FactoryOrders, mode: LatticeRestoreMode.ShadowCutover);
+        var restore = await ContractCalls.StartOperationAsync(
+            "the orders-baseline restore", operationId => backup.StartRestoreAsync(restoreRequest, operationId));
         await ContractWait.SucceededAsync("the orders-baseline restore", () => backup.GetBackupOperationStatusAsync(restore.OperationId), OperationPatience);
 
         var priya = ContractFacades.Of(context, Personas.Priya.Id).Data;

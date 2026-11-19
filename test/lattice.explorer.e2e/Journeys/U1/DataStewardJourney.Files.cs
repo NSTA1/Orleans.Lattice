@@ -126,7 +126,10 @@ public sealed partial class DataStewardJourney
         await CheckpointAsync("9", "importing", "history-2025.ndjson, 500,000 lines, streams in");
 
         await import.Stop.ClickAsync();
-        await import.ExpectEndAsync("stopped", PanelSettled.BoundMs);
+
+        // A stopped seed still finishes the chunk in flight and commits the load, the same bulk
+        // appends step 8's seed is given 300 s for on a loaded estate (#5569), not a panel settle.
+        await import.ExpectEndAsync("stopped", 300_000);
         var committed = await import.CommittedAsync();
         var written = committed.ToString("N0", CultureInfo.InvariantCulture) + (committed == 1 ? " entry" : " entries");
         await Expect(import.Result).ToContainTextAsync($"Stopped. {written} were written before the stop, and nothing after it.");

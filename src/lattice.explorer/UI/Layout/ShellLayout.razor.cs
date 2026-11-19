@@ -59,6 +59,7 @@ public partial class ShellLayout : IAsyncDisposable
     private int _version;
     private bool _directoryOpen;
     private bool _menuOpen;
+    private bool _overlayTookFocus;
     private ElementReference _root;
     private ElementReference _directory;
     private ElementReference _content;
@@ -670,13 +671,28 @@ public partial class ShellLayout : IAsyncDisposable
 
     private async Task SkipToContentAsync() => await Interop.FocusAsync(_content);
 
-    private void OpenDirectory() => _directoryOpen = true;
+    // A sheet closed because a session modal opened hands focus to that modal rather than
+    // back to its toggle: returning it would race the modal's own focus and could leave
+    // keyboard focus - and Escape - outside the dialog the operator is now looking at.
+    private ElementReference? DirectoryReturnFocus => _overlayTookFocus ? null : _directoryToggle;
+
+    private ElementReference? MenuReturnFocus => _overlayTookFocus ? null : _menuToggle;
+
+    private void OpenDirectory()
+    {
+        _overlayTookFocus = false;
+        _directoryOpen = true;
+    }
 
     private void CloseDirectory() => _directoryOpen = false;
 
     private void OnDirectoryOpenChanged(bool open) => _directoryOpen = open;
 
-    private void OpenMenu() => _menuOpen = true;
+    private void OpenMenu()
+    {
+        _overlayTookFocus = false;
+        _menuOpen = true;
+    }
 
     private void OnMenuOpenChanged(bool open) => _menuOpen = open;
 
@@ -687,17 +703,24 @@ public partial class ShellLayout : IAsyncDisposable
 
     // Any session modal - asked for from anywhere, or the re-authentication
     // interstitial raised off the renderer by Core - closes both compact sheets
-    // and every header panel before it opens, so modals never stack.
-    private void OnSessionOverlayOpening(SessionOverlayKind kind) => _ = InvokeAsync(() =>
+    // and every header panel before it opens, so modals never stack. The modal takes
+    // the focus, so a sheet it closes - here, or by the overflow's own CloseMenu, which
+    // may run first - does not hand focus back to its toggle. Set before marshalling for
+    // that reason; a sheet opened afterwards clears it.
+    private void OnSessionOverlayOpening(SessionOverlayKind kind)
     {
-        HeaderPanels.Opening(Session);
-        if (_menuOpen || _directoryOpen)
+        _overlayTookFocus = true;
+        _ = InvokeAsync(() =>
         {
-            _menuOpen = false;
-            _directoryOpen = false;
-            StateHasChanged();
-        }
-    });
+            HeaderPanels.Opening(Session);
+            if (_menuOpen || _directoryOpen)
+            {
+                _menuOpen = false;
+                _directoryOpen = false;
+                StateHasChanged();
+            }
+        });
+    }
 
     // Compact, the tenant switcher lives in the directory sheet, so the palette's
     // Switch tenant opens the sheet; the switcher it mounts takes the request and
@@ -706,6 +729,7 @@ public partial class ShellLayout : IAsyncDisposable
     {
         if (IsCompact && !_directoryOpen)
         {
+            _overlayTookFocus = false;
             _menuOpen = false;
             _directoryOpen = true;
             StateHasChanged();

@@ -203,9 +203,13 @@ internal sealed class SchemaWorkshopPage(ShellPage shell)
     }
 
     /// <summary>Waits for a toast saying <paramref name="message"/>.</summary>
+    /// <remarks>
+    /// The toast follows a cluster write, which on a loaded estate can take longer than the
+    /// default assertion timeout, so the wait is bounded like any other settling panel.
+    /// </remarks>
     /// <param name="message">The toast's text, or part of it.</param>
     public Task ExpectToastAsync(string message) =>
-        Expect(Shell.Toasts.Filter(new() { HasText = message }).First).ToBeVisibleAsync();
+        Expect(Shell.Toasts.Filter(new() { HasText = message }).First).ToBeVisibleAsync(new() { Timeout = PanelSettled.BoundMs });
 
     /// <summary>Saves the policy, and waits for the confirmation and the read-only policy view.</summary>
     /// <param name="tree">The tree.</param>
