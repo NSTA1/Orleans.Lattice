@@ -70,6 +70,18 @@ internal interface ITreeDeletionGrain : IGrainWithStringKey
     Task<PhysicalTreeRetention> GetPhysicalRetentionAsync();
 
     /// <summary>
+    /// Reports whether the local physical copy is soft-deleted because a resize
+    /// retired it (<see cref="DeleteRetiredPhysicalTreeAsync"/> or
+    /// <see cref="DeleteDerivedPhysicalTreeAsync"/>) and is not yet purged or
+    /// discarded. Such a deletion was issued by no caller, an undo can still
+    /// recover it, and its purge is already scheduled, so the WAL GC reports the
+    /// floor its pins hold as an expected hold rather than a terminal one. A pure
+    /// read of in-memory state, interleaved so a probe never queues behind a purge.
+    /// </summary>
+    [Orleans.Concurrency.AlwaysInterleave]
+    Task<bool> IsRetiredByResizeAsync();
+
+    /// <summary>
     /// Reports whether this physical copy was ever discarded by
     /// <see cref="DiscardDerivedPhysicalTreeAsync"/> - the destination of an
     /// undone resize. Unlike <see cref="GetPhysicalRetentionAsync"/> the answer

@@ -153,6 +153,79 @@ public partial class WalShardGrainTests
     }
 
     [Test]
+    public async Task Concurrent_retirements_raise_the_floor_without_an_etag_conflict()
+    {
+        // #6114: retirements of different leaves hold different leaf gates but raise the
+        // same floor row. Two first raises both read the row absent and both insert it,
+        // and the storage provider logs the refused insert as an error.
+        var storage = new FloorRaceStorage();
+        var grain = await CreateFencedGrainAsync(storage);
+        await grain.ClaimAppendEpochAsync(FenceLeaf, 3, CancellationToken.None);
+        await grain.ClaimAppendEpochAsync(OtherFenceLeaf, 5, CancellationToken.None);
+
+        storage.Armed = true;
+        await Task.WhenAll(
+            grain.RetireAppendEpochAsync(FenceLeaf, 0, CancellationToken.None),
+            grain.RetireAppendEpochAsync(OtherFenceLeaf, 0, CancellationToken.None));
+
+        var durable = await WalAppendFenceRows.ReadFloorAsync(storage, TreeId, ShardIndex);
+        Assert.Multiple(() =>
+        {
+            Assert.That(storage.FloorConflicts, Is.Zero, "raises in one activation must not race on the floor row");
+            Assert.That(durable.State.Floor, Is.EqualTo(5), "the floor is the max of both raises");
+            Assert.That(grain.EpochFloorForTesting, Is.EqualTo(5));
+        });
+    }
+
+    /// <summary>
+    /// Holds the first floor-row read until a second arrives (or a short timeout), so
+    /// two ungated raises would both read the row absent; counts refused floor writes.
+    /// </summary>
+    private sealed class FloorRaceStorage : IGrainStorage
+    {
+        private readonly EnumerableMemoryGrainStorage _inner = new();
+        private readonly TaskCompletionSource _second = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _floorReads;
+        private int _floorConflicts;
+
+        public bool Armed { get; set; }
+
+        public int FloorConflicts => Volatile.Read(ref _floorConflicts);
+
+        public async Task ReadStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
+        {
+            await _inner.ReadStateAsync(stateName, grainId, grainState);
+            if (Armed && stateName == WalAppendFenceRows.FloorGrainType)
+            {
+                if (Interlocked.Increment(ref _floorReads) == 1)
+                {
+                    await Task.WhenAny(_second.Task, Task.Delay(TimeSpan.FromMilliseconds(500)));
+                }
+                else
+                {
+                    _second.TrySetResult();
+                }
+            }
+        }
+
+        public async Task WriteStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState)
+        {
+            try
+            {
+                await _inner.WriteStateAsync(stateName, grainId, grainState);
+            }
+            catch (InconsistentStateException) when (stateName == WalAppendFenceRows.FloorGrainType)
+            {
+                Interlocked.Increment(ref _floorConflicts);
+                throw;
+            }
+        }
+
+        public Task ClearStateAsync<T>(string stateName, GrainId grainId, IGrainState<T> grainState) =>
+            _inner.ClearStateAsync(stateName, grainId, grainState);
+    }
+
+    [Test]
     public async Task Retiring_another_leaf_never_supersedes_a_live_leaf()
     {
         var storage = new EnumerableMemoryGrainStorage();

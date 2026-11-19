@@ -479,6 +479,41 @@ public partial class TreeDeletionGrainTests
         await resize.DidNotReceive().ReferencesPhysicalTreeAsync(Arg.Any<string>());
     }
 
+    // --- IsRetiredByResizeAsync ---
+
+    [Test]
+    public async Task IsRetiredByResize_reports_a_copy_either_resize_retirement_deleted()
+    {
+        var derived = CreateDiscardHarnessFor(AbandonedCopy, 4, 7, 9);
+        await derived.Grain.DeleteDerivedPhysicalTreeAsync();
+        var retired = CreateDiscardHarness(4, 7, 9);
+        await retired.Grain.DeleteRetiredPhysicalTreeAsync();
+
+        Assert.That(await derived.Grain.IsRetiredByResizeAsync(), Is.True);
+        Assert.That(await retired.Grain.IsRetiredByResizeAsync(), Is.True);
+    }
+
+    [Test]
+    public async Task IsRetiredByResize_is_false_for_a_live_caller_deleted_delegated_or_discarded_copy()
+    {
+        var live = CreateDiscardHarnessFor(AbandonedCopy, 4, 7, 9);
+
+        var callerDeleted = CreateDiscardHarnessFor(AbandonedCopy, 4, 7, 9);
+        callerDeleted.GrainFactory.GetLatticeRegistry().GetAliasesTargetingAsync(Arg.Any<string>()).Returns(Array.Empty<string>());
+        await callerDeleted.Grain.DeleteTreeAsync();
+
+        var delegated = CreateDiscardHarnessFor(AbandonedCopy, 4, 7, 9);
+        await delegated.Grain.DeleteDelegatedAsync();
+
+        var discarded = CreateDiscardHarnessFor(AbandonedCopy, 4, 7, 9);
+        await discarded.Grain.DiscardDerivedPhysicalTreeAsync();
+
+        Assert.That(await live.Grain.IsRetiredByResizeAsync(), Is.False, "live");
+        Assert.That(await callerDeleted.Grain.IsRetiredByResizeAsync(), Is.False, "caller-deleted");
+        Assert.That(await delegated.Grain.IsRetiredByResizeAsync(), Is.False, "delegated");
+        Assert.That(await discarded.Grain.IsRetiredByResizeAsync(), Is.False, "discarded");
+    }
+
     [TestCase("t/resized/abc", "t")]
     [TestCase("a/b/resized/abc", "a/b")]
     [TestCase("t/resized/abc/resized/def", "t/resized/abc")]
