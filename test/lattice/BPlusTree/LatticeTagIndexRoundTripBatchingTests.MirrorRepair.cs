@@ -83,14 +83,38 @@ public partial class LatticeTagIndexRoundTripBatchingTests
         var attempts = 0;
         if (mode == LatticeMergeMode.LwwRegister)
         {
-            index.Lattice.SetAsync(mirror, Arg.Any<byte[]>(), Arg.Any<CancellationToken>())
+            // The repair batches its mirror writes into one SetMany.
+            index.Lattice.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>(), Arg.Any<CancellationToken>())
                 .Returns(ci =>
                 {
-                    if (attempts++ == 0)
+                    var entries = ci.Arg<List<KeyValuePair<string, byte[]>>>();
+                    if (entries.Any(e => e.Key == mirror) && attempts++ == 0)
                     {
                         return Task.FromException(failure);
                     }
-                    index.Data[mirror] = ci.Arg<byte[]>();
+                    foreach (var entry in entries)
+                    {
+                        index.Data[entry.Key] = entry.Value;
+                    }
+                    return Task.CompletedTask;
+                });
+        }
+        else if (mode == LatticeMergeMode.OrFlag)
+        {
+            // The repair batches its OR enables into one ApplyCrdtDeltaMany.
+            index.Lattice.ApplyCrdtDeltaManyAsync(
+                    Arg.Any<List<KeyValuePair<string, byte[]>>>(), mode, Arg.Any<CancellationToken>())
+                .Returns(ci =>
+                {
+                    var entries = ci.Arg<List<KeyValuePair<string, byte[]>>>();
+                    if (entries.Any(e => e.Key == mirror) && attempts++ == 0)
+                    {
+                        return Task.FromException(failure);
+                    }
+                    foreach (var entry in entries)
+                    {
+                        MergeFlagRow(index, entry.Key, mode, entry.Value);
+                    }
                     return Task.CompletedTask;
                 });
         }
@@ -153,6 +177,59 @@ public partial class LatticeTagIndexRoundTripBatchingTests
             Assert.That(index.GateAccountedWidths.Max(), Is.EqualTo(window));
             Assert.That(index.TotalWriteCalls, Is.EqualTo(writesBefore));
             Assert.That(subject.GateAccountedCalls, Is.Zero, "intact mirrors need no extra subject confirmation");
+        });
+    }
+
+    [TestCase(LatticeMergeMode.LwwRegister)]
+    [TestCase(LatticeMergeMode.OrFlag)]
+    [TestCase(LatticeMergeMode.RwFlag)]
+    public async Task ReconcileSubjectAsync_missing_mirror_repairs_are_batched_for_lww_and_or_flag(
+        LatticeMergeMode mode)
+    {
+        var (index, subject, ctx) = CreateWithSubject(mode);
+        if (mode != LatticeMergeMode.LwwRegister)
+        {
+            ConfigureFlagRows(index);
+        }
+        const int keys = 3;
+        await SeedOrphansAsync(ctx, subject, keyCount: keys, tagCount: 1);
+        for (var k = 0; k < keys; k++)
+        {
+            subject.Data[$"k{k:D3}"] = [1];
+            index.Data.Remove($"\0k\0orders\0k{k:D3}\0tag00");
+        }
+        var setsBefore = index.SetAsyncCalls;
+        var setManyBefore = index.SetManyAsyncCalls;
+        var singleBefore = index.ApplyCrdtDeltaCalls;
+        var manyBefore = index.ApplyCrdtDeltaManyCalls;
+
+        await ctx.ReconcileSubjectAsync(SubjectTreeId, null, null, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            for (var k = 0; k < keys; k++)
+            {
+                Assert.That(IsStoredRowLive(index, $"\0k\0orders\0k{k:D3}\0tag00", mode), Is.True);
+            }
+            Assert.That(index.SetAsyncCalls - setsBefore, Is.Zero);
+            switch (mode)
+            {
+                case LatticeMergeMode.LwwRegister:
+                    // Previously one SetAsync per repaired mirror.
+                    Assert.That(index.SetManyAsyncCalls - setManyBefore, Is.EqualTo(1));
+                    break;
+                case LatticeMergeMode.OrFlag:
+                    // Previously one GetAsync plus one ApplyCrdtDelta per mirror.
+                    Assert.That(index.ApplyCrdtDeltaManyCalls - manyBefore, Is.EqualTo(1));
+                    Assert.That(index.ApplyCrdtDeltaManyWidths[^1], Is.EqualTo(keys));
+                    Assert.That(index.ApplyCrdtDeltaCalls - singleBefore, Is.Zero);
+                    break;
+                default:
+                    // An RW enable must read its own row at write time.
+                    Assert.That(index.ApplyCrdtDeltaCalls - singleBefore, Is.EqualTo(keys));
+                    Assert.That(index.ApplyCrdtDeltaManyCalls - manyBefore, Is.Zero);
+                    break;
+            }
         });
     }
 

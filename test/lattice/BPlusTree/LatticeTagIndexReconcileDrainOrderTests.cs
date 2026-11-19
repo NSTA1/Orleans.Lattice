@@ -158,6 +158,16 @@ public sealed class LatticeTagIndexReconcileDrainOrderTests
                     Data[ci.Arg<string>()] = ci.Arg<byte[]>();
                     return Task.CompletedTask;
                 });
+            sub.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>(), Arg.Any<CancellationToken>())
+                .Returns(ci =>
+                {
+                    SetDuringScanObserved |= Volatile.Read(ref _scanDepth) > 0;
+                    foreach (var entry in ci.Arg<List<KeyValuePair<string, byte[]>>>())
+                    {
+                        Data[entry.Key] = entry.Value;
+                    }
+                    return Task.CompletedTask;
+                });
             sub.GetManyWithGateAccountingAsync(Arg.Any<List<string>>(), Arg.Any<CancellationToken>())
                 .Returns(ci => Task.FromResult(new GatedMultiReadResult
                 {

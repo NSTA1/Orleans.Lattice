@@ -119,6 +119,16 @@ public partial class TagIndexReconcileGrainTests
                     Written.Add(key);
                     return Task.CompletedTask;
                 });
+            sub.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>(), Arg.Any<CancellationToken>())
+                .Returns(ci =>
+                {
+                    foreach (var entry in ci.Arg<List<KeyValuePair<string, byte[]>>>())
+                    {
+                        Data[entry.Key] = entry.Value;
+                        Written.Add(entry.Key);
+                    }
+                    return Task.CompletedTask;
+                });
             sub.DeleteAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
                 .Returns(ci => Task.FromResult(Data.Remove(ci.ArgAt<string>(0))));
             Lattice = sub;
