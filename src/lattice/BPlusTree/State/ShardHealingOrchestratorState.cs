@@ -48,4 +48,13 @@ internal sealed class ShardHealingOrchestratorState
 
     /// <summary>Physical shards above the configured base at the most recent sweep.</summary>
     [Id(4)] public int LastBacklog { get; set; }
+
+    /// <summary>
+    /// The owner tree this tree was last found to be an alias target of, or
+    /// <see langword="null"/> while it is not one (issue #6097). While set, an
+    /// arming call registers no keepalive: the orchestrator only runs one sweep to
+    /// re-check, so a copy its owner aliases stays stood down across
+    /// reactivations instead of re-registering its reminder every minute.
+    /// </summary>
+    [Id(5)] public string? AliasStandDownOwner { get; set; }
 }

@@ -535,10 +535,10 @@ internal sealed partial class ViewMaintainerGrain(
             return 0;
         }
 
-        // Reclaim a swapped-out generation tree once its post-swap reader grace has
-        // elapsed; runs on the regular drain cadence so reclamation is crash-safe
-        // (durable) and never blocks the swap itself.
-        await TryReclaimPendingGenerationAsync(cancellationToken);
+        // Retire swapped-out generation trees once their post-swap reader grace has
+        // elapsed, and any an earlier release left behind; paced, durable, and
+        // never blocking the swap itself.
+        await TryReclaimSupersededGenerationsAsync(cancellationToken);
 
         // Lag-budget eviction (the GC contract): a view that has fallen further
         // behind than its configured MaxLagBudget - chronically slow, or a crashed

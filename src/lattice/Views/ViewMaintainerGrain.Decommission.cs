@@ -161,9 +161,9 @@ internal sealed partial class ViewMaintainerGrain
     /// <summary>
     /// Soft-deletes every backing view-tree generation through the standard
     /// tree-deletion machinery: the active generation, any generation awaiting
-    /// reclamation, and every prior generation (each of which still holds shard
-    /// state - reclamation only clears a generation's keys, it does not purge its
-    /// shards). The generation-0 legacy <c>view-{name}</c> tree is always included,
+    /// reclamation, and every prior generation (a superseded generation the sweep
+    /// has not reached yet, or one an earlier release only emptied, still holds
+    /// shard state). The generation-0 legacy <c>view-{name}</c> tree is always included,
     /// as is the next (shadow) generation an interrupted rebuild may have left behind.
     /// Returns the highest generation number that was deleted, so the caller can
     /// advance the checkpoint past it.

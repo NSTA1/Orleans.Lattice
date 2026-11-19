@@ -236,4 +236,15 @@ internal sealed class ViewCheckpointState
     /// </summary>
     [Id(18)]
     public List<string> PendingCrossTreeRepairAcknowledgements { get; set; } = [];
+
+    /// <summary>
+    /// The lowest generation the superseded-generation sweep has not yet
+    /// reclaimed: every generation below it has been handed to tree deletion or
+    /// was found already deleted or never created. <see langword="null"/> on a
+    /// checkpoint written before reclamation deleted generations (issue #6097),
+    /// which makes the sweep start at generation 0 and retire every generation
+    /// an earlier release only emptied.
+    /// </summary>
+    [Id(19)]
+    public long? ReclaimedGenerationFloor { get; set; }
 }
