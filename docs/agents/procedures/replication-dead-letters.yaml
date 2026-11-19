@@ -37,7 +37,7 @@ steps:
   - n: 4
     action: "Replay an entry that should now apply or terminally filter through the canonical applier."
     api: "ILatticeReplicationDeadLetters.ReplayAsync"
-    expects: "A non-null, non-deferred ApplyResult removes the parked entry; Deferred true or SourceLineageRefused true leaves it parked."
+    expects: "A non-null ApplyResult removes the parked entry unless Deferred, SourceLineageRefused, TenantIsolationRefused or DeadLettered is true, any of which leaves it parked."
     source: "src/lattice.replication/ILatticeReplicationDeadLetters.cs#ReplayAsync"
   - n: 5
     action: "Discard only after validating that the parked entry should never be applied."
@@ -45,10 +45,12 @@ steps:
     expects: "Returns true when the entry was removed and false when the id was already absent. A foreign-origin entry is first recorded as a lost write, so later entries that depend on it are dead-lettered with reason dependency_lost."
     source: "src/lattice.replication/ILatticeReplicationDeadLetters.cs#DiscardAsync"
 postconditions:
-  - check: "Replay removes a parked entry on any non-throwing, non-deferred return, including Applied false."
-    source: "docs/lattice.replication/dead-letter-queue.md"
+  - check: "Replay removes a parked entry on any non-throwing return that is not deferred or refused, including Applied false; Deferred, SourceLineageRefused, TenantIsolationRefused or DeadLettered true leaves it parked."
+    source: "src/lattice.replication/LatticeReplicationDeadLetters.cs#ReplayAsync"
   - check: "Replay that returns Deferred true applies nothing and leaves the entry parked for a later replay."
     source: "src/lattice.replication/ILatticeReplicationDeadLetters.cs#ReplayAsync"
+  - check: "Replay that the applier refuses again for the entry's parked cause (mode mismatch, tenant-isolation refusal or lost dependency) returns DeadLettered true and leaves the entry parked, so replaying before fixing the cause never discards it."
+    source: "src/lattice.replication/ApplyResult.cs#ApplyResult.DeadLettered"
   - check: "Discard removes the entry without attempting to apply it, after durably recording a foreign-origin entry as a lost write."
     source: "docs/lattice.replication/dead-letter-queue.md"
 failure_modes:
@@ -83,7 +85,7 @@ failure_modes:
   - id: dependency-lost
     signal: "dead_letter.enqueued reason dependency_lost."
     effect: "The entry depends on a write an operator discarded from this queue, so it can never be applied in causal order."
-    response: "Decide whether the dependent write is still wanted; replaying it re-parks it as dependency_lost, so discard it or correct the data at the application level."
+    response: "Decide whether the dependent write is still wanted; replaying it is refused again with DeadLettered true and leaves it parked, so discard it or correct the data at the application level."
   - id: surface-not-available
     signal: "The in-process interface cannot be resolved, the gRPC service is not mapped, or the MCP tool is not listed in the session's tools/list."
     effect: "The operation cannot be carried out through that surface on this host."

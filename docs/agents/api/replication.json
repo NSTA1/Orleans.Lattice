@@ -210,6 +210,16 @@
           "name": "SourceLineageRefused",
           "type": "bool",
           "required": true
+        },
+        {
+          "name": "TenantIsolationRefused",
+          "type": "bool",
+          "required": true
+        },
+        {
+          "name": "DeadLettered",
+          "type": "bool",
+          "required": true
         }
       ],
       "source": "src/lattice.replication/ApplyResult.cs#ApplyResult"
@@ -1373,7 +1383,7 @@
       "request": "string treeId, long entryId, CancellationToken cancellationToken",
       "response": {
         "type": "ApplyResult?",
-        "meaning": "null when no entry with that id exists. Otherwise the applier's result: the entry is removed unless Deferred is true, in which case a restore saga's receive fence held it back and it stays parked."
+        "meaning": "null when no entry with that id exists. Otherwise the canonical applier's result: the entry is removed unless Deferred, SourceLineageRefused, TenantIsolationRefused or DeadLettered is true, in which case it stays parked (a receive fence or bootstrap drop floor held it back, its source lineage was refused, or the applier refused it again for the cause it was parked for)."
       },
       "errors": [
         {
@@ -1391,7 +1401,7 @@
       ],
       "retry": {
         "safe": true,
-        "policy": "A replay that throws or is deferred leaves the entry parked and can be replayed again; after a successful replay a repeat returns null.",
+        "policy": "A replay that throws, is deferred, or is refused (SourceLineageRefused, TenantIsolationRefused or DeadLettered) leaves the entry parked and can be replayed again; after a replay that removed the entry a repeat returns null.",
         "source": "src/lattice.replication/ILatticeReplicationDeadLetters.cs#ReplayAsync"
       },
       "idempotency": {

@@ -52,7 +52,12 @@ threshold is classified `ThroughputBound`; its `OverThreshold` flag still reads
 `true`.
 
 The saturation input is the answering silo's own WAL saturation signal, read
-per tree, and the answering silo tracks how long each tree has stayed
+per tree under the id the tree's WAL is written under: the collector resolves
+each tree's physical tree id (a fresh routing read) and looks the signal up by
+that id, so a tree that a resize, a restore or an alias moved onto a physical
+copy reads its copy's saturation rather than an always-`Healthy` logical name.
+If that resolve fails, the collector reads the signal under the tree's own id.
+The answering silo tracks how long each tree has stayed
 non-`Healthy` across its own samples; an account takes the worst state and the
 longest such run among the trees with partitions on it. Two silos can therefore
 classify the same account differently.

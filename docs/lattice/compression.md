@@ -128,7 +128,7 @@ siloBuilder.AddLatticeReplication(o =>
     o.ClusterId = "site-a";
     // Dict-less Zstd is the default; set this to LatticeCompression.None to opt out.
     o.FramingCompression = LatticeCompression.Zstd;
-    o.FramingCompressionLevel = 3;          // validated to 1-22; the registered compressor's level applies (see below)
+    o.FramingCompressionLevel = 3;          // 1-22; host-wide, read from the default options (see below)
     o.FramingCompressionMinBatchBytes = 512; // skip compression below this uncompressed tail size
 });
 ```
@@ -136,7 +136,7 @@ siloBuilder.AddLatticeReplication(o =>
 | Option | Type | Default | Meaning |
 |---|---|---|---|
 | `FramingCompression` | `LatticeCompression` | `Zstd` | Algorithm tag stamped into the framing header. Defaults to dict-less Zstd; set to `None` to opt out. |
-| `FramingCompressionLevel` | `int` | `3` | Validated to `[1, 22]` when `FramingCompression` is `Zstd` or `ZstdDictionary`, but not read by the encoder: frames are compressed at the level of the registered compressor instance - `3` for the `ZstdLatticeCompressor` that `AddLatticeReplication` registers, and the `compressionLevel` passed to `AddLatticeZstdDictionaryCompressor` for `ZstdDictionary`. To change the dict-less level, register your own `ZstdLatticeCompressor` instance (`AddLatticeCompressor(new ZstdLatticeCompressor(level))`) before calling `AddLatticeReplication`. |
+| `FramingCompressionLevel` | `int` | `3` | Level the framing encoder compresses dict-less `Zstd` frames at; validated to `[1, 22]` when `FramingCompression` is `Zstd` or `ZstdDictionary`. The level is host-wide: the encoder reads it once, from the default (unnamed) options instance, when it is constructed, so a per-tree override has no effect. At a non-default level the encoder compresses with its own `ZstdLatticeCompressor` at that level, whichever package registered the shared Zstd compressor; at the default `3` it keeps the registered instance, so a host that pre-registered its own `ZstdLatticeCompressor` (`AddLatticeCompressor(new ZstdLatticeCompressor(level))`) keeps that instance's level. The `ZstdDictionary` compressor ignores this option and compresses at the `compressionLevel` passed to `AddLatticeZstdDictionaryCompressor`. |
 | `FramingCompressionMinBatchBytes` | `int` | `512` | Uncompressed-tail threshold below which the batch ships uncompressed. |
 | `FramingCompressionDictionaryId` | `uint` | `0` | Shared-dictionary id requested when the algorithm is `ZstdDictionary`. |
 | `MaxInboundDecompressedBytes` | `long` | `64 MiB` | Receiver ceiling on the decompressed size of an inbound framing batch. |
@@ -355,7 +355,7 @@ Compression never *increased* allocations at any measured size. Together with th
 
 ### Registration and the level-coupling note
 
-`AddAzureTableWalStorage` registers a Zstd fallback compressor (`ZstdLatticeCompressor` at `LatticeAzureTableServiceCollectionExtensions.DefaultCompressionLevel`, currently `3`) via `TryAddEnumerable`, so enabling `Compression = LatticeCompression.Zstd` works without any extra wiring. Because registration is additive and idempotent, **the first fallback factory to run wins the compression level**: if a host has already registered its own `ZstdLatticeCompressor` instance (e.g. for replication at a different level), `TryAddEnumerable` will not add the WAL default, and the WAL path reuses the host's instance and its level. To pin a specific WAL level, register the compressor instance explicitly before calling `AddAzureTableWalStorage`. Changing that level later is safe even after rows have been written - because the on-disk frame is self-describing and reads key on the per-row algorithm tag, the new level applies only to subsequently written rows while older rows continue to decode unchanged.
+`AddAzureTableWalStorage` registers a Zstd fallback compressor (`ZstdLatticeCompressor` at `LatticeAzureTableServiceCollectionExtensions.DefaultCompressionLevel`, currently `3`) via `TryAddEnumerable`, so enabling `Compression = LatticeCompression.Zstd` works without any extra wiring. Because registration is additive and idempotent, **the first fallback factory to run wins the compression level**: if a host has already registered its own `ZstdLatticeCompressor` instance (e.g. for replication at a different level), `TryAddEnumerable` will not add the WAL default, and the WAL path reuses the host's instance and its level. To pin a specific WAL level, register the compressor instance explicitly before calling `AddAzureTableWalStorage`. Replication's `FramingCompressionLevel` does not change this choice: at a non-default value the replication framing encoder compresses with its own instance at that level, leaving the shared instance (and the WAL's level) untouched; at the default `3` the encoder uses the shared instance as registered. Changing that level later is safe even after rows have been written - because the on-disk frame is self-describing and reads key on the per-row algorithm tag, the new level applies only to subsequently written rows while older rows continue to decode unchanged.
 
 ### Why a shared byte-tag registry, not a WAL-specific compressor contract
 
