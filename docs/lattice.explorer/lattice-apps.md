@@ -102,7 +102,9 @@ bridge operation - the cluster refuses the install, nothing is recorded, and the
 asks you to review it again. Each
 role's group is a [picker](navigation-model.md#pickers) that suggests the cluster's
 groups from the identity directory and those stored in the Access area, each labelled
-(**Directory**, **Stored**), and accepts any group id. Enabling,
+(**Directory**, **Stored**, or **Directory and stored**), and accepts any group id. On a
+tenant with delegated tenant access administration, it also offers that tenant's own
+groups, labelled **Tenant**, never another tenant's (see [Tenant scope](tenant-scope.md#admin-set-quota-caps-and-app-bindings)). Enabling,
 disabling, upgrading and uninstalling are native actions with explicit confirmation;
 the palette offers `apps.upgrade.{slug}` for an app with an update and
 `apps.disable.{slug}` for an enabled one.

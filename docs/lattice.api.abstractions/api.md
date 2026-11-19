@@ -29,7 +29,7 @@ The in-process facades and the remote adapters implement the same interfaces, so
 
 ## Conventions
 
-- **Serialization.** Most models are Orleans-serializable: they carry [GenerateSerializer] and an [Alias] drawn from their namespace's alias class in the table above. The alias string is the wire and persisted identity of the type and never changes, so the alias classes are part of the public surface. The exceptions are the state facade's in-process result wrappers (TreeSummaryResult, ShardSummariesResult, TreeStructureResult, EntryScanResult, EntryDetailResult and EntryHistoryResult), a few enums that carry no attribute, and most typed exceptions (next bullet).
+- **Serialization.** Most models are Orleans-serializable: they carry [GenerateSerializer] and an [Alias] drawn from their namespace's alias class in the table above. The alias string is the wire and persisted identity of the type and never changes, so the alias classes are part of the public surface. The exceptions are the state facade's in-process result wrappers (TreeSummaryResult, ShardSummariesResult, TreeStructureResult, EntryScanResult, EntryDetailResult and EntryHistoryResult), the two in-process stream-shaping option records (DataSetManyStreamOptions and TreeBulkLoadStreamOptions), a few enums that carry no attribute, and most typed exceptions (next bullet).
 - **Exceptions.** The typed exceptions are raised in-process by the facades, so a binding can surface each as a distinct outcome. Only AppBridgeException and LatticeReplicationEngineNotHostedException are Orleans-serializable. Every exception derives directly from System.Exception except two: LatticeReplicationEngineNotHostedException (InvalidOperationException) and TenantAccessConfinementException (ArgumentException). Each of those two ships a no-op same-silo copier beside it and implements the core library's ILatticeDomainFault marker, which tells a broad catch written for the BCL base type that the exception is a deliberate domain refusal to let propagate, not a framework failure to recover from.
 - **Long-running work.** Operation-tracking interfaces (`ILatticeBackupOperations`, `ILatticeSchemaOperations`, `ILatticeSchemaComplianceOperations`, `ILatticeTreeAdminOperations`, `ILatticeStorageUsageOperations`) extend `ILatticeOperations` and return a `LatticeOperationHandle` from each start verb. See [Long-running operations](operations.md).
 - **Shared core types.** Several models expose types from the packages this one references - the core library (for example `HybridLogicalClock` and `LatticeMergeMode`), `Orleans.Lattice.Membership`, `Orleans.Lattice.Auth`, `Orleans.Lattice.Backup` and `Orleans.Lattice.Schema` - so a contract consumer takes those packages as transitive dependencies.
@@ -38,7 +38,7 @@ The in-process facades and the remote adapters implement the same interfaces, so
 
 Each namespace section lists every public type with its kind and summary, followed by the declaration reference: the declaration line and every directly declared public member and overload, in source order, with enum values. Inherited framework members and compiler-generated record members are not listed. For `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Api.TenantAdmin` and `Orleans.Lattice.Api.Apps` the member-level reference is maintained once, in the facade's own API page, and is linked rather than repeated here.
 
-Totals: 327 public types across 12 namespaces.
+Totals: 338 public types across 12 namespaces.
 
 ## `Orleans.Lattice.Api.Operations`
 
@@ -1123,6 +1123,7 @@ Implemented by [`Orleans.Lattice.Api.Data`](../lattice.api.data/README.md) and e
 - `public required string TreeId { get; init; }`
 - `public IReadOnlyList<DataEntry> Entries { get; init; }`
 - `public string? ContinuationToken { get; init; }`
+- `public LatticeRangeReadGateCoverage? GateCoverage { get; init; }`
 
 ### `DataRangeRequest`
 
@@ -1135,6 +1136,7 @@ Implemented by [`Orleans.Lattice.Api.Data`](../lattice.api.data/README.md) and e
 - `public string? EndExclusive { get; init; }`
 - `public int PageSize { get; init; }`
 - `public string? ContinuationToken { get; init; }`
+- `public bool IncludeGateCoverage { get; init; }`
 
 ### `DataReadResult`
 
@@ -1471,6 +1473,13 @@ Implemented by [`Orleans.Lattice.Api.Backup`](../lattice.api.backup/api.md) and 
 - `Task<BackupHealthReport?> GetBackupHealthAsync(string backupId, CancellationToken cancellationToken = default)`
 - `Task ConfigureBackupHealthAsync(string backupId, BackupHealthConfig config, CancellationToken cancellationToken = default)`
 - `Task<BackupHealthConfig?> GetBackupHealthConfigAsync(string backupId, CancellationToken cancellationToken = default)`
+- `Task<BackupSetScheduleStatus> ScheduleBackupSetAsync(LatticeBackupSetScheduleRequest request, CancellationToken cancellationToken = default)`
+- `Task<bool> CancelBackupSetScheduleAsync(string name, CancellationToken cancellationToken = default)`
+- `Task<bool> RemoveBackupSetScheduleAsync(string name, bool deleteRetainedSets, CancellationToken cancellationToken = default)`
+- `Task<BackupSetScheduleStatus?> GetBackupSetScheduleStatusAsync(string name, CancellationToken cancellationToken = default)`
+- `Task<BackupSetScheduleRunProgress?> GetBackupSetScheduleProgressAsync(string name, CancellationToken cancellationToken = default)`
+- `Task<IReadOnlyList<BackupSetScheduleStatus>> ListBackupSetSchedulesAsync(CancellationToken cancellationToken = default)`
+- `Task<bool> RunBackupSetScheduleNowAsync(string name, CancellationToken cancellationToken = default)`
 
 ### `ILatticeBackupOperations`
 

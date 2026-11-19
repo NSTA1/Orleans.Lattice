@@ -89,7 +89,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <see cref="LatticeGrain"/> partials - bulk load, cursors, digests, entry
 /// and key enumeration, orphan repair, projection administration, warm-up,
 /// resharding, and the <c>SetManyAsync</c> write fan-out - rather than by a
-/// single entry point. Because <see cref="RunAsync"/> is the one envelope
+/// single entry point. Because <c>RunAsync</c> is the one envelope
 /// they all share, every arm described above applies to all of them,
 /// including the replay-permit arm added for issue #3294. That breadth is
 /// wanted here: the refusal is raised by the per-silo permit gate while a
@@ -101,7 +101,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 internal static class ShardActivationRetry
 {
     /// <summary>
-    /// Maximum number of attempts performed by <see cref="RunAsync"/>
+    /// Maximum number of attempts performed by <c>RunAsync</c>
     /// before the original <see cref="ShardActivationTimeoutException"/> is
     /// rethrown. Includes the first attempt, so the operator pays at most
     /// <c>MaxAttempts - 1</c> retries.

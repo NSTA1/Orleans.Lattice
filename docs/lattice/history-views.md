@@ -98,8 +98,10 @@ var history = await factory.CreateAsync(
 
 A view created through the provider is persisted against the provider key, and
 every silo re-hydrates it the same way. It reads, retains and drops exactly like
-one built from `LatticeHistoryView.Definition`. Creating one needs the same
-authority as any runtime view: Admin over the source tree.
+one built from `LatticeHistoryView.Definition`. Creating one through the
+tree-administration facade (which the MCP tool and the Explorer use) needs the
+same authority as any provider-backed view there: whole-tree Admin over the source
+tree.
 
 A change-history view **retains every revision of every key, including values
 later overwritten or deleted, until the view is dropped** (or, when the tree has

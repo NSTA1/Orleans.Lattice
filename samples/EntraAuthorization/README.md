@@ -51,9 +51,10 @@ walks the whole thing with `az` commands. In short:
    app exposes a specific delegated scope instead, set the optional
    `LATTICE_ENTRA_SCOPE` variable to override it.
 
-If either required variable is unset, or a token cannot be acquired, the sample
-prints the setup steps and exits with a non-zero code rather than silently doing
-nothing.
+If either required variable is unset, a token cannot be acquired, the token
+carries no `oid` claim, or the silo's Entra authenticator does not accept it as
+the owner, the sample prints the setup steps and exits with a non-zero code
+rather than silently doing nothing.
 
 ## Run it
 

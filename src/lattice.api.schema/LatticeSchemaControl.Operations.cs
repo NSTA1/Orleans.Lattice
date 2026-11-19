@@ -7,8 +7,8 @@ namespace Orleans.Lattice.Api.Schema;
 /// <summary>
 /// The accept-then-poll half of the schema facade (#4123): the
 /// <see cref="ILatticeSchemaOperations"/> verbs. Every start scopes the tree under
-/// the caller's tenant and authorizes schema-management on it exactly as the
-/// blocking verb always has, before the work is handed to the shared coordinator.
+/// the caller's tenant and authorizes schema-management on it before the work is
+/// handed to the shared coordinator.
 /// </summary>
 internal sealed partial class LatticeSchemaControl
 {

@@ -22,7 +22,7 @@ The facade holds no replication state. It delegates to `ILatticeReplicationConfi
 
 ## Decommissioning a peer
 
-`DecommissionPeerAsync` is the one operation on this facade that does not scope to a single tree, because a peer being decommissioned is a cluster-wide fact, not a per-tree one. It authorizes against the dedicated `LatticeOperation.Replication` capability with no target tree (the same cluster-wide shape the gRPC and MCP bindings surface as a `null` target id), before touching any engine state - an unauthorized caller is denied with `LatticeAuthorizationDeniedException` and nothing is read or written.
+`DecommissionPeerAsync` - the one operation of the separate `ILatticeReplicationPeerAdmin` facade, which `AddLatticeReplicationApi` serves from the same instance as `ILatticeReplicationControl` - is the one control operation that does not scope to a single tree, because a peer being decommissioned is a cluster-wide fact, not a per-tree one. It authorizes against the dedicated `LatticeOperation.Replication` capability over the cluster-wide scope rather than any single tree (the gRPC binding's transport authorizer sees the peer cluster id as the call's target; there is no MCP tool for it), before touching any engine state - an unauthorized caller is denied with `LatticeAuthorizationDeniedException` and nothing is read or written.
 
 Once authorized, the facade:
 

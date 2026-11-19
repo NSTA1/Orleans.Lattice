@@ -18,7 +18,7 @@ seam it covers; the log is in the pull request that added the module.
 
 ## This module and its companion
 
-The area is specified by two modules, documented together in
+The area is specified by five modules. Its core is two, documented together in
 [`README.md`](README.md#two-modules-and-the-seam-between-them):
 
 - **`ShardOwnership`** (this note) owns who serves a key: the split, the
@@ -29,6 +29,11 @@ The area is specified by two modules, documented together in
   owns what the transaction registry's retention does to a saga bound across a
   split and a resize: the registry declining to report the decision, the row's
   retirement, a delayed shadow-forwarded prepare, and leaf reactivation.
+
+The other three - `ShardOwnershipCrdt` ([`RefinementCrdt.md`](RefinementCrdt.md)),
+`ShardOwnershipCutover` ([`RefinementCutover.md`](RefinementCutover.md)) and
+`ShardOwnershipFold` ([`RefinementFold.md`](RefinementFold.md)) - each check one
+further concern and carry their own notes.
 
 A property this note marks clean holds here under a registry that always
 answers. It is not a claim about behaviour under retention; read the companion

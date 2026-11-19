@@ -180,8 +180,8 @@ The split path preserves the one-parent invariant as follows:
 
 1. **Prune on the donor.** When an internal node splits, it removes the
    moved children's rows from its persisted per-child digest table and
-   recomputes its `SubtreeProjectionHash`, `SubtreeEntryCount`, and
-   `SubtreeHighestCheckpointOffset` from the remaining rows before
+   recomputes its persisted subtree hash, entry count, and highest
+   checkpoint offset from the remaining rows before
    publishing the corrected aggregate upward. The XOR fold's
    self-inverse algebra makes the recompute exact - the moved rows
    cancel cleanly out of the running hash.
@@ -255,7 +255,7 @@ Heap allocations on the hot path are bounded:
 | `XxHash128` for the outer digest framing | one per digest read, at the leaf or the internal-node root |
 | `byte[16]` XxHash128 hash from `GetHashAndReset()` | unavoidable (the result) |
 | `byte[16]` hash clone carried by each upward digest publish | bounded by tree height; cloned so subsequent XOR updates do not retroactively mutate the parent's captured bytes |
-| String / VC scratch buffers             | pooled (`stackalloc 256` fast path; `ArrayPool<byte>.Shared` and `ArrayPool<string>.Shared` for the rare overflow) |
+| String / VC scratch buffers             | pooled: strings use a `stackalloc 256` fast path with `ArrayPool<byte>.Shared` for the rare overflow; a vector clock with more than one replica rents its sorted replica ids and clocks from `ArrayPool<string>.Shared` and `ArrayPool<HybridLogicalClock>.Shared` (a single-replica clock is fed directly) |
 
 The `O(shardCount)` per-tree cost makes the digest cheap enough for
 steady-state monitoring - including periodic cross-silo equality
@@ -341,9 +341,9 @@ When the opt-out is in effect:
 
 - Leaf-mutation funnels take a trimmed
   path that LWW-merges the value, bumps the delivery sequence, and
-  returns without touching the persisted `ProjectionHash`.
+  returns without touching the persisted running projection hash.
 - The leaf does not publish child digest snapshots upward, so no
-  internal-node ancestor updates its `SubtreeProjectionHash` for that
+  internal-node ancestor updates its persisted subtree hash for that
   mutation. The whole upward chain is quiescent.
 - `ILattice.GetLeafProjectionDigestAsync` throws
   `InvalidOperationException`. When the opt-out comes from the configured
@@ -352,7 +352,7 @@ When the opt-out is in effect:
   set only through the tree's registry override or the latch below is
   caught after the shard hop, by the same check in the leaf and internal
   grains, which also stops a direct grain-handle caller.
-- Persisted state is **not** rewritten. Any `ProjectionHash` already on
+- Persisted state is **not** rewritten. Any running projection hash already on
   disk from a previous-enabled period remains untouched.
 
 #### Cross-cluster impact: anti-entropy drift detection
@@ -452,9 +452,9 @@ all.
 ## Recovery: fall-off-log triggers and `ProjectionRebuildPolicy`
 
 When a leaf grain reactivates it consults its persisted
-per-partition `ProjectionCheckpointOffsetsByPartition[p]` (and the
-legacy scalar `ProjectionCheckpointOffset` for the partition-0
-back-compat slot) and decides how to recover. The classifier runs
+per-partition projection checkpoints (and the legacy scalar
+checkpoint slot that partition 0 falls back to on an older state
+row) and decides how to recover. The classifier runs
 **once per partition** in `[0, WalPartitions)`; the leaf is refused
 as fall-off-log if **any** partition's classifier reports genuine loss,
 while a cost signal or the snapshot advisory below still tail-replays.
@@ -465,10 +465,10 @@ the first is fatal:
 1. **WAL trimmed past checkpoint.** Partition `p`'s WAL
    has GC'd entries the leaf still considers unapplied. A tail
    replay would skip those entries and converge to the wrong state.
-   Skipped unless the partition's checkpoint is positive: the -1
-   "nothing applied" sentinel means the leaf has no in-memory state
-   to lose to a trimmed prefix on that partition, and a checkpoint of
-   `0` is skipped as well.
+   Skipped only for the -1 "nothing applied" sentinel, which means the
+   leaf has no in-memory state to lose to a trimmed prefix on that
+   partition. A durably recorded checkpoint of `0` is a real read
+   position (issue #4433), so a trim past offset `1` is genuine loss.
    **This is the only trigger that routes to `ProjectionRebuildPolicy`.**
    The exact loss boundary is `tail > checkpoint + 1`: the entry *at*
    the checkpoint is already applied, so trimming it loses nothing.
@@ -490,16 +490,15 @@ the first is fatal:
    leaf applies lies inside `(checkpoint, head)` and `applied <= gap`
    always holds. Since issue #2275 nothing acts on the
    comparison (it was once a candidate the replay confirmed): an
-   over-budget gap yields the decision `TailReplayOverBudget` and the
-   leaf tail-replays exactly as for `TailReplay`, and its only remaining
+   over-budget gap yields a non-fatal over-budget decision and the
+   leaf tail-replays exactly as for an in-budget gap, and its only remaining
    effect is that it suppresses the snapshot advisory described under
    [Snapshot-on-fall-off safety net](#snapshot-on-fall-off-safety-net).
    Confirming the gap in the classifier would mean reading
    `(checkpoint, head)` before the replay reads it again - doubling the
    most expensive part of activation - so the **verdict** is taken on
    every replay path, during the replay that happens anyway, by counting
-   the entries that actually pass the per-leaf range filter
-   (`ShouldApplyDuringReplay`). The warning and the
+   the entries that actually pass the per-leaf range filter. The warning and the
    `orleans.lattice.leaf.activation_replays_over_budget` counter are
    emitted at that exact count, whatever the comparison said. The
    comparison is skipped for the -1 sentinel, whose gap would charge a
@@ -510,7 +509,7 @@ the first is fatal:
 3. **Cold past retention.** The persisted projection age exceeds
    `LatticeOptions.LeafProjectionRetention` (default 7 days). Also a
    cost signal only - an old checkpoint does not imply a trimmed WAL,
-   so it degrades to the same non-fatal `TailReplayOverBudget` replay.
+   so it degrades to the same non-fatal over-budget tail replay.
    Age is a property of the leaf, not of any one partition, so every
    partition's classification sees the same age. Note the activation path currently
    supplies `TimeSpan.Zero` as the age, so this trigger does not fire
@@ -591,14 +590,14 @@ the first is fatal:
 > as a fault and not as a slow replay, which is the #2165 shape exactly.
 
 On the healthy multi-partition path every partition's classifier
-returns `TailReplay`, and the leaf executes a two-pass replay across
+returns a plain tail replay, and the leaf executes a two-pass replay across
 all partitions (per-partition Set / Delete absorption with
 `TxCommit` / `TxAbort` / `DeleteRange` deferred until every partition
 has populated its pending-tx record, then drained; a `DeleteRange` whose
 range cannot overlap the leaf's key range is instead consumed in the
 first pass, applying nothing - issue #3601) followed by a
 post-pass per-partition checkpoint reconciliation that advances each
-partition's `ProjectionCheckpointOffsetsByPartition[p]` to the
+partition's persisted checkpoint to the
 highest applied offset once the saga-prepare clamp lifts.
 
 The `ProjectionRebuildPolicy` enum on `LatticeOptions` is consulted only
@@ -911,7 +910,7 @@ The capture path is **leaf-driven**, not maintenance-driven:
   replays nothing, and a capture that fails or is declined leaves coverage,
   and so the pin, where they were (issue #3599).
 - A single-flight guard suppresses overlapping captures: a slow
-  `SaveAsync` does not pin a follow-on capture behind it; the
+  snapshot save does not pin a follow-on capture behind it; the
   follow-on is dropped and the next cadence tick re-evaluates.
 
 Each capture overwrites the previous blob; only the most recent
@@ -939,7 +938,7 @@ residency bound or authorize discarding its replay progress.
 
 The activation-time WAL replay that rebuilds a leaf's projection cache
 is **resumable**. A leaf rebuilds its cache from the WAL on every
-activation, but the persisted `ProjectionCheckpointOffset` is what
+activation, but the persisted projection checkpoint is what
 survives across activations. Historically the checkpoint was advanced
 only by a single reconciliation step at the very *end* of the replay,
 so a leaf whose un-snapshotted prefix could not be drained inside one
@@ -1087,8 +1086,8 @@ projection-state slots** that the materialiser owns:
   first, accepting the loss - see
   [An unreadable leaf snapshot](#an-unreadable-leaf-snapshot).
 
-**Topology-bearing state is preserved**: `TreeId`, `ShardIndex`, the
-leaf's key range, and the sibling pointers stay intact. The rebuild
+**Topology-bearing state is preserved**: the leaf's tree id, shard
+index, key range, and sibling pointers stay intact. The rebuild
 does not re-shape the tree - it only re-derives the materialised
 projection for the range the leaf already owns. Only the part that no
 snapshot covers is re-derived from the WAL: a snapshot-covered prefix

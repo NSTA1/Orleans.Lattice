@@ -81,7 +81,7 @@ For day-to-day use and operations:
 
 - [API Reference](api.md) - public types, registration helper, and extension policies.
 - [Configuration](configuration.md) - every `AzureTableWalStorageOptions` knob, default, and validation rule.
-- [Architecture](architecture.md) - storage layout, transactional batch contract, commit pipeline, and recovery behaviour.
+- [Architecture](architecture.md) - storage layout, transactional batch contract, commit pipeline, recovery behaviour, and the telemetry the provider emits.
 - [Chaos Tests](chaos-tests.md) - the Azurite-backed chaos suite and what it proves.
 
 Related package docs:

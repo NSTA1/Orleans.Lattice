@@ -6,8 +6,9 @@ namespace Orleans.Lattice.Replication;
 /// <summary>
 /// Outcome of an <see cref="IReplicationApplier.ApplyAsync(WalRecord, CancellationToken)"/>
 /// invocation. Returned to give callers visibility into whether the
-/// entry was actually merged onto the local tree (versus filtered by a pinned
-/// snapshot floor, the recent exact-identity cache, or a local-origin guard) and
+/// entry was actually merged onto the local tree (versus dropped below a
+/// completed bootstrap's drop floor, filtered by the recent exact-identity
+/// cache, or rejected by a receiver gate such as the local-origin guard) and
 /// where the HWM stands after the call.
 /// </summary>
 [GenerateSerializer]

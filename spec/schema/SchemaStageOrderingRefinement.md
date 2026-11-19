@@ -120,8 +120,8 @@ JSON policy accepts, so valid replicated atomic entries were dead-lettered and
 local re-writes of stored bytes were rejected. The fix judges the body the read
 decoder serves; ValidationBeforeCommitUndecodableAdmitted pins its fail-closed
 half, an envelope no reader can be served being refused rather than trusted. It is fixed in the
-schema-assurance integration bucket; this is integration-branch evidence, not a
-claim the fix is released.
+schema-assurance integration bucket, which landed on `main` with #5330 and
+shipped in the 10.3.0 release.
 
 StampedWhenVersionedReversedReplaces is the #5241 mechanism: enforcement
 registered after versioning replaced the composed interceptor with the
@@ -130,8 +130,8 @@ ingest stopped running while the decoder and envelope codec stayed installed.
 The model recorded that order as a non-guarantee. Enforcement now re-composes
 with the registered versioning stage, so the reversed order is checked against
 every property, `StampedWhenVersioned` included. It is fixed in the
-schema-assurance integration bucket; this is integration-branch evidence, not a
-claim the fix is released.
+schema-assurance integration bucket, which landed on `main` with #5330 and
+shipped in the 10.3.0 release.
 
 ## Deliberate abstraction gaps
 

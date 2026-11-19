@@ -83,18 +83,20 @@
 // 2) compute.bicep - the storage endpoints are DETERMINISTIC (pure functions of
 //    resourceGroup().id + baseName + regionCode), so there is NO module
 //    dependency cycle: compute is fed endpoint STRINGS, this module creates the
-//    matching resources with the identical names. Add these four params to
-//    compute.bicep and append them to the silo container's `env` array:
+//    matching resources with the identical names. compute.bicep takes these
+//    three params and binds them into the silo container's `env` array as the
+//    host configuration keys the silo reads:
 //
-//      param walTableEndpoint string          // -> LATTICE_WAL_TABLE_ENDPOINT
-//      param clusteringTableEndpoint string   // -> ORLEANS_CLUSTERING_TABLE_ENDPOINT
-//      param backupBlobEndpoint string        // -> LATTICE_BACKUP_BLOB_ENDPOINT
-//      param backupIsPrimary bool             // -> LATTICE_BACKUP_IS_PRIMARY
+//      param walTableEndpoint string          // -> Storage:TableServiceUri
+//      param backupBlobEndpoint string        // -> Storage:BlobServiceUri
+//      param backupIsPrimary bool             // -> Backup:Primary
 //
-//        { name: 'LATTICE_WAL_TABLE_ENDPOINT',       value: walTableEndpoint }
-//        { name: 'ORLEANS_CLUSTERING_TABLE_ENDPOINT', value: clusteringTableEndpoint }
-//        { name: 'LATTICE_BACKUP_BLOB_ENDPOINT',      value: backupBlobEndpoint }
-//        { name: 'LATTICE_BACKUP_IS_PRIMARY',         value: string(backupIsPrimary) }
+//        { name: 'Storage__TableServiceUri', value: walTableEndpoint }
+//        { name: 'Storage__BlobServiceUri',  value: backupBlobEndpoint }
+//        { name: 'Backup__Primary',          value: string(backupIsPrimary) }
+//
+//    The one table endpoint backs the WAL, Orleans clustering, grain state and
+//    reminders, so there is no separate clustering endpoint.
 //
 //    (AZURE_CLIENT_ID is already on the silo; the TokenCredential uses it.)
 //
@@ -108,12 +110,11 @@
 //
 //      In the compute module loop add:
 //        walTableEndpoint:        'https://st${uniqueString(resourceGroup().id, baseName, region.regionCode)}.table.${environment().suffixes.storage}'
-//        clusteringTableEndpoint: 'https://st${uniqueString(resourceGroup().id, baseName, region.regionCode)}.table.${environment().suffixes.storage}'
 //        backupBlobEndpoint:      'https://stbk${uniqueString(resourceGroup().id, baseName)}.blob.${environment().suffixes.storage}'
 //        backupIsPrimary:         region.regionCode == backupPrimaryRegionCode
 //
-//    The WAL and clustering endpoints are intentionally the SAME account: the WAL
-//    and the membership table share the per-region storage account by design.
+//    The WAL and the membership table intentionally share the per-region
+//    storage account by design.
 // =============================================================================
 
 targetScope = 'resourceGroup'
@@ -301,7 +302,7 @@ output perRegionStorage array = [for (region, i) in regions: {
 @description('Name of the shared global backup blob account (single source of truth for restore).')
 output backupAccountNameOut string = backupStorage.name
 
-@description('Blob endpoint of the shared backup sink (keyless URI). Feeds LATTICE_BACKUP_BLOB_ENDPOINT on every silo.')
+@description('Blob endpoint of the shared backup sink (keyless URI). Feeds the Storage:BlobServiceUri host setting on every silo.')
 output backupBlobEndpoint string = backupStorage.properties.primaryEndpoints.blob
 
 @description('Backup container name (single shared source of truth for cold-restore).')

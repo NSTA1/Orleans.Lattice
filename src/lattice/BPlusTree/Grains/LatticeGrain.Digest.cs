@@ -6,7 +6,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <see cref="ShardMap"/> via the existing <see cref="Orleans.Lattice.BPlusTree.Grains.LatticeGrain.GetRoutingAsync(System.Threading.CancellationToken)"/>
 /// helper, validates that <c>shardIndex</c> corresponds to a physical shard
 /// owned by this tree, and dispatches to <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain.GetShardProjectionDigestAsync"/>.
-/// Guarded by <see cref="LatticeGrain.ThrowIfSystemTree"/> so reserved
+/// Guarded by <see cref="LatticeGrain.ThrowIfSystemTree()"/> so reserved
 /// system trees (registry, replication WAL prefix) cannot be inspected
 /// through the public surface, and short-circuits with
 /// <see cref="InvalidOperationException"/> when the per-tree

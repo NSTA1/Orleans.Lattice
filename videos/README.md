@@ -212,7 +212,8 @@ videos/
     brand/code.js                   colours code in the site's syntax roles
     brand/site/                     the copy of the site's design system and words, never committed
     components/                     the scenes, variable-driven: title-card, remember, many-places,
-                                    store-overview, cluster, join-diagram, seams, journey, ways
+                                    store-overview, cluster, join-diagram, seams, journey, ways,
+                                    choice-list, version-vector, atomic-saga, migration-flow
   episodes/<slug>/                  everything one episode owns
     BRIEF.md, SCRIPT.md             the brief, and the narration it is timed from
     STORYBOARD.md                   what is on screen for each cue
@@ -296,10 +297,15 @@ episode's pictures, timing and structure against silence of its stamped
 length; hearing it means narrating it locally, or watching its published cut.
 
 The repository's `build-and-test` job skips its package tests for a change
-confined to `videos/`, as it does for `docs/` and `benchmark/`. The content
-gates still scan every file here, and they run `node videos/tools/series.js
-check`, so the order of the series is part of the required check: the videos
-lane is advisory, and merging is how an episode is approved.
+confined to `videos/`, as it does for `docs/` and `benchmark/`. A pull request
+that changes only `videos/`, workflow files (bar the few that route formal
+checks) and `.github/copilot-instructions.md` is lightweight: its content-gate
+fixtures (em-dash, mojibake and the other hygiene and docs gates) do not run
+either, so this lane's ASCII check is what guards the folder there. Any other
+pull request runs the content gates, which scan every file here. The content
+gates run `node videos/tools/series.js check` in every case, lightweight or
+not, so the order of the series is part of the required check: the videos lane
+is advisory, and merging is how an episode is approved.
 
 ## Licences
 

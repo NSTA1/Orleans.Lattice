@@ -36,7 +36,7 @@ flowchart LR
     Explorer -- wire --> Binding
 ```
 
-The dependency arrows only point at the contract. A facade references the contract and the core library; a gRPC binding references the contract and, with one exception, nothing else; the MCP server and the Explorer reference the contract and the bindings. No binding or consumer references a facade assembly, so the facade's implementation types stay `internal` and can change freely.
+The dependency arrows only point at the contract. A facade references the contract, the core library and the engine packages it fronts - except the telemetry facade, which reads a metrics backend rather than the cluster and directly references only the contract - and the tree-administration facade also references the schema facade. A gRPC binding references the contract and, with one exception, nothing else; the MCP server references the contract, the bindings and the core library; the Explorer references the contract and the bindings. None of the bindings, the MCP server or the Explorer references a facade assembly, so the facade's implementation types stay `internal` and can change freely. Telemetry is the exception on the consumer side too: the MCP telemetry tool package (`Orleans.Lattice.Api.Mcp.Telemetry`) and its Azure token add-on reference the telemetry facade directly.
 
 ## The contract assembly
 
@@ -44,7 +44,7 @@ The assembly holds one namespace per facade (`Orleans.Lattice.Api.State`, `.Data
 
 It is not dependency-free. Its models reuse public types from the packages it references - the core `Orleans.Lattice` library, `Orleans.Lattice.Membership`, `Orleans.Lattice.Auth`, `Orleans.Lattice.Backup` and `Orleans.Lattice.Schema` - rather than redeclaring them, so a contract consumer takes those packages transitively. It references no facade, binding or transport package, and it registers nothing: it has no service-collection extension, no options and no background work.
 
-Behaviour in the assembly is limited to what a model needs to be useful on its own: computed properties and small pure helpers on the models themselves, such as the terminal-state check on an operation status or the lookup on a telemetry query catalog, all listed in the [Public API](api.md).
+Behaviour in the assembly is limited to what a model needs to be useful on its own: computed properties and small pure helpers on the models themselves, such as the terminal-state check on an operation status or the lookup on a telemetry query catalog, all listed in the [Public API](api.md). The only other behaviour is the default bodies of a few additive interface members, which keep an existing implementation compiling when a member is added. The streamed write (`SetManyStreamAsync` on `ILatticeDataApi`) and the streamed bulk load (`BulkLoadStreamAsync` on `ILatticeTreeAdmin`) default to cutting the stream into batches or chunks written through the interface's own verbs, and a binding overrides them to stream over a single call. The remaining defaulted members - the backup-set schedule verbs on `ILatticeBackupControl`, runtime schema registration on `ILatticeSchemaControl`, and the orphaned-leaf survey and runtime-view provider listing and creation on `ILatticeTreeAdmin` - throw `NotSupportedException` until an implementation overrides them.
 
 ## Serving a call in-process
 
@@ -58,7 +58,7 @@ On the client side the same interface reappears. Several bindings ship a public 
 
 ## The MCP server and the Explorer
 
-`Orleans.Lattice.Api.Mcp` projects contract methods as MCP tools and reaches them in one of two ways. Co-hosted (`AddLatticeMcp`), it runs on the silo that exposes the facades and resolves each facade group's interface from dependency injection. In remote mode (`AddLatticeMcpRemote`), it registers its own internal adapters that implement the contract interfaces over the bindings' gRPC clients, so the same tool handlers run unchanged against a remote cluster, and it implements `ILatticeRegionCatalog` to report which regions and facade groups it can route to. The Explorer follows the remote pattern: its shell transports implement the contract interfaces over the bindings' gRPC clients, so its pages depend on the interfaces rather than on a transport.
+`Orleans.Lattice.Api.Mcp` projects contract methods as MCP tools and reaches them in one of two ways. Co-hosted (`AddLatticeMcp`), it runs on the silo that exposes the facades and resolves each facade group's interface from dependency injection. In remote mode (`AddLatticeMcpRemote`), it registers its own internal adapters that implement the contract interfaces over the bindings' gRPC clients, so the same tool handlers run unchanged against a remote cluster. In both modes it implements `ILatticeRegionCatalog` to report which regions and facade groups it can route to: co-hosted, the current region with the facade groups registered on it; in remote mode, the configured peer regions as well. The Explorer follows the remote pattern: its shell transports implement the contract interfaces over the bindings' gRPC clients, so its pages depend on the interfaces rather than on a transport.
 
 ## Long-running operations
 

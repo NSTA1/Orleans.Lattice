@@ -45,7 +45,10 @@ The collapsed leaf state row carries only:
   not yet acknowledged), plus the moved-away slot seal an adaptive shard
   split records (a later shard consolidation that folds those slots back
   lifts it).
-- The projection-digest XOR fold (16 bytes).
+- The projection-digest XOR fold (16 bytes), together with the version
+  of the per-entry contribution function that produced it, so a leaf
+  whose persisted fold came from another version recomputes it from
+  its entries before folding anything new into it.
 - The scalar projection checkpoint pointing into the WAL, plus a
   per-partition offset array on a multi-partition tree and a flag
   recording that partition 0's checkpoint was actually assigned rather
@@ -137,7 +140,7 @@ The activation path therefore tolerates any combination of:
   sibling leaves. The fall-off-log detector does not apply its
   replay budget to the sentinel because the per-leaf range filter
   inside the materialiser drops every WAL entry that falls outside
-  this leaf's `[LowKeyInclusive, HighKeyExclusive)` ownership
+  this leaf's `[low, high)` ownership
   range, so the cost of the tail replay is bounded by the leaf's
   own range, not by the WAL head. The trim trigger is also a no-op
   for the sentinel: there is no projection state to lose.

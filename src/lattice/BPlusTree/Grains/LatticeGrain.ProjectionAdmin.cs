@@ -7,7 +7,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <see cref="Orleans.Lattice.BPlusTree.Grains.LatticeGrain.GetRoutingAsync(System.Threading.CancellationToken)"/> helper, validates the
 /// physical shard index, and dispatches to the
 /// <see cref="Orleans.Lattice.BPlusTree.IShardRootGrain"/> admin seams. Guarded by
-/// <see cref="LatticeGrain.ThrowIfSystemTree"/> so reserved system
+/// <see cref="LatticeGrain.ThrowIfSystemTree()"/> so reserved system
 /// trees (registry, replication WAL prefix) cannot be rebuilt or
 /// inspected through the public surface.
 /// </summary>

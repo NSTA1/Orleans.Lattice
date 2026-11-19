@@ -48,7 +48,7 @@ query-value:backups.backup=id	query-value	docs/lattice.explorer/managing-backups
 query-value:data.import=seed	query-value	docs/lattice.explorer/areas.md#importing-into-a-tree	?import=seed opens the Import dialog on a seed, as New tree from file does	A3
 query-value:schema.scan=start	query-value	docs/lattice.explorer/managing-schema.md#compliance	?scan=start starts a compliance scan	U2
 query-value:schema.show=all	query-value	docs/lattice.explorer/managing-schema.md#directory-page	?show=all lists every tree in the Schema directory	U2
-query-value:shell.all-tenants=true	query-value	docs/lattice.explorer/navigation-model.md#query-keys	?all-tenants=true shows every tenant's rows	T4
+query-value:shell.all-tenants=true	query-value	docs/lattice.explorer/tenant-scope.md#what-is-scoped	?all-tenants=true asks for every tenant's items, honoured only for a platform operator	T4
 query-value:telemetry.from=instant	query-value	docs/lattice.explorer/areas.md#telemetry	?from= and ?to= name an absolute window	A11
 query-value:telemetry.range=relative	query-value	docs/lattice.explorer/areas.md#telemetry	?range= names a relative range	A11
 query-value:telemetry.scope=all	query-value	docs/lattice.explorer/areas.md#telemetry	?scope=all asks for every tenant	T4
@@ -276,6 +276,7 @@ use-case:apps/upgrade-command	use-case	docs/lattice.explorer/lattice-apps.md#con
 use-case:backups/addresses	use-case	docs/lattice.explorer/managing-backups.md#addresses	Reopen a finished operation by its address	A10
 use-case:backups/area	use-case	docs/lattice.explorer/areas.md#backups	The Backups area's catalogue, capture, schedules, health and maintenance pages	A6
 use-case:backups/availability	use-case	docs/lattice.explorer/managing-backups.md#availability	The Backups area is hidden for a caller without backup rights, and restore is not offered	U4
+use-case:backups/backup-set-schedules	use-case	docs/lattice.explorer/managing-backups.md#backup-set-schedules	Schedule a cross-tree-consistent backup set of several trees, pause or resume it, and see its runs	A10
 use-case:backups/capture-cancel	use-case	docs/lattice.explorer/managing-backups.md#capture	Cancel a capture	A6
 use-case:backups/capture-full	use-case	docs/lattice.explorer/managing-backups.md#capture	Capture a full backup to the separate backup account	A6
 use-case:backups/capture-kinds	use-case	docs/lattice.explorer/managing-backups.md#capture	Capture kinds: full (tree, prefix, key), incremental, and a set of trees at one fence	A10

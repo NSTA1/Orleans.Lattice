@@ -42,13 +42,13 @@ Every fixture is tagged `[Category("Chaos")]`, so any test filter carrying `Test
 |---|---|---|
 | Happy-path chaos | `ChaosIntegrationTests.cs` | Strong invariants *during* heavy concurrent load with manually-triggered splits. |
 | Chaos + storage faults | `ChaosWithFaultsIntegrationTests.cs` | Parametrized theory that injects random storage faults; asserts eventual convergence after the fault window closes. |
-| Chaos + online resize | `ChaosResizeIntegrationTests.cs` | Full-workload chaos while `ResizeAsync` changes fan-out in the background under `SnapshotMode.Online`. Exercises the `TreeResizeGrain` phase machine (Snapshot → Swap → Reject → Cleanup), shadow-forwarding on every source shard, and the alias swap. |
+| Chaos + online resize | `ChaosResizeIntegrationTests.cs` | Full-workload chaos while `ResizeAsync` changes fan-out in the background under `SnapshotMode.Online`. Exercises the resize coordinator's phase machine (Snapshot → Swap → Reject → Cleanup), shadow-forwarding on every source shard, and the alias swap. |
 | Chaos + online reshard | `ChaosReshardIntegrationTests.cs` | Full-workload chaos while `ReshardAsync` grows the physical shard count (4 to 8) in the background. Exercises the reshard coordinator's migration loop and its dispatch-budget clamping (`MaxConcurrentMigrations`), and `ShardMap` convergence when reshard-dispatched splits race with workload writes. The same fixture also shrinks a tree (4 to 2) under the same workload, exercising fold planning, every fold's drain, freeze, swap and finalise racing live writes, and the release of each retired donor's storage while scans and counts may still hold a pre-fold shard map. |
 | Resize swap after a registry-turn restart | `AliasSwapRegistryTurnRestartChaosTests.cs` | A resize whose alias-swap step times out is left in its swap phase, a silo restarts, and a later pass must finish the resize. The test installs an ownership guard that reads a registered but unseeded ledger tree inside the alias-change turn, injects one failed alias write, restarts the secondary silo over process-shared storage and WAL, then requires the resize to complete and every pre-resize key to read through the logical tree. |
 | Atomic-write reader isolation | `AtomicVisibilityChaosTests.cs` | Strict reader isolation: a continuous reader concurrent with `SetManyAtomicAsync` always observes either the full pre-saga snapshot, the full post-saga snapshot, or all keys hidden - never a partial view. Quiescent topology (no concurrent split/resize/reshard). |
-| Atomic-write reader isolation across shard split | `ShardSplitTopologyTests.cs` | Same zero-or-all visibility invariant as `AtomicVisibilityChaosTests`, but the topology mutator drives a manual `SplitAsync` on shard 0 concurrently with a chain of `SetManyAtomicAsync` sagas. Exercises shadow-forward of saga prepares onto the destination shard and the saga terminal-broadcast retry onto the new owner via `StaleShardRoutingException`. |
-| Atomic-write reader isolation across online resize | `ResizeTopologyTests.cs` | Same zero-or-all visibility invariant, but the topology mutator runs an online `ResizeAsync` (`MaxLeafKeys` / `MaxInternalChildren` to 8) concurrently with the saga chain. Exercises shadow-forwarding from the source physical tree to the destination, the alias swap, and the saga terminal-broadcast retry onto the new owner via `StaleTreeRoutingException`. |
-| Atomic-write reader isolation across online reshard | `ReshardTopologyTests.cs` | Same zero-or-all visibility invariant, but the topology mutator runs a 4-shard → 8-shard `ReshardAsync` concurrently with the saga chain. Exercises the retroactive prepared-mutation sweep at `BeginShadowWrite`, the registry's `TxDecisionRetention` tombstone window, and the saga terminal-fan-out shadow-forward fallback that mirrors `TxCommit` / `TxAbort` marks onto the destination shard via the post-Complete `MovedAwaySlots` lookup. Its shrink half (`ReshardTopologyTests.Shrink.cs`) runs the same invariant through a 4 → 2 shrink and through a 4 → 8 grow followed by an 8 → 3 shrink, whose donors include split-allocated shard indices, with continuous readers and atomic batches kept flowing until each change completes (see [Test 15](#test-15---atomic-visibility-across-topology-compositions-alias-swaps-and-silo-restarts)). |
+| Atomic-write reader isolation across shard split | `ShardSplitTopologyTests.cs` | Same zero-or-all visibility invariant as `AtomicVisibilityChaosTests`, but the topology mutator drives a manual split of shard 0 concurrently with a chain of `SetManyAtomicAsync` sagas. Exercises shadow-forward of saga prepares onto the destination shard and the saga terminal-broadcast retry onto the new owner when the old owner signals stale shard routing. |
+| Atomic-write reader isolation across online resize | `ResizeTopologyTests.cs` | Same zero-or-all visibility invariant, but the topology mutator runs an online `ResizeAsync` (`MaxLeafKeys` / `MaxInternalChildren` to 8) concurrently with the saga chain. Exercises shadow-forwarding from the source physical tree to the destination, the alias swap, and the saga terminal-broadcast retry onto the new owner when the retired physical tree signals stale tree routing. |
+| Atomic-write reader isolation across online reshard | `ReshardTopologyTests.cs` | Same zero-or-all visibility invariant, but the topology mutator runs a 4-shard → 8-shard `ReshardAsync` concurrently with the saga chain. Exercises the retroactive prepared-mutation sweep when shadow writing begins, the registry's `TxDecisionRetention` tombstone window, and the saga terminal-fan-out shadow-forward fallback that mirrors `TxCommit` / `TxAbort` marks onto the destination shard via the post-Complete moved-away slot lookup. Its shrink half (`ReshardTopologyTests.Shrink.cs`) runs the same invariant through a 4 → 2 shrink and through a 4 → 8 grow followed by an 8 → 3 shrink, whose donors include split-allocated shard indices, with continuous readers and atomic batches kept flowing until each change completes (see [Test 15](#test-15---atomic-visibility-across-topology-compositions-alias-swaps-and-silo-restarts)). |
 | Leaf structure after a reshard raced by atomic batches | `ReshardAtomicWriteStructureTests.cs` | A grow (4 -> 8) and a shrink (4 -> 2) `ReshardAsync` driven to completion while `SetManyAtomicAsync` rewrites a fixed 16-key universe throughout and for 300 ms after. Afterwards `CountAsync` must equal 16 and `ScanKeysAsync` must return each key once: a saga prepared bucket stranded on a split donor once drained into it outside its span, duplicating keys within one shard (issue [#4335](https://github.com/NSTA1/Orleans.Lattice/issues/4335)). |
 | Atomic-write reader isolation across silo restarts | `AtomicWriteSiloRestartChaosTests.cs` | Same zero-or-all visibility invariant over a chain of `SetManyAtomicAsync` batches, with no topology change: the secondary silo of a two-silo `TestCluster` is restarted three times while readers poll the whole universe, and every batch whose call returned must stay visible. A restart parks the saga in flight (its caller may see `LatticeShuttingDownException`, which is tolerated) and reactivates leaves from the write-ahead log, so leaves hold that saga's undecided prepares beside every later batch's and replay drains one saga's commit after absorbing a later saga's prepare. Shares grain storage and the write-ahead log across silos exactly as `MultiSiloRestartChaosTests` does, and verifies after quiescence that every key reads at the last committed round and that a count and a full scan see exactly the universe. |
 | Atomic visibility across topology compositions | `TopologyCompositionChaosTests.cs` | One tree is driven through a sequence of online changes - grow 4 → 8, resize, shrink 8 → 3 of the resized (aliased) tree, resize again, grow 3 → 6 - and, separately, a grow, a resize and an undo of that resize followed by a regrow, with atomic batches and continuous readers throughout. Pins the hand-offs between operations: a resize's alias swap carrying a map a reshard wrote, a shrink folding an aliased tree's shards, a resize of a map with retired donors, and an undo carrying the original map back (see [Test 15](#test-15---atomic-visibility-across-topology-compositions-alias-swaps-and-silo-restarts)). |
@@ -203,7 +203,7 @@ observes a fully consistent view of the tree.
 | `ScanKeysAsync(start, end)` yields exactly the in-range slice | Range pruning is slot-aware |
 | `GetAsync` / `GetManyAsync` never return a corrupt value | Writes are atomic per-shard; CRDT LWW resolves concurrent rewrites |
 | No public-API call throws an unhandled exception | Stale routing retries and enumeration aborts are transparent |
-| Splits during a scan never cause data loss, duplication, or out-of-order output | `MovedAwaySlots` + version stamping + in-line reconciliation |
+| Splits during a scan never cause data loss, duplication, or out-of-order output | Permanent rejection of moved-away slots + version stamping + in-line reconciliation |
 
 ### Tolerated transients
 
@@ -295,7 +295,7 @@ storage fault cascades into many observable shapes:
 * `OrleansException` wrappers when a faulted grain deactivates.
 * `EnumerationAbortedException` if a stream cursor was on the
   deactivated grain.
-* `StaleShardRoutingException` after a shard map swap when the split
+* The stale shard-routing signal after a shard map swap when the split
   coordinator crashed and resumed mid-phase.
 * `ArgumentException` from the injector itself when a target already
   has an armed fault pending (skipped).
@@ -314,7 +314,7 @@ passes complete exception-free**, bounded by a 15 s timeout. This loop:
 * Consumes any remaining one-shot faults (each fires once on its next
   write, clearing itself).
 * Gives resumable splits and pending root promotions time to reach
-  their `RunSplitPassAsync` keepalive tick and replay.
+  their split-pass keepalive tick and replay.
 * Rewrites every universe key with a fresh value on each pass
   (`v-{i}-heal-{pass}`), so after three clean passes every key holds a
   value a fault-free pass wrote, and that value matches its envelope.
@@ -348,21 +348,21 @@ invariants are checked.
 
 ### Recovery surfaces exercised
 
-* `TreeResizeGrain` phase machine (Snapshot → Swap → Reject → Cleanup)
+* The resize coordinator's phase machine (Snapshot → Swap → Reject → Cleanup)
   under sustained traffic.
 * Shadow-forwarding on every source shard - the workload's live point
   writes during the drain must be mirrored to the destination with their
   original HLCs (typed CRDT deltas and bulk appends are mirrored as the
   rows they stored, and a CRDT row is joined on the destination).
 * Alias swap - mid-flight `GetAsync` / `SetAsync` on a stateless-worker
-  `LatticeGrain` activation holding a stale alias must transparently
+  routing activation holding a stale alias must transparently
   re-resolve and retry.
 * Strongly-consistent `CountAsync` / `ScanKeysAsync` during the online
   snapshot drain and Rejecting phase.
 
 ### Tolerated transients
 
-The same set as the happy-path test, plus `StaleTreeRoutingException`
+The same set as the happy-path test, plus the stale tree-routing signal
 raised during the alias swap window.
 
 ### Pass criteria
@@ -390,12 +390,12 @@ residual work in a post-window drain of up to 30 s.
 
 ### Recovery surfaces exercised
 
-* `TreeReshardGrain` migration loop under sustained traffic -
+* The reshard coordinator's migration loop under sustained traffic -
   eligibility filtering, dispatch-budget clamping
   (`MaxConcurrentMigrations`), re-evaluation across ticks.
 * `ShardMap` convergence when reshard-dispatched splits race with
   workload writes (shadow-write, drain, swap, reject, permanent
-  `MovedAwaySlots`).
+  rejection of the moved-away slots).
 * No invariant drift across the full reshard window.
 * Shrink run: fold planning and concurrency under sustained traffic,
   every fold's drain, freeze, swap and finalise racing live writes, and
@@ -447,7 +447,7 @@ The invariant holds **per poll**, with no bounded-window caveat, across
 | Invariant | Mechanism under test |
 |---|---|
 | Continuous reader observes zero-or-all keys at every poll | The leaf's prepared-write commit path stages every saga write in a per-transaction pending bucket, and every key a read reaches resolves against one transaction-registry decision, the tree-wide visibility flip |
-| Saga drives 16 keys spanning multiple leaves through the full prepare → terminal pipeline | `AtomicWriteGrain` per-shard terminal broadcast, idempotent under concurrent retry |
+| Saga drives 16 keys spanning multiple leaves through the full prepare → terminal pipeline | The saga coordinator's per-shard terminal broadcast, idempotent under concurrent retry |
 | Final post-round value is preserved across 50 iterations | LWW resolution under saga commit ordering |
 
 ### Workload
@@ -485,14 +485,14 @@ never a partial subset.
 
 | Invariant | Mechanism under test |
 |---|---|
-| Saga prepares survive a mid-flight shard split | Source shard's shadow-forward pipeline mirrors prepared entries to the destination during the split's drain phase; saga terminal-broadcast retries onto the new owner via `StaleShardRoutingException` |
+| Saga prepares survive a mid-flight shard split | Source shard's shadow-forward pipeline mirrors prepared entries to the destination during the split's drain phase; saga terminal-broadcast retries onto the new owner when the old owner signals stale shard routing |
 | Saga prepares survive a mid-flight online resize | Source physical tree shadow-forwards every write (including saga prepares, typed CRDT deltas and bulk appends) to the destination physical tree during the snapshot drain; the alias swap is observed via the stale tree-routing signal and the saga terminal-broadcast retries onto the new owner |
-| Saga prepares survive a mid-flight online reshard | `TreeReshardGrain` migration loop dispatches per-shard splits; the retroactive prepared-mutation sweep at `BeginShadowWrite` and the terminal-fan-out shadow-forward fallback together mirror prepares and the saga's `TxCommit` / `TxAbort` marks onto the destination shard via the post-Complete `MovedAwaySlots` lookup; the registry's `TxDecisionRetention` tombstone window absorbs duplicate terminals |
+| Saga prepares survive a mid-flight online reshard | The reshard coordinator's migration loop dispatches per-shard splits; the retroactive prepared-mutation sweep run as each split opens its shadow-write window and the terminal-fan-out shadow-forward fallback together mirror prepares and the saga's `TxCommit` / `TxAbort` marks onto the destination shard by looking up the slots the source shard permanently moved away once its split completed; the registry's `TxDecisionRetention` tombstone window absorbs duplicate terminals |
 
 ### Workload (per fixture)
 
 * **Seed phase** - `SetAsync` for each of 16 keys at round 0, followed by a single `SetManyAtomicAsync` at round 0 so the universe is pinned through the saga path before the topology mutator starts.
-* **Topology kick-off** - exactly once before the saga loop: `SplitAsync(shard 0)` for `ShardSplitTopologyTests`, `ResizeAsync(MaxLeafKeys=8, MaxInternalChildren=8)` for `ResizeTopologyTests`, or `ReshardAsync(8)` for `ReshardTopologyTests`. A background driver pumps the coordinator's `RunSplitPassAsync` / `RunResizePassAsync` / `RunReshardPassAsync` to completion while the saga loop runs.
+* **Topology kick-off** - exactly once before the saga loop: a manual split of shard 0 for `ShardSplitTopologyTests`, `ResizeAsync(MaxLeafKeys=8, MaxInternalChildren=8)` for `ResizeTopologyTests`, or `ReshardAsync(8)` for `ReshardTopologyTests`. A background driver pumps the split, resize or reshard coordinator's passes to completion while the saga loop runs.
 * **Saga loop** - 15 sequential rounds. Each round starts a continuous reader task that polls all 16 keys via `GetManyAsync` every 10 ms and concurrently issues `SetManyAtomicAsync` with the post-round value envelope.
 * **Reader classification** - identical to Test 5: `fullPre`, `fullPost`, `fullHidden`, or **split** (mixed observation, fails the test).
 * **Drain phase** - after the saga loop, the test pumps the coordinator to idle and asserts the final post-round value is present on every key.
@@ -567,11 +567,11 @@ prepared/terminal apply seam.
 | Source HLC rides through the wire verbatim | `LatticeHlcOverrideContext` wrapping the apply call so the receiver does not stamp a fresh local HLC |
 | Repeated terminal delivery is idempotent | The per-tree transaction registry classifies an arriving terminal against the decision already recorded and returns without a write when the outcome matches, so a redelivery inside the retention window changes nothing; the leaf additionally absorbs a second delivery within one activation from its recently-terminal set |
 | Mid-workload partition does not produce partial-saga visibility on any site | Prepares queued behind the partition and the matching terminal both ship after heal; the receiver-side staging buffer holds prepared entries off the visible projection until the terminal arrives |
-| Producer-side per-key WAL filter does not strand terminals | `ReplicationShipperGrain.ShouldShip` bypasses `KeyFilter` / `KeyPrefixes` for `TxCommit` / `TxAbort` records |
+| Producer-side per-key WAL filter does not strand terminals | The shipper's per-entry ship filter bypasses the `KeyFilter` / `KeyPrefixes` replication options for `TxCommit` / `TxAbort` records |
 
 ### Workload
 
-* **Topology** - three independent `TestCluster` instances (`site-0`, `site-1`, `site-2`) wired through `MultiSiteClusterFixture`, each with its own `MemoryGrainStorage`-backed Lattice and a per-site `ReplicationApplier` driven by the chaos delivery pump.
+* **Topology** - three independent `TestCluster` instances (`site-0`, `site-1`, `site-2`) wired through `MultiSiteClusterFixture`, each with its own `MemoryGrainStorage`-backed Lattice and a per-site replication applier driven by the chaos delivery pump.
 * **Author phase** - every site concurrently runs 6 local `SetManyAtomicAsync` sagas (4 keys per saga, deterministic per-saga key prefix), so each saga emits 4 prepared `Set` records + 1 `TxCommit` per touched shard onto its source site's WAL.
 * **Partition cycle** - `site-0`'s loop isolates `site-2` after the first third of its workload and heals it after the second third. The `ChaosDeliveryPump` continues polling but does not advance the cursor on the partitioned edges, so the prepares and terminals authored during the outage queue at the source and ship en bloc after heal.
 * **Drain phase** - after every author task completes, `pump.HealAllAndDrainAsync` heals every edge and waits for every per-edge cursor to catch up to its sender's WAL tail, with a 60 s timeout.
@@ -636,7 +636,7 @@ mode-specific convergence invariant pointwise across sites.
 
 ### Tolerated transients
 
-* PN-Counter and MV-Register wrap `IncrementAsync` / `DecrementAsync` and `SetAsync` in a call-site retry (8 attempts with linear backoff, then one final unretried call) that catches an `InvalidOperationException` carrying `CAS budget exhausted`. The wrapper is defensive only: both accessors now apply one producer-side delta per call - a single read, then one `ApplyCrdtDeltaAsync`, with no compare-and-swap loop - so neither raises that exception, and a foreign-origin merge that lands mid-call cannot abort the local write.
+* PN-Counter and MV-Register wrap `IncrementAsync` / `DecrementAsync` and `SetAsync` in a call-site retry (8 attempts with linear backoff, then one final unretried call) that catches an `InvalidOperationException` carrying `CAS budget exhausted`. The wrapper is defensive only: both accessors now apply one producer-side delta per call - a single read, then one CRDT delta apply, with no compare-and-swap loop - so neither raises that exception, and a foreign-origin merge that lands mid-call cannot abort the local write.
 * OR-Set / LWW: no per-call retry needed - the pipeline is non-blocking from the producer side; transient pump errors queue onto `pump.PumpErrors` and surface in the post-drain assertion if convergence stalls.
 
 ### Companion observability
@@ -683,16 +683,16 @@ continuously throughout the ~15 s window.
 
 | Invariant | Mechanism under test |
 |---|---|
-| A settled committed generation key is present in all three trees | Coordinator's single global decision flips visibility uniformly across every participating tree's `ITxRegistryGrain` via delegation |
+| A settled committed generation key is present in all three trees | Coordinator's single global decision flips visibility uniformly across every participating tree's transaction registry via delegation |
 | A settled committed key never vanishes under concurrent split churn | Per-tree finalize promotes prepared entries into the main store before settlement; splits are read-transparent for promoted committed keys |
 | Every committed generation is durably present in all trees post-window | Cross-tree all-or-nothing completeness across the whole run |
 
 ### Workload
 
 * **Seed phase** - 200 `SetAsync` keys per tree across three trees (`xct-{run}-0..2`), each on a four-shard fixture (`FourShardClusterFixture`) so splits are enabled.
-* **Commit worker** - one cross-tree saga per generation at a 50 ms cadence: a `LatticeTreeBatch` per tree writing `x-{gen}` into all three trees under operation id `xctop-{run}-{gen}`. Asserts each saga returns `Committed`.
+* **Commit worker** - one cross-tree saga per generation at a 50 ms cadence: a `LatticeTreeBatch` per tree writing `x-{gen:D8}` into all three trees under operation id `xctop-{run}-{gen}`. Asserts each saga returns `Committed`.
 * **Reader workers** - three readers repeatedly probe the six most recently **settled** generations (ending at the commit frontier minus a `SettleMargin` of 5) in all three trees; a settled generation that reads absent in any tree is a failure.
-* **Split coordinators** - one per tree at a 250 ms cadence, picking a random non-empty shard and driving `SplitAsync` + `RunSplitPassAsync`.
+* **Split coordinators** - one per tree at a 250 ms cadence, picking a random non-empty shard and driving a manual split followed by a split pass.
 
 ### Pass criteria
 
@@ -729,8 +729,8 @@ cross-tree all-or-nothing invariant**: when a cross-tree
 cluster, a reader on the receiver must never observe one tree committed
 while a sibling tree is still pre-saga. Because each tree's terminals
 replicate on their own WAL feed, the receiver routinely applies one tree's
-terminal before the other's; the receiver coordinator grain
-(`ILatticeCrossTreeReceiverGrain`) must hold every participating tree
+terminal before the other's; the receiver-side cross-tree coordinator
+must hold every participating tree
 invisible until all of the batch's replicated terminals have arrived, then
 flip them together.
 
@@ -922,33 +922,33 @@ The table below covers the four full-workload topology-mutation chaos fixtures (
 | Concurrent reads/writes during split shadow phase | ✅ | ✅ | - | ✅ |
 | `ScanKeysAsync` / `ScanEntriesAsync` in-line reconciliation | ✅ | ✅ | ✅ | ✅ |
 | `CountAsync` per-slot routing + version stability + bounded retry | ✅ | ✅ | ✅ | ✅ |
-| `StaleShardRoutingException` transparent retry | ✅ | ✅ | - | ✅ |
-| `StaleTreeRoutingException` transparent retry across alias swap | - | - | ✅ | - |
-| Permanent `MovedAwaySlots` rejection after split completion | ✅ | ✅ | - | ✅ |
-| Resumable `SplitInProgress` intent replay across crashes | - | ✅ | - | - |
-| Two-phase root promotion (`PendingPromotion`) replay | - | ✅ | - | - |
-| Shadow `MergeManyAsync` atomicity under failed source write | - | ✅ | - | - |
+| Stale shard-routing transparent retry | ✅ | ✅ | - | ✅ |
+| Stale tree-routing transparent retry across alias swap | - | - | ✅ | - |
+| Permanent moved-away slot rejection after split completion | ✅ | ✅ | - | ✅ |
+| Resumable split-intent replay across crashes | - | ✅ | - | - |
+| Two-phase root promotion (pending promotion) replay | - | ✅ | - | - |
+| Shadow batched-merge atomicity under failed source write | - | ✅ | - | - |
 | Registry `ShardMap.Version` stamping under retry | - | ✅ | - | ✅ |
 | Idempotent drain chunks | - | ✅ | ✅ | ✅ |
-| `TreeResizeGrain` phase machine under live traffic | - | - | ✅ | - |
+| Resize coordinator phase machine under live traffic | - | - | ✅ | - |
 | Per-source-shard shadow-forwarding under live traffic | - | - | ✅ | - |
-| `TreeReshardGrain` migration loop + dispatch-budget clamping | - | - | - | ✅ |
+| Reshard coordinator migration loop + dispatch-budget clamping | - | - | - | ✅ |
 
 ### Saga-atomicity surfaces (Tests 5, 6, 8)
 
 | Surface | Atomic vis. quiescent | Split + saga | Resize + saga | Reshard + saga | Cross-cluster |
 |---|:---:|:---:|:---:|:---:|:---:|
 | Continuous reader observes zero-or-all keys per poll | ✅ | ✅ | ✅ | ✅ | ✅ |
-| `AtomicWriteGrain` per-shard terminal broadcast idempotent under retry | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Saga coordinator per-shard terminal broadcast idempotent under retry | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Prepared-write commit path holds keys hidden until terminal arrives | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Saga prepares shadow-forwarded onto destination shard mid-split | - | ✅ | - | ✅ | - |
 | Saga prepares shadow-forwarded onto destination physical tree mid-resize | - | - | ✅ | - | - |
-| Retroactive prepared-mutation sweep at `BeginShadowWrite` | - | - | - | ✅ | - |
-| Saga terminal-fan-out shadow-forward fallback via post-Complete `MovedAwaySlots` | - | - | - | ✅ | - |
+| Retroactive prepared-mutation sweep when shadow writing begins | - | - | - | ✅ | - |
+| Saga terminal-fan-out shadow-forward fallback via the post-Complete moved-away slot lookup | - | - | - | ✅ | - |
 | Registry `TxDecisionRetention` tombstone absorbs duplicate terminals | - | - | - | ✅ | ✅ |
 | Receiver-side prepared/terminal apply seam holds prepares off projection | - | - | - | - | ✅ |
 | `LatticeHlcOverrideContext` preserves source HLC on receiver | - | - | - | - | ✅ |
-| `ShouldShip` bypass for `TxCommit` / `TxAbort` records | - | - | - | - | ✅ |
+| Shipper ship-filter bypass for `TxCommit` / `TxAbort` records | - | - | - | - | ✅ |
 
 ### Per-mode convergence surfaces (Test 9)
 
@@ -987,12 +987,12 @@ Azure Table WAL columns map to fixtures catalogued in
 | Process-shared `IGrainStorage` isolates membership churn from storage disappearance | - | - | - | ✅ | - | - | - | - | - | - |
 | Producer-side WAL trim cannot prune un-acked entries | - | - | - | - | ✅ | - | - | - | - | - |
 | Real `AddLatticeReplication` + loopback transport under sustained writes | - | - | - | - | ✅ | ✅ | - | ✅ | - | - |
-| Outbound liveness probe: `peer.last_contact_seconds` climbs while a peer edge is isolated and falls below half a probe interval within ten probe intervals of the heal | - | - | - | - | - | ✅ | - | - | - | - |
+| Outbound liveness probe: `orleans.lattice.replication.peer.last_contact_seconds` climbs while a peer edge is isolated and falls below half a probe interval within ten probe intervals of the heal | - | - | - | - | - | ✅ | - | - | - | - |
 | Budget-driven receiver-side apply faults drain in full, the receiver still converges, and the inbound peer-stats row records contact with no outbound-only backlog or in-flight counts | - | - | - | - | - | ✅ | - | - | - | - |
 | OR-Map convergence under concurrent multi-site mutation + partition | - | - | - | - | - | - | ✅ | - | - | - |
 | Per-tree typed-CRDT shape resolution end-to-end on producer + receiver dispatch | - | - | - | - | - | - | ✅ | - | - | - |
-| `ReplicationShipperGrain.ShouldShip` keeps `MutationKind.Tombstone` envelopes off the wire | - | - | - | - | - | - | - | ✅ | - | - |
-| `ITombstoneCompactionGrain.RunCompactionPassAsync` mid-shipment preserves receiver convergence | - | - | - | - | - | - | - | ✅ | - | - |
+| The replication shipper's ship filter keeps `MutationKind.Tombstone` envelopes off the wire | - | - | - | - | - | - | - | ✅ | - | - |
+| A tombstone compaction pass mid-shipment preserves receiver convergence | - | - | - | - | - | - | - | ✅ | - | - |
 | gRPC sender retry loop under 15% and 30% per-call channel faults delivers every attempted entry | - | - | - | - | - | - | - | - | ✅ | - |
 | Re-deliveries the channel faults induce are absorbed as no-ops by the receiver's exact-identity dedupe cache or the idempotent leaf apply | - | - | - | - | - | - | - | - | ✅ | - |
 | Azurite-backed WAL keeps every shard's offsets dense, gap-free and duplicate-free under sustained concurrent appends across shards | - | - | - | - | - | - | - | - | - | ✅ |

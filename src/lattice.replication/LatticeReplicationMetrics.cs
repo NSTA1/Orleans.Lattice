@@ -97,13 +97,19 @@ public static class LatticeReplicationMetrics
     public const string OutcomeSuccess = "success";
 
     /// <summary>
-    /// <see cref="TagOutcome"/> value: the entry was short-circuited by
-    /// the receiver before merge - the receiver-side local-origin gate rejected an
-    /// entry authored by this cluster, the entry is a tombstone-reap envelope
-    /// (local structural cleanup, never applied), or, on the per-entry apply
-    /// path only, a coordinated restore's receive fence deferred it (a deferred
-    /// multi-entry run records no sample). The per-origin high-water-mark is not
-    /// a point-write drop threshold.
+    /// <see cref="TagOutcome"/> value: the entry was short-circuited by the
+    /// receiver before merge, or deferred with no outcome of its own. It covers
+    /// an entry the receiver-side local-origin gate rejected because this cluster
+    /// authored it, a tombstone-reap envelope (local structural cleanup, never
+    /// applied), and, on the per-entry path only, an entry the source-lineage
+    /// gate refused. It also covers every deferral (the result carries
+    /// <c>Deferred = true</c> and the sender re-ships the entry): a coordinated
+    /// restore's receive fence or a restored copy's still-closed fence, a
+    /// snapshot capture holding the tree's saga decision gate, an identical
+    /// delivery still in flight, and a full dead-letter queue refusing a park.
+    /// On the multi-entry batch path a run the receive fence defers, or the
+    /// source-lineage gate refuses, records no sample. The per-origin
+    /// high-water-mark is not a point-write drop threshold.
     /// </summary>
     public const string OutcomeDedup = "dedup";
 
@@ -884,8 +890,8 @@ public static class LatticeReplicationMetrics
     /// Counter of entries removed from the per-tree dead-letter queue.
     /// Tagged by <see cref="TagTree"/> and <see cref="TagReason"/>; the
     /// reason tag distinguishes operator <c>Discard</c>
-    /// (<see cref="ReasonDiscarded"/>), successful <c>Replay</c>
-    /// (<see cref="ReasonReplayed"/>). <see cref="ReasonEvicted"/> is no longer
+    /// (<see cref="ReasonDiscarded"/>) from a <c>Replay</c> that removed the
+    /// entry (<see cref="ReasonReplayed"/>). <see cref="ReasonEvicted"/> is no longer
     /// emitted: since #4603 a full queue refuses an enqueue instead of evicting
     /// (see <see cref="DeadLetterRefused"/>).
     /// </summary>

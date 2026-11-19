@@ -209,6 +209,30 @@ delegate can be omitted. The knobs that shape tenancy behaviour live on the
 [`Orleans.Lattice.Tenancy`](../lattice.tenancy/README.md#configuration-reference)
 options instead.
 
+## Quick Start
+
+Register tenancy first, then the facade, and resolve the facades from the silo's
+service provider (or reach them remotely through the
+[gRPC binding](../lattice.api.tenantadmin.grpc/README.md)):
+
+```csharp
+siloBuilder
+    .AddLatticeTenancy(options => options.DelegatedAccessAdministrationEnabled = true)
+    .AddLatticeTenantAdminApi();
+```
+
+A platform operator (whole-tree `Admin` on the reserved auth policy tree) creates a
+tenant, handing it to its delegated admin; that admin can then shape the tenant's
+residency and, with delegated access administration on, its groups:
+
+```csharp
+var tenants = serviceProvider.GetRequiredService<ILatticeTenantAdmin>();
+await tenants.CreateTenantAsync("acme", adminSubjects: ["alice"]);
+
+var directory = serviceProvider.GetRequiredService<ILatticeTenantDirectoryAdmin>();
+await directory.UpsertGroupAsync("acme", new TenantGroupDescriptor { Name = "readers" });
+```
+
 ## Facade method signatures
 
 ### `ILatticeTenantAdmin`
@@ -516,7 +540,8 @@ in the tenancy guide; how tenant-tier rules are evaluated beneath operator rules
   uncancellably. If every attempt fails, the addition stays and the call is still
   refused with `LatticeQuotaExceededException`, whose message says the cap may stay
   exceeded until the addition is removed and whose `Current` is the over-cap count; a
-  warning naming only the tenant and dimension is logged.
+  warning is logged naming the tenant, the dimension, the cap, the observed count, the
+  attempt count and the failure's exception type, and no subject, group or rule id.
 - **Removals win the merge.** A removal from the member set or the admin set is
   stamped later than the entry it removes as well as the local clock, so `Changed`
   `true` means the entry is gone even when another silo with a clock running ahead

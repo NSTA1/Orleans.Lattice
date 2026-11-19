@@ -26,8 +26,8 @@ namespace Orleans.Lattice.Storage.AzureTable;
 public sealed partial class AzureTableWalStorageProvider
 {
     /// <summary>
-    /// Claims <c>[startOffset, endOffsetInclusive]</c> on
-    /// <paramref name="guard"/> after proving it overlaps no batch
+    /// Claims <c>[startOffset, endOffsetInclusive]</c> on the overlap
+    /// guard of <paramref name="activity"/> after proving it overlaps no batch
     /// written or in motion at a different start offset. Throws
     /// <see cref="InvalidOperationException"/> on overlap. The claim is
     /// held only when the method returns normally, and returns the commit

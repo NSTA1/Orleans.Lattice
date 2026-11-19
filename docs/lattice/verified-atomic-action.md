@@ -32,7 +32,7 @@ Each function is:
   vector as a `ReadOnlySpan<AtomicActionStepStatus>` and the `AtomicActionPhase`)
   and returns a verdict. No `Task`/`await`, no wall-clock read, no Orleans types, no
   storage, no allocation. Given the same inputs it always returns the same output.
-- **The single source of the decision** - the production `AtomicActionGrain` calls
+- **The single source of the decision** - the production atomic-action grain calls
   the core to make the real decision (run the next forward step, commit, compensate
   the next step in reverse order, or settle a terminal) after every persisted step
   transition, including on a reminder-driven resume, and the Coyote model calls the

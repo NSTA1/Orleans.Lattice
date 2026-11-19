@@ -29,14 +29,18 @@ public readonly record struct ApplyResult
     public bool Applied { get; init; }
     public HybridLogicalClock HighWaterMark { get; init; }
     public bool Deferred { get; init; }
+    public bool SourceLineageRefused { get; init; }
+    public bool TenantIsolationRefused { get; init; }
 }
 ```
 
 | `ApplyResult` member | Semantics |
 |---|---|
-| `Applied` | `true` when the entry was merged onto the local tree; `false` when the entry was filtered out as a re-delivery because its identity tuple hit the shadow-forward cache, parked on the causal-apply buffer to await its dependencies, deferred by a restore saga's receive fence, acknowledged as a no-op because it is a tombstone-reap envelope, or rejected as inapplicable (its `OriginClusterId` matched the local cluster id and would have looped, its tree is not enrolled for replication on this receiver, its wire merge mode disagreed with the locally-resolved mode, or the tenant-isolation gate refused it). For batch calls, `true` if **any** entry in the batch was newly merged. |
-| `HighWaterMark` | For point applies (`Set` / `Delete`) this is the per-origin HWM after the call - equal to `entry.Timestamp` when `entry.Timestamp` advanced the frontier, or the current HWM otherwise (including when `Applied` is `false`). For range deletes, saga terminal marks, tombstone-reap envelopes, local-origin no-op rejections, receive-fence deferrals, and receiver-side enrollment / merge-mode / tenant-isolation rejections - none of which reads or advances the HWM - this is `HybridLogicalClock.Zero`. For batch calls, the pointwise maximum HWM across every distinct origin in the batch. |
-| `Deferred` | `true` when the entry (or run) was **not** applied by this delivery and must be re-shipped: either a cross-cluster restore saga's durable receive fence has paused inbound apply for the tree, or the entry routed to a restored copy that saga has fenced against it - still closed, or admitted before the saga paused receiving ([#4593](coordinated-restore.md#restored-copies-are-born-receive-closed)) - (re-ship once the fence lifts), or the entry duplicates an identity whose first delivery is still in flight on this receiver (see [Shadow-forward dedupe cache](#5-shadow-forward-dedupe-cache)). A third deferral cause is a full dead-letter queue: an entry a receiver-side gate would dead-letter is deferred rather than acknowledged when the queue refuses the park (see [Capacity and backpressure](dead-letter-queue.md#capacity-and-backpressure)). For batch calls, `true` if **any** entry or run in the batch was deferred. Receive paths turn a deferred result into a not-accepted, cursor-preserving ack; every other `Applied == false` outcome is terminal and lets the sender advance past the entry. |
+| `Applied` | `true` when the entry was merged onto the local tree; `false` when the entry was filtered out as a re-delivery because its identity tuple hit the shadow-forward cache, parked on the causal-apply buffer to await its dependencies, deferred by a restore saga's receive fence, acknowledged as a no-op because it is a tombstone-reap envelope, or rejected as inapplicable (its `OriginClusterId` matched the local cluster id and would have looped, its tree is not enrolled for replication on this receiver, its wire merge mode disagreed with the locally-resolved mode, the tenant-isolation gate refused it, or its sender read it under a source lineage the tree no longer holds). For batch calls, `true` if **any** entry in the batch was newly merged. |
+| `HighWaterMark` | For point applies (`Set` / `Delete`) this is the per-origin HWM after the call - equal to `entry.Timestamp` when `entry.Timestamp` advanced the frontier, or the current HWM otherwise (including when `Applied` is `false`). For range deletes, saga terminal marks, tombstone-reap envelopes, local-origin no-op rejections, receive-fence deferrals, source-lineage refusals, and receiver-side enrollment / merge-mode / tenant-isolation rejections - none of which reads or advances the HWM - this is `HybridLogicalClock.Zero`. For batch calls, the pointwise maximum HWM across every distinct origin in the batch. |
+| `Deferred` | `true` when the entry (or run) was **not** applied by this delivery and must be re-shipped: either a cross-cluster restore saga's durable receive fence has paused inbound apply for the tree, or the entry routed to a restored copy that saga has fenced against it - still closed, or admitted before the saga paused receiving ([#4593](coordinated-restore.md#restored-copies-are-born-receive-closed)) - (re-ship once the fence lifts), or the entry duplicates an identity whose first delivery is still in flight on this receiver (see [Shadow-forward dedupe cache](#5-shadow-forward-dedupe-cache)). A third deferral cause is a full dead-letter queue: an entry a receiver-side gate would dead-letter is deferred rather than acknowledged when the queue refuses the park (see [Capacity and backpressure](dead-letter-queue.md#capacity-and-backpressure)). For batch calls, `true` if **any** entry or run in the batch was deferred. Receive paths turn a deferred result into a not-accepted, cursor-preserving ack; every other `Applied == false` outcome except a source-lineage refusal is terminal and lets the sender advance past the entry. |
+| `SourceLineageRefused` | `true` when the entry (or run) was not applied because its sender stamped it with a source lineage this tree no longer holds: it was read before a source restore, purge and recreate, or alias move, and arrived after this tree drained the new lineage (see [Source lineage gate](snapshot-bootstrap.md#source-lineage-gate)). Unlike a deferral it is not simply re-shipped: the gRPC receive path answers with a not-accepted ack carrying `ReplicationAck.SourceLineageRefused`, which tells the sender to re-resolve its source binding. A dead-letter replay refused this way leaves the entry parked. For batch calls, `true` if **any** run was refused. |
+| `TenantIsolationRefused` | `true` when the tenant-isolation gate refused the entry because configured tenant residency does not admit its authenticated direct sender, or no sender identity was available (the `tenant_source_not_resident` and `missing_source_identity` refusals). The entry is still dead-lettered and the push still acknowledged; the flag only tells a dead-letter replay to leave the entry parked, so a sender that is not currently authorized cannot consume it. For batch calls, `true` if **any** run was refused this way. |
 
 ## Apply semantics
 
@@ -75,7 +79,7 @@ The merge mode is always re-resolved locally through the receiver's per-tree res
 
 A run the gate rejects - either way, or for want of an enrollment source - is also never recorded as inbound contact in `ReplicationPeerStats`, on any receive path, so a peer cannot plant a tree id of its choosing in the peer statistics or the peer-status report. The inbound half of that state is additionally capped, because the origin id of an admitted run is still the peer's own claim; see [observability](observability.md#bidirectional-peerlast_contact_seconds-and-the-liveness-probe).
 
-Two further receiver-side gates run after an entry clears enrollment, before any high-water-mark read:
+Three further receiver-side gates run after an entry clears enrollment, before any high-water-mark read:
 
 - **Tenant isolation (dead-lettered).** When tenancy is on, the owning tenant is
   derived from the tree id alone - never from a wire field. An entry is refused
@@ -98,6 +102,7 @@ Two further receiver-side gates run after an entry clears enrollment, before any
   treated as sender identity. The receive path acknowledges a refusal only after
   the entry is durably parked; a full dead-letter queue defers and re-ships it
   instead. With tenancy off the gate is inactive and costs nothing. Custom `IReplicationTenantIsolationGate` implementations must override the sender-aware overload to enforce source residency; the default preserves legacy tenant-only evaluation.
+- **Source lineage (refused or deferred).** An entry its sender read under a source lineage this tree no longer holds - before a source restore, purge and recreate, or alias move, arriving after this tree drained the new lineage - is not applied on any path that delivers it: a push, a causal-buffer drain, or a dead-letter replay. The call returns `Applied = false` with `SourceLineageRefused = true` (or `Deferred = true` for a transient refusal the sender retries) and the high-water mark unchanged; see [Source lineage gate](snapshot-bootstrap.md#source-lineage-gate). It runs after the enrollment and tenant gates, so a peer-controlled tree id activates nothing.
 - **Restore receive fence (deferred).** While a cross-cluster restore saga has paused inbound apply for the tree, the entry is not applied: the call returns `Applied = false` with `Deferred = true`, and the sender keeps its cursor and re-ships once the fence lifts. The tree's apply seam refuses an entry that routes to a restored copy the saga still holds closed, or that was admitted before the saga paused receiving, and the applier defers it the same way ([#4593](coordinated-restore.md#restored-copies-are-born-receive-closed)). A single-entry apply records the deferral under the `dedup` apply-duration outcome; the batch path defers a multi-entry run whole and records no apply-duration sample for it.
 
 The batch path applies the same classification once per run, except that it checks the restore receive fence first: a run for a fenced tree is deferred whole before it is classified. The wire mode is part of the run key - a run is a contiguous `(TreeId, OriginClusterId, Mode)` segment, so a mode change starts a new run that is classified on its own - and the representative first entry therefore classifies the whole run. A rejected run neither merges nor advances the per-origin high-water-mark; every entry still records its matching apply-duration outcome so per-entry receiver observability is preserved, while a single warning is logged per run rather than per entry to avoid a log-flood amplification from a hostile peer.
@@ -124,7 +129,7 @@ The tree's high-water-mark grain decides each dependency in one call:
 2. **Otherwise the origin's frontier decides.** That is the per-origin replication frontier, shared by every tree, because a dependency names an origin's write and not a tree. It holds:
    - the low watermark `S` the origin ships: every write of `o` stamped strictly below `S` was acknowledged here;
    - the writes of `o` this receiver acknowledged without applying: those parked in any tree's causal-apply buffer or dead-letter queue, which publish them before they acknowledge;
-   - the writes marked **lost**: discarded from a dead-letter queue (issue #4603), or dropped because their tree is not enrolled here (recorded only for a configured `ReplicationPeers` member, since the origin is wire-supplied).
+   - the writes marked **lost**: discarded from a dead-letter queue (issue #4603), or dropped because their tree is not enrolled here (recorded only for an origin listed in `ReplicationPeers` when that list is set, since the origin is wire-supplied; with `ReplicationPeers` unset, for any origin).
 
    A dependency is **Lost** when its write is marked lost. It is **Met** when `t < S` and the write is not held, because acknowledged and not held means applied. Otherwise it is **Unmet**. A held listing that a crash left behind is confirmed with its source before it blocks anything.
 
@@ -193,17 +198,17 @@ The per-origin vector is the explicit handoff contract for the bootstrap protoco
 
 Inbound transports deliver batches of `WalRecord` records, not single entries: a 256-entry gRPC push from a single producer is one network round-trip carrying 256 mutations. `ApplyBatchAsync` is the seam that lets the receiver process such a batch as one logical operation rather than 256 independent `ApplyAsync` calls - for each contiguous run of entries sharing a tree, origin, and merge mode it reads the high-water-mark once, merges the run's plain point writes in one batched grain call instead of one apply call per entry, advances the high-water-mark once, and drains the causal-apply buffer once at the end of the run instead of after every successful apply.
 
-The default-interface-method body provides backward-compatible semantics: it loops over `ApplyAsync` and aggregates the per-entry results - `Applied` if any entry was newly merged, the pointwise-maximum `HighWaterMark`, and `Deferred` if any entry was deferred - so any custom `IReplicationApplier` written before the batch seam existed continues to work without changes, and a restore saga's receive-fence deferral returned by its `ApplyAsync` still reaches the receive path as a deferred, cursor-preserving result. The shipped applier overrides the batch path with the optimised implementation described below.
+The default-interface-method body provides backward-compatible semantics: it loops over `ApplyAsync` and aggregates the per-entry results - `Applied` if any entry was newly merged, the pointwise-maximum `HighWaterMark`, and `Deferred`, `SourceLineageRefused`, and `TenantIsolationRefused` if any entry carried them - so any custom `IReplicationApplier` written before the batch seam existed continues to work without changes, and a restore saga's receive-fence deferral returned by its `ApplyAsync` still reaches the receive path as a deferred, cursor-preserving result. The shipped applier overrides the batch path with the optimised implementation described below.
 
 ### Run grouping
 
 The optimised batch path walks the inbound list and identifies maximal contiguous runs of entries that share the same `(TreeId, OriginClusterId, Mode)` tuple (a well-formed batch carries one merge mode per run, so including the mode never splits a legitimate run). For a 256-entry batch shipped by a single producer the entire batch is one run; for an interleaved batch (e.g. a snapshot recovery merge that intersperses entries from two origins) the path emits one run per contiguous group, each amortised independently. Within a run:
 
-- A single read fetches the persisted per-origin HWM at the start of the run. There is no pinned-floor read.
+- A single admission read fetches the persisted per-origin HWM at the start of the run, together with any [bootstrap drop floor](#7-bootstrap-drop-floor). There is no legacy snapshot-pinned-floor read.
 - There is no in-batch HLC threshold or running-HWM dedupe accumulator: a below-max-applied-HLC entry is a genuine write under non-monotonic per-origin HLC unless the exact identity cache or a later idempotent merge proves it redundant.
-- Causal-dependency entries fetch the local vector clock lazily on first use and reuse it until an apply has occurred, at which point a `localVcDirty` flag forces a re-fetch on the next causal-dep check.
-- A single conditional advance moves the persisted HWM to the highest applied HLC at the end of the run.
-- The causal-apply buffer is drained once, if the run advanced the persisted HWM.
+- Each causal-dependency entry is decided by one dependency-check call to the tree's high-water-mark grain, as in the per-entry path (see [Causal-dependency gate](#6-causal-dependency-gate)); there is no cached local vector clock.
+- A single conditional advance moves the persisted HWM to the highest applied HLC at the end of the run, recording the run's applied write identities in the same call.
+- The causal-apply buffer is drained once, if the run advanced the persisted HWM or recorded any applied write identity.
 - Non-prepared `LwwRegister` `Set` / `Delete` entries that pass classification are deferred and merged in one batched grain call per run, and non-prepared typed-CRDT `Set` entries that carry a delta (every CRDT mode except `OrMap`) fold in one batched delta call. Range deletes, saga terminal marks, prepared entries, CRDT-mode deletes, and `OrMap` or delta-less CRDT entries flush the pending batch first and take their own per-entry apply hop.
 
 For a 256-entry single-origin `LwwRegister` batch this collapses roughly 3 x 256 = 768 grain round-trips on the per-entry path (a high-water-mark read, a point apply, and a high-water-mark advance per entry) to about three (one HWM read, one batched merge, and one HWM advance) - the dominant receiver-side cost on every inbound push.
@@ -213,9 +218,9 @@ For a 256-entry single-origin `LwwRegister` batch this collapses roughly 3 x 256
 Every classification the per-entry path produces survives the batch path, except the tombstone-reap no-op (the last bullet):
 
 - **Range-delete entries** bypass point-write identity dedup and HWM advance, and apply unconditionally (a range apply is naturally idempotent at the leaf layer).
-- **Local-origin runs** classify every entry as `Dedup` with `HighWaterMark = HybridLogicalClock.Zero` and emit no grain calls.
+- **Local-origin runs** record every entry under the `dedup` apply-duration outcome with `HighWaterMark = HybridLogicalClock.Zero` and emit no grain calls.
 - **No HLC-threshold dedup** runs in either path: point writes below the current HWM, or below a legacy snapshot coordinate, still enter the apply pipeline unless another gate filters them.
-- **Causal-park** is exercised per-entry; only the local-vector-clock fetch is lazy.
+- **Causal-park** is exercised per-entry, with the same dependency-check call the per-entry path makes.
 - **Per-entry instrumentation** (`ApplyDuration`, `ApplyLag`, `ApplyFifoViolations`) is recorded inside the per-entry loop so observability is preserved verbatim.
 - **Single-entry batches** defer to `ApplyAsync` so behaviour is bit-identical with the legacy receiver for the trivial case.
 - **Tombstone-reap envelopes** are not acknowledged as `dedup` on the batch path: it has no no-op branch for them, so a multi-entry batch carrying one faults on that entry, because the point-apply step has no rule for it. The dead-letter-tracking decorator then falls back to per-entry apply, which does acknowledge the envelope as a no-op. The sender never ships these envelopes, so only an older shipper or a hand-built caller can deliver one.
@@ -343,8 +348,8 @@ grain** (keyed by
 and commit/abort vote. The coordinator decides only once a terminal has
 arrived for every tree in the wait set, committing iff every arrived tree
 voted commit. Before the decision, a delegated read on any participating
-tree's registry resolves `InFlight` against the coordinator, so every
-tree stays invisible (an unreachable coordinator resolves `Indeterminate`,
+tree's registry reads the saga as still in flight against the coordinator, so every
+tree stays invisible (an unreachable coordinator reads as undetermined,
 which likewise keeps the keys invisible); after it, the receiver flips every
 participating tree together. The coordinator only ever returns the decision (it never
 calls back into a tree grain); the calling tree grain performs the
@@ -430,7 +435,8 @@ re-shipped after the frontier passes it.
 
 A shipped cross-tree terminal carries the operation's **decision stamps**:
 per participating tree, the export epoch the origin read after the decision
-was durable (`WalRecord.CrossTreeDecisionStamps`, on the wire only). The
+was durable (a non-public `WalRecord` slot the shipper sets on the wire copy
+only). The
 applier records them on the barrier before it applies the terminal. A
 barrier compares each tree that has not arrived with the tree's latest
 snapshot import, which the same index records, and records the tree's

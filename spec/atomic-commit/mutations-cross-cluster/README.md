@@ -93,7 +93,7 @@ transport assumption or its read view already does.
 Each loss-path or join mutation declares `BOUNDS:` to enable its loss path, or a
 joining receiver, on one slice of the instance (`LossPath`, `JoinStart`,
 `SagaOutcome`, `Shape`, `PreHold`, `DialFaults`, `Purges`, `AckLoss`, `BarrierTtl`,
-`IndexFaults`, `OneReplicated`): the base
+`IndexFaults`): the base
 cfg enables none, so the control arm checks the target on the instance with no
 loss path and a receiver that follows the stream,
 and the variant configurations check every property under each loss path with

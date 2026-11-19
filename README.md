@@ -372,6 +372,7 @@ Use these documents for day-to-day use and operations:
 - [Benchmarks](docs/lattice/benchmarks.md) - prerequisites, running benchmarks, interpreting results.
 - [Performance: single-silo guide](docs/lattice/performance-single-silo.md) - approximate single-silo throughput and latency, measured against real Azure Tables.
 - [Performance: multi-silo scaling guide](docs/lattice/performance-multi-silo.md) - how that throughput responds as silos are added.
+- Performance methodology - how each performance table is produced and how to read it: [Layer 1](docs/lattice/performance-methodology-layer1.md) (in-process cost per call), [Layer 2](docs/lattice/performance-methodology-layer2.md) (one silo on Azure Tables), and [Layer 3](docs/lattice/performance-methodology-layer3.md) (scaling from one to eight silos).
 - [Troubleshooting](docs/lattice/troubleshooting.md) - symptom-driven diagnosis: reading a `DiagnoseAsync` report, storage-provider write failures, split activity, slow scans, and stale reads.
 
 For internals (the "how"):
@@ -386,7 +387,7 @@ For internals (the "how"):
 - [Tombstone Compaction](docs/lattice/tombstone-compaction.md) - background reaping of expired tombstones, its policy-driven triggers, and the operator API.
 - [Projection Rebuild](docs/lattice/projection-rebuild.md) - leaf-projection digests for cross-silo divergence detection, and policy-driven rebuild when a leaf falls off the log.
 - [Chaos Tests](docs/lattice/chaos-tests.md) - the integration suite that drives a live cluster with concurrent load, topology changes, network partitions, and storage faults, and asserts the consistency guarantees.
-- [Formal Coverage](docs/lattice/formal-coverage.md) - checked protocols across WAL durability, shard ownership, B+ tree topology, atomic visibility, replication, backup/restore, materialised views, tree lifecycle, anti-entropy, aliasing, tenant quotas, rate budgets and isolation, and scheduling and progress; production detectors, defects found, bounded refinement mappings and model limits.
+- [Formal Coverage](docs/lattice/formal-coverage.md) - checked protocols across WAL durability, shard ownership, B+ tree topology, atomic visibility, replication, backup/restore, materialised views, tree lifecycle, anti-entropy, aliasing, tenant quotas, rate budgets and isolation, scheduling and progress, and schema enforcement and versioning; production detectors, defects found, bounded refinement mappings and model limits.
 - [Formal Verification Pipeline](docs/lattice/formal-verification-pipeline.md) - which CI lane runs which formal checks: TLC input classes and the smoke-or-exhaustive decision, per-module fingerprints and verdict receipts, nightly exhaustive TLC, weekly production perturbations, and the refinement gates that tie specifications to code.
 - [Verified Atomic-Commit](docs/lattice/verified-atomic-commit.md) - the proven-core pattern, Coyote concurrency tier, property catalogue, and TLA+ spec behind the atomic-commit protocol.
 - [Verified Shard Ownership](docs/lattice/verified-shard-ownership.md) - the TLA+ modules, pure cores and Coyote models behind key ownership across shard split, reshard, resize and undo, and what they do not cover.

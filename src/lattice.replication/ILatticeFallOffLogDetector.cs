@@ -20,11 +20,12 @@ namespace Orleans.Lattice.Replication;
 /// This is not the cross-cluster source-WAL trim detector. A sender that
 /// trims records before its shipper reads them observes the sequence gap
 /// in <c>IWalShardGrain.ReadShippingAsync</c>,
-/// records <see cref="ReplicationBatch.ReseedAfterEpoch"/>, and asks the
-/// receiver to re-seed on subsequent pushes. A transport that does not
-/// carry that batch field cannot deliver the request; the sender then
-/// keeps saga records withheld and the link remains stalled until an
-/// operator re-seeds or the transport is fixed.
+/// records the current export epoch, and asks the receiver to re-seed on
+/// subsequent pushes through a request the transport carries out of band
+/// (the gRPC binding sends it as a call header). The request is not part
+/// of the public <see cref="ReplicationBatch"/> surface, so a custom
+/// transport does not deliver it; the sender then keeps saga records
+/// withheld and the link remains stalled until the peer is re-seeded.
 /// </para>
 /// <para>
 /// The coordinator's idempotency contract handles concurrent

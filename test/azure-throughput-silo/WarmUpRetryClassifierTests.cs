@@ -79,7 +79,7 @@ public class WarmUpRetryClassifierTests
     [Test]
     public void No_compatible_silos_placement_failure_is_transient_placement_convergence()
     {
-        // The exact shape Orleans 10.2.2 surfaces out of
+        // The exact shape the Orleans runtime surfaces out of
         // PlacementService.GetCompatibleSilos when the warm-up call races the
         // local silo becoming Active in membership (grain manifest not yet
         // published), for the local-placed LatticeGrain.

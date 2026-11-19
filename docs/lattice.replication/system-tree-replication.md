@@ -54,8 +54,9 @@ overwriting one another.
 
 Register `AddLatticeReplication` first, then call `ReplicateLatticeSystemTrees`. The
 call merges the reserved ids into `LatticeReplicationOptions.ReplicatedTrees` via a
-`PostConfigure`, so it wins regardless of the order in which the host configures its
-own replicated-trees map; any host-declared tree is preserved.
+`PostConfigureAll`, so it wins regardless of the order in which the host configures its
+own replicated-trees map; any other host-declared tree is preserved, and a host
+declaration of one of the reserved ids is overwritten with the reserved merge mode.
 
 ```csharp verify
 var builder = WebApplication.CreateBuilder();

@@ -15,7 +15,9 @@ and the endpoint served on the pod's container port.
 ## Option 1: KEDA `ScaledObject` (recommended)
 
 Install KEDA in the cluster, then apply a `ScaledObject` with a `metrics-api`
-trigger pointed at the in-cluster service:
+trigger pointed at the in-cluster service (the package ships a reference copy as
+`deploy/keda-scaledobject.yaml` - see
+[`src/lattice.scaling/deploy/README.md`](../../src/lattice.scaling/deploy/README.md)):
 
 ```yaml
 apiVersion: keda.sh/v1alpha1

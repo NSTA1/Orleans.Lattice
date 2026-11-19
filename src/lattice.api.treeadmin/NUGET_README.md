@@ -28,6 +28,14 @@ presents one complete surface.
   repair; materialised-view and tag-index administration; and shard compaction and
   durable-history retention - each delegated to the subsystem that owns it and
   authorized through the fail-closed access gate.
+- **WAL reclamation.** `ILatticeWalReclamation` reports, as a read with no side
+  effects, which durable pin holds a tree's write-ahead-log floor and whether it
+  has wedged reclamation.
+- **Accept-then-poll operations.** `ILatticeTreeAdminOperations` starts view
+  rebuild and reconcile, tag-index reconcile, WAL partition moves, and
+  orphaned-leaf audit and repair, and `ILatticeStorageUsageOperations` starts a
+  storage-usage refresh; each returns a handle at once, polled or cancelled
+  through the shared operation status surface.
 
 ## Security
 

@@ -157,7 +157,7 @@ always-resident metrics collector, is described under [Observability](#observabi
 | Silo | built (silo host) | 1 | 3 | Stateful cluster member; a min floor keeps a membership quorum and never cold-starts the data plane. Scales up on compute pressure (see [Autoscaling](#autoscaling-via-the-latticescaling-keda-bridge)). |
 | MCP | built (MCP host) | 0 | 3 | Stateless remote MCP server; cold-starts on demand, idle at zero. |
 | Explorer | built (Explorer host) | 0 | 3 | Operator console (Blazor Server): per-user circuit state only, pinned by sticky sessions, nothing durable; a small admin tool, idle at zero. |
-| Grafana | stock `grafana/grafana-oss` | 0 | 1 | Stateless visualization head, provisioned config only, no database or volume. |
+| Grafana | stock `grafana/grafana-oss` | 0 | 1 | Stateless visualization head, provisioned config only, no database or persistent volume. |
 
 The silo is the only always-on head and the only one that must never reach zero.
 Keeping the three read/tool heads at a zero floor is the whole point of the
@@ -353,8 +353,10 @@ ingress FQDN:
 - Endpoint authentication is **Lattice's per-cluster replication key/secret**,
   stored in each region's **Key Vault**, referenced by the silo via **managed
   identity**, and matched across all regions.
-- The global front door fronts the client-facing heads, and every head enforces
-  the Front Door origin lock. An ingress IP allow-list is a parameterised seam
+- The global front door fronts the Explorer, MCP, and silo State API heads, and
+  each of them enforces the Front Door origin lock; the Grafana head is not
+  fronted or origin-locked and keeps its own external ingress behind its admin
+  sign-in. An ingress IP allow-list is a parameterised seam
   (`ingressAllowedCidrs`) that the kit does not yet apply to any ingress.
 
 **Private option** - internal-only ingress, replication over private address
@@ -550,8 +552,11 @@ sequenceDiagram
   by that managed Prometheus datasource, so the telemetry tool returns live
   metrics.
 - **Self-hosted Grafana** runs as a stateless, scale-to-zero container app on the
-  stock `grafana/grafana-oss` image, provisioned with the bundled
-  `Orleans.Lattice.Dashboards` and the managed-Prometheus datasource via Grafana
+  stock `grafana/grafana-oss` image, provisioned with nine of the eleven bundled
+  `Orleans.Lattice.Dashboards` (Overview, Commit Path, Atomic Writes,
+  Materialised Views, Backup, Authorization, Scaling, Replication and
+  Replication gRPC; the Grain Index and Tenancy dashboards are not provisioned)
+  and the managed-Prometheus datasource via Grafana
   provisioning config. No database or persistent volume; it is a visualization
   head only. Any alerting rides Prometheus / Azure Monitor rules, not Grafana
   state.
@@ -590,8 +595,11 @@ Security is a first-class property of this architecture, not an afterthought:
 - **Non-root distroless runtime.** Every built image runs as a non-root user on a
   chiseled (shell-less) base, shrinking the attack surface and blocking
   shell-based exploitation.
-- **Locked ingress.** Client origins accept traffic only from the global front
-  door (public option) or only on their internal ingress (private option); the
+- **Locked ingress.** The Explorer, MCP, and silo State API origins accept
+  traffic only from the global front door (public option) or only on their
+  internal ingress (private option); on the public option the Grafana head keeps
+  its own external ingress, protected by its admin sign-in rather than the origin
+  lock; the
   replication transport is server-TLS + replication-key over public
   ingress (public option) or the private VNet mesh **also** authenticated by the
   replication key (private option).

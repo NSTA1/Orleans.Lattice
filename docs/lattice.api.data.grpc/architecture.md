@@ -8,7 +8,7 @@ The binding projects the in-process `ILatticeDataApi` facade onto a code-first g
 
 ## Wire contract
 
-The service is bound from C# definitions rather than a `.proto` file, under the gRPC service name `orleans.lattice.api.data`, so each method's path is `/orleans.lattice.api.data/<Rpc>`. All ten RPCs are unary. Every message is a `[GenerateSerializer]` record marshalled with the Orleans binary serializer; the server and `LatticeDataApiGrpcClient` build their method definitions from the same serializers resolved out of a service provider, so both ends use identical marshallers. Most RPCs carry this package's `Data*` and `Crdt*` records; `Get`, `ReadRange` and `DeleteRange` reuse the facade's records from `Orleans.Lattice.Api.Abstractions` unchanged. Wire aliases are pinned in `GrpcDataTypeAliases` and must never be renamed.
+The service is bound from C# definitions rather than a `.proto` file, under the gRPC service name `orleans.lattice.api.data`, so each method's path is `/orleans.lattice.api.data/<Rpc>`. The service has twelve RPCs: eleven are unary, and `StreamSetMany` is a duplex stream that carries a non-atomic bulk upsert as batch frames. Every message is a `[GenerateSerializer]` record marshalled with the Orleans binary serializer; the server and `LatticeDataApiGrpcClient` build their method definitions from the same serializers resolved out of a service provider, so both ends use identical marshallers. Most RPCs carry this package's `Data*` and `Crdt*` records; `Get`, `ReadRange`, `DeleteRange` and `ProbeCapabilities` reuse the facade's records from `Orleans.Lattice.Api.Abstractions` unchanged, and the `StreamSetMany` frames wrap the facade's `DataEntry`, `DataSetManyStreamBatch` and `DataSetManyStreamResult`. Wire aliases are pinned in `GrpcDataTypeAliases` and must never be renamed.
 
 ## Request path
 
@@ -30,9 +30,9 @@ sequenceDiagram
     S-->>C: response, or RpcException with mapped status
 ```
 
-1. **Admission.** A gRPC interceptor added to the host pipeline recognises calls under the `orleans.lattice.api.data` service and ignores every other service on the host. When `RequireAuthorization` is `true`, it builds a `LatticeDataApiAuthorizationContext` - the `ServerCallContext`, the `LatticeDataApiOperation` derived from the method name, and the target tree id taken from the request (`null` for a cross-tree batch, which spans several trees) - and asks `ILatticeDataApiAuthorizer`. A refusal ends the call with `PermissionDenied` before the request reaches the service; a cancelled check ends it with `Cancelled`.
+1. **Admission.** A gRPC interceptor added to the host pipeline recognises calls under the `orleans.lattice.api.data` service and ignores every other service on the host. When `RequireAuthorization` is `true`, it builds a `LatticeDataApiAuthorizationContext` - the `ServerCallContext`, the `LatticeDataApiOperation` derived from the method name, and the target tree id taken from the request (`null` for a cross-tree batch, which spans several trees, and for `StreamSetMany`, whose tree rides in frames that are not read until the call is admitted) - and asks `ILatticeDataApiAuthorizer`. A refusal ends the call with `PermissionDenied` before the request reaches the service; a cancelled check ends it with `Cancelled`.
 2. **Identity and tenant.** The service asks `ILatticeDataApiCredentialBridge` for the caller credential and `ILatticeDataApiActiveTenantBridge` for an asserted tenant, and stamps each onto its ambient context for the duration of the call. A call with neither stamps nothing, so it runs as an anonymous caller in the default tenant.
-3. **Dispatch.** The service unpacks the request and calls the matching facade verb. `CrdtWrite` and `CrdtRead` dispatch on the request's `CrdtWriteOp` or `CrdtKind` to the corresponding typed CRDT verb.
+3. **Dispatch.** The service unpacks the request and calls the matching facade verb. `CrdtWrite` and `CrdtRead` dispatch on the request's `CrdtWriteOp` or `CrdtKind` to the corresponding typed CRDT verb. `StreamSetMany` reads one frame at a time, refuses a frame that names a different tree from the first or carries more than `DataSetManyStreamOptions.MaxBatchSize` entries (`InvalidArgument`), writes each frame as one batch through the facade's `SetManyStreamAsync`, answers it with that batch's outcome before reading the next, and ends with a frame carrying the stream's totals - so the server holds one batch per stream.
 4. **Status mapping.** Exceptions from the facade or the core tree are translated to explicit gRPC statuses. A core authorization denial becomes `PermissionDenied` with the non-sensitive denial fields as `lattice-denied-*` trailers; an admission quota refusal becomes `ResourceExhausted` with `lattice-quota-*` trailers; a schema-policy rejection becomes `InvalidArgument` with payload-free `lattice-validation-*` trailers. Any unmapped exception is logged server-side and returned as `Internal` with a generic message. The full table is in the [status mapping](README.md#status-mapping).
 
 ## Two independent gates
@@ -48,6 +48,7 @@ The interceptor's authorizer is an endpoint-level switch: it decides whether a c
 - [Header credential bridge](../../src/lattice.api.data.grpc/HeaderLatticeDataApiCredentialBridge.cs)
 - [Header active-tenant bridge](../../src/lattice.api.data.grpc/HeaderLatticeDataApiActiveTenantBridge.cs)
 - [Client](../../src/lattice.api.data.grpc/LatticeDataApiGrpcClient.cs)
+- [Client streamed-write driver](../../src/lattice.api.data.grpc/DataSetManyStreamCall.cs)
 
 ## Related
 

@@ -165,12 +165,16 @@ and, once tenancy is enabled, the tenant you act as - per call:
   and forwards it to the silo; fail-closed tool discovery then advertises only the
   tool groups that identity's grants reach. Discovery is coarse, so a group's
   mutating tools are listed alongside its reads and refused at call time for a
-  caller who lacks them, with two refinements: the data group lists its mutating
+  caller who lacks them, with three refinements: the data group lists its mutating
   tools only to a caller whose grants include a mutating data-plane operation
-  (`Write`, `Delete`, `RangeDelete`, `CrdtApply`, `AtomicWrite`, or `BulkLoad`),
-  and the scopeless `Telemetry` and `AppInstall` capabilities count only from a
+  (`Write`, `Delete`, `RangeDelete`, `CrdtApply`, `AtomicWrite`, or `BulkLoad`);
+  the tree-administration group lists its read-only schema-inspection tools to a
+  caller holding `Read`, its schema-mutation tools only to `SchemaAdmin`, and its
+  other tools only to a caller holding `Admin`, `TreeLifecycle`, `BulkLoad`, or
+  `Restore`; and the scopeless `Telemetry` and `AppInstall` capabilities count only from a
   grant written cluster-wide, as every grant in `identities.json` is.
-  `data-reader` sees the state tools and the data reads; `auditor` sees the
+  `data-reader` sees the state tools, the data reads, and the read-only
+  schema-inspection tools of the tree-administration group; `auditor` sees the
   telemetry tools; `region-operator` sees the state, data, auth, and
   tree-administration tools; `platform-admin` sees everything; an unlisted id
   sees only the `lattice_capabilities` meta-tool, and a call with no token sees
@@ -233,7 +237,8 @@ and, once tenancy is enabled, the tenant you act as - per call:
 1. `docker compose up --build` and wait for both silos to finish starting (see the
    Quickstart table).
 2. `tools/list` on region A's MCP (port 9090) as `platform-admin` - full tool set.
-3. Repeat as `data-reader` - the state tools and the data reads (the data group's
+3. Repeat as `data-reader` - the state tools, the data reads, and the read-only
+   schema-inspection tools of the tree-administration group (the data group's
    write tools are withheld, because its grants include no mutating data-plane
    operation). As `auditor` - only telemetry. As
    `region-operator` - the state, data, auth, and tree-administration tools, but no

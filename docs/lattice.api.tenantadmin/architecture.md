@@ -10,15 +10,15 @@ These boundaries are separate: an asserted tenant is not proof of authority, tra
 
 ## Definition writes and side effects
 
-Accepted registry changes carry monotonic last-writer-wins timestamps. Tenant deletion composes with the tree-cascade seam, while region-residency changes drive backfill and drain through resumable work. Hosted discovery re-finds owed backfill, and region-status listeners advance the lifecycle as work completes. A recorded target state is not proof that every tree has already moved or been purged.
+Accepted registry changes carry monotonic last-writer-wins timestamps. Tenant deletion suspends the tenant first, soft-deletes its trees through the tree-cascade seam, and then removes the registry record, which first purges the tenant's tenant-tier rules, tenant groups and their edges, and every cross-tenant grant issued to it. Region-residency changes drive backfill and drain through resumable work. Hosted discovery re-finds owed backfill, and region-status listeners advance the lifecycle as work completes. A recorded target state is not proof that every tree has already moved or been purged.
 
-Backfill discovers logical tenant trees through registry provenance as well as current aliases. A derived physical copy can precede its alias or outlive it; its same-tenant `DerivedFrom` owner remains the backfill candidate unless the copy is independently configured for replication. Discovery does not enroll either tree: an unenrolled logical owner still blocks the region, as does an independent tree or a copy with foreign-tenant provenance. The region remains `Backfilling` until each candidate finishes receiver bootstrap with its read fence released.
+Backfill discovers logical tenant trees through registry provenance as well as current aliases. A derived physical copy can precede its alias or outlive it; the same-tenant logical tree its registry entry records it as derived from remains the backfill candidate unless the copy is independently configured for replication. Discovery does not enroll either tree: an unenrolled logical owner still blocks the region, as does an independent tree or a copy with foreign-tenant provenance. The region remains `Backfilling` until each candidate finishes receiver bootstrap with its read fence released and its parked tenant-offline replication dead letters replayed.
 
 Directory member/group operations use the membership-store seam. Tenant policy operations use the policy-store and policy-decision seams, filtering tenant-visible rules and usage rather than exposing unrestricted cluster policy administration.
 
 ## Namespace-confined tree facade
 
-`ILatticeTenantScopedTreeAdmin` composes logical names into the selected tenant's tree namespace and delegates lifecycle operations to `ILatticeTreeAdmin`. Schema-policy changes are authorized by the tenant-scoped facade itself. This service does not expose a route for administering another tenant by passing an already-qualified or reserved tree id.
+`ILatticeTenantScopedTreeAdmin` composes logical names into the active tenant's tree namespace (refusing with `TenantScopeRequiredException` when no active tenant is in scope), delegates lifecycle operations to `ILatticeTreeAdmin` and schema-policy operations to `ILatticeSchemaAdmin`. Tree creation is authorized here (whole-tree `Admin`) before the delegated create counts it against the tenant's quota, and schema-policy reads and changes are authorized by the tenant-scoped facade itself, because the in-process schema admin performs no authorization. This service does not expose a route for administering another tenant by passing an already-qualified or reserved tree id.
 
 ## Source map
 

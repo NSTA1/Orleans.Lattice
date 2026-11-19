@@ -144,7 +144,9 @@ public sealed class LatticeApiMcpOptions
 
     /// <summary>
     /// Whether the backup tool module also contributes its <b>mutating</b>
-    /// control tools (capture, incremental capture, restore, revert, delete) in
+    /// control tools (the backup, incremental, backup-set, restore, health-check,
+    /// catalog rebuild and catalog scrub starts, operation cancel, restore revert,
+    /// delete, and the backup-set schedule set, cancel, remove and run-now verbs) in
     /// addition to the read-only inspect tools. Defaults to
     /// <see langword="false"/> so a registered backup module is inspect-only
     /// until the host explicitly opts backup control in - either by setting this
@@ -254,11 +256,15 @@ public sealed class LatticeApiMcpOptions
     /// <summary>
     /// Whether the tenant-administration tool module contributes its control tools:
     /// create, suspend, resume, delete, set quotas, authorize regions, set residency,
-    /// and region status. The tenant-admin surface is control-gated, so the group contributes no tools
+    /// region status and advance region, plus the delegated tenant access tools (nine
+    /// group, member, rule, explain, effective-permission and posture reads and eight
+    /// group, member and rule writes) when their facades are registered. The tenant-admin
+    /// surface is control-gated, so the group contributes no tools
     /// until the host explicitly opts control in - either by setting this flag or
     /// by passing <c>enableControl: true</c> to <c>AddTenantAdminTools(...)</c>.
     /// Every mutating tool it then contributes is annotated destructive and
-    /// non-read-only (the region-status read is annotated read-only), and each
+    /// non-read-only (the region-status and delegated access reads are annotated
+    /// read-only), and each
     /// remains subject to the same fail-closed access gate the tenant-admin
     /// facades enforce.
     /// </summary>

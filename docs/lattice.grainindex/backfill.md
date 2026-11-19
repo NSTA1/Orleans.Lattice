@@ -176,7 +176,7 @@ deliberately - or a test that needs a pass to happen at an exact moment - wants.
 | `PauseBackfillAsync(indexName)` | Stops scheduling passes, keeping the checkpoint. |
 | `ResumeBackfillAsync(indexName)` | Resumes from the checkpoint. |
 | `RebuildAsync(indexName)` | Restarts the crawl from the beginning of the key range. |
-| `RunBackfillPassAsync(indexName)` | Runs exactly one pass now, whatever the schedule says. |
+| `RunBackfillPassAsync(indexName)` | Runs exactly one pass now, whatever the schedule says. On a crawl that is not `Running` it does nothing and reports the current state. |
 
 The needs-backfill flag that a `Rebuild`-policy
 [drift](configuration.md#drift-detection) acceptance raises is cleared when a

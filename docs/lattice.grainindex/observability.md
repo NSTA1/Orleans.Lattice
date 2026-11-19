@@ -104,8 +104,9 @@ misleading figure, and `backfill.processed` is the progress signal. See
   `RunBackfillPassAsync`). A key source that throws moves the state to `Failed`
   instead, and one that yields nothing completes the crawl.
 - **`projection.duration` p99 climbing** means the projection path is becoming a
-  latency contributor to the grain's own write path under the default
-  synchronous projection mode.
+  latency contributor to the grain's own write path. The projection and diff run
+  before the state write under either projection mode; only the index write
+  itself is deferred under `Eventual`.
 
 ### Dashboards
 
@@ -140,7 +141,7 @@ indexes.
 | `Task<GrainIndexBackfillStatus> PauseBackfillAsync(string indexName, CancellationToken)` | Stops scheduling passes, keeping the checkpoint. |
 | `Task<GrainIndexBackfillStatus> ResumeBackfillAsync(string indexName, CancellationToken)` | Resumes from the checkpoint. |
 | `Task<GrainIndexBackfillStatus> RebuildAsync(string indexName, CancellationToken)` | Restarts the crawl from the beginning of the key range. |
-| `Task<GrainIndexBackfillBatchResult> RunBackfillPassAsync(string indexName, CancellationToken)` | Runs exactly one pass now, whatever the schedule says. |
+| `Task<GrainIndexBackfillBatchResult> RunBackfillPassAsync(string indexName, CancellationToken)` | Runs exactly one pass now, whatever the schedule says. On a crawl that is not `Running` it does nothing and reports the current state. |
 
 ```csharp verify
 using Orleans.Lattice.GrainIndex;
@@ -163,7 +164,9 @@ An unknown index name throws `GrainIndexNotDeclaredException`.
 
 `RunBackfillPassAsync` is the primitive that makes a backfill testable: combined
 with `BackfillEnabled = false` it lets a test drive the crawl one pass at a time
-instead of waiting on a schedule.
+instead of waiting on a schedule. Silo start never begins the crawl on such a
+host, so start it with `RebuildAsync` first; until then a pass reports
+`NotStarted` and does nothing.
 
 ## See also
 

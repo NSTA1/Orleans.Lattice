@@ -25,6 +25,8 @@ The per-operation routing is tabulated in [Surface (v1)](README.md#surface-v1). 
 - **Range reads are one bounded page per call.** The first call opens an entry cursor over the requested bounds; the cursor id is returned as the continuation token while more entries remain, and the cursor is closed as soon as a page drains. The page size is the request's size, or `DefaultRangePageSize` when unset, clamped to `MaxRangePageSize` and never below `1`. A continuation token that names an unknown, drained, closed or expired cursor is reported as `ArgumentException`, a client error rather than a server fault.
 - **Values are returned raw.** A point read reports the stored bytes with the key's merge mode and `Raw = true`; a range-read page flags every entry raw and leaves its merge mode unset. Typed CRDT values are read through the typed CRDT verbs, which decode them.
 - **Cross-tree batches resolve every slice.** Each slice's tree name goes through the same tenant resolution, delete keys are carried alongside the upserts with per-entry delete flags, and the whole set is handed to the grain-factory cross-tree atomic coordinator in one call. The coordinator's outcome is returned unchanged.
+- **Streamed bulk writes reuse the bulk path.** The facade does not override `SetManyStreamAsync`; the contract's default member cuts the entry stream into batches of `DataSetManyStreamOptions.BatchSize` and writes each through `SetManyAsync`. When a batch is refused for one entry's sake - an unauthorized key, a schema rejection, or an invalid write - it is written again one entry at a time through `SetAsync`, so every other entry lands and each refusal is reported against its own key; any other fault ends the stream. Memory is bounded by the batch, never by the stream.
+- **The capability probe asks the gate, not the tree.** `ProbeCapabilitiesAsync` composes the tree name under the active tenant (a refused tenant reports no capability rather than throwing), then asks the registered access gate whether the caller may `Write` and `Delete` - at the key, applying any per-key filter, or, with no key, whether the caller holds any grant for the operation in the tree (an anonymous caller holds none). No tree is read or written. With no authorization add-on registered, or inside a system-origin scope, both are reported allowed.
 
 ## Typed CRDT verbs
 
@@ -45,6 +47,7 @@ The typed CRDT methods follow the same validate-resolve-delegate shape, calling 
 - [Options](../../src/lattice.api.data/LatticeApiDataOptions.cs)
 - [Facade - point, bulk, atomic and range verbs](../../src/lattice.api.data/LatticeDataApi.cs)
 - [Facade - typed CRDT verbs](../../src/lattice.api.data/LatticeDataApi.Crdt.cs)
+- [Facade - capability probe](../../src/lattice.api.data/LatticeDataApi.Capabilities.cs)
 - [Shared contract](../../src/lattice.api.abstractions/Data/ILatticeDataApi.cs)
 
 ## Related

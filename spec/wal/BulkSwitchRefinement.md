@@ -90,7 +90,8 @@ design model ([`LiveAdvanceInterface.md`](LiveAdvanceInterface.md)).
   minus one (`BPlusLeafGrain.HeadsAsCheckpoints`, #5760), and applies
   `min(hint, frontier)`: in checkpoint terms `min(head - 1, O's checkpoint)`, which is the
   model's `Min2(hint - 1, fO)`.
-- **Guarantees.** Four, each a checked invariant of the base and of the `Skip` variant:
+- **Guarantees.** Five: four checked invariants and an action property, each checked on the
+  base and on the `Skip` variant:
   - `BulkHintBound`: N's read position is at or below every record of its range it does
     not hold, from its birth through its replay. Rows relocated into it at birth are
     held, by the offset of the record that wrote them.
@@ -109,6 +110,10 @@ design model ([`LiveAdvanceInterface.md`](LiveAdvanceInterface.md)).
   - `ReplacedRootRelocated` (#5812, review Q2): a load published over a root that a batch
     write seeded while it ran has relocated that root under the switch (narrowed it), never
     overwritten it.
+  - `SwitchCloseCoversPriorAllocations` (#5833): a switch's close records the allocator
+    head at its re-claim, so its head is above every record allocated before the close, the
+    range's earlier records and the seeds alike. The core's bulk-born leaf relies on it
+    under the lazy arm.
 - **Module-local invariant.** `HintOnlyWhileOpen`: a stored hint belongs to an open
   switch, since the hint and the token are stored in one write and removed in one write.
   It is not an interface guarantee, and nothing outside B assumes it.

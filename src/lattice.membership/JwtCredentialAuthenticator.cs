@@ -15,8 +15,9 @@ namespace Orleans.Lattice.Membership;
 /// implementation.
 /// <para>
 /// Extension points: <see cref="CanHandle"/> (selection), <see cref="ResolveValidationParametersAsync"/>
-/// (OIDC / JWKS metadata discovery and signing-key rotation), and
-/// <see cref="MapPrincipal"/> (subject / groups / claim mapping).
+/// (OIDC / JWKS metadata discovery and signing-key rotation),
+/// <see cref="MapPrincipal"/> (subject / groups / claim mapping), and
+/// <see cref="EnrichPrincipalAsync"/> (post-validation enrichment of the mapped principal).
 /// </para>
 /// </summary>
 public class JwtCredentialAuthenticator : ILatticeCredentialAuthenticator

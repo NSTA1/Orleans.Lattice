@@ -34,9 +34,16 @@ the two scale-value gauges report `double` values; the replica, account, and
 recommendation gauges report `long` values.
 
 The instrument-name constants are exposed on `LatticeScalingMetrics`
-(`ScaleValueName`, `RawScaleValueName`, `ComputeActivationPressureName`, and so
-on) so a `MeterListener` or a test can reference them without hard-coding
-strings.
+(`ScaleValueName`, `RawScaleValueName`, `ComputeActivationPressureName`,
+`ComputeResourcePressureName`, `ComputeWalDispatchPressureName`,
+`ComputeReplicasName`, `StorageAccountsOverThresholdName`, and
+`StorageRebalanceRecommendationsName`) so a `MeterListener` or a test can
+reference them without hard-coding strings, and `LatticeScalingMetrics.Meter`
+exposes the meter instance itself for subscribers that match by reference.
+
+The gauges are created once per process, when the first scaling signal starts,
+and read process-wide published values: in a process that hosts more than one
+silo, the silo that sampled most recently supplies the value.
 
 When these names are exported through the OpenTelemetry Prometheus exporter the
 dots become underscores, so `orleans.lattice.scaling.scale_value` is scraped as

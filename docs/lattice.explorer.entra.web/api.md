@@ -64,7 +64,8 @@ app.MapLatticeExplorerEntraWebSignOut(
     redirectUri: "/");
 ```
 
-Maps a federated sign-out `POST` endpoint. The endpoint validates antiforgery,
+Maps a federated sign-out `POST` endpoint. The endpoint validates antiforgery
+(a missing or invalid token returns `400 Bad Request` without signing out),
 clears the local State API credential when an `IExplorerAuthSession` is available,
 clears the OpenID Connect cookie, and signs the user out of Entra. It redirects
 back to `redirectUri` after sign-out. Throws `ArgumentNullException` for a null
@@ -86,7 +87,8 @@ app.MapLatticeExplorerEntraWebReauth(
 Maps a forced-interactive re-authentication `GET` endpoint. It issues an OpenID
 Connect challenge with the supplied `prompt` value, defaulting to `login`, so a
 new authorization code is redeemed even when the browser already has a valid
-cookie. The return URL query value is honoured only when it is a local path; an
+cookie. The return URL query value is honoured only when it is a local path
+(`/path` or an app-relative `~/path`, containing no control characters); an
 absolute or protocol-relative URL returns the browser to `/`. Throws
 `ArgumentNullException` for a null endpoint builder and `ArgumentException` for a
 blank pattern, prompt or return-url parameter.
@@ -115,8 +117,9 @@ public sealed class StaticExplorerWebTokenAcquirer : IExplorerWebTokenAcquirer
 
 Acquires a downstream State API token for the signed-in browser user. The default
 implementation passes the circuit's `ClaimsPrincipal` to Microsoft.Identity.Web
-explicitly. It throws `ExplorerWebReauthRequiredException` when the browser
-session is not authenticated or Microsoft.Identity.Web requires interaction.
+explicitly. It throws `ArgumentException` for an empty scope list, and
+`ExplorerWebReauthRequiredException` when the browser session is not
+authenticated or Microsoft.Identity.Web requires interaction.
 
 ## `ExplorerWebToken`
 
@@ -159,7 +162,8 @@ ExplorerAuthSignIn signIn = await method.ChallengeAsync(
 `SchemeId` returns `entra`. `CanHandle` matches that scheme case-insensitively.
 `ChallengeAsync` resolves scopes from `ExplorerEntraWebOptions.Scopes` or an
 admitted advertised audience, acquires the initial downstream token, and returns a
-bearer sign-in. Silent renewal latches the credential as revoked when token acquisition
+bearer sign-in. It throws `InvalidOperationException` when no scope resolves or the
+advertised audience is not admitted. Silent renewal latches the credential as revoked when token acquisition
 throws `ExplorerWebReauthRequiredException`.
 
 ## `ExplorerWebReauthRequiredException`

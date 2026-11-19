@@ -40,7 +40,7 @@ Full signatures: [`Orleans.Lattice.Api.Operations` in the Public API](api.md#orl
 ## Behaviour every facade shares
 
 - **Independent of the caller.** The work runs in the background on the silo that accepted it. The start call's cancellation token cancels only the start call, and a caller timeout, a closed browser tab or a dropped connection does not stop the work.
-- **Idempotent start.** Starting again with an id that is in use returns the existing operation with `Created = false`. Reusing an id for a different kind is refused.
+- **Idempotent start.** Starting again with an id that is in use returns the existing operation with `Created = false`. Reusing an id for a different kind or a different set of trees is refused.
 - **Fail-closed scoping.** A status read, listing or cancel sees only operations of the facade's own kinds, in the caller's tenant, over trees the caller may read. Anything else is reported as **not found** (`null`), never as forbidden, so an operation's existence is not disclosed across a tenant or grant boundary. Cancelling needs the grant that starting the operation needed.
 - **Cancellation.** `CancelOperationAsync` records the request durably. The work stops at once when the request reaches the silo running it, and otherwise at its next progress report or heartbeat (every ten seconds by default). The operation then reads `Cancelled`.
 - **Silo loss.** Resuming an interrupted operation is not supported in this version. When the silo running an operation is declared dead by cluster membership, or the operation stops heartbeating for longer than its lease (two minutes by default), the next read records it as `Failed` with a reason that says so. It is never left `Running`. Start it again.

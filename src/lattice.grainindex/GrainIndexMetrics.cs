@@ -43,8 +43,8 @@ namespace Orleans.Lattice.GrainIndex;
 /// frozen singleton, adding it costs no per-measurement allocation.
 /// </para>
 /// <para>
-/// The observable gauges read a frozen snapshot published by the backfill grain
-/// (see <c>GrainIndexBackfillProgressRegistry</c>), so a scrape recomputes
+/// The observable gauges read a frozen snapshot the crawl's activation publishes
+/// whenever its progress changes or its status is read, so a scrape recomputes
 /// nothing and touches no durable store. They report for the silo hosting a
 /// crawl's activation, which is the silo that knows where the crawl has reached.
 /// </para>
@@ -100,8 +100,9 @@ public static class GrainIndexMetrics
     /// <i>performed</i>, which is every enrolment that reaches a grain activation.
     /// <see cref="PathBackfill"/> counts the ones the crawl <i>caused</i>, which is
     /// how much of a dormant population the crawl has onboarded. A crawl-driven
-    /// stateful grain appears on both; a no-state grain the crawl cannot activate
-    /// appears only on the backfill path. Chart them side by side rather than summing them.
+    /// stateful grain appears on both; a grain the crawl activates that has no
+    /// stored state never enrols on its activation path, so it appears only on the
+    /// backfill path. Chart them side by side rather than summing them.
     /// </remarks>
     public const string GrainsEnrolledName = "orleans.lattice.grainindex.grains_enrolled";
 

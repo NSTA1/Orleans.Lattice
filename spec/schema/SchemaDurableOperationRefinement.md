@@ -91,8 +91,9 @@ under weak fairness of each operation's runner steps and of loss detection
 with a third operation, which is the smallest bound where a followed
 remediation can be superseded; the TwoParams variant re-checks them with a
 second parameter set, which reaches the in-band refusal of a start whose
-parameters differ from the in-flight remediation. Both leave the temporal
-checks on the base for the TLC liveness budget.
+parameters differ from the in-flight remediation. Both drop the lapsed lease
+(`MaxStalls = 0`) and leave the temporal checks on the base for the TLC
+liveness budget.
 
 Every experiment is an anchored action perturbation:
 
@@ -140,8 +141,8 @@ at once instead of being refused. OutcomeOfFollowedDrivesAnother and
 DrivenOnlyByFollowersSlicesAnother are the #5267 defect this model found: a
 driver that joined a remediation sliced, and then reported the outcome of, a
 remediation another operation started after the followed one ended. It is
-fixed in the schema-assurance integration bucket; this is integration-branch
-evidence, not a claim the fix is released.
+fixed in the schema-assurance integration bucket, which landed on `main` with
+#5330 and shipped in the 10.3.0 release.
 
 ## Deliberate abstraction gaps
 

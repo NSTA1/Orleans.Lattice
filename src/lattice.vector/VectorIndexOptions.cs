@@ -170,7 +170,7 @@ public sealed class VectorIndexOptions
     /// corpus grows. Under this rule it does: about 20 percent at ten thousand
     /// vectors, 12 percent at the seventy thousand of a large live corpus, and 6
     /// percent at a million. The measured recall of the default is published in
-    /// the package readme.
+    /// the package's recall documentation (<c>docs/lattice.vector/recall.md</c>).
     /// </para>
     /// </summary>
     /// <param name="partitionCount">The trained partition count.</param>

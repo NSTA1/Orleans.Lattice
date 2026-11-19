@@ -12,7 +12,7 @@ The **Access** area is the Explorer surface for the cluster's authorization rule
 
 Access is visible after one of two fail-closed probes admits the caller. A cluster administrator is admitted when the cluster-wide probe can read the first page of the group catalogue. A tenant administrator who is not a cluster administrator is admitted when the tenant posture probe for the asserted tenant reports delegated tenant access administration enabled and the caller administers that tenant. The verdict is remembered for the signed-in identity, endpoint and asserted tenant on the current circuit, and is asked again when any of them changes.
 
-The area is hidden when neither the cluster-wide access facade nor the delegated tenant access facades are served, the cluster cannot be reached, the cluster does not serve the relevant administration surface, or a signed-in identity is refused by both probes.
+The area is hidden when neither the cluster-wide access facade nor the delegated tenant access facades are served, the cluster does not serve the relevant administration surface, a probe fails definitely, or a signed-in identity is refused by both probes. A cluster-wide probe the cluster did not answer (a transient fault) leaves the area not checked rather than hidden, and that answer is not remembered; see [Area availability](area-availability.md#faults-the-cluster-did-not-answer).
 
 The only unavailable state is an anonymous or unsigned circuit that is refused by the probe. The exact sentence shown is:
 

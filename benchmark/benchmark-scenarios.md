@@ -207,7 +207,7 @@ and the harness. The micro-benchmark scenario (`microbench`) drives
 - [x] **atomic-write: Atomic-saga driver, single cluster, replication off.**
   Drives a steady stream of `SetManyAtomicAsync` sagas via `LatticeAtomicSagaDriver`
   to exercise the WAL-only prepare path under sustained load. Each saga commits
-  16 keys atomically through the per-saga `AtomicWriteGrain`; concurrency=16
+  16 keys atomically through its own per-saga coordinator; concurrency=16
   workers each use a per-worker key prefix so concurrent sagas don't collide on
   the same keys. Validates that saga-RPS scales linearly with batch concurrency,
   bounded by per-saga grain RPS rather than capped at single-grain throughput.

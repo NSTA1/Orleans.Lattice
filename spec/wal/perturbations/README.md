@@ -23,7 +23,9 @@ is seeded on the rows issue #5358 broke: `Decide(p, c, k)` and `NoTrimPastLiveNe
 `PurgeTailRemove`, the row issue #5417 broke (the purge tail's re-drive acting on a tree id),
 and on `Recreate`, the row issue #5458 broke (a purged shard admitting a write while the
 purge still held the tree's registry entry).
-`WalDurability` and `WalMove` have no perturbations yet, so the gate does not
+`WalDurability`, `WalMove` and the six live-advance modules (`WalAppendEpoch`,
+`WalHandOffFence`, `WalRoutingFloor`, `WalBulkSwitch`, `WalLiveAdvanceCore` and
+`WalLiveAdvanceComposite`) have no perturbations yet, so the gate does not
 require their rows to be listed.
 
 ## Unseeded rows

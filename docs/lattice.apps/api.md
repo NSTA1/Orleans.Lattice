@@ -51,9 +51,9 @@ Each identifier below is a public top-level type declared by this package. The i
 
 ## Operational contracts
 
-`IAppActivationPipeline` exposes `EnableAsync`, `DisableAsync`, `UninstallAsync`, `ReconcileAsync`, and `GetStatusAsync`; each is tenant- and slug-scoped and accepts a cancellation token. Mutations return `AppActivationOutcome`; the status read returns nullable `AppActivationStatus`.
+`IAppActivationPipeline` exposes `EnableAsync`, `DisableAsync`, `UninstallAsync`, `ReconcileAsync`, `GetStatusAsync`, and `GetRunningOperationAsync`; each is tenant- and slug-scoped and accepts a cancellation token. Mutations return `AppActivationOutcome`; the status read returns nullable `AppActivationStatus`; the running-operation read returns the nullable `AppActivationOperation` of the run executing right now (its default interface implementation returns `null`), so a reader can report a run in flight as pending rather than failed.
 
-`IAppRegistry` exposes install/upgrade transitions, enable/disable/uninstall transitions, tenant/global enumeration, and a read-only tree-ownership conflict query. `IAppRegistryProjection` exposes the current `CompiledAppRegistrySnapshot` and warm-up behavior for readers. Prefer `ILatticeAppsControl` for caller-facing administration because it resolves the tenant and authorizes before registry access.
+`IAppRegistry` exposes install/upgrade transitions, enable/disable/uninstall transitions, tenant/global enumeration, and a read-only tree-ownership conflict query. `IAppRegistryProjection` exposes the current `CompiledAppRegistrySnapshot` and its epoch, warm-up (`EnsureWarmAsync`), and cluster-wide currency (`EnsureCurrentAsync`), which a surface that decides access on the snapshot calls first because the change feed that refreshes it fires only on the silo that committed the registry write. Prefer `ILatticeAppsControl` for caller-facing administration because it resolves the tenant and authorizes before registry access.
 
 `AppManifestParser.Parse(string?)` and `Parse(Stream)` return an `AppManifestResult`; `AppManifestValidator.Validate(AppManifest?, AppManifest? previous = null)` validates a manifest and optional previous version. `IAppSource` resolves a slug/version; `IAppCatalogSource` additionally exposes a descriptor, paged listing, and digest-checked asset opening. `IAppChangeFeedHandler.HandleAsync(AppSubscriptionContext, LatticeMutation, CancellationToken)` receives subscribed mutations.
 
@@ -769,6 +769,7 @@ The following inventory includes directly declared public members and overloads,
 - `Task<AppActivationOutcome> UninstallAsync(TenantId tenant, AppSlug slug, CancellationToken cancellationToken = default)`
 - `Task<AppActivationOutcome> ReconcileAsync(TenantId tenant, AppSlug slug, CancellationToken cancellationToken = default)`
 - `Task<AppActivationStatus?> GetStatusAsync(TenantId tenant, AppSlug slug, CancellationToken cancellationToken = default)`
+- `Task<AppActivationOperation?> GetRunningOperationAsync(TenantId tenant, AppSlug slug, CancellationToken cancellationToken = default)`
 
 ### `Orleans.Lattice.Apps.IAppChangeFeedHandler`
 
@@ -796,13 +797,14 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Apps.IAppRegistryProjection`
 
-[Source](../../src/lattice.apps/Registry/IAppRegistryProjection.cs) (line 11).
+[Source](../../src/lattice.apps/Registry/IAppRegistryProjection.cs) (line 13).
 
 `public interface IAppRegistryProjection`
 
 - `long CurrentEpoch { get; }`
 - `CompiledAppRegistrySnapshot Current { get; }`
 - `Task EnsureWarmAsync(CancellationToken cancellationToken = default)`
+- `Task EnsureCurrentAsync(CancellationToken cancellationToken = default)`
 
 ### `Orleans.Lattice.Apps.IAppSource`
 
@@ -880,7 +882,7 @@ The following inventory includes directly declared public members and overloads,
 - `public static IServiceCollection AddLatticeAppSubscriptionHandler<THandler>( this IServiceCollection services, AppSlug app, string subscriptionName) where THandler : class, IAppChangeFeedHandler`
 - `public static IServiceCollection AddLatticeAppSubscriptionHandler( this IServiceCollection services, AppSlug app, string subscriptionName, Func<IServiceProvider, IAppChangeFeedHandler> factory)`
 
-[Source](../../src/lattice.apps/LatticeAppsServiceCollectionExtensions.cs) (line 16).
+[Source](../../src/lattice.apps/LatticeAppsServiceCollectionExtensions.cs) (line 17).
 
 `public static partial class LatticeAppsServiceCollectionExtensions`
 
@@ -921,7 +923,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Apps.Sources.AppSourceCapabilities`
 
-[Source](../../src/lattice.apps/Sources/AppSourceCapabilities.cs) (line 5).
+[Source](../../src/lattice.apps/Sources/AppSourceCapabilities.cs) (line 4).
 
 `public enum AppSourceCapabilities`
 

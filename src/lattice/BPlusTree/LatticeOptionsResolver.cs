@@ -119,7 +119,7 @@ internal sealed class LatticeOptionsResolver(
     /// <para>
     /// The cache exists to elide the per-call <see cref="ILatticeRegistry.GetEntryAsync"/>
     /// grain RPC on the foreground WAL commit path. Without it, every
-    /// <see cref="Grains.WalCommitLogWriter.AppendAsync"/> serialises through
+    /// <see cref="Grains.WalCommitLogWriter.AppendAsync(WalRecord, CancellationToken)"/> serialises through
     /// one turn on the cluster-singleton registry activation before the writer
     /// can fan its append across <c>WalPartitions</c> WAL shards, collapsing
     /// the realised throughput by an order of magnitude on multi-partition

@@ -240,7 +240,8 @@ pull request, which the gate cannot tell from an open one.
   release. A dial fault only hides a delegated key, and is checked with no loss
   path and on the gap's and the poison's follow slices; a lost acknowledgement
   only repeats a delivery, and is checked on every slice but the pre-hold ones,
-  the cross-tree decommission slices and the path that takes both trees off the
+  the barrier-retention ones (below), the cross-tree decommission slices that
+  replicate both trees and the path that takes both trees off the
   log. The cross-tree decommission slices partition its instance by how the
   receiver joins and by the saga's outcome.
   What the pairing leaves out is either of them combined with a pre-hold purge

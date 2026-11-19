@@ -58,7 +58,7 @@
         "AddTreeAdminTools"
       ],
       "write_opt_in": "Mutating tool modules are contributed only by their enableWrites, enableControl, enableAdministration, enableSchemaControl, enableLifecycle, or equivalent opt-in flags.",
-      "region_parameter": "The per-invocation wrapper advertises an optional region string argument on every tool. Facade-backed tools resolve it through the group router and reject unknown or unreachable targets fail-closed; app-contributed tools are in-process and accept only the current region.",
+      "region_parameter": "The per-invocation wrapper advertises an optional region string argument on every tool. Facade-backed tools resolve it through the group router and answer an unknown or unserved region as an invalid-argument client error result (isError true) rather than throwing, and throw an McpException only when a peer region fails identity verification; app-contributed tools are in-process and accept only the current region.",
       "app_tool_surface": "AddAppMcpTools registers the app tool source. Enabled app manifests declare app-local tools, providers implement those names, and the session advertises permitted tools as {slug}_{tool}; app tools are omitted from lattice_capabilities.",
       "app_tool_authorization": "The app tool source offers an app tool only when the caller holds the tool's declared role by binding (a group in its closure is bound to the role) and the access gate, asked only after the binding holds, refuses none of the role's operations on at least one resolved role scope; the caller's other rules never add a role. The namespaced app tool repeats the same check at invocation.",
       "app_tool_pairing": "App tool activation hard-fails an app's whole tool activation when a declared tool lacks an implementation, an implementation is undeclared, a local name is duplicated, or the slug is reserved."
@@ -17630,7 +17630,7 @@
         },
         {
           "error_id": "mcp-exception",
-          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+          "condition": "Caller errors and fail-closed workspace faults are surfaced as McpException messages, as is a peer region that fails identity verification; an unknown or unserved region is answered as an invalid-argument client error instead."
         }
       ],
       "retry": {
@@ -17755,7 +17755,7 @@
         },
         {
           "error_id": "mcp-exception",
-          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+          "condition": "Caller errors and fail-closed workspace faults are surfaced as McpException messages, as is a peer region that fails identity verification; an unknown or unserved region is answered as an invalid-argument client error instead."
         }
       ],
       "retry": {
@@ -17837,7 +17837,7 @@
         },
         {
           "error_id": "mcp-exception",
-          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+          "condition": "Caller errors and fail-closed workspace faults are surfaced as McpException messages, as is a peer region that fails identity verification; an unknown or unserved region is answered as an invalid-argument client error instead."
         }
       ],
       "retry": {
@@ -17920,7 +17920,7 @@
         },
         {
           "error_id": "mcp-exception",
-          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+          "condition": "Caller errors and fail-closed workspace faults are surfaced as McpException messages, as is a peer region that fails identity verification; an unknown or unserved region is answered as an invalid-argument client error instead."
         }
       ],
       "retry": {
@@ -18001,7 +18001,7 @@
         },
         {
           "error_id": "mcp-exception",
-          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+          "condition": "Caller errors and fail-closed workspace faults are surfaced as McpException messages, as is a peer region that fails identity verification; an unknown or unserved region is answered as an invalid-argument client error instead."
         }
       ],
       "retry": {
@@ -18103,7 +18103,7 @@
         },
         {
           "error_id": "mcp-exception",
-          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+          "condition": "Caller errors and fail-closed workspace faults are surfaced as McpException messages, as is a peer region that fails identity verification; an unknown or unserved region is answered as an invalid-argument client error instead."
         }
       ],
       "retry": {
@@ -18191,7 +18191,7 @@
         },
         {
           "error_id": "mcp-exception",
-          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+          "condition": "Caller errors and fail-closed workspace faults are surfaced as McpException messages, as is a peer region that fails identity verification; an unknown or unserved region is answered as an invalid-argument client error instead."
         }
       ],
       "retry": {
@@ -18272,7 +18272,7 @@
         },
         {
           "error_id": "mcp-exception",
-          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+          "condition": "Caller errors and fail-closed workspace faults are surfaced as McpException messages, as is a peer region that fails identity verification; an unknown or unserved region is answered as an invalid-argument client error instead."
         }
       ],
       "retry": {
@@ -18359,7 +18359,7 @@
         },
         {
           "error_id": "mcp-exception",
-          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+          "condition": "Caller errors and fail-closed workspace faults are surfaced as McpException messages, as is a peer region that fails identity verification; an unknown or unserved region is answered as an invalid-argument client error instead."
         }
       ],
       "retry": {
@@ -18474,7 +18474,7 @@
         },
         {
           "error_id": "mcp-exception",
-          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+          "condition": "Caller errors and fail-closed workspace faults are surfaced as McpException messages, as is a peer region that fails identity verification; an unknown or unserved region is answered as an invalid-argument client error instead."
         }
       ],
       "retry": {
@@ -18568,7 +18568,7 @@
         },
         {
           "error_id": "mcp-exception",
-          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+          "condition": "Caller errors and fail-closed workspace faults are surfaced as McpException messages, as is a peer region that fails identity verification; an unknown or unserved region is answered as an invalid-argument client error instead."
         }
       ],
       "retry": {
@@ -18643,7 +18643,7 @@
         },
         {
           "error_id": "mcp-exception",
-          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+          "condition": "Caller errors and fail-closed workspace faults are surfaced as McpException messages, as is a peer region that fails identity verification; an unknown or unserved region is answered as an invalid-argument client error instead."
         }
       ],
       "retry": {
@@ -18756,7 +18756,7 @@
         },
         {
           "error_id": "mcp-exception",
-          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+          "condition": "Caller errors and fail-closed workspace faults are surfaced as McpException messages, as is a peer region that fails identity verification; an unknown or unserved region is answered as an invalid-argument client error instead."
         }
       ],
       "retry": {
@@ -18864,7 +18864,7 @@
         },
         {
           "error_id": "mcp-exception",
-          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+          "condition": "Caller errors and fail-closed workspace faults are surfaced as McpException messages, as is a peer region that fails identity verification; an unknown or unserved region is answered as an invalid-argument client error instead."
         }
       ],
       "retry": {
@@ -18944,7 +18944,7 @@
         },
         {
           "error_id": "mcp-exception",
-          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+          "condition": "Caller errors and fail-closed workspace faults are surfaced as McpException messages, as is a peer region that fails identity verification; an unknown or unserved region is answered as an invalid-argument client error instead."
         }
       ],
       "retry": {
@@ -19037,7 +19037,7 @@
         },
         {
           "error_id": "mcp-exception",
-          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+          "condition": "Caller errors and fail-closed workspace faults are surfaced as McpException messages, as is a peer region that fails identity verification; an unknown or unserved region is answered as an invalid-argument client error instead."
         }
       ],
       "retry": {
@@ -19106,7 +19106,7 @@
         },
         {
           "error_id": "mcp-exception",
-          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+          "condition": "Caller errors and fail-closed workspace faults are surfaced as McpException messages, as is a peer region that fails identity verification; an unknown or unserved region is answered as an invalid-argument client error instead."
         }
       ],
       "retry": {
@@ -19219,7 +19219,7 @@
         },
         {
           "error_id": "mcp-exception",
-          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+          "condition": "Caller errors and fail-closed workspace faults are surfaced as McpException messages, as is a peer region that fails identity verification; an unknown or unserved region is answered as an invalid-argument client error instead."
         }
       ],
       "retry": {
@@ -19313,7 +19313,7 @@
         },
         {
           "error_id": "mcp-exception",
-          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+          "condition": "Caller errors and fail-closed workspace faults are surfaced as McpException messages, as is a peer region that fails identity verification; an unknown or unserved region is answered as an invalid-argument client error instead."
         }
       ],
       "retry": {
@@ -19383,7 +19383,7 @@
         },
         {
           "error_id": "mcp-exception",
-          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+          "condition": "Caller errors and fail-closed workspace faults are surfaced as McpException messages, as is a peer region that fails identity verification; an unknown or unserved region is answered as an invalid-argument client error instead."
         }
       ],
       "retry": {
@@ -19454,7 +19454,7 @@
         },
         {
           "error_id": "mcp-exception",
-          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+          "condition": "Caller errors and fail-closed workspace faults are surfaced as McpException messages, as is a peer region that fails identity verification; an unknown or unserved region is answered as an invalid-argument client error instead."
         }
       ],
       "retry": {
@@ -19521,7 +19521,7 @@
         },
         {
           "error_id": "mcp-exception",
-          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+          "condition": "Caller errors and fail-closed workspace faults are surfaced as McpException messages, as is a peer region that fails identity verification; an unknown or unserved region is answered as an invalid-argument client error instead."
         }
       ],
       "retry": {
@@ -19590,7 +19590,7 @@
         },
         {
           "error_id": "mcp-exception",
-          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+          "condition": "Caller errors and fail-closed workspace faults are surfaced as McpException messages, as is a peer region that fails identity verification; an unknown or unserved region is answered as an invalid-argument client error instead."
         }
       ],
       "retry": {
@@ -19680,7 +19680,7 @@
         },
         {
           "error_id": "mcp-exception",
-          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+          "condition": "Caller errors and fail-closed workspace faults are surfaced as McpException messages, as is a peer region that fails identity verification; an unknown or unserved region is answered as an invalid-argument client error instead."
         }
       ],
       "retry": {
@@ -19756,7 +19756,7 @@
         },
         {
           "error_id": "mcp-exception",
-          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+          "condition": "Caller errors and fail-closed workspace faults are surfaced as McpException messages, as is a peer region that fails identity verification; an unknown or unserved region is answered as an invalid-argument client error instead."
         }
       ],
       "retry": {
@@ -19825,7 +19825,7 @@
         },
         {
           "error_id": "mcp-exception",
-          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+          "condition": "Caller errors and fail-closed workspace faults are surfaced as McpException messages, as is a peer region that fails identity verification; an unknown or unserved region is answered as an invalid-argument client error instead."
         }
       ],
       "retry": {
@@ -19900,7 +19900,7 @@
         },
         {
           "error_id": "mcp-exception",
-          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+          "condition": "Caller errors and fail-closed workspace faults are surfaced as McpException messages, as is a peer region that fails identity verification; an unknown or unserved region is answered as an invalid-argument client error instead."
         }
       ],
       "retry": {
@@ -19979,7 +19979,7 @@
         },
         {
           "error_id": "mcp-exception",
-          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+          "condition": "Caller errors and fail-closed workspace faults are surfaced as McpException messages, as is a peer region that fails identity verification; an unknown or unserved region is answered as an invalid-argument client error instead."
         }
       ],
       "retry": {
@@ -20135,7 +20135,7 @@
         },
         {
           "error_id": "mcp-exception",
-          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+          "condition": "Caller errors and fail-closed workspace faults are surfaced as McpException messages, as is a peer region that fails identity verification; an unknown or unserved region is answered as an invalid-argument client error instead."
         }
       ],
       "retry": {
@@ -20209,7 +20209,7 @@
         },
         {
           "error_id": "mcp-exception",
-          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+          "condition": "Caller errors and fail-closed workspace faults are surfaced as McpException messages, as is a peer region that fails identity verification; an unknown or unserved region is answered as an invalid-argument client error instead."
         }
       ],
       "retry": {
@@ -20295,7 +20295,7 @@
         },
         {
           "error_id": "mcp-exception",
-          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+          "condition": "Caller errors and fail-closed workspace faults are surfaced as McpException messages, as is a peer region that fails identity verification; an unknown or unserved region is answered as an invalid-argument client error instead."
         }
       ],
       "retry": {
@@ -20369,7 +20369,7 @@
         },
         {
           "error_id": "mcp-exception",
-          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+          "condition": "Caller errors and fail-closed workspace faults are surfaced as McpException messages, as is a peer region that fails identity verification; an unknown or unserved region is answered as an invalid-argument client error instead."
         }
       ],
       "retry": {
@@ -20472,7 +20472,7 @@
         },
         {
           "error_id": "mcp-exception",
-          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+          "condition": "Caller errors and fail-closed workspace faults are surfaced as McpException messages, as is a peer region that fails identity verification; an unknown or unserved region is answered as an invalid-argument client error instead."
         }
       ],
       "retry": {
@@ -20554,7 +20554,7 @@
         },
         {
           "error_id": "mcp-exception",
-          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+          "condition": "Caller errors and fail-closed workspace faults are surfaced as McpException messages, as is a peer region that fails identity verification; an unknown or unserved region is answered as an invalid-argument client error instead."
         }
       ],
       "retry": {
@@ -20617,7 +20617,7 @@
         },
         {
           "error_id": "mcp-exception",
-          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+          "condition": "Caller errors and fail-closed workspace faults are surfaced as McpException messages, as is a peer region that fails identity verification; an unknown or unserved region is answered as an invalid-argument client error instead."
         }
       ],
       "retry": {
@@ -20732,7 +20732,7 @@
         },
         {
           "error_id": "mcp-exception",
-          "condition": "Caller errors and fail-closed workspace or region faults are surfaced as McpException messages."
+          "condition": "Caller errors and fail-closed workspace faults are surfaced as McpException messages, as is a peer region that fails identity verification; an unknown or unserved region is answered as an invalid-argument client error instead."
         }
       ],
       "retry": {
@@ -20785,7 +20785,7 @@
       "type": "McpException",
       "grpc_status": null,
       "retryable": false,
-      "meaning": "A tool handler rejected a caller error or a fail-closed workspace or region fault with an McpException message.",
+      "meaning": "A tool handler rejected a caller error or a fail-closed workspace fault with an McpException message, or the per-invocation wrapper refused a peer region whose identity verification failed (its endpoint does not reach the region's own cluster).",
       "source": "src/lattice.api.mcp.repocontext/RepoContextToolHandlers.cs#RepoContextToolHandlers"
     },
     {

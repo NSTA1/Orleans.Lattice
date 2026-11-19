@@ -1668,6 +1668,9 @@ internal sealed partial class BPlusLeafGrain
     /// stamp it <b>now</b>. Defaulting to fresh is what lets a fixture that says
     /// nothing about freshness keep proving exactly what it proved before issue
     /// #3306 gave the mean an expiry at all.</param>
+    /// <param name="sinceHolderProgress">Time to backdate the last replay-holder
+    /// progress stamp by, or <see langword="null"/> - the default - to clear it
+    /// (forwarded to <see cref="SeedReplayHolderProgressForTest"/>).</param>
     internal static void SeedReplayPermitWaitStateForTest(
         TimeSpan mean, TimeSpan? sinceLastProgress, TimeSpan? sinceLastSample = null, TimeSpan? sinceHolderProgress = null)
     {
@@ -1841,7 +1844,7 @@ internal sealed partial class BPlusLeafGrain
     /// build. The sites are <see cref="AcquireReplayPermitAsync"/>, the
     /// retained wait in <see cref="WaitRetainedReplayPermitAsync"/> (issue
     /// #6006) and the permit re-take in <c>ResumeReplayPermitAsync</c>, which
-    /// wait, and <see cref="TryAcquireStarvationReplayPermit"/>, which probes.
+    /// wait, and <see cref="TryAcquireStarvationReplayPermit(SemaphoreSlim, StarvationDriveOrigin, out bool)"/>, which probes.
     /// </para>
     /// </remarks>
     private static bool IsReplayPermitFreeWithNoWaiterAhead()
@@ -2222,7 +2225,7 @@ internal sealed partial class BPlusLeafGrain
     /// A single-slot share is the exception. A reservation there would leave the
     /// timer nothing, and the timer is the only remedy for a live leaf the sweep
     /// never reaches, so the two share it, and
-    /// <see cref="TryAcquireStarvationReplayPermit"/> instead makes the timer yield
+    /// <see cref="TryAcquireStarvationReplayPermit(SemaphoreSlim, StarvationDriveOrigin, out bool)"/> instead makes the timer yield
     /// it while a refused sweep drive is outstanding.
     /// </para>
     /// </remarks>
@@ -2263,7 +2266,7 @@ internal sealed partial class BPlusLeafGrain
     /// <remarks>
     /// Read by the WAL GC scheduler to size its concurrent touch fan-out, so a
     /// pass does not launch more sweep drives at once than the non-queueing
-    /// admission in <see cref="TryAcquireStarvationReplayPermit"/> can take. It
+    /// admission in <see cref="TryAcquireStarvationReplayPermit(SemaphoreSlim, StarvationDriveOrigin, out bool)"/> can take. It
     /// is this silo's reading: a leaf activated elsewhere is admitted against
     /// its own silo's share, which follows the same configuration, so the
     /// figure is an estimate there rather than a bound. Zero means no leaf has
@@ -2307,7 +2310,7 @@ internal sealed partial class BPlusLeafGrain
     /// <see cref="LatticeMetrics.SaturationRefusals"/> with source
     /// <see cref="LatticeSaturationSource.ReplayPermitAdmission"/> instead.
     /// The same acquire-in-this-frame contract as
-    /// <see cref="AcquireReplayPermitAsync(CancellationToken)"/> applies to an
+    /// <see cref="AcquireReplayPermitAsync(bool, CancellationToken)"/> applies to an
     /// admitted permit.
     /// </para>
     /// </remarks>
@@ -6847,8 +6850,8 @@ internal sealed partial class BPlusLeafGrain
     /// <b>Why it has to be here.</b> The same figure is already reported by
     /// <c>RecordDeactivationCheckpointDelta</c>, which runs from
     /// <c>OnDeactivateAsync</c>. Orleans does not run that hook when
-    /// <c>OnActivateAsync</c> throws - measured with a positive control on
-    /// Orleans 10.2.2 - and a cancelled replay leaves activation by throwing,
+    /// <c>OnActivateAsync</c> throws - measured with a positive control against
+    /// the Orleans runtime - and a cancelled replay leaves activation by throwing,
     /// so that emission is structurally blind to every activation that failed.
     /// This site is its exact complement, in the same way
     /// <see cref="LatticeMetrics.LeafActivationFailures"/> is the complement of
@@ -7287,6 +7290,11 @@ internal sealed partial class BPlusLeafGrain
     /// periodic snapshot capture.
     /// </para>
     /// </summary>
+    /// <param name="partition">The WAL partition whose recovered checkpoint is flushed.</param>
+    /// <param name="maxScanned">The highest offset this replay has scanned in <paramref name="partition"/>.</param>
+    /// <param name="deferredOffsets">The replay's deferred-offset ledger, whose lowest unresolved offset clamps the ceiling.</param>
+    /// <param name="projection">The leaf projection the checkpoint offset is written through.</param>
+    /// <param name="cancellationToken">Cancels the flush.</param>
     /// <param name="incremental">
     /// Whether this is a catch-up replay's incremental bank - a pass-1 slice or a pass-2
     /// terminal - rather than the apply-failure bank. An incremental bank persists by

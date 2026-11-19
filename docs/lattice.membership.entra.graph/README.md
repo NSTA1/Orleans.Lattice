@@ -10,9 +10,18 @@ Microsoft Graph-backed group-overflow resolver for [Orleans.Lattice.Membership.E
 
 `Orleans.Lattice.Membership.Entra.Graph` provides the Microsoft Graph-backed implementation of the Entra group resolver abstraction defined in `Orleans.Lattice.Membership.Entra`. It is a separate, opt-in package so that the Microsoft Graph SDK and the MSAL client library are pulled in only by applications that actually need to resolve overflowed group membership or want the Graph-backed identity directory it also installs. Applications that never overflow their groups claim, or that are satisfied with the token-only fallback, never take this dependency.
 
-## What it does
+## Core properties
 
 When an inbound Entra token's group membership overflows and the authenticator needs the caller's full transitive group set, it delegates to the registered group resolver - provided the Entra authenticator's `GroupResolutionMode` is set to `ResolveOnOverage`; in its default `TokenOnly` mode the authenticator never consults a resolver, so registering this package alone does not change group resolution. The Graph-backed resolver answers that request by calling the caller's transitive member-groups endpoint through Microsoft Graph and returning the resolved group ids. It is consulted only on the overflow path, so an application whose tokens carry their groups inline makes no Graph call. Unlike the identity-directory search/resolve path (below), the overflow resolver does **not** degrade: a token-acquisition or Graph-call failure on this path propagates through authentication rather than resolving to an empty group set, so a caller whose overflow lookup fails is not silently authorized with no groups.
+
+## Features
+
+| Feature | Public surface | Details |
+|---|---|---|
+| Microsoft Graph groups-overage resolver | `LatticeEntraGraphServiceCollectionExtensions.AddEntraGraphGroupResolver`, `LatticeEntraGraphOptions` (`SecurityEnabledOnly`) | [Architecture - Overage resolution](architecture.md#overage-resolution) |
+| Transparent app-only token management | `LatticeEntraGraphOptions` (`TenantId`, `ClientId`, `ClientSecret`, `TokenRefreshSkew`) | [Transparent app-token management](#transparent-app-token-management) |
+| Secret-less (token credential) authentication | `LatticeEntraGraphOptions` (`Credential`) | [Secret-less (managed-identity) authentication](#secret-less-managed-identity-authentication) |
+| Graph-backed identity directory | `EntraGraphIdentityDirectory`, `EntraDirectorySubjectIdSource` | [Identity directory](#identity-directory) |
 
 ## Transparent app-token management
 

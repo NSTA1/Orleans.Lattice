@@ -288,7 +288,8 @@ Boolean action/stutter observations, with one common stutter bit and a genuine
 drop-second-clause negative in both checking modes. A separate 23-control run
 passes all 23. These are separate retained artifacts, not a fabricated green 52.
 Historical A15/OOM results and rejected evaluator-error negatives remain history,
-not acceptance at the current 657769 model hash.
+not acceptance at the 657769 model hash or at the current `5FACE20F` one (see the
+[mutation catalogue](replay-permits-mutations/README.md)).
 
 ## Replication shipping
 

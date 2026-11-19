@@ -19,7 +19,7 @@ interactive non-web hosts. A remote Blazor Server circuit has no ambient
 `HttpContext`, so this package explicitly passes the circuit's `ClaimsPrincipal`
 to Microsoft.Identity.Web when it acquires tokens.
 
-## Behaviour
+## Core properties
 
 - The provider registers a scoped `IExplorerAuthMethod` for `entra` and a scoped
   token-acquirer seam. Each browser circuit uses its own user and token source.
@@ -38,6 +38,19 @@ to Microsoft.Identity.Web when it acquires tokens.
   credential.
 - `ReauthChallengePath` publishes the forced-interactive challenge path used by
   the `Your session expired` interstitial.
+
+## Features
+
+| Feature | Public surface | Reference |
+|---|---|---|
+| Hosted-web OpenID Connect registration | `ExplorerEntraWebServiceCollectionExtensions.AddLatticeExplorerEntraWebAuth`, `ExplorerEntraWebOptions` | [API reference](api.md#explorerentrawebservicecollectionextensions) |
+| `entra` sign-in method over the browser session | `EntraWebExplorerAuthMethod` | [API reference](api.md#entrawebexplorerauthmethod) |
+| Downstream State API token seam | `IExplorerWebTokenAcquirer`, `ExplorerWebToken` | [API reference](api.md#iexplorerwebtokenacquirer) |
+| Re-authentication signal | `ExplorerWebReauthRequiredException` | [Renewal and revocation](architecture.md#renewal-and-revocation) |
+| Forced re-authentication and federated sign-out endpoints | `ExplorerEntraWebEndpointRouteBuilderExtensions` | [API reference](api.md#explorerentrawebendpointroutebuilderextensions) |
+| Advertised audience admission | `ExplorerEntraWebOptions.AllowedAudiences` | [Scope resolution](architecture.md#scope-resolution) |
+| Automatic State API sign-in | `ExplorerEntraWebOptions.AutoSignIn` | [Auto-sign-in circuit handler](architecture.md#auto-sign-in-circuit-handler) |
+| In-memory or distributed token cache | `ExplorerWebTokenCacheKind`, `ExplorerEntraWebOptions.TokenCache` | [Configuration](configuration.md#explorerwebtokencachekind) |
 
 ## Setup
 

@@ -42,9 +42,12 @@ inside the cluster. It addresses the internal shard grains directly rather than
 going through the `ILattice` facade, which has two consequences worth knowing
 before you pick it:
 
-- It performs no order validation. Out-of-order input is accepted and produces a
-  tree whose entries are not in key order, and no exception is raised at load
-  time to tell you so.
+- It performs no order validation, and no exception is raised at load time for
+  out-of-order input. Entries that sort at or below rows a shard already holds
+  are merged into the leaves that own them rather than grafted (see
+  [Rows the append meets](bulk-loading.md#rows-the-append-meets)), but disorder
+  within one shard's flushed chunk is appended exactly as given and can leave a
+  tree whose entries are not in key order.
 - On a cluster that registered the authorization layer, a direct call to an
   internal shard grain arriving from an external Orleans client is refused with
   `LatticeAuthorizationDeniedException`. Run the streaming loader inside the
@@ -188,8 +191,11 @@ or case-insensitive mode, and two consequences follow directly:
   `StringComparer.Ordinal` or `string.CompareOrdinal`.
 
 The append-based paths graft each chunk onto the right edge of the routed shards,
-which is why they require ascending input rather than merely sorted-per-chunk
-input. The streaming extension resolves routing once at the start of the load;
+which is why they want ascending input rather than merely sorted-per-chunk
+input: a chunk whose entries sort at or below rows a shard already holds is not
+refused, but those entries are merged into the leaves that own them instead of
+taking the cheap right-edge graft. The streaming extension resolves routing once
+at the start of the load;
 the tree-administration chunk path force-refreshes routing on each chunk call.
 The tree-administration facade validates chunk order and throws
 `BulkLoadOrderException`, carrying the tree id, the chunk index, the offending
@@ -208,9 +214,16 @@ Each shard records the identifier of the last bulk operation it completed, and
 re-driving that same operation short-circuits. The facade derives a deterministic
 per-shard identifier from the one you supply, so replaying a chunk under the same
 operation id and chunk index replays the same per-shard identifiers and is
-absorbed. A shard remembers only its most recent completed operation, so resume
-from the last unacknowledged chunk and never replay a chunk that a later one has
-already superseded.
+absorbed. A shard remembers only its most recent completed operation, but a
+replayed chunk that a later one has already superseded is absorbed as well: when
+the shard already holds every one of the chunk's entries at or below its highest
+live key with the identical value (live, no expiry, the same bytes), it treats the
+chunk as a re-delivery and skips them. A replay that changes any of those values is
+not a re-delivery; it is merged last-writer-wins, so resume from the last
+unacknowledged chunk and re-send the bytes you originally sent. The session holds
+no server-side state, so a restart skips `BeginBulkLoadAsync` - whose emptiness
+probe would now refuse the partly loaded tree - and goes straight back to
+`AppendBulkLoadAsync`.
 
 A graft persists its intent before it completes, so a shard that crashes
 mid-graft finds the recorded intent and completes it before it serves its next
@@ -757,7 +770,9 @@ foreach (var shard in report.Shards)
 The report is cached per mode for `LatticeOptions.DiagnosticsCacheTtl` (five
 seconds by default), so a diagnose issued immediately after the last chunk can
 return a pre-load snapshot. That caching is exactly why `CommitBulkLoadAsync`
-counts rather than diagnoses. Wait out the cache window, or count. See
+counts rather than diagnoses; it also drops the tree's cached reports, so a
+diagnose issued after the commit samples the shards afresh. On the other ingest
+paths, wait out the cache window, or count. See
 [Diagnostics](diagnostics.md) for the rest of the report.
 
 ### Then apply the delta and cut over

@@ -40,7 +40,10 @@ public enum LatticeDashboardKind
     /// dead-letter queue
     /// churn, apply FIFO violations, causal-wait histograms,
     /// fall-off-log events, and per-peer cursor lag. Sources the
-    /// <c>orleans.lattice.replication</c> meter and core WAL series from
+    /// <c>orleans.lattice.replication</c> meter, plus core WAL, WAL-compaction
+    /// and WAL GC series and the coordinated-restore copy-receive series
+    /// (<c>orleans.lattice.restore.copy_receive_closed_age</c>,
+    /// <c>orleans.lattice.restore.copy_receive_fenced</c>) from
     /// <c>orleans.lattice</c>; the replication-specific panels are useful only
     /// when the replication package is registered on the silo.
     /// </summary>

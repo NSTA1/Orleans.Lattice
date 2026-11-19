@@ -9,19 +9,19 @@ Existence checks and batched reads (`ExistsAsync`, `GetManyAsync`), and any poin
 ```mermaid
 flowchart LR
     subgraph SiloA["Silo A"]
-        CA[LeafCacheGrain<br/>activation 1]
+        CA[Leaf cache<br/>activation 1]
     end
     subgraph SiloB["Silo B"]
-        CB[LeafCacheGrain<br/>activation 2]
+        CB[Leaf cache<br/>activation 2]
     end
     subgraph Primary["Primary Silo"]
-        L[BPlusLeafGrain]
+        L[Primary leaf]
     end
 
-    CA -->|"GetDeltaSinceCursorAsync(c₁)"| L
-    CB -->|"GetDeltaSinceCursorAsync(c₂)"| L
-    L -.->|"StateDelta"| CA
-    L -.->|"StateDelta"| CB
+    CA -->|"refresh since cursor c₁"| L
+    CB -->|"refresh since cursor c₂"| L
+    L -.->|"delta"| CA
+    L -.->|"delta"| CB
 ```
 
 - **Cursor-based delta refresh**: Every read first refreshes the cache from
@@ -51,16 +51,16 @@ flowchart LR
   path remains the sole projection source-of-truth and the cursor
   adds zero per-write durable I/O.
 - **Freshness bound**: Cached reads are bounded by `CacheTtl + one delta round-trip`. See [Consistency](consistency.md#read-cache-staleness) for the full per-operation contract.
-- **Why keep a local cache at all?**: The cursor comparison fast-path makes the delta call cheap when nothing has changed, but the local `Dictionary<string, LwwValue<byte[]>>` avoids deserialising the full entry set on every read. When the primary returns a non-empty delta, only the changed entries are merged - the rest are already in memory.
-- **Split-aware pruning**: When a `StateDelta` contains a non-null `SplitKey`, the cache removes all entries with keys ≥ `SplitKey` from its local dictionary. These entries now belong to a different leaf grain and would otherwise become stale ghosts in the cache.
+- **Why keep a local cache at all?**: The cursor comparison fast-path makes the delta call cheap when nothing has changed, but the local dictionary of last-writer-wins entries avoids deserialising the full entry set on every read. When the primary returns a non-empty delta, only the changed entries are merged - the rest are already in memory.
+- **Split-aware pruning**: When a delta reports that the primary leaf has split, the cache removes all entries with keys ≥ the split key from its local dictionary. These entries now belong to a different leaf and would otherwise become stale ghosts in the cache.
 - **Migrated-entry delegation and moved-away pruning**: An entry
-  arriving from a cross-shard migration is stamped `IsMigrated = true`
+  arriving from a cross-shard migration is flagged as migrated
   on the destination leaf until a higher-HLC non-migrated write
   supersedes it. The cache delegates reads for any cached row
-  carrying `IsMigrated = true` back to the primary leaf so the
+  carrying that flag back to the primary leaf so the
   leaf-side shadow guard (which protects an in-flight cross-shard
   migration window) is never bypassed by the cache fast path. When a
-  delta carries the cumulative `MovedAwaySlots` set, the cache drops
+  delta carries the cumulative moved-away slot set, the cache drops
   every cached entry whose key hashes into one of those virtual
   slots so it stops serving the source's pre-migration snapshot once
   the destination has taken authoritative ownership.
@@ -103,12 +103,12 @@ coexist with the correctness contracts above:
   re-deliver until the next write - a silent false miss. That is why only the
   payload is dropped.)
 - **Pending-key, moved-away, migrated-entry**: the retained timestamp, tombstone
-  bit, `IsMigrated` flag, and expiry keep every delegation and pruning decision
+  bit, migrated flag, and expiry keep every delegation and pruning decision
   intact.
 
-Because `LwwValue.Create` never stores a `null` value and empty values are
-non-null `byte[0]`, the shape `Value == null && !IsTombstone` is an unambiguous
-**payload-evicted sentinel**. A value read (`GetAsync` / `GetManyAsync`) that
+Because a stored live entry always carries a value - an empty value is a
+zero-length `byte[]`, never `null` - a live (non-tombstone) row with no value is
+an unambiguous **payload-evicted sentinel**. A value read (`GetAsync` / `GetManyAsync`) that
 lands on the sentinel delegates to the primary leaf for the authoritative bytes -
 reusing the same delegation path as pending and migrated keys. A single-key
 `GetAsync` that delegates for this reason is recorded as a cache miss; a
@@ -129,17 +129,17 @@ This means cache invalidation after a resize is **free** - no explicit cache flu
 
 ```
 Before resize:
-  LatticeGrain("my-tree") → ShardRootGrain("my-tree/0") → LeafCacheGrain("leaf-abc")
+  tree router "my-tree" → shard root "my-tree/0" → leaf cache for "leaf-abc"
 
 After resize + alias swap:
-  LatticeGrain("my-tree") → resolves alias → ShardRootGrain("my-tree/resized/op1/0") → LeafCacheGrain("leaf-xyz")
+  tree router "my-tree" → resolves alias → shard root "my-tree/resized/op1/0" → leaf cache for "leaf-xyz"
 ```
 
 The old cache for `leaf-abc` is never called again and is garbage-collected by Orleans when it deactivates due to inactivity. The new cache for `leaf-xyz` starts fresh, fetching a full delta from the new primary leaf on its first read.
 
 ### Stale tree-router activations
 
-The tree router is a `[StatelessWorker]` that resolves the alias once per activation and caches the result. After an alias swap, existing activations still hold a cached alias pointing to the old physical tree. The resize moves the old tree's shards into its rejecting phase immediately before the swap - so a stale activation can never read the old tree after the new one has taken a write - and the phase stays in force after the old tree is soft-deleted; they refuse every request with an internal stale tree-routing signal. The activation then discards its cached alias and shard map, re-resolves the alias from the registry, and retries the operation within the same call, for up to a 60-second wall-clock budget. A cached alias that instead points at a physical tree deleted without a rejecting phase - the discarded copy after an `UndoResizeAsync` - makes the shard throw `InvalidOperationException`, which the activation handles the same way, once (a Lattice domain exception such as `LatticeSaturatedException` propagates instead of being absorbed). Either way the caller sees a brief retry delay, not a failure.
+The tree router is a `[StatelessWorker]` that resolves the alias once per activation and caches the result. After an alias swap, existing activations still hold a cached alias pointing to the old physical tree. The resize moves the old tree's shards into its rejecting phase immediately before the swap - so a stale activation can never read the old tree after the new one has taken a write - and the phase stays in force after the old tree is soft-deleted; they refuse every request with an internal stale tree-routing signal. The activation then discards its cached alias and shard map, re-resolves the alias from the registry, and retries the operation within the same call, within the stale-routing retry budget (60 seconds for a write; for a read, five sixths of the silo's response timeout, capped at 60 seconds). A cached alias that instead points at a physical tree deleted without a rejecting phase - the discarded copy after an `UndoResizeAsync` - makes the shard throw `InvalidOperationException`, which the activation handles the same way, once (a Lattice domain exception such as `LatticeSaturatedException` propagates instead of being absorbed). Either way the caller sees a brief retry delay, not a failure.
 
 ## Read performance
 

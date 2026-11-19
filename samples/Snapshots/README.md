@@ -7,8 +7,8 @@ snapshot as a point-in-time copy - which is useful for backups, read-only
 analytics forks, or cloning a dataset for experimentation. The copy carries only
 live entries (never tombstoned or expired ones) and follows the tree's shard
 map, so it covers every physical shard the map routes to, including one an
-adaptive split added; an online snapshot does not mirror typed CRDT deltas or
-bulk appends (see
+adaptive split added; an online snapshot mirrors typed CRDT deltas and bulk
+appends too (see
 [Snapshots](../../docs/lattice/snapshots.md)). This
 sample uses `SnapshotMode.Offline`: every source
 shard is locked when the copy starts and each is unlocked again once its own
@@ -22,11 +22,12 @@ mutations mirrored to the destination. Offline trades source availability (a
 shard stays locked until its own copy completes) for the simplest consistency
 story; online keeps the source hot.
 
-> **Runtime note:** `SnapshotAsync` runs a crash-safe coordinator that advances
-> one shard step per two-second timer tick, and an offline copy spends two ticks
-> on each shard (copy it, then unlock it). A tree defaults to 64 physical shards,
-> so this sample takes a few minutes to complete even though it only holds 12
-> keys - snapshot cost scales with **shard count, not key count**.
+> **Runtime note:** `SnapshotAsync` runs a crash-safe coordinator driven by a
+> two-second grain timer; each tick takes as many steps as fit in a bounded slice
+> (`LatticeOptions.BackgroundDrainMaxDuration`, capped at five seconds), and an
+> offline copy takes two steps on each shard (copy it, then unlock it). A tree
+> defaults to 64 physical shards, so even this 12-key copy walks 64 shards -
+> snapshot cost scales with **shard count** as well as key count.
 
 ## Run it
 
@@ -36,8 +37,8 @@ dotnet run --project samples/Snapshots
 
 ## Expected output
 
-The progress dots appear once per second while the copy runs; the total time
-depends on your machine (about 4-5 minutes for the default 64-shard tree).
+A progress dot appears once per second while the copy runs; the number of dots
+and the total time depend on your machine (the figure shown is illustrative).
 
 ```
 Silo starting... ready.
@@ -45,7 +46,7 @@ Silo starting... ready.
 Seeding source tree 'orders' with 12 keys...
   source count = 12
 
-Offline snapshot: orders -> orders-backup ....[ ~4 minutes of progress dots ].... done in 259s.
+Offline snapshot: orders -> orders-backup ... done in 3s.
 
 Verifying the snapshot:
   backup live-key count = 12 (expected 12)

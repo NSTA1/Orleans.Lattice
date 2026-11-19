@@ -10,7 +10,7 @@ Every replicated mutation in `Orleans.Lattice.Replication` is committed to the t
 
 ## Topology
 
-A WAL grain is keyed by `{treeId}/{partition}` and persists an append-only list of sequenced WAL-entry records. Each entry has a dense, monotonically increasing `Sequence` (starts at 0 and increments by one per append) and the captured `WalRecord`.
+A WAL partition grain is keyed by `{treeId}/{partition}` and appends sequenced WAL-entry records, each pairing the captured `WalRecord` with a per-partition sequence number, through the configured `IWalStorageProvider`. Sequence numbers start at 0 and rise by one per append, but they are not guaranteed dense: a flush abandoned at its deadline that never lands leaves a hole (see [`../lattice/wal.md`](../lattice/wal.md#abandoned-flushes-holes-and-the-trim-watermark)).
 
 Routing of a mutation to a partition is deterministic and process-independent: a stable FNV-1a 32-bit hash of the entry's key, modulo the tree's WAL partition count (saga terminal marks route by shard index modulo the same count instead). A `null` key hashes as the empty string. That count is pinned in the tree's registry entry when the tree is first registered, from its `LatticeOptions.WalPartitions` (default `8`), and is not changed afterwards. The shipper reads a separate setting, `LatticeReplicationOptions.ReplogPartitions` (default `8`), so the two agree only by configuration - see [Configuration](#configuration) below.
 
@@ -60,7 +60,7 @@ siloBuilder.AddLatticeReplication(opts =>
 
 ## Producer-side filters
 
-These options on `LatticeReplicationOptions` decide whether a committed mutation is replicated to peers. The leaf commit-log writer appends every commit to the tree's WAL regardless; these filters gate the commit-time replication nudge and are re-applied by the shipper as it tails the WAL, so a mutation that fails a filter stays in the local WAL but is never shipped (snapshot exports and the opt-in anti-entropy repair paths do not apply these filters):
+These options on `LatticeReplicationOptions` decide whether a committed mutation is replicated to peers. The leaf commit-log writer appends every commit to the tree's WAL regardless; these filters gate the commit-time replication nudge, and `KeyFilter` and `KeyPrefixes` are re-applied by the shipper as it tails the WAL, so a mutation that fails a key filter stays in the local WAL but is never shipped (snapshot exports and the opt-in anti-entropy repair paths do not apply these filters). The shipper does not re-check tree membership: `ReplicatedTrees` decides which trees get a shipper at all, and a tree dropped from the replicated set after its shipper was enrolled keeps shipping (see [Replication drivers](replication-drivers.md#activation)):
 
 | Option | Default | Semantics |
 |---|---|---|
@@ -86,7 +86,7 @@ The maintenance gate runs **before** mode resolution and per-key filters: a main
 
 WAL-append failures propagate. The leaf commit-log writer's append runs inside the originating grain's foreground commit path, so a storage-provider failure surfaces as the same exception the calling `ILattice.SetAsync` / `DeleteAsync` / `DeleteRangeAsync` observes. Because the WAL is the single source of truth for replication, this guarantees that every committed mutation is durably captured for replication before the write reports success.
 
-The commit-time replication nudge is, by contrast, best-effort. The commit-time doorbell sink does not append to the WAL and holds no producer-side vector clock state; it rings each peer shipper's doorbell fire-and-forget. A doorbell ring that fails (silo loss, transient fault, missing activation) is logged at `Trace` and swallowed, so the commit path never fails on a nudge failure - a missed doorbell only delays the affected peer by one shipper timer tick.
+The commit-time replication nudge is, by contrast, best-effort. The commit-time doorbell sink does not append to the WAL and holds no producer-side vector clock state; it rings each peer shipper's doorbell fire-and-forget. A doorbell ring that fails (silo loss, transient fault, missing activation) is logged at `Trace` and swallowed, so the commit path never fails on a nudge failure. A missed ring costs an active shipper nothing, because its phase timer drains regardless; a shipper that had been deactivated waits for the next ring, grain call, or keepalive reminder to reactivate it.
 
 There is intentionally no opt-in "best-effort" mode that would catch the WAL-append exception and let the primary write report success while silently dropping the log record. Silent log drops are exactly the hazard commit-time capture exists to remove; a host that wants different semantics for a specific tree should compose its own `IMutationObserver` rather than configure correctness away.
 
@@ -124,9 +124,9 @@ siloBuilder.AddLatticeReplication(opts =>
 });
 ```
 
-When `LatticeReplicationOptions.WalStorageProvider` is `null` (the default), nothing is mirrored: a partition on the default WAL placement uses the core `LatticeOptions.WalStorageProvider` resolver when the host set one directly, and otherwise the DI-registered `IWalStorageProvider` singleton; a partition whose placement is pinned to a named catalog provider uses that provider instead. `AddLattice` installs `InMemoryWalStorageProvider` as that fallback (a first-wins registration); replace it with `AddWalStorage(factory)` or a storage package such as `AddAzureTableWalStorage`, which replace the baseline whether they are called before or after `AddLattice`.
+When `LatticeReplicationOptions.WalStorageProvider` is set, it is mirrored onto the same tree's core `LatticeOptions.WalStorageProvider` unless the host already set that directly. When it is `null` (the default), nothing is mirrored: a partition on the default WAL placement uses the core `LatticeOptions.WalStorageProvider` resolver when the host set one directly, and otherwise the DI-registered `IWalStorageProvider` singleton; a partition whose placement is pinned to a named catalog provider uses that provider instead. `AddLattice` installs `InMemoryWalStorageProvider` as that fallback (a first-wins registration); replace it with `AddWalStorage(factory)` or a storage package such as `AddAzureTableWalStorage`, which replace the baseline whether they are called before or after `AddLattice`.
 
-The exchanged `WalEntry` carries the dense per-partition `Offset` and the captured `LatticeMutation`. When the WAL is read back, the authored merge mode comes from the durable record itself (the record persists it since wire id 26), falling back to `ILatticeMergeModeResolver` only when it holds the default `LwwRegister` (a plain LWW write or a legacy record); `DependencySummary` is rebuilt from the mutation's `VectorClock`. The on-disk WAL therefore stays storage-pluggable for both single-cluster and multi-cluster hosts.
+The exchanged `WalEntry` carries the per-partition `Offset` and the captured `LatticeMutation`. When the WAL is read back, the authored merge mode comes from the durable record itself (the record persists it since wire id 26), falling back to `ILatticeMergeModeResolver` only when it holds the default `LwwRegister` (a plain LWW write or a legacy record); `DependencySummary` is rebuilt from the mutation's `VectorClock`. The on-disk WAL therefore stays storage-pluggable for both single-cluster and multi-cluster hosts.
 
 ## Testing
 

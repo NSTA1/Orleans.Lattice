@@ -49,14 +49,14 @@ Behavior:
 
 - **Absolute UTC expiry, resolved server-side**, exactly as for `SetAsync`: the handling silo computes `DateTimeOffset.UtcNow.Add(ttl).UtcTicks` and stores it on the entry. Validation is identical: every accessor's TTL overload throws `ArgumentOutOfRangeException` for a zero or negative `ttl` before it reads or writes anything (so a lapsed remaining life is rejected, never written as a durable entry), and the `ILattice` seam throws the same for one large enough to overflow.
 - **Expiry converges by a max-absolute-ticks join, not last-writer-wins.** When two TTL'd CRDT writes to the same key are merged, the resolved expiry is `Math.Max(existingExpiry, incomingExpiry)`, with `0` (durable) as the semilattice bottom. This join is commutative, associative, and idempotent, so every replica converges on the same expiry regardless of the order in which it observes the writes, and a later or concurrent TTL'd write extends (never shortens) the entry's life - refresh-extends-life.
-- **Why this differs from the LWW-TTL path.** An `LwwValue` resolves its whole value - expiry included - by the single last-writer-by-HLC. A CRDT has no single winning write: both deltas fold into the converged state, so the expiry needs its own independent commutative join, applied regardless of which write wins the row-level HLC merge.
+- **Why this differs from the LWW-TTL path.** A last-writer-wins row resolves its whole value - expiry included - by the single last-writer-by-HLC. A CRDT has no single winning write: both deltas fold into the converged state, so the expiry needs its own independent commutative join, applied regardless of which write wins the row-level HLC merge.
 - **A durable (no-TTL) CRDT write leaves any existing expiry unchanged.** Writing without a TTL contributes `0` (the bottom element), which the max-join ignores, so it neither introduces nor clears an expiry. Clearing a TTL'd entry back to durable is out of scope for this version.
 
 ### Replication and cold rebuild
 
 The resolved absolute expiry ships on the wire with each replicated CRDT delta (`WalRecord.ExpiresAtTicks`) and is applied verbatim by the receiver - the absolute tick is never re-resolved from a relative TTL on receive, so inter-cluster clock skew cannot shift a replicated entry's lifetime. The batched receive path threads the same per-entry absolute expiry into each coalesced dispatch item. On a cold projection rebuild, each WAL record carries the cumulative-max expiry and replay re-applies the same `max(priorExpiry, recordExpiry)` join, so the rebuilt entry's expiry is reconstructed independently of HLC replay order.
 
-Read filtering, scans, counts, cursors, caching, and tombstone compaction treat a TTL'd CRDT entry exactly like a TTL'd `SetAsync` entry - the expiry lives on the stored row (`LwwValue.ExpiresAtTicks`), not on the value shape, so all the [read-path](#read-paths) and [tombstone-compaction](#tombstone-compaction) rules below apply unchanged.
+Read filtering, scans, counts, cursors, caching, and tombstone compaction treat a TTL'd CRDT entry exactly like a TTL'd `SetAsync` entry - the expiry lives on the stored row (its absolute expiry ticks), not on the value shape, so all the [read-path](#read-paths) and [tombstone-compaction](#tombstone-compaction) rules below apply unchanged.
 
 ## Internal representation
 
@@ -102,7 +102,7 @@ The effective "now" is captured once per leaf call, so every key a single leaf e
 
 ## Read cache
 
-The leaf lookup cache (the per-silo `[StatelessWorker]` cache described in [Read Caching](caching.md)) stores the raw `LwwValue<byte[]>` including `ExpiresAtTicks`. On a cache hit it applies `IsExpired(nowUtcTicks)` before returning, so expired entries are never served from cache even if the primary leaf has not yet had them compacted.
+The leaf lookup cache (the per-silo `[StatelessWorker]` cache described in [Read Caching](caching.md)) stores each entry's full stored row, absolute expiry included. On a cache hit it applies the same expiry predicate against the current UTC time before returning, so expired entries are never served from cache even if the primary leaf has not yet had them compacted.
 
 ## Atomic writes
 
@@ -116,8 +116,8 @@ An abort never rewrites a pre-saga entry or its TTL, because it issues no rollba
 
 Online shard splits must carry TTL metadata across two distinct code paths:
 
-- **Shadow-forward writes** during the shadow phase read the source leaf's raw `LwwValue` via `GetRawEntryAsync` (not the filtered `VersionedValue`) so the shadow receives the full record including `ExpiresAtTicks`.
-- **Drain** uses `MergeManyAsync(batch)`, which carries the complete `LwwValue` for each entry. Expiry is preserved verbatim on the target shard.
+- **Shadow-forward writes** during the shadow phase read the source leaf's raw stored row (not the filtered `VersionedValue`) so the shadow receives the full record, absolute expiry included.
+- **Drain** merges batches of complete stored rows into the target shard. Expiry is preserved verbatim on the target shard.
 
 See [Shard Splitting](shard-splitting.md) for the full split lifecycle.
 
@@ -131,7 +131,7 @@ A snapshot copies the live entries of each source shard - `0` to `ShardCount - 1
 
 ## Merge (`MergeAsync`)
 
-Merging one tree into another flows entries through `GetDeltaSinceAsync` + `MergeManyAsync`. Conflict resolution is LWW by HLC timestamp; the winning `LwwValue` carries its `ExpiresAtTicks` unchanged. If the winner was written without a TTL, the target entry ends up with no expiry - even if the loser had one.
+Merging one tree into another reads each source leaf's entries as full stored rows and merges them into the target's shards. Conflict resolution is LWW by HLC timestamp; the winning row carries its absolute expiry unchanged. If the winner was written without a TTL, the target entry ends up with no expiry - even if the loser had one.
 
 ## Tombstone compaction
 

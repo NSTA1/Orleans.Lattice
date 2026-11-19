@@ -15,6 +15,8 @@ The state API is a read-only surface, but read-only is not the same as public. T
 
 `AddLatticeStateApiGrpc` registers `DenyAllStateApiAuthorizer` via `TryAddSingleton`, so a custom authorizer registered before or after it wins.
 
+Before the authorizer runs, the interceptor fails a call that presents a credential the cluster recognises and refuses - for example a wrong password - with `Unauthenticated`, whether or not `RequireAuthorization` is set, so a client can tell a bad credential from a missing grant. The check runs only when the host has a membership context registered to judge the credential; a call with no credential, an accepted credential, or one no registered authenticator recognises passes through to the authorizer unchanged.
+
 The seam describes mapped calls with a `LatticeStateApiAuthorizationContext` carrying the underlying `ServerCallContext` (`Call`), the `LatticeStateApiOperation` - one member per protected RPC, from `ListTrees` to `ListDeadLetters` - and the `TargetTreeId` the call acts on, so a policy can scope by operation and by tree. `TargetTreeId` is the request's `TreeId` for the per-tree reads, `CancelScan`, the change feed, and the dead-letter RPCs; a catalog request's `SourceTreeId`; the one tree a metrics request names when it names exactly one; and `null` otherwise (`GetClusterInfo`, `ScanTagMembers`, and a multi-tree or unscoped metrics request). A method the interceptor does not map uses `LatticeStateApiOperation.Unknown` rather than a benign default, so a deny-by-default policy refuses anything unmapped instead of letting it pass as a catalog read.
 
 The index-wide tag-browsing operations (`ListCoveredTrees`, `ListIndexTags`, `ScanTagMembers`) span every tree a tag index covers, so they carry no meaningful target tree: `ScanTagMembers` always presents a `null` `TargetTreeId`, while `ListCoveredTrees` and `ListIndexTags` present only the request's `SourceTreeId`, which both of them ignore - `null` in normal use, but caller-controlled. The transport authorizer must scope these calls by operation rather than trusting that target field. Independently, the facade filters covered trees and member rows through the active tenant's enumeration policy, even when auth-backed read visibility is disabled or no auth add-on is registered. An index-wide tag union is empty if any covered tree is outside that tenant-visible set.
@@ -52,7 +54,7 @@ Change subscriptions re-resolve the caller and read grant after each WAL page re
 
 ## Default-deny posture
 
-With `AddLatticeStateApiGrpc` and nothing else, `LatticeStateApiGrpcOptions.RequireAuthorization` is at its default and the default-deny authorizer is in place, so the endpoint rejects all traffic. You open it deliberately:
+With `AddLatticeStateApiGrpc` and nothing else, `LatticeStateApiGrpcOptions.RequireAuthorization` is at its default and the default-deny authorizer is in place, so the endpoint rejects all protected traffic (only the `GetAuthScheme` advertisement still answers). You open it deliberately:
 
 Register a real authorizer that validates the caller (a token, a client certificate, a claim):
 

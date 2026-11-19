@@ -74,7 +74,11 @@ Given a batch `[(k0, v0), (k1, v1), ..., (kN-1, vN-1)]`, a successful
    because it can only shrink the tree. Delete keys are not length-checked up
    front: a delete key longer than `MaxKeyLength` is refused only when the
    saga writes the batch, so the saga aborts and the call throws
-   `InvalidOperationException`.
+   `InvalidOperationException`. A registered `ILatticeWriteInterceptor`
+   (schema enforcement and schema versioning) also runs over the upserts up
+   front: a transformed value is the one staged, and a value it rejects or
+   dead-letters fails the whole call with `LatticeWriteRejectedException`
+   before the saga starts. Deletes are not intercepted.
 5. **Idempotent client retry.** A re-invocation of the same saga grain (same
    `treeId` + `operationId`) after successful completion returns success
    without re-executing. A re-invocation after a compensated-failure replays
@@ -99,8 +103,8 @@ Given a batch `[(k0, v0), (k1, v1), ..., (kN-1, vN-1)]`, a successful
   calls touching overlapping keys are resolved pairwise by LWW - the later
   HLC tick wins per key. There is no global transaction order.
 - **Abort durability in every failure mode.** If recording the abort
-  decision or broadcasting the abort terminals fails, the saga stays in
-  `Compensate` and the keepalive reminder keeps re-driving it until it
+  decision or broadcasting the abort terminals fails, the saga stays in its
+  compensate phase and the keepalive reminder keeps re-driving it until it
   completes; operators can inspect the failure message the saga records in
   its persisted state. This is rare in practice and limited to
   total-storage-outage scenarios.
@@ -629,19 +633,19 @@ release is crash-safe: if the terminal persist fails, the released fields
 are restored verbatim so the same activation can retry and a reactivation
 re-reads the intact pre-terminal record from disk.
 
-`ForgetAsync` does **not** evict the decision record immediately - it
+Forgetting the decision does **not** evict the decision record immediately - it
 stamps a tombstone in the saga's decision registry shard with a forgotten-at
 timestamp and retains the committed/aborted verdict for
 `LatticeOptions.TxDecisionRetention` (default 60 s). During this window
-`GetStatusAsync` / `GetStatusManyAsync` / `SnapshotAsync` continue to
+the registry's single-txid, multi-txid, and snapshot status reads continue to
 surface the saga's outcome, so any process that races the saga's
 terminal fan-out and installs a *new* pending bucket on the saga's txid
 can still resolve the verdict and apply the terminal directly. The
 primary race this guards is the retroactive shadow-forward sweep at
 the start of an adaptive shard split: the split coordinator walks the
-source shard's leaves at `BeginShadowWrite` entry, replays every
-in-flight prepared mutation into the destination shard's
-`_pendingTx` buckets, and then runs a post-sweep cleanup pass that
+source shard's leaves when shadow writing begins, replays every
+in-flight prepared mutation into the destination shard's pending-tx
+buckets, and then runs a post-sweep cleanup pass that
 resolves any saga whose terminal already completed via the retained
 verdict. Without the retention window, a saga that completed
 microseconds before the sweep installed its pending bucket on the
@@ -665,7 +669,7 @@ two cases apart
 ([#4632](https://github.com/NSTA1/Orleans.Lattice/issues/4632)). The saga
 holds the row in its tree's registry from before its first prepare dispatch
 (the execute phase re-asserts it, and a registry fault fails the step) until
-`ForgetAsync`, and a forwarded prepare's participant registration only joins
+it forgets its decision, and a forwarded prepare's participant registration only joins
 an existing row, never recreating it. So a destination leaf refuses a
 forwarded prepare whose saga the registry reports undecided and holds no row
 for, before it writes anything. A prepare applied by replication carries its
@@ -754,8 +758,8 @@ physical copy.
 
 Once a tombstone outlives `TxDecisionRetention`, the registry stops
 *reporting* the verdict but the decision row itself is still stored
-until a purge removes it. `GetStatusAsync` / `GetStatusManyAsync` /
-`SnapshotAsync` report that masked row as `Indeterminate` -
+until a purge removes it. The registry's status reads (single-txid,
+multi-txid, and snapshot) report that masked row as `Indeterminate` -
 "a decision exists and I am no longer entitled to report it" - and
 **not** as `InFlight`. The distinction is exact: a txid the registry
 has genuinely never recorded still reports `InFlight`.
@@ -897,7 +901,8 @@ continued topology/registry-coverage churn are not unconditional progress cases.
 The counts retain their existing retry policy. An Information-level structured
 log names the tree and optimistic attempt count whenever the fallback is entered.
 A fallback read occupies a tree-router stateless-worker activation for up to
-the 30-second gate lease, so `MaxLocalWorkers` headroom matters under sustained
+the 30-second gate lease, so the per-silo cap on those activations (256)
+leaves less headroom under sustained
 fallback traffic.
 
 The streaming `KeysAsync` / `EntriesAsync` scans instead pin the one
@@ -918,8 +923,8 @@ exists to prevent.
 | Crash point | State on reactivation | Recovery path |
 |---|---|---|
 | Before the prepare checkpoint persists | Not started - nothing persisted | Reminder tick unregisters itself and deactivates. Client's pending call returns a transport error; the client retries (the same caller-supplied `operationId` starts the saga afresh; the auto-generated overload mints a new one). |
-| During execute, before the whole batch is staged | Execute phase, staging checkpoint not yet written | Reminder tick resumes the saga, which re-dispatches the whole unwritten remainder (re-staging a write already staged for the transaction is idempotent) and drives to completion. |
-| After the whole batch is staged, before completion persists | Execute phase, every entry staged | Reminder tick re-records the commit decision (a same-outcome repeat is a no-op), re-broadcasts the commit terminals (idempotent at the leaf), then completes. |
+| During execute, before the whole batch is staged | Execute phase, staging checkpoint not yet written | A re-issue of the same `operationId` resumes the saga forwards: it re-dispatches the whole unwritten remainder (re-staging a write already staged for the transaction is idempotent) and drives to completion. A keepalive-driven resume normally runs past the caller's decide-by deadline (the reminder first fires a minute after the saga started), so it instead records an abort, broadcasts the abort terminals, and completes (see [Batches whose caller was answered](#batches-whose-caller-was-answered)). |
+| After the whole batch is staged, before completion persists | Execute phase, every entry staged | If the commit decision was already recorded, the resumed saga re-records it (a same-outcome repeat is a no-op), re-broadcasts the commit terminals (idempotent at the leaf), then completes. If it was not, a keepalive-driven resume rolls the saga back exactly as in the previous row. |
 | During compensate | Compensate phase | Reminder tick re-drives the abort decision and the abort-terminal broadcast (both idempotent), then completes. |
 | Parked as a cross-tree participant | Prepared (paused) | The keepalive tick is a deliberate no-op; the cross-tree coordinator's own reminder re-drives its finalize call, which records this tree's decision, broadcasts the terminals, and completes. |
 | After completion persists | Completed (or precondition-failed) | Reminder tick re-runs the terminal cleanup idempotently - it unregisters itself, arms the retention reminder and, for a completed saga, forgets the registry decision - then deactivates. Completion metrics and the completed event are not re-emitted. |
@@ -1042,9 +1047,9 @@ new map. A physical-copy change uses the existing rebind path; repeated
 routing changes fail before the commit decision rather than committing a
 batch against a stale snapshot. If the budget elapses with a captured WAL
 partition still `Saturated` - or the batched dispatch itself is refused as
-saturated, by the writer-side admission gate or, when one is configured,
-by the batch write's
-[`SetManyFanOutBudget`](configuration.md#setmanyfanoutbudget) or
+saturated, by the writer-side admission gate or by the batch write's
+[`SetManyFanOutBudget`](configuration.md#setmanyfanoutbudget) (finite, 30 s by
+default) or, when one is configured,
 [`SetManyEnvelopeBudget`](configuration.md#setmanyenvelopebudget) - the saga takes a saturation
 fast-path that mirrors the shutdown one: it skips the retry and the
 compensate pivot (either would re-enter the same throttled storage
@@ -1187,7 +1192,7 @@ await tree.SetManyAtomicAsync(entries, operationId, cancellationToken);
 
 An `operationId` is bound to the exact **set of keys** submitted on its
 first call. The saga persists a SHA-256 fingerprint of the sorted key
-set during `Prepare`; a subsequent call reusing the same `operationId`
+set during the prepare phase; a subsequent call reusing the same `operationId`
 with a different key set (added, removed, or renamed keys) throws
 `LatticeIdempotencyKeyMismatchException` (a subclass of
 `InvalidOperationException`). Reordering keys or changing their values
@@ -1395,7 +1400,7 @@ leaf does not bump the source HLC into its local clock, because LWW
 convergence across clusters with skewed wall clocks requires the
 authoring cluster's HLC to remain the comparator. Whenever the
 source HLC is below the destination leaf's already-published
-`Version[ReplicaId]`, an HLC-based delta filter on the read cache
+version-vector entry for its own replica, an HLC-based delta filter on the read cache
 silently drops the entry from the per-key delta and continues
 serving the stale local value indefinitely.
 
@@ -1404,7 +1409,7 @@ a leaf lookup cache's refresh pulls from the primary leaf through an
 internal delivery-cursor delta call rather than the legacy HLC-keyed
 delta. The cursor is an
 activation-scoped `(Epoch, Sequence)` pair: `Sequence` is bumped
-once per `StoreEntry` / `RemoveEntry` on the leaf - regardless of the
+once per entry stored or removed on the leaf - regardless of the
 write's LWW HLC - so the cache pulls every write strictly newer than
 its last delivered sequence even when the underlying HLC has rewound.
 `Epoch` is bumped on every leaf activation, so a cache holding a
@@ -1644,7 +1649,7 @@ decision authority. The flow is:
    coordinator writes **one** decision - commit only if every tree voted
    prepared, otherwise abort - to its own persistent state. This single
    write is the cross-tree linearization point.
-3. **Finalize.** The coordinator fans out a `Finalize` call to every
+3. **Finalize.** The coordinator fans out a finalize call to every
    tree whose saga voted prepared (a tree whose guard missed, or whose
    staging failed and it aborted itself, has already terminated; a tree
    that voted failed with its writes still staged is not finalized
@@ -1654,8 +1659,8 @@ decision authority. The flow is:
 
 Between prepare and the coordinator's decision, every participating
 tree's registry *delegates* the status of its prepared txid to the
-coordinator. A reader dialling a per-tree registry
-(`GetStatusAsync` / `GetStatusManyAsync` / `SnapshotAsync`) for a
+coordinator. A reader dialling a per-tree registry (a single-txid,
+multi-txid, or snapshot status read) for a
 delegated txid resolves it against the coordinator and caches the
 terminal verdict locally. Before the coordinator decides, every
 delegated read returns `InFlight`, so the prepared keys are invisible

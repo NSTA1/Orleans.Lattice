@@ -6,7 +6,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// tree, drives each shard's work-bounded batches, and reduces the per-shard
 /// findings into one report.
 /// <para>
-/// Guarded by <see cref="LatticeGrain.ThrowIfSystemTree"/> so reserved system
+/// Guarded by <see cref="LatticeGrain.ThrowIfSystemTree()"/> so reserved system
 /// trees cannot be repaired through the public surface, and gated like its
 /// siblings in <c>LatticeGrain.ProjectionAdmin</c>: inspection enforces
 /// <see cref="LatticeOperation.Read"/> because it only observes, repair

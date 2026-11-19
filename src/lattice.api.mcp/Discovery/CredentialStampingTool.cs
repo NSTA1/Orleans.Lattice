@@ -38,8 +38,10 @@ namespace Orleans.Lattice.Api.Mcp;
 /// default path unchanged - no region resolution, no ambient scope, no result
 /// annotation - so an existing call is byte-for-byte identical and allocation-free
 /// versus before. When a <c>region</c> is supplied it is validated against the
-/// <see cref="ILatticeApiMcpRegionRouter"/> for this tool's group (an unknown or
-/// unreachable region yields a clean typed fault), the ambient
+/// <see cref="ILatticeApiMcpRegionRouter"/> for this tool's group (an unknown region,
+/// or one that does not serve the group, is answered as a client error result with
+/// reason <c>invalid_argument</c>, and a peer region that fails identity verification
+/// is refused with a thrown error), the ambient
 /// <see cref="LatticeApiMcpRegionScope"/> routes the outbound gRPC call to the
 /// target region under the same forwarded caller credential (so the target
 /// authorizes independently, fail-closed), and the result is annotated with the
@@ -59,8 +61,9 @@ namespace Orleans.Lattice.Api.Mcp;
 /// answered here with the MCP error result the SDK would have built, logged at Debug
 /// without a stack, and counted on <see cref="LatticeApiMcpMetrics.ToolClientErrors"/>
 /// (issue #3761). Throwing it instead would have the SDK log it at Error as an
-/// unhandled exception. Every other fault - a server fault, an authorization denial, a
-/// region rejection - is still thrown.
+/// unhandled exception. An unknown argument and an unroutable <c>region</c> are answered
+/// the same way. Every other fault - a server fault, an authorization denial, a peer
+/// region that fails identity verification - is still thrown.
 /// </para>
 /// </remarks>
 internal sealed class CredentialStampingTool : DelegatingMcpServerTool

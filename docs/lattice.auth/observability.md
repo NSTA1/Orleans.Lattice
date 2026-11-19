@@ -20,14 +20,14 @@ Besides `MeterName` and the tag keys below, `LatticeAuthMetrics` exposes each in
 
 ### Instruments
 
-| Instrument | Name | Kind | Emitted? | Meaning |
-|---|---|---|---|---|
-| Decisions | `orleans.lattice.auth.decisions` | Counter | Yes | One per gated decision (allow or deny), including bootstrap-admin bypasses and strict-fence denials. |
-| Decision duration | `orleans.lattice.auth.decision.duration` | Histogram (ms) | Yes | Gate-entry-to-decision latency. |
-| Snapshot rebuilds | `orleans.lattice.auth.snapshot.rebuilds` | Counter | Yes | One per successful compiled-policy snapshot rebuild. |
-| Snapshot epoch | `orleans.lattice.auth.snapshot.epoch` | Observable gauge | Yes (on scrape) | The current compiled-policy epoch. |
-| Snapshot age | `orleans.lattice.auth.snapshot.age` | Observable gauge (s) | Yes (on scrape) | Seconds since the current compiled snapshot was last rebuilt. Reports no measurement until the first rebuild. |
-| Snapshot subjects | `orleans.lattice.auth.snapshot.subjects` | Observable gauge | Yes (on scrape) | Distinct members (users and groups) for which a policy is configured. |
+| Instrument | Name | Kind | Unit | Emitted? | Meaning |
+|---|---|---|---|---|---|
+| Decisions | `orleans.lattice.auth.decisions` | Counter (`long`) | `{decision}` | Yes | One per gated decision (allow or deny), including bootstrap-admin bypasses and strict-fence denials. An administrator's explain evaluation of another subject is not counted. |
+| Decision duration | `orleans.lattice.auth.decision.duration` | Histogram (`double`) | `ms` | Yes | Gate-entry-to-decision latency. |
+| Snapshot rebuilds | `orleans.lattice.auth.snapshot.rebuilds` | Counter (`long`) | `{rebuild}` | Yes | One per successful compiled-policy snapshot rebuild. |
+| Snapshot epoch | `orleans.lattice.auth.snapshot.epoch` | Observable gauge (`long`) | `{epoch}` | Yes (on scrape) | The current compiled-policy epoch. |
+| Snapshot age | `orleans.lattice.auth.snapshot.age` | Observable gauge (`double`) | `s` | Yes (on scrape) | Seconds since the current compiled snapshot was last rebuilt. Reports no measurement until the first rebuild. |
+| Snapshot subjects | `orleans.lattice.auth.snapshot.subjects` | Observable gauge (`long`) | `{subject}` | Yes (on scrape) | Distinct members (users and groups) for which a policy is configured. |
 
 ### Policy-coverage gauge
 
@@ -41,7 +41,7 @@ The decision counter and the decision-latency histogram carry four tags:
 |---|---|---|
 | `operation` | `LatticeAuthMetrics.TagOperation` | The authorized `LatticeOperation`, as its flag name (for example `Read`); a composite mask renders as the enum's comma-separated `ToString()` form. |
 | `tree` | `LatticeAuthMetrics.TagTree` | The target tree id. |
-| `tenant` | `LatticeTenantLabel.TagTenant` | The owning tenant derived from `tree`: the tenant id for a `t/{tenant}/...` tree, `_platform_` for a `_lattice_` or `sys-` tree (the reserved `sys-auth-*` policy tree included), and `default` for any other bare id (the `*` sentinel included, and every tree on a tenancy-off cluster). Always emitted, on tenancy-on and tenancy-off clusters alike. |
+| `tenant` | `LatticeTenantLabel.TagTenant` | The owning tenant derived from `tree`: the tenant id for a `t/{tenant}/...` tree, `_platform_` for a `_lattice_` or `sys-` tree (the reserved `sys-auth-*` policy tree included) or a malformed id in the reserved `t/` namespace, and `default` for any other bare id (the `*` sentinel included, and every tree on a tenancy-off cluster). Always emitted, on tenancy-on and tenancy-off clusters alike. |
 | `effect` | `LatticeAuthMetrics.TagEffect` | `allow` or `deny`. |
 
 The snapshot-rebuild counter and the three snapshot gauges carry only the `tenant` tag, fixed to the platform sentinel `_platform_` (`LatticeTenantLabel.PlatformTenant`): the compiled snapshot is silo-wide and belongs to no tenant.

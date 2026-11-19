@@ -4,9 +4,13 @@ name: Videos
 # educational video series (see videos/README.md). A change there matches no
 # package, so ci.yml carves `videos/**` out of its package selection rather than
 # fanning out to the full test suite; this lane is what checks the workspace
-# instead. The repository's content gates (em-dash, mojibake) still scan every
-# file under `videos/` from ci.yml, so a stray character fails there as well as
-# in this lane's ASCII check.
+# instead. The repository's content gates (em-dash, mojibake) scan every file
+# under `videos/` from ci.yml's content-gates job, but only on a pull request
+# that also changes something outside the lightweight set: a pull request
+# confined to `videos/**`, `.github/workflows/**` and the instruction file is
+# lightweight (lightweight-change.py), and ci.yml then runs video order and the
+# guard self-tests but skips the .NET content fixtures. On such a pull request
+# this lane's ASCII check is the only character check that runs.
 on:
   pull_request:
     # Branch list mirrors ci.yml; the rationale for the '*/epic/**' and

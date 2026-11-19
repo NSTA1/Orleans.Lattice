@@ -163,7 +163,7 @@ from the server's facade as an `RpcException` with the status below.
 ### Status mapping
 
 Every domain failure maps to an explicit status rather than falling through to a
-generic fault. The RPC groups (lifecycle, quota usage, region residency, tenant-admin subjects, cross-tenant grants, self-service) share the
+generic fault. The RPC groups (lifecycle, quota usage, region residency, tenant-admin subjects, cross-tenant grants, self-service, delegated tenant access) share the
 same vocabulary; the last column notes where an arm applies to only some of them.
 
 | Exception | gRPC status | Why |
@@ -185,6 +185,7 @@ same vocabulary; the last column notes where an arm applies to only some of them
 | `ArgumentException` | `InvalidArgument` | A malformed tenant, region, or subject id, or a grant with a blank scope, an empty operation set, or the same tenant on both sides; also a negative `BurstPercent` or quota ceiling, and an added admin subject the identity directory cannot resolve (`LatticeDirectoryValidationException` derives from `ArgumentException`). |
 | `OperationCanceledException` | `Cancelled` | The caller's deadline or cancellation token fired. |
 | (optional facade not registered) | `Unimplemented` | The region-residency, tenant-admin subject, cross-tenant grant, quota-usage, tenant directory, or tenant policy facade is absent from the host, so its RPCs are not served. |
+| `LatticeSaturatedException` | `ResourceExhausted` | Storage back-pressure: the store refused the call on purpose and nothing was applied. Retry after a short backoff (#5723). Mapped explicitly on every RPC group, ahead of the `InvalidOperationException` arm it derives from where that arm exists. |
 | `TimeoutException` | `DeadlineExceeded` | A grain call timed out inside the cluster, so the outcome is unknown and a write may already have applied. Retry an idempotent read; confirm state before retrying a write. Logged at Warning (#5742). |
 | `OrleansMessageRejectionException` (including `SiloUnavailableException`) or `EnumerationAbortedException` | `Unavailable` | A silo was unavailable or rejected the message, or a remote enumerator was lost to a grain deactivation mid-read: a transient cluster fault. Retry after a short backoff. Logged at Warning (#5742). |
 | `LatticeWalQuiescingException` | `Unavailable` | A WAL shard is briefly quiesced for a placement move: the write was refused without being applied and the shard accepts writes again once the move lifts its fence. Retry after a short backoff. Logged at Warning (#5800). |

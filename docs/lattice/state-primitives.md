@@ -26,10 +26,10 @@ This gives every write a totally-ordered timestamp without requiring a central c
 
 ## Last-Writer-Wins Register (LWW)
 
-Each key-value entry in a leaf node is wrapped in `LwwValue<byte[]>`:
+Each key-value entry in a leaf node is stored as a last-writer-wins register over the value bytes:
 
 ```
-LwwValue = (Value, Timestamp, IsTombstone, ...)   // plus expiry, origin cluster, vector clock, migration marker
+LWW = (Value, Timestamp, IsTombstone, ...)   // plus expiry, origin cluster, vector clock, migration marker
 ```
 
 The merge rule is simple: **the entry with the higher `HLC` timestamp wins**. This is:
@@ -38,9 +38,9 @@ The merge rule is simple: **the entry with the higher `HLC` timestamp wins**. Th
 - **Associative:** `Merge(Merge(a, b), c) = Merge(a, Merge(b, c))`
 - **Idempotent:** `Merge(a, a) = a`
 
-These three properties make `LwwValue` a join-semilattice - two divergent replicas can always merge to a consistent result regardless of message ordering.
+These three properties make the LWW register a join-semilattice - two divergent replicas can always merge to a consistent result regardless of message ordering.
 
-Deletes are represented as **tombstones** (an `LwwValue` with `IsTombstone = true` and a timestamp). A tombstone with a higher timestamp than a live value wins; a live value with a higher timestamp than a tombstone "resurrects" the key.
+Deletes are represented as **tombstones** (an LWW entry with `IsTombstone = true` and a timestamp). A tombstone with a higher timestamp than a live value wins; a live value with a higher timestamp than a tombstone "resurrects" the key.
 
 When two entries carry exactly the same timestamp, the merge falls back to a fixed order over facts that read the same on every replica - a tombstone beats a live value, then the later expiry wins, then the larger value bytes - so replicas converge whatever order they observe the writes in. The writing cluster's identity and then a migration marker break any tie that remains. The cluster identity ranks below the value because it is observer-relative - a cluster stores its own writes with no origin while its peers stamp the same write with the authoring cluster - so by the time it decides anything the candidates already agree on everything a read can see.
 
@@ -326,7 +326,7 @@ This is commutative, associative, and idempotent: re-delivering an older state n
 
 ## Multi-Value Register (MV-Register)
 
-Where `LwwValue` collapses concurrent writes by picking the higher HLC, the multi-value register `MvRegister` preserves every concurrent write as a dot-tagged entry so the application can resolve the conflict itself (e.g. surface every candidate to a user, or merge in a domain-aware way). Like the OR-Set, the register uses **causal dots** - `(replicaId, counter)` pairs - to distinguish concurrent updates from sequential overwrites.
+Where the LWW register collapses concurrent writes by picking the higher HLC, the multi-value register `MvRegister` preserves every concurrent write as a dot-tagged entry so the application can resolve the conflict itself (e.g. surface every candidate to a user, or merge in a domain-aware way). Like the OR-Set, the register uses **causal dots** - `(replicaId, counter)` pairs - to distinguish concurrent updates from sequential overwrites.
 
 ```
 MvRegisterEntry = (ReplicaId, Counter, Value)
@@ -342,7 +342,7 @@ This is commutative, associative, and idempotent.
 
 `MvRegister.Set(replicaId, value)` drops every entry the writer has observed locally and mints a fresh dot `(replicaId, NextCounter(replicaId))`. Concurrent writes from other replicas that have not been observed survive the next merge, producing a multi-value result that `MvRegisterAccessor<T>.ValuesAsync()` deserialises to `IReadOnlyList<T>`.
 
-Use the multi-value register when **losing a concurrent write is unacceptable** for a single-valued field such as a title, status, note, or document body. Use `LwwValue` when last-writer-wins is the desired semantics and the application is happy to drop the loser silently.
+Use the multi-value register when **losing a concurrent write is unacceptable** for a single-valued field such as a title, status, note, or document body. Use a plain last-writer-wins write when that is the desired semantics and the application is happy to drop the loser silently.
 
 **Example use case:** a shopping-cart `notes` field that two devices edit while one of them is offline. With LWW, the offline device's note silently overwrites the online one when it reconnects. With MV-register, both notes survive the merge and the UI can show the user "you have two pending versions of this note - keep which one?" instead of losing data.
 
@@ -434,7 +434,7 @@ Other typical pairings:
 - **Per-aggregate counters** (`OrMap<MetricId, PnCounter>`) where each metric must accumulate concurrent increments from many replicas.
 - **Per-key version vectors** (`OrMap<EntityId, VersionVector>`) for tracking causal history of independent entities.
 
-Use `ILattice.OrMap<TKey, TValue>(key)` to obtain the typed accessor; see `docs/lattice/api.md` for the surface.
+Use the `OrMap<TKey, TValue>(key)` extension method on `ILattice` to obtain the typed accessor; see [api.md](api.md) for the surface.
 
 ## Replicated Growable Array (RGA)
 
@@ -458,11 +458,11 @@ The merge rule is straightforward:
 
 Because tombstones stay in the tree, the worst-case node count grows with **insert + remove history**, not live length. For long-lived editing sessions a periodic snapshot-and-trim of fully-causally-stable tombstones is a follow-on optimisation; the base primitive keeps the full causal history so convergence is unconditional.
 
-**Example use case:** a collaborative document or chat transcript where two users edit at the same position while one of them is offline. With a plain `LwwValue<List<string>>` the offline user's edits silently overwrite the online user's when they reconnect. With `Rga`, both users' inserts survive the merge, sibling inserts under the same predecessor converge on the same order on every device, and a remove that observed only the local insert does not erase the remote insert. Pairing this with a mutation observer gives a real-time text or list channel out of the box.
+**Example use case:** a collaborative document or chat transcript where two users edit at the same position while one of them is offline. With a plain last-writer-wins list value the offline user's edits silently overwrite the online user's when they reconnect. With `Rga`, both users' inserts survive the merge, sibling inserts under the same predecessor converge on the same order on every device, and a remove that observed only the local insert does not erase the remote insert. Pairing this with a mutation observer gives a real-time text or list channel out of the box.
 
 Other typical pairings:
 
 - **Append-only event lists** where multiple replicas record events and every replica must see them in the same resolved order.
 - **Tooling that needs stable cursor identity**: `InsertAfterAsync(parentDot, ...)` lets a client capture a dot from a previous read and have a later insert land at exactly that causal position regardless of intervening edits elsewhere in the sequence.
 
-Use `ILattice.Sequence<T>(key)` to obtain the typed accessor (`RgaAccessor<T>` with `InsertAtAsync`, `RemoveAtAsync`, `ToListAsync`, plus the lower-level dot-explicit `InsertAfterAsync`); see [api.md](api.md) for the surface.
+Use the `Sequence<T>(key)` extension method on `ILattice` to obtain the typed accessor (`RgaAccessor<T>` with `InsertAtAsync`, `RemoveAtAsync`, `ToListAsync`, plus the lower-level dot-explicit `InsertAfterAsync`); see [api.md](api.md) for the surface.

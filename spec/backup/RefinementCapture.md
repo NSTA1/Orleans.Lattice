@@ -131,8 +131,9 @@ Per #2321's taxonomy:
   protocol-level mutations fire it, each leaving the fairness of Spec intact.
 
 No mutation in this module adds an action; every one perturbs an existing
-action or definition. BackupSagaConsistentPruneBeforeTerminals declares
-`DEADLOCK: off`: a row pruned while a bucket of its saga is pending strands the
+action or definition. BackupSagaConsistentPruneBeforeTerminals and
+BackupSagaConsistentExpiryDropsRow declare `DEADLOCK: off`: a row pruned, or
+dropped at expiry, while a bucket of its saga is pending strands the
 bucket for good, so the saga never quiesces and TLC would report that deadlock
 before the torn capture. Two checks are mutually redundant by design and are
 paired in one mutation: skipping the gated in-flight re-check alone, or the

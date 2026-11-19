@@ -288,12 +288,18 @@ write. Diversion avoids waiting for the offending value to be repaired, not
 every possible ingestion failure.
 
 Strict mode only sees ingest that reaches the tree's write operations as a
-system-origin write, which in practice is the typed-CRDT replication path (a
-replicated delta, or a full-state row during bootstrap) and the entries of a
-replicated atomic batch, which the receiver stages through the tree's write
-operations until the batch's commit arrives; a dead-lettered entry is left out of
-its batch and the receiver commits the rest. A plain (non-atomic) last-writer-wins
-replication apply and a backup restore merge or bulk-load straight into the tree's
+system-origin write, which in practice is every replicated write: the typed-CRDT
+replication path (a replicated delta, or a full-state row during bootstrap), the
+entries of a replicated atomic batch, which the receiver stages through the tree's
+write operations until the batch's commit arrives (a dead-lettered entry is left
+out of its batch and the receiver commits the rest), the rows a receiver bootstrap
+drains from a peer's export, and a steady-state plain (non-atomic)
+last-writer-wins replication apply. A plain replicated write is judged only for a
+tree whose version config (or enforcement policy) sets the per-tree strict flag -
+asked once per replicated batch, so a tree that is not strict pays nothing per
+row - and an admitted one is stored with the tag it carried, never stamped or
+re-stamped (see [strict-mode ingest](schema-enforcement.md#strict-mode-ingest)).
+A backup restore and a tree merge bulk-load or merge straight into the tree's
 shards, so even in strict mode their items are stored with whatever tag they carry
 and are never stamped or dead-lettered.
 
@@ -304,7 +310,8 @@ config (`new LatticeSchemaVersionConfig(schemaId, targetVersion, strictIngest: t
 which makes that tree dead-letter a non-upcastable ingested item. While the global
 switch is on, an ingested value or CRDT delta that reaches the versioning stage
 carrying no envelope is stamped at its tree's target version, as a local write is,
-whatever that tree's per-tree flag. When the silo also registers enforcement, both add-ons share one composed
+whatever that tree's per-tree flag - except a plain replicated last-writer-wins
+write, which is stored verbatim. When the silo also registers enforcement, both add-ons share one composed
 write interceptor that is consulted for system-origin writes when *either* global
 switch is on (see the caveat under
 [strict-mode ingest](schema-enforcement.md#strict-mode-ingest)).

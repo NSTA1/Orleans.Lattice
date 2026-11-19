@@ -73,7 +73,9 @@ How to read the columns:
   check that joins them, has a shard of its own,
   routed by its exact module name in `TlcCiShard`, holding its base, variants and
   mutations together, so its base serves its mutations' controls and the module
-  never lengthens another shard.
+  never lengthens another shard. `WalLiveAdvanceCore` outgrew one shard: its
+  variants and its claimless-advance mutations are routed onto further shards
+  of their own, and its base keeps every mutation whose control it serves.
 - **Gate only** under perturbations means `RefinementPerturbationTests`, which
   checks every perturbation's anchors, row and detectors without building or
   running anything. Only the weekly lane applies the perturbations.
@@ -87,6 +89,13 @@ How to read the columns:
 - `ci.yml` can also be dispatched by hand on any branch. That run is evaluated
   like a push: every package, every tier and exhaustive TLC, with an input that
   switches receipts off.
+- Two other workflows provision the toolchain but are not lanes of this table.
+  `ci-serial-old.yml`, the manual-dispatch serial control that `ci.yml`
+  replaced, runs every TLC case in its single deterministic leg when it tests
+  the core package, and never reads or writes a receipt. The test legs of
+  `publish.yml` skip both exhaustive TLC and the smoke case, because that
+  workflow first requires a successful release-line `build-and-test` on the
+  exact tag commit.
 
 ## Deciding whether a pull request model-checks
 
@@ -223,10 +232,10 @@ commit still means every module ran on that commit. A `ci.yml` dispatch with
 `tlc_receipts: off` runs every module the same way, which is the dry run of a
 release line on any branch.
 
-What a fingerprint cannot see is runtime drift: the JDK patch level the runner
-image resolves, or the runner image itself. Two runs with identical fingerprints
-can in principle diverge on those, which is why the nightly lane ignores
-receipts.
+What a fingerprint cannot see is runtime drift: the JDK patch level `setup-java`
+resolves within the pinned major version, or the runner image itself. Two runs
+with identical fingerprints can in principle diverge on those, which is why the
+nightly lane ignores receipts.
 
 ## Nightly exhaustive TLC
 
@@ -278,7 +287,8 @@ row of the [module layout](../../spec/README.md#module-layout)).
   behaviour row of a perturbed module is either seeded or listed with a reason.
 - Weekly, [`formal-perturbations.yml`](../../.github/workflows/formal-perturbations.yml)
   runs `tools/perturbations/run-perturbations.py` over every perturbation on
-  `main`. The detectors first run on the unperturbed tree as a control that must
+  `main`, split across parallel shards that each build once. In each shard the
+  detectors first run on the unperturbed tree as a control that must
   pass; then, per perturbation, the edit is applied, the tree rebuilt and the
   detectors run, and at least one must fail. A failing run opens or updates one
   `ci` issue, "Weekly production-perturbation lane failing", listing every

@@ -632,7 +632,7 @@ if (requireApiAuthorization)
 //
 // Both names are EXACT, deliberately, and were read off the pinned dependency
 // rather than recalled: "Microsoft.Orleans" is the name of the single Meter that
-// Orleans.Core 10.4.2 constructs (Orleans.Runtime.OrleansInstruments, built from
+// the pinned Orleans.Core constructs (Orleans.Runtime.OrleansInstruments, built from
 // IMeterFactory), and "System.Runtime" is the name the .NET 10 runtime publishes
 // its 19 built-in instruments on. Note that the similar-looking
 // "Microsoft.Orleans.Runtime", "Microsoft.Orleans.Application" and siblings are
@@ -640,15 +640,13 @@ if (requireApiAuthorization)
 // AddMeter would match nothing and fail silently, which is the same failure this
 // block exists to close. Re-verify both names on an Orleans or .NET major upgrade.
 //
-// Cardinality, measured rather than assumed, on a single silo under Orleans
-// 10.2.2: "Microsoft.Orleans" produced 54 series and "System.Runtime" 29. Every
-// System.Runtime dimension is a fixed enumeration (GC generation, cpu mode), so
-// its cost does not grow with load at all. The only Orleans dimensions that grow
-// are the grain-type tags: `grain_type` on orleans-grains (and, from Orleans
-// 10.4, on the per-type activation and working-set gauges) and `type` on
-// orleans-system-targets. Both are bounded by the number of grain TYPES in the
-// image - a compile-time constant - not by the number of grain activations.
-// Neither meter carries a per-key, per-tree, or per-activation tag.
+// Cardinality, measured rather than assumed, on a single silo: "Microsoft.Orleans"
+// produced 54 series and "System.Runtime" 29. Every System.Runtime dimension is a
+// fixed enumeration (GC generation, cpu mode), so its cost does not grow with load
+// at all. The only Orleans dimension that grows is the `type` tag on
+// orleans-grains and orleans-system-targets, which is bounded by the number of
+// grain TYPES in the image - a compile-time constant - not by the number of grain
+// activations. Neither meter carries a per-key, per-tree, or per-activation tag.
 builder.Services.AddOpenTelemetry()
     .WithMetrics(metrics => metrics
         .AddMeter($"{LatticeMetrics.MeterName}*")

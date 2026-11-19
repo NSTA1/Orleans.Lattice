@@ -12,9 +12,9 @@ Code-first gRPC binding for [Orleans.Lattice.Api.Data](../lattice.api.data/READM
 
 It provides:
 
-- **A code-first gRPC service.** Unary RPCs cover point read, range read, set, delete, range delete, non-atomic bulk upsert, the atomic multi-key writes (single-tree and cross-tree), typed CRDT write, and typed CRDT read, all bound from C# definitions rather than a `.proto`. One duplex RPC, `StreamSetMany`, streams a non-atomic bulk upsert in batches and reports per-entry refusals as it goes. The service is exposed under the fully-qualified gRPC service name `orleans.lattice.api.data`, so each method's full path is `/orleans.lattice.api.data/<Rpc>`.
+- **A code-first gRPC service.** Unary RPCs cover point read, range read, set, delete, range delete, non-atomic bulk upsert, the atomic multi-key writes (single-tree and cross-tree), typed CRDT write, typed CRDT read, and the side-effect-free write-capability probe (`ProbeCapabilities`), all bound from C# definitions rather than a `.proto`. One duplex RPC, `StreamSetMany`, streams a non-atomic bulk upsert in batches and reports per-entry refusals as it goes. The service is exposed under the fully-qualified gRPC service name `orleans.lattice.api.data`, so each method's full path is `/orleans.lattice.api.data/<Rpc>`.
 - **A public typed client.** `LatticeDataApiGrpcClient` exposes one method per RPC over a caller-supplied gRPC channel.
-- **Shared Orleans marshalling.** Every wire message is a `[GenerateSerializer]` record serialized with the Orleans binary serializer, so client and server stay in lock-step by construction. Most RPCs use this package's own request / response records, wrapping facade DTOs where needed; `Get` answers with the facade's `DataReadResult`, and `ReadRange` and `DeleteRange` carry the facade's `DataRangeRequest` / `DataRangePage` and `DataRangeDeleteRequest` / `DataRangeDeleteResult` unchanged.
+- **Shared Orleans marshalling.** Every wire message is a `[GenerateSerializer]` record serialized with the Orleans binary serializer, so client and server stay in lock-step by construction. Most RPCs use this package's own request / response records, wrapping facade DTOs where needed; `Get` answers with the facade's `DataReadResult`, `ProbeCapabilities` with the facade's `LatticeDataCapabilities`, and `ReadRange` and `DeleteRange` carry the facade's `DataRangeRequest` / `DataRangePage` and `DataRangeDeleteRequest` / `DataRangeDeleteResult` unchanged.
 - **Fail-closed authorization.** A per-call `ILatticeDataApiAuthorizer` seam gates every RPC; the default denies all traffic until a host configures one.
 
 The package has no external broker and no `.proto` file to maintain.
@@ -30,7 +30,7 @@ The package has no external broker and no `.proto` file to maintain.
 
 | Feature | What it gives you | Docs |
 |---|---|---|
-| **Code-first service** | Unary RPCs bound from C# - no `.proto` to author or keep in sync. | [`Orleans.Lattice.Api.Data`](../lattice.api.data/README.md) |
+| **Code-first service** | Unary RPCs and the duplex `StreamSetMany` RPC bound from C# - no `.proto` to author or keep in sync. | [`Orleans.Lattice.Api.Data`](../lattice.api.data/README.md) |
 | **Public typed client** | `LatticeDataApiGrpcClient` over a caller-supplied channel, one method per RPC. | [`Orleans.Lattice.Api.Data`](../lattice.api.data/README.md) |
 | **Fail-closed authorization** | Per-call `ILatticeDataApiAuthorizer` seam, default-deny. | [`Orleans.Lattice.Api.Data`](../lattice.api.data/README.md) |
 
@@ -126,7 +126,7 @@ The table summarises each public type's role; the [Public API](api.md) reference
 | `ILatticeDataApiAuthorizer` | Transport meta-authorization seam: `Task<bool> IsAuthorizedAsync(LatticeDataApiAuthorizationContext authorizationContext, CancellationToken cancellationToken)`. |
 | `DenyAllDataApiAuthorizer` | Default-deny authorizer (registered automatically via `TryAdd`). |
 | `AllowAllDataApiAuthorizer` | Opt-in permissive authorizer for trusted-network use. |
-| `LatticeDataApiAuthorizationContext` | Per-call description handed to the authorizer: `Operation`, `TargetTreeId` (`null` for the cross-tree batch, which spans several trees), and the underlying `ServerCallContext`. |
+| `LatticeDataApiAuthorizationContext` | Per-call description handed to the authorizer: `Operation`, `TargetTreeId` (`null` for the cross-tree batch, which spans several trees, and for the streamed `StreamSetMany`, whose tree rides in frames read only after admission), and the underlying `ServerCallContext`. |
 | `LatticeDataApiOperation` | The operation behind each RPC: `SetPoint`, `DeletePoint`, `SetManyAtomic`, `SetManyAtomicCrossTree`, `GetPoint`, `ReadRange`, `DeleteRange`, `SetMany`, `CrdtWrite`, `CrdtRead`, `ProbeCapabilities`, `StreamSetMany`, and `Unknown` for an unmapped method. |
 | `ILatticeDataApiCredentialBridge` | Identity seam that lifts the inbound credential onto the ambient context; the default reads `CredentialHeaderName` and strips a case-insensitive `CredentialScheme` prefix. |
 | `ILatticeDataApiActiveTenantBridge` | Active-tenant seam (`TenantId? Resolve(ServerCallContext context)`) that lifts the caller's asserted tenant onto the ambient scope; the default reads `ActiveTenantHeaderName`. |

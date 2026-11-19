@@ -4,22 +4,22 @@ agent_spec: "docs/agents/procedures/compaction.yaml"
 
 # Tombstone Compaction
 
-Deleted keys are represented as **tombstones** - `LwwValue` entries with `IsTombstone = true`. Tombstones participate in LWW merge and delta replication like any other entry, so all replicas and caches eventually learn about the delete. However, tombstones are never removed by normal operations, leading to unbounded storage and scan overhead.
+Deleted keys are represented as **tombstones** - last-writer-wins entries flagged as deleted. Tombstones participate in LWW merge and delta replication like any other entry, so all replicas and caches eventually learn about the delete. However, tombstones are never removed by normal operations, leading to unbounded storage and scan overhead.
 
 ## How It Works
 
 A single internal compaction coordinator per tree owns one [grain reminder](https://learn.microsoft.com/dotnet/orleans/grains/timers-and-reminders) that fires at the configured grace-period interval. When the reminder fires, it starts a **grain timer** that walks at most one batch of one shard per tick (every `CompactionShardTickInterval`, 500 ms by default), avoiding a single long-running grain call that could hit Orleans timeouts for large trees:
 
-1. The reminder tick persists `InProgress = true` and registers a **one-minute keepalive reminder**, then starts a grain timer at shard 0.
+1. The reminder tick persists that a pass is in progress and registers a **one-minute keepalive reminder**, then starts a grain timer at shard 0.
 2. Each timer tick works on the current shard:
-   a. On entering a shard, pulls the shard root's dirty-leaves snapshot. A snapshot that names leaves confines the walk to them (see [Dirty-Leaves Fast Path](#dirty-leaves-fast-path)); an empty one falls back to the leaf chain, whose head `GetLeftmostLeafIdAsync` on the shard root finds and which `GetNextSiblingAsync` walks.
-   b. Calls `CompactTombstonesAsync` on each leaf it visits - up to `CompactionLeafBatchSize` leaves per tick, or fewer when the batch reaches `BackgroundDrainMaxDuration` first - and persists an in-shard cursor so the next tick resumes where this one stopped.
-   c. Once the shard's walk completes, persists the updated `NextShardIndex` to durable state.
+   a. On entering a shard, pulls the shard root's dirty-leaves snapshot. A snapshot that names leaves confines the walk to them (see [Dirty-Leaves Fast Path](#dirty-leaves-fast-path)); an empty one falls back to the leaf chain, starting from the leftmost leaf the shard root names and following each leaf's next-sibling pointer.
+   b. Asks each leaf it visits to compact its tombstones - up to `CompactionLeafBatchSize` leaves per tick, or fewer when the batch reaches `BackgroundDrainMaxDuration` first - and persists an in-shard cursor so the next tick resumes where this one stopped.
+   c. Once the shard's walk completes, persists the advanced next-shard index to durable state.
    d. Runs a best-effort pass over the completed shard that folds away leaves the compaction left empty, bounded by `CompactionLeafBatchSize` and `BackgroundDrainMaxDuration`. A failure there is logged and retried on the next pass; it never spends the shard's retry budget. See [Empty Leaf Reclaim](tree-structure.md#empty-leaf-reclaim).
 3. If a shard fails, it is retried once before being skipped. On the dirty-leaves fast path a single leaf that refuses to compact no longer fails the shard - see [Dirty-Leaves Fast Path](#dirty-leaves-fast-path).
-4. After all shards are processed, the timer self-disposes, `InProgress` is set to `false`, and the keepalive reminder is unregistered.
+4. After all shards are processed, the timer self-disposes, the pass is recorded as no longer in progress, and the keepalive reminder is unregistered.
 
-**Recovery:** If the silo restarts mid-compaction, the keepalive reminder fires within one minute and the grain resumes from the persisted `NextShardIndex` and in-shard cursor. Once the pass completes, the keepalive is unregistered. If `InProgress` is already `false` when the keepalive fires, it simply unregisters itself.
+**Recovery:** If the silo restarts mid-compaction, the keepalive reminder fires within one minute and the grain resumes from the persisted next-shard index and in-shard cursor. Once the pass completes, the keepalive is unregistered. If no pass is recorded in progress when the keepalive fires, it simply unregisters itself.
 
 Each leaf compares every tombstone's `HLC.WallClockTicks` against `now - gracePeriod`. Tombstones older than the cutoff are durably reaped: for each removed entry the leaf appends a single `WalRecord { Op = MutationKind.Tombstone, IsMerge = true }` envelope to its WAL partition **before** the entry is removed from the leaf's in-memory entry cache. The envelope's HLC is the existing tombstone's own timestamp (not a fresh tick) so activation-time replay can use a straight `existing.Timestamp <= mutation.Timestamp` dominance check to skip a reap when a fresher live rewrite has already landed. Expired live entries past the same grace period are reaped through the same envelope shape.
 
@@ -42,32 +42,32 @@ sequenceDiagram
     participant L2 as Leaf
 
     R->>C: ReceiveReminder("tombstone-compaction")
-    C->>C: Persist InProgress = true, NextShardIndex = 0
+    C->>C: Persist pass in progress, next shard = 0
     C->>R: Register keepalive reminder (1 min)
     C->>C: Start grain timer (500 ms ticks)
 
     Note over C: Timer tick 1 - shard 0 (empty dirty-leaves snapshot, so chain walk)
-    C->>S0: GetLeftmostLeafIdAsync()
+    C->>S0: Get leftmost leaf
     S0-->>C: leafId0
-    C->>L0: CompactTombstonesAsync(gracePeriod)
-    C->>L0: GetNextSiblingAsync()
+    C->>L0: Compact tombstones (gracePeriod)
+    C->>L0: Get next sibling
     L0-->>C: leafId1
-    C->>L1: CompactTombstonesAsync(gracePeriod)
-    C->>L1: GetNextSiblingAsync()
+    C->>L1: Compact tombstones (gracePeriod)
+    C->>L1: Get next sibling
     L1-->>C: null (end of chain)
-    C->>C: Persist NextShardIndex = 1
+    C->>C: Persist next shard = 1
     C->>S0: Fold away emptied leaves (best-effort)
 
     Note over C: Timer tick 2 - shard 1 (chain walk)
-    C->>S1: GetLeftmostLeafIdAsync()
+    C->>S1: Get leftmost leaf
     S1-->>C: leafId2
-    C->>L2: CompactTombstonesAsync(gracePeriod)
-    C->>L2: GetNextSiblingAsync()
+    C->>L2: Compact tombstones (gracePeriod)
+    C->>L2: Get next sibling
     L2-->>C: null
 
     Note over C: Timer tick 3 - all shards done
     C->>C: Dispose timer
-    C->>C: Persist InProgress = false
+    C->>C: Persist pass finished
     C->>R: Unregister keepalive reminder
 ```
 
@@ -77,7 +77,7 @@ The compaction coordinator is not part of the public API, and it handles the rem
 
 ### A leaf pass is bounded
 
-`CompactTombstonesAsync` spends a wall-clock budget and yields when it is spent, so one call returns comfortably inside Orleans' 30-second request timeout however many tombstones the leaf holds. Without that bound the call did a full synchronous scan of every row followed by one sequentially awaited WAL append per condemned entry, so its cost scaled with the tombstone count - the very quantity compaction exists to reduce - and a tombstone-heavy leaf always overran.
+A leaf's compaction call spends a wall-clock budget and yields when it is spent, so one call returns comfortably inside Orleans' 30-second request timeout however many tombstones the leaf holds. Without that bound the call did a full synchronous scan of every row followed by one sequentially awaited WAL append per condemned entry, so its cost scaled with the tombstone count - the very quantity compaction exists to reduce - and a tombstone-heavy leaf always overran.
 
 The budget is [`BackgroundDrainMaxDuration`](configuration.md#backgrounddrainmaxduration), the same wall-clock net every other background pass spends, applied one level further down rather than added alongside. That reuse is deliberate: two budgets already governed this path - a storage busy window and the request timeout - and a third independent one would be free to sum past the limit with no component breaching on its own. At the 10-second default a turn stops issuing new appends after 10 seconds and the one append already in flight can block for the whole 15-second storage busy window, so a single call's worst case is 25 seconds against a 30-second timeout. Raising this knob much past 15 seconds, or raising the storage busy window, spends that remaining margin. Setting it to `TimeSpan.Zero` disables the bound and restores the unbounded pass.
 
@@ -109,7 +109,7 @@ The default grace period is **24 hours**. The reminder interval equals the grace
 
 ### `CompactionShardTickInterval`
 
-A `TimeSpan` (default 500 ms, floor 100 ms). The compaction grain processes at most one batch of one shard per internal grain-timer tick during a pass, and waits this long between ticks so the grain returns control to the Orleans scheduler between batches. Without this gap a single grain call could span every shard in the tree, hit Orleans' grain-call timeout, and starve concurrent operator-initiated `RequestCompactionAsync` callers.
+A `TimeSpan` (default 500 ms, floor 100 ms). The compaction grain processes at most one batch of one shard per internal grain-timer tick during a pass, and waits this long between ticks so the grain returns control to the Orleans scheduler between batches. Without this gap a single grain call could span every shard in the tree, hit Orleans' grain-call timeout, and starve concurrent out-of-cycle compaction requests, operator-initiated ones included.
 
 The cadence is a **scheduler-fairness knob, not a grain-deactivation knob.** Leaf activation lifetime is governed by the silo's `GrainCollectionOptions.CollectionAge` (default 15 minutes) and is independent of this value.
 
@@ -150,7 +150,7 @@ siloBuilder.ConfigureLattice("high-shard-tree", o => o.CompactionShardTickInterv
 
 ### CompactionLeafBatchSize
 
-An `int` (default 64, floor 1). Caps how many leaves the coordinator visits within a single shard before yielding for one `CompactionShardTickInterval`. The leaf walk resumes on the next timer tick from a persisted in-shard cursor, so progress survives silo crashes the same way `NextShardIndex` does. The cursor is cleared when the shard's leaf walk completes; a fresh pass on a different shard list always starts from the leftmost leaf.
+An `int` (default 64, floor 1). Caps how many leaves the coordinator visits within a single shard before yielding for one `CompactionShardTickInterval`. The leaf walk resumes on the next timer tick from a persisted in-shard cursor, so progress survives silo crashes the same way the next-shard index does. The cursor is cleared when the shard's leaf walk completes; a fresh pass on a different shard list always starts from the leftmost leaf.
 
 The cursor is a **key** on the chain-walk path and an **index into the persisted dirty-leaves snapshot** on the dirty-leaves fast path - never a leaf grain id. Orleans grains are virtual, so an id persisted across a batch boundary can activate a fresh, empty grain whose sibling pointer is null; a walk resumed from it would report the shard done with most of it never visited, and that silent under-compaction is indistinguishable from a clean completion. A key is always re-descended onto whichever leaf now owns it, so a leaf split - or reclaimed - between two batches cannot truncate the pass. A leaf-id cursor left by an older build is discarded on load and the shard restarts from its leftmost leaf, which costs a re-walk and nothing else because per-leaf compaction is idempotent. See [Bounded background leaf walks](configuration.md#bounded-background-leaf-walks).
 
@@ -180,11 +180,11 @@ The active path is reported on `orleans.lattice.compaction.leaves.visited` via t
 
 ### `DirtyLeafFlushIntervalMs`
 
-Coalescing window for persisting the shard-root dirty-leaves dictionary (default: `50` ms). The `Delete` hot path never writes to storage directly: the shard-root dirty-mark path max-merges the destination leaf into the in-memory dirty-leaves map with a monotonically-advancing HLC, sets a pending-flush flag, and on first use arms a periodic grain timer at this interval. A tick with nothing pending is a no-op; otherwise it drains the flag with one `WriteStateAsync` per window regardless of how many distinct leaves were marked - the per-`Delete` shard-root storage write that previously raced concurrent `SetManyAsync` turns is replaced by at most one persist per window. Five consecutive failed flushes suspend the flush loop for the rest of the activation and count once on `orleans.lattice.shard_root.flush.retries_suspended` (`kind=dirty-leaves`). After a transient storage fault the marks stay in memory, where the coordinator reads them, so suspension costs only crash survival; when the last failure is a version conflict the shard root also deactivates, so that its next activation re-reads the stored row, and the marks it held are re-discovered by the chain-walk fallback like a crash's.
+Coalescing window for persisting the shard-root dirty-leaves dictionary (default: `50` ms). The `Delete` hot path never writes to storage directly: the shard-root dirty-mark path max-merges the destination leaf into the in-memory dirty-leaves map with a monotonically-advancing HLC, sets a pending-flush flag, and on first use arms a periodic grain timer at this interval. A tick with nothing pending is a no-op; otherwise it drains the flag with one state write per window regardless of how many distinct leaves were marked - the per-`Delete` shard-root storage write that previously raced concurrent `SetManyAsync` turns is replaced by at most one persist per window. Five consecutive failed flushes suspend the flush loop for the rest of the activation and count once on `orleans.lattice.shard_root.flush.retries_suspended` (`kind=dirty-leaves`). After a transient storage fault the marks stay in memory, where the coordinator reads them, so suspension costs only crash survival; when the last failure is a version conflict the shard root also deactivates, so that its next activation re-reads the stored row, and the marks it held are re-discovered by the chain-walk fallback like a crash's.
 
 The compaction coordinator reads the in-memory dictionary directly from the shard root, so an unpersisted mark is still routable within the same activation - the coalescing window matters only for crash survival. Admin-path flushes and clean deactivation always drain pending marks in their own persist call, so clean shutdown loses nothing. An unclean silo crash that loses an in-memory mark causes the affected leaf to be re-discovered by the legacy chain-walk fallback on the first later pass that finds the shard's dirty snapshot empty - the next pass, when no persisted mark survived the restart; otherwise once the surviving marks have drained - so the loss bound is one missed leaf per crashed activation per window - bounded and self-healing, never a correctness signal.
 
-Set to `0` (or a negative value) to disable coalescing entirely: each `MarkLeafDirtyAsync` call starts a best-effort flush straight away, without the delete waiting for it, restoring the pre-coalescing behaviour of one `WriteStateAsync` per first-call-per-leaf-per-window. Tighten the window if shard-root crash survival is more valuable than coalescing the hot-path write; widen it if storage-side write amplification dominates over crash-recovery cost.
+Set to `0` (or a negative value) to disable coalescing entirely: each dirty mark starts a best-effort flush straight away, without the delete waiting for it, restoring the pre-coalescing behaviour of one state write per first mark of a leaf in a window. Tighten the window if shard-root crash survival is more valuable than coalescing the hot-path write; widen it if storage-side write amplification dominates over crash-recovery cost.
 
 ## Policy-Driven Triggers
 
@@ -247,7 +247,7 @@ The bundled Grafana **Overview** dashboard ships compaction-focused panels for e
 | **Durability of reaps** | Each reaped entry is committed to the tree's WAL as a `MutationKind.Tombstone` envelope **before** in-memory removal, so activation-time replay re-applies the reap deterministically. The WAL is the sole durability boundary; grain state is never a fallback store for entry values. |
 | **Idempotency** | Per-leaf compaction is safe to repeat. The compaction-watermark fast path avoids redundant scans. Replay re-runs the dominance check for each reap envelope, so the same envelope applied twice is a no-op. |
 | **Replication isolation** | Reap envelopes carry `MutationCategory.Maintenance`. The replication observer skips maintenance writes entirely, and the change feed plus outbound shipper apply a `MutationKind.Tombstone` filter as defence in depth. Every peer reaps independently against its own grace window. |
-| **Durability of progress** | Compaction progress (`NextShardIndex`, the in-shard cursor, and `InProgress`) is persisted to grain storage. A one-minute keepalive reminder ensures the grain is reactivated after a silo restart to resume the in-flight pass. |
+| **Durability of progress** | Compaction progress (the next shard index, the in-shard cursor, and the in-progress flag) is persisted to grain storage. A one-minute keepalive reminder ensures the grain is reactivated after a silo restart to resume the in-flight pass. |
 | **Fault tolerance** | If a shard fails during compaction, it is retried once before being skipped. On the dirty-leaves fast path a single leaf that throws is skipped and re-marked dirty instead of failing the shard, so the rest of the shard is still compacted and the leaf is retried on the next pass. The next reminder tick starts a fresh pass. |
 | **Bounded leaf turns** | A leaf's reap loop awaits one WAL append per condemned entry, so an unbounded turn overran the request timeout on exactly the leaves that most needed compacting. Each turn now spends `BackgroundDrainMaxDuration` and yields, reaping strictly fewer entries on each resumed pass until the leaf drains. A truncated turn reports itself incomplete, which is what keeps its dirty mark from being drained; nothing is persisted to record the truncation, because such a write would fail under the same pressure that caused it. See [A leaf pass is bounded](#a-leaf-pass-is-bounded). |
 | **Memory** | Leaves are compacted in batches of `CompactionLeafBatchSize` (default 64) per timer tick; both the *between-shard* gap and the *between-batch* gap are governed by `CompactionShardTickInterval`. The dirty-leaves fast path (see above) limits a shard that saw routed deletes to its shard root plus those dirty leaves. The chain-walk fallback - every shard whose dirty snapshot is empty, including every shard of an idle tree and the first pass after an upgrade - is bounded by `min(leaves walked in last CollectionAge, CompactionLeafBatchSize * (CollectionAge / CompactionShardTickInterval))`. With the default 64-leaf batch, 500 ms tick, and 15 min `CollectionAge`, that bound is roughly 115 200 activations regardless of tree size, which is above the leaf count of most trees, so on those the whole leaf set can be active at the end of a chain-walked pass. |

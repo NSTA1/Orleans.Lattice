@@ -35,9 +35,11 @@ public readonly record struct BootstrapCoordinatorStatus(
     [property: Id(1)] string? SourceClusterId)
 {
     /// <summary>
-    /// Whether the tree's reads are refused because a snapshot drain is applying
-    /// an import, or a failed drain left a partial import behind (issue #4526).
-    /// While <see langword="true"/>, reads of the tree throw
+    /// Whether the tree's reads are refused because a legacy in-place snapshot
+    /// drain is applying an import, or a failed in-place drain left a partial
+    /// import behind (issue #4526). A bootstrap that stages its import on a
+    /// shadow copy leaves the currently aliased tree readable and never sets
+    /// this. While <see langword="true"/>, reads of the tree throw
     /// <see cref="LatticeTreeBootstrappingException"/>.
     /// </summary>
     [Id(2)] public bool ReadFenced { get; init; }

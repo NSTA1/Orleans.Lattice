@@ -67,8 +67,8 @@ public static class LatticeApiTreeAdminServiceCollectionExtensions
 
         // The transport-agnostic control facade. Registered as a silo singleton that
         // every transport binding (for example gRPC, MCP) adapts over. The
-        // accept-then-poll operations facade (#4124) is the same singleton, so a
-        // blocking verb and its start share one authorization path and one engine.
+        // accept-then-poll operations facade (#4124) is the same singleton, so the
+        // control verbs and the starts share one authorization path and one engine.
         builder.Services.TryAddSingleton<LatticeTreeAdmin>();
         builder.Services.TryAddSingleton<ILatticeTreeAdmin>(sp => sp.GetRequiredService<LatticeTreeAdmin>());
         builder.Services.TryAddSingleton<ILatticeTreeAdminOperations>(sp => sp.GetRequiredService<LatticeTreeAdmin>());

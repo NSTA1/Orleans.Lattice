@@ -14,8 +14,9 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// <list type="number">
 /// <item><description><see cref="ResizePhase.Snapshot"/> - online snapshot of the logical
 /// tree to a new physical tree with the desired sizing. The source tree remains
-/// fully available for reads and writes; every accepted mutation except a typed
-/// CRDT delta apply or a bulk append is shadow-forwarded to the destination.
+/// fully available for reads and writes; every accepted mutation, including a
+/// typed CRDT delta apply and a bulk append, is shadow-forwarded to the
+/// destination (see <c>ShardRootGrain.ResizeMirror.cs</c>, issue #4618).
 /// The snapshot's routing-map-driven shard copy is described on
 /// <see cref="TreeSnapshotGrain"/>.</description></item>
 /// <item><description><see cref="ResizePhase.Swap"/> - fence every old physical shard the

@@ -20,7 +20,17 @@ Backups are laid out under two deterministic prefixes in the container - manifes
 - **Provisionless.** The container is created on first use (idempotent), so a host does not have to provision it out of band.
 - **Durable.** The sink reports `ILatticeBackupSink.IsDurable` as `true`, so the backup engine's durable-sink-gated features - the periodic backup-health monitor and the Explorer health column - are active against it.
 
-## Setup
+## Features
+
+| Feature | Surface | Summary |
+|---|---|---|
+| Sink registration | `LatticeBackupAzureBlobServiceCollectionExtensions.AddLatticeBackupAzureBlob` | Replaces the in-cluster default `ILatticeBackupSink` with the Azure Blob implementation, before or after `AddLatticeBackup`. |
+| Configuration | `LatticeBackupAzureBlobOptions` | One authentication mode (connection string, service URI plus token or shared-key credential, or a pre-built `BlobServiceClient`), the container name, and an optional client-options callback. |
+| Streamed artifacts | `ILatticeBackupSink` artifact members | Append blobs under `artifacts/`, length-prefixed per chunk so reads return the written chunk boundaries, with a metadata commit marker for idempotent retries. |
+| Manifests | `ILatticeBackupSink` manifest members | Block blobs under `manifests/`, listed in backup-id order by a single prefix scan. |
+| Resolvability probe | `ILatticeBackupSink.ManifestExistsAsync` / `ProbeAsync` | Existence and committed-metadata checks that never download an artifact. |
+
+## Quick Start
 
 Register the sink on the silo. It may be called before or after `AddLatticeBackup` because it replaces the sink registration outright.
 

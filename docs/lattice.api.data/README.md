@@ -12,7 +12,7 @@ A write-capable external data-plane add-on for [Orleans.Lattice](../../README.md
 
 It is the write-capable sibling of the read-only [`Orleans.Lattice.Api.State`](../lattice.api.state/README.md) package, and is built the same layered way:
 
-- **A transport-agnostic facade.** `ILatticeDataApi` (a public contract in the shared `Orleans.Lattice.Api.Abstractions` package) exposes point set/delete, bounded range delete, non-atomic bulk upsert, single-tree atomic batch, cross-tree atomic batch, point read, a single bounded range-read page, and typed CRDT verbs over plain request/response records. The facade has no wire dependency, so the same surface serves an in-process consumer and a remote one.
+- **A transport-agnostic facade.** `ILatticeDataApi` (a public contract in the shared `Orleans.Lattice.Api.Abstractions` package) exposes point set/delete, bounded range delete, non-atomic bulk upsert (one-shot or streamed), single-tree atomic batch, cross-tree atomic batch, point read, a single bounded range-read page, a side-effect-free write-capability probe, and typed CRDT verbs over plain request/response records. The facade has no wire dependency, so the same surface serves an in-process consumer and a remote one.
 - **A code-first gRPC binding.** `Orleans.Lattice.Api.Data.Grpc` projects the facade onto a gRPC service whose messages are Orleans-serialized request / response records that wrap or reuse the facade DTOs, plus a public `LatticeDataApiGrpcClient`. Remote consumers talk to the cluster over HTTP/2 with no hand-rolled `.proto`.
 
 Single-tree operations resolve the caller-supplied tree name to its **effective, tenant-scoped id** and fetch that `ILattice` grain, then call the same public method the in-cluster client calls. Cross-tree atomic batches are different: the facade converts each tree slice into a cross-tree batch and calls the grain-factory cross-tree coordinator surface. Authorization is therefore inherited, not re-implemented: the per-tree / per-key enforcement wired at the core grain fires automatically once the caller identity flows on the ambient credential context.
@@ -43,6 +43,7 @@ See [`Orleans.Lattice.Tenancy`](../lattice.tenancy/README.md) for the isolation 
 | Point delete | `DeleteAsync` | `Delete` | `DeleteAsync(key)` |
 | Range delete | `DeleteRangeAsync` | `DeleteRange` | the resilient range-delete drain (the `DeleteRangeAsync(startInclusive, endExclusive, stepSize)` extension over the delete-range cursor, stepping `LatticeApiDataOptions.RangeDeleteStepSize` keys at a time) |
 | Non-atomic bulk upsert | `SetManyAsync` | `SetMany` | `SetManyAsync(pairs)` |
+| Streamed bulk upsert | `SetManyStreamAsync` | `StreamSetMany` (duplex streaming) | none of its own: a default interface member that cuts the entry stream into batches of `DataSetManyStreamOptions.BatchSize` and writes each through the facade's `SetManyAsync`, re-writing a batch refused for one entry's sake entry by entry through `SetAsync` so the refusal is reported against its key and every other entry lands |
 | Single-tree atomic batch | `SetManyAtomicAsync` | `SetManyAtomic` | `SetManyAtomicAsync(upserts, deletes, operationId)` |
 | Cross-tree atomic batch | `SetManyAtomicCrossTreeAsync` | `SetManyAtomicCrossTree` | the grain-factory cross-tree coordinator surface |
 | Point read | `GetAsync` | `Get` | `GetWithVersionAsync(key)`, after a `TreeExistsAsync` probe so an unknown tree is a clean miss rather than a created tree |
@@ -176,6 +177,6 @@ This is a write-capable external surface, so its default posture is closed:
 - [`Orleans.Lattice.Api.Data.Grpc`](../lattice.api.data.grpc/README.md) - the gRPC binding: [public API](../lattice.api.data.grpc/api.md), [configuration](../lattice.api.data.grpc/configuration.md), and [architecture](../lattice.api.data.grpc/architecture.md).
 - Facade registration: `AddLatticeDataApi()` on the silo builder, configured with `LatticeApiDataOptions`.
 - gRPC registration: `AddLatticeDataApiGrpc()` and `MapLatticeDataApiGrpc()`, configured with `LatticeDataApiGrpcOptions`.
-- Public client: `LatticeDataApiGrpcClient` (`SetAsync`, `DeleteAsync`, `DeleteRangeAsync`, `SetManyAsync`, `SetManyAtomicAsync`, `SetManyAtomicCrossTreeAsync`, `GetAsync`, `ReadRangeAsync`, `CrdtWriteAsync`, `CrdtReadAsync`).
+- Public client: `LatticeDataApiGrpcClient` (`SetAsync`, `DeleteAsync`, `DeleteRangeAsync`, `SetManyAsync`, `SetManyStreamAsync`, `SetManyAtomicAsync`, `SetManyAtomicCrossTreeAsync`, `GetAsync`, `ReadRangeAsync`, `CrdtWriteAsync`, `CrdtReadAsync`, `ProbeCapabilitiesAsync`).
 - Authorization seam: `ILatticeDataApiAuthorizer` (`DenyAllDataApiAuthorizer`, `AllowAllDataApiAuthorizer`).
 - Identity seams: `ILatticeDataApiCredentialBridge` (caller credential) and `ILatticeDataApiActiveTenantBridge` (asserted active tenant).

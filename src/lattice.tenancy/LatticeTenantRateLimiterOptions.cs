@@ -80,7 +80,7 @@ public sealed class LatticeTenantRateLimiterOptions
     /// to <see cref="LeaseInterval"/> on the first success, so a persistently
     /// unhealthy registry is probed at a decaying rate instead of being hammered
     /// every tick. Defaults to <see cref="DefaultMaxLeaseBackoff"/>; a non-positive
-    /// value falls back to that default, and a value below
+    /// value falls back to that default, and a value at or below
     /// <see cref="LeaseInterval"/> disables backoff.
     /// </summary>
     public TimeSpan MaxLeaseBackoff { get; set; } = DefaultMaxLeaseBackoff;

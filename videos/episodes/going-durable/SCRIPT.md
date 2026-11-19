@@ -1,6 +1,6 @@
 # Going durable - script
 
-Status: fact-checked by the Docs agent against the corpus, cue by cue. Eight of ten cues were accurate as written; two were corrected: the file provider now "suits a single container with a mounted volume" (the corpus says single-container, not single node), and the closing pairing advice now reads "durable grain storage too, not the memory provider" rather than an absolute ban. The fencing default it states (Reject: a provider that accepts a stale write stops the silo) matches configuration.md and source; wal-storage-providers.md still says Warn and is stale.
+Status: fact-checked by the Docs agent against the corpus, cue by cue. Eight of ten cues were accurate as written; two were corrected: the file provider now "suits a single container with a mounted volume" (the corpus says single-container, not single node), and the closing pairing advice now reads "durable grain storage too, not the memory provider" rather than an absolute ban. The fencing default it states (Reject: a provider that accepts a stale write stops the silo) matches configuration.md, wal-storage-providers.md and source.
 
 Written form, in the series voice (Emma, British English). The code is on
 screen, so the narration explains the change rather than reading method names.

@@ -76,13 +76,13 @@ Crossing them:
 | mechanism | **not** turn-token contention | **turn-token contention** |
 
 The production storm is 100% never-served on members that **all** carry
-`[AlwaysInterleave]` (`ResolveAsync` `ILatticeRegistry.cs:258`, `GetEntryAsync`
-`:130`, `GetShardMapAsync` `:271`). This also explains, without needing any
+`[AlwaysInterleave]` (`ResolveAsync` `ILatticeRegistry.cs:344`, `GetEntryAsync`
+`:149`, `GetShardMapAsync` `:357`). This also explains, without needing any
 further conjecture, why PR #3183's interleaving attributes were present in the
 binary that produced the 103-timeout storm and did not prevent it.
 
 The rig's storm is 93% served-slowly and 64% on non-interleaved members
-(`GetAllTreeIdsAsync` `:170`, `RegisterAsync` `:097`). Different mechanism,
+(`GetAllTreeIdsAsync` `:189`, `RegisterAsync` `:097`). Different mechanism,
 different remedy.
 
 **Consequence for anyone writing the fix: a remedy validated against this rig
@@ -146,6 +146,15 @@ instrument is working and reporting a true negative. Manufacturing the specified
 series would have meant giving the grain state it does not have, in order to
 measure a load that does not happen.
 
+> **Status note (2026-11-19).** Since these measurements the registry grain has
+> gained one `[PersistentState]` declaration, `alias-routing`
+> (`LatticeRegistryGrain.cs:41`, #4759), which holds the durable intent of an
+> in-flight alias routing move. The grain therefore now has an activation-time
+> state load, and a `state_name="alias-routing"` series can appear; a
+> `state_name="lattice-registry"` series still cannot, and registry entries are
+> still read through the backing `_lattice_trees` tree. The paragraph and table
+> above describe the grain as it stood when the rig was measured.
+
 What ships instead measures the thing that actually governs the activation
 window: per-member service time, fan-in width, and which members are
 non-interleaved (read from source, never inferred). See
@@ -168,9 +177,9 @@ callers register with the same one-minute due time:
 
 | service | reminder registration | due |
 |---|---|---|
-| hot-shard monitor | `src/lattice/BPlusTree/Grains/HotShardMonitorGrain.cs:265-268` | 1 min |
-| shard-healing orchestrator | `src/lattice/BPlusTree/Grains/ShardHealingOrchestratorGrain.cs:131-134` | 1 min |
-| view maintainer | `src/lattice/Views/ViewMaintainerGrain.cs:264-267` | 1 min |
+| hot-shard monitor | `src/lattice/BPlusTree/Grains/HotShardMonitorGrain.cs:277-281` | 1 min |
+| shard-healing orchestrator | `src/lattice/BPlusTree/Grains/ShardHealingOrchestratorGrain.cs:164-168` | 1 min |
+| view maintainer | `src/lattice/Views/ViewMaintainerGrain.cs:423-427` | 1 min |
 
 Those three were 87 of the 103 live timeouts. Reminders are **persistent**, so
 they survive into the next process lifetime and re-fire after a cold start with

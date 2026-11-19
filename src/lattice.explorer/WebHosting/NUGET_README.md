@@ -13,8 +13,9 @@ path and cannot drift.
 
 ## Package shape
 
-This package ships as one of a small family of explorer packages. It depends on
-two explorer libraries, which restore automatically for a consumer:
+This package ships as one of a small family of explorer packages. It references
+`Orleans.Lattice.Explorer.UI` directly and `Orleans.Lattice.Explorer.Core`
+through it; both restore automatically for a consumer:
 
 - `Orleans.Lattice.Explorer.UI` - the Explorer UI itself: the navigation and
   session chrome, the compiled-in Data, Apps, Access, Schema, Tenancy,

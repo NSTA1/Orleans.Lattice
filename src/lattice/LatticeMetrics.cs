@@ -1460,7 +1460,7 @@ public static class LatticeMetrics
     /// measured from the wall-clock time the saga's first
     /// <c>AtomicWritePhase.Prepare</c> ran (persisted on the saga state
     /// so it survives a silo crash) to the time the saga reached
-    /// <c>AtomicWritePhase.Completed</c>. Tagged with <see cref="TagOutcome"/>
+    /// <c>AtomicWritePhase.Completed</c>. Tagged with <see cref="TagTree"/> and <see cref="TagOutcome"/>
     /// = <c>committed</c>, <c>compensated</c>, or <c>failed</c> (see
     /// <see cref="AtomicWriteCompleted"/>; its <c>shutdown_refused</c> value is
     /// never produced) so operators can plot abort-path latency separately from
@@ -1475,14 +1475,14 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Histogram<double> AtomicWriteDuration =
         Meter.CreateHistogram<double>("orleans.lattice.atomic_write.duration", unit: "ms",
-            description: "End-to-end SetManyAtomicAsync saga duration, tagged by outcome.");
+            description: "End-to-end SetManyAtomicAsync saga duration, tagged by tree and outcome.");
 
     /// <summary>
     /// Histogram of saga batch sizes, recorded once per terminal transition of
     /// an <c>AtomicWriteGrain</c> saga next to <see cref="AtomicWriteCompleted"/>.
     /// The value is the entry count submitted to <c>SetManyAtomicAsync</c>
     /// (or the per-entry list length on apply-mode sagas). Tagged with
-    /// <see cref="TagOutcome"/> = <c>committed</c>, <c>compensated</c>, or
+    /// <see cref="TagTree"/> and <see cref="TagOutcome"/> = <c>committed</c>, <c>compensated</c>, or
     /// <c>failed</c> (see <see cref="AtomicWriteCompleted"/>). Lets operators interpret
     /// <see cref="AtomicWriteDuration"/>
     /// in context - a 10-entry batch and a 1000-entry batch both appear as one
@@ -1491,7 +1491,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Histogram<int> AtomicWriteBatchSize =
         Meter.CreateHistogram<int>("orleans.lattice.atomic_write.batch_size", unit: "{entry}",
-            description: "Entry count of each SetManyAtomicAsync saga, tagged by outcome.");
+            description: "Entry count of each SetManyAtomicAsync saga, tagged by tree and outcome.");
 
     /// <summary>
     /// Counter incremented once per terminal completion of a <b>cross-tree</b>
@@ -1977,8 +1977,9 @@ public static class LatticeMetrics
 
     /// <summary>
     /// Counter of bytes physically returned to the filesystem by WAL shard
-    /// compaction, tagged with <see cref="TagTree"/> and <see cref="TagShard"/>.
-    /// Zero-primed per shard.
+    /// compaction, tagged with <see cref="TagTree"/>, <see cref="TagShard"/> and
+    /// <see cref="TagTrigger"/> (the compaction trigger that released the bytes,
+    /// as on <see cref="WalCompactions"/>). Zero-primed per shard and trigger.
     /// <para>
     /// Monotonic by design. The obvious alternative - an up/down gauge of dead
     /// bytes currently held - needs a compensating write per compaction, and
@@ -1998,7 +1999,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> WalCompactionReclaimedBytes =
         Meter.CreateCounter<long>("orleans.lattice.wal.compaction.reclaimed_bytes", unit: "By",
-            description: "Bytes physically returned to the filesystem by WAL shard compaction, tagged by tree and by the storage shard the rewrite ran on. Monotonic by design: an up/down gauge of currently-held dead bytes would need a compensating write that can be lost, which ratchets the series (issue #2700). For present-truth occupancy compare the tree's physical and retained WAL bytes on the storage-usage report instead. Zero-primed per shard.");
+            description: "Bytes physically returned to the filesystem by WAL shard compaction, tagged by tree, by the storage shard the rewrite ran on and by compaction trigger. Monotonic by design: an up/down gauge of currently-held dead bytes would need a compensating write that can be lost, which ratchets the series (issue #2700). For present-truth occupancy compare the tree's physical and retained WAL bytes on the storage-usage report instead. Zero-primed per shard.");
 
     /// <summary>Canonical name of <see cref="WalCompactionReclaimedBytes"/>.</summary>
     public const string WalCompactionReclaimedBytesName = "orleans.lattice.wal.compaction.reclaimed_bytes";
@@ -4418,8 +4419,8 @@ public static class LatticeMetrics
     ///   hook by design, so a leaf lost that way is never counted.</item>
     ///   <item>An activation that FAILED never reaches this hook at all.
     ///   Orleans does not run <c>OnDeactivateAsync</c> when
-    ///   <c>OnActivateAsync</c> throws - measured, with a positive control, on
-    ///   Orleans 10.2.2 - and a cancelled cold replay throws
+    ///   <c>OnActivateAsync</c> throws - measured, with a positive control, against
+    ///   the Orleans runtime - and a cancelled cold replay throws
     ///   <see cref="OperationCanceledException"/> out of activation by design
     ///   ("failures propagate"). That population is counted by
     ///   <see cref="LeafActivationFailures"/> instead, and reading either
@@ -9037,8 +9038,8 @@ public static class LatticeMetrics
     /// retries so dashboards can attribute wall-time inflation to
     /// SDK backoff without inferring it from the gap.
     /// <para>
-    /// Cardinality is intentionally bounded: only the status tag is
-    /// emitted (small bounded set of HTTP status codes), not
+    /// Cardinality is intentionally bounded: only the status tag (plus the
+    /// fixed platform tenant label) is emitted (small bounded set of HTTP status codes), not
     /// <see cref="TagTree"/> / <see cref="TagShard"/>. Per-tree /
     /// per-shard attribution is covered by
     /// <see cref="ProviderRetryExhausted"/>, which fires rarely.

@@ -40,9 +40,12 @@ initialisation (R and H, in three slices: `Recreate`, `RecreateSurvivor` and
 `RecreateSurvivorMixed`), and a bulk-born leaf (`Bulk`, B). The core owns
 `Armed(a)`, `LiveAdvance`, `Replay`, `Capture`, `GcTrim`, the applied-prefix tracker
 (`mine`, and the in-flight own appends), the unstamped watermark with its restart reset and
-self-report, and the duplicate. The base and the `Bulk` variant also check one liveness
-property, `NewbornPinEventuallyUsable`, under `LiveSpec`'s explicit fairness; the other
-variants check safety only.
+self-report, and the duplicate. The base and the variants whose newborn it applies to
+(`Bulk`, `KeyMove`, `PreArmBulk`, `FreeKeyMove`, `FreeSplitBirth`, `FreeSplitLink`,
+`FreeEpochOnly` and `FreeForwardIn`) also check the liveness property
+`NewbornPinEventuallyUsable` under `LiveSpec`'s explicit fairness, and the base,
+`FreeSplitLink`, `FreeEpochOnly` and `FreeForwardIn` the second, `SplitEventuallyLinked`;
+the other variants check safety only.
 
 ## Interface
 
@@ -96,7 +99,8 @@ weaken each one in turn and go red, so each is load-bearing.
 - **Guarantees.** Four, each a checked invariant of the base and every variant, consumed
   by no other module: `ReadPositionHonest`, `SnapshotHonest`, `NoTrimPastAcked` and
   `OldNeverRejected`; two cost witnesses of the lazy arm (#5833), checked where their
-  environment allows them, `PreArmCostWitness` and `ReclaimCostBound`; and one liveness property, checked on the base and in `Bulk`,
+  environment allows them, `PreArmCostWitness` and `ReclaimCostBound`; and the liveness
+  property, checked on the base and in the variants listed above,
   `NewbornPinEventuallyUsable`, the armed newborn's pin becoming usable without a
   replay from `-1`.
 - **The graph.** E <- H, E <- R, and {E, H, R, B} <- C, where E is `WalAppendEpoch`,
@@ -246,8 +250,11 @@ weaken each one in turn and go red, so each is load-bearing.
 
 `TypeOK` and the four invariants are state safety, reached and checked on the base and
 re-checked in each variant. `NewbornPinEventuallyUsable` is liveness, checked on the base
-and re-checked in `Bulk`, whose bulk-born leaf is a newborn too; the other variants leave
-it out (below). The base carries the duplicate, one hand-off window and a
+and re-checked in `Bulk`, whose bulk-born leaf is a newborn too, and in `KeyMove`,
+`PreArmBulk` and five claimless-advance variants; the other variants leave it out
+(below). `SplitEventuallyLinked` is liveness too, checked on the base (where no split-born
+leaf exists, so it holds trivially) and in `FreeSplitLink`, `FreeEpochOnly` and
+`FreeForwardIn`. The base carries the duplicate, one hand-off window and a
 10.2.0 silo's append; each variant adds one environment (a restart, own unstamped appends,
 the purge, a bulk birth), because the combinations are larger than the CI budget allows
 for one case. The design model's combined configurations stay as local evidence in the
@@ -288,7 +295,7 @@ birth proof, and `WithOrphanForward` a stale duplicate's forward into an orphan.
 `WithFwdExclusion` adds the relief that lets a donor exclude its own forwards once its
 narrow is durable: `ReadPositionHonest`, `SnapshotHonest` and `NoTrimPastAcked` then skip
 only the forwards of keys L no longer owns, which `ForwardHonest` and
-`SnapshotForwardHonest` state. `WithDuplicate` and `WithEvict` exist to slice. Fifteen variants check it, each within the
+`SnapshotForwardHonest` state. `WithDuplicate` and `WithEvict` exist to slice. Twenty-four variants check it, each within the
 case budget:
 
 | Variant | Adds | States |
@@ -311,8 +318,8 @@ case budget:
 | `FreeReforward` | a forward chain at depths 2, 3 and 4 against k = 3 (F2') | 1,795,034 |
 | `FreeChainEvict` | the chain with an eviction (`WithEvictAlone`: no WAL shard restart), without the orphan's own forward: the fold of the chain's records (S-a) | 1,993,821 |
 | `FreeOrphanEvict` | an orphan's forward with an eviction and no WAL shard restart: the fold of the orphan's forward (S-a). With `FreeChainEvict` it replaces one variant combining both with a restart, which measured 46,514,214 states; the chain with a restart alone measured 12,065,410, and the restart's own floors are checked in `FreeRestart` | 3,045,174 |
-| `FreeForwardIn` | the donor's pre-link forward into L and a stale D''s into another orphan (the `staleHigh` tag exclusion) | 1,032,584 |
-| `FreeEpochOnly` | a stale duplicate's epoch-only write before the link, in the donor's `staleHigh` | 712,124 |
+| `FreeForwardIn` | the donor's pre-link forward into L and a stale D''s into another orphan (the `staleHigh` tag exclusion); liveness and `SplitEventuallyLinked` | 1,032,584 |
+| `FreeEpochOnly` | a stale duplicate's epoch-only write before the link, in the donor's `staleHigh`; liveness and `SplitEventuallyLinked` | 712,124 |
 | `FreeSplitView` | the split's view read concurrently with the drain (V3), with a hand-off window, and the split's cap fallback when the hint guard fails (#5851 O2c) | 1,159,405 |
 | `FreeOtherLinkRaise` | another split's link raising the shard root's generation between the donor's close and L's link, and L's link witness, under the latch and without the birth proof (#5866 B1, B2) | 1,056,232 |
 | `FreeKeyFilter` | the key-range-filtered unstamped high: an unstamped write keyed in a span outside L's range, and L's range absorbing the span (#5851 K1-K6) | 8,791 |
@@ -415,8 +422,9 @@ the shared snapshot covers every durable own append. The base cfg's specificatio
   that path. Without the exclusion TLC reports exactly this behaviour; with the GC
   additionally bounded by every running activation's read position, the property holds
   without it (550,843 states, checked by the independent review).
-- **Cost, measured** (tla2tools v1.7.4, two workers, liveness included): the base finds
-  778,329 distinct states to depth 25 in 1 minute 27 seconds, and `Bulk` 1,114,185 to
+- **Cost, measured** (tla2tools v1.7.4, two workers, liveness included): an earlier
+  revision of the base found 778,329 distinct states to depth 25 in 1 minute 27 seconds
+  (the current base's count is the manifest's, 2,021,047), and `Bulk` 1,114,185 to
   depth 25 in 2 minutes 38 seconds (re-measured with TLC 2.19). Stated as three
   leads-to formulas the base took 4 minutes, and with
   one fairness condition per step as well, 11.

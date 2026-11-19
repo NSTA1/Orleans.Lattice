@@ -647,7 +647,7 @@ if ($exceptionCount -gt 0 -and (Test-Path -LiteralPath $exceptionLog)) {
 }
 
 # Subtract benign placement-convergence exceptions from the verdict-relevant
-# tally. Since the Orleans 10.2.0 -> 10.2.2 bump (#1598), a fresh silo's
+# tally. Since the Orleans package bump in #1598, a fresh silo's
 # cluster-manifest / grain-directory view converges lazily per grain type:
 # the FIRST hot-path message addressed to a grain type the local silo has
 # not yet resolved is rejected by the placement service with an

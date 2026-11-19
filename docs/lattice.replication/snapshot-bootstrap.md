@@ -93,7 +93,8 @@ before calling `AddLatticeReplication`.
   changed (a restore, a revert, or an alias moved to another tree) -
   adopts the export's lineage when every source-origin key it held was
   carried by the export, because there is then nothing it could wrongly
-  delete; otherwise it skips, counted as `skipped_never_aligned` or
+  delete; otherwise it skips, counted on
+  `orleans.lattice.replication.bootstrap.reconcile` as `skipped_never_aligned` or
   `skipped_lineage_mismatch`, and keeps every key. Every alignment - this
   one and the one a receiver that held no source row records - also
   needs a scan at the end of the drain to find no live, non-expiring
@@ -273,6 +274,7 @@ disturbing the live tail pipeline.
 |------|-------|---------|
 | `IRemoteSnapshotTransport` | `Task<RemoteSnapshotMetadata> GetMetadataAsync(string treeName, string sourceClusterId, HybridLogicalClock fromAsOfHlc, CancellationToken ct)` + `IAsyncEnumerable<SnapshotEntry> RequestSnapshotAsync(string treeName, string sourceClusterId, HybridLogicalClock fromAsOfHlc, CancellationToken ct)` | Transport-shaped sub-interface used by a cross-cluster `ISnapshotProvider` adapter to fetch a snapshot from a sender cluster. |
 | `RemoteSnapshotMetadata` | `readonly record struct` with `TreeName`, `SourceClusterId`, `AsOfHlc`, `CausalStableFrontier`, `ExportEpoch`, `OpenGeneration` | Snapshot cut-point plus the source export epoch and opening tree generation; alias `olr.sm`. A legacy sender omits the epoch (`0`) or generation (`null`). |
+| `IRemoteSnapshotItemTransport` | `IRemoteSnapshotTransport` + `IAsyncEnumerable<RemoteSnapshotStreamItem> RequestSnapshotItemsAsync(string treeName, string sourceClusterId, HybridLogicalClock fromAsOfHlc, CancellationToken ct)` | Optional extension for a binding that can carry an end-of-stream trailer. Each `RemoteSnapshotStreamItem` carries one `SnapshotEntry` (`Entry`) or, as the trailer, the export's `CloseGeneration`. `LatticeRemoteSnapshotService` implements it, and `RemoteSnapshotProvider` drains through it when the registered transport does. |
 
 ### Semantics
 
@@ -355,6 +357,12 @@ concrete binding the host registers.
   the mesh secret cannot stream out a tree this cluster keeps local,
   such as the `sys-` authorization and identity trees. The check sits
   on the handler, so every binding (gRPC, loopback, custom) inherits it.
+- **Tenant export gate.** A tree owned by a non-default tenant is
+  exported only to an authenticated requesting peer that the active
+  tenant-isolation gate authorises for that tree. With no authenticated
+  requester, no active gate, or a refusal, the call fails with
+  `UnauthorizedAccessException`. Platform-owned and default-tenant
+  trees keep the enrollment-only rule.
 - **Delegation to the local provider.** `GetMetadataAsync` calls
   `ISnapshotProvider.ExportAsync(treeName, fromAsOfHlc, ct)` and
   returns a `RemoteSnapshotMetadata` carrying the resulting
@@ -598,7 +606,7 @@ See [Auto-Bootstrap](auto-bootstrap.md).
 | `LatticeBootstrapState` | `enum` with members `Idle`, `RequestingSnapshot`, `ApplyingSnapshot`, `IncrementalHandoff`, `LiveIncremental`, `Failed` | The state machine's observable position for a single tree. |
 | `BootstrapCoordinatorStatus` | `readonly record struct (LatticeBootstrapState Phase, string? SourceClusterId)` plus `ReadFenced`, `EntriesApplied` and `RedriveAttempts` | Observable status snapshot returned by `GetStatusAsync`; carries the phase, the in-flight source cluster id (or `null` when no bootstrap is in flight), whether a legacy import's reads are fenced (fresh shadow imports remain readable), how many snapshot entries the current drain attempt has applied, and how many times a failed bootstrap has been re-driven (see [Read fence during the drain](#read-fence-during-the-drain)). Answered while a drain runs. |
 | `ILatticeBootstrapCoordinator` | `Task<LatticeBootstrapState> GetStateAsync(string treeName, CancellationToken ct)` + `Task<BootstrapCoordinatorStatus> GetStatusAsync(string treeName, CancellationToken ct)` + `Task BootstrapAsync(string treeName, string sourceClusterId, CancellationToken ct)` | Public facade over the per-tree bootstrap coordinator grain. Registered as a singleton by `AddLatticeReplication`; the state machine itself lives in a per-tree internal grain whose cluster-wide single activation provides cross-silo mutual exclusion. |
-| `LatticeBootstrapTransientFaultClassifier` | `public static class` exposing `bool IsTransient(Exception)` | Default classifier consumed by the bootstrap drain's bounded-retry seam. Returns `true` for `TimeoutException`, `HttpRequestException`, `SocketException`, `IOException`, `LatticeTreeBootstrappingException` (the source tree is itself mid-bootstrap), Orleans' `EnumerationAbortedException` (an expired cross-grain enumeration session), aggregate wrappers of those, and gRPC `RpcException` carrying `Unavailable`, `DeadlineExceeded`, or `Aborted`. Hosts can compose this with a custom predicate via `LatticeReplicationOptions.BootstrapTransientRetry.RetryableExceptionClassifier`. |
+| `LatticeBootstrapTransientFaultClassifier` | `public static class` exposing `bool IsTransient(Exception)` | Default classifier consumed by the bootstrap drain's bounded-retry seam. Returns `true` for `TimeoutException`, `HttpRequestException`, `SocketException`, `IOException`, `LatticeTreeBootstrappingException` (the source tree is itself mid-bootstrap), Orleans' `EnumerationAbortedException` (an expired cross-grain enumeration session), a source deferring the export until a cross-tree precondition holds, aggregate wrappers of those, and gRPC `RpcException` carrying `Unavailable`, `DeadlineExceeded`, or `Aborted`. Hosts can compose this with a custom predicate via `LatticeReplicationOptions.BootstrapTransientRetry.RetryableExceptionClassifier`. |
 
 ### State transitions
 
@@ -630,7 +638,7 @@ Failed -> IncrementalHandoff (automatic retry after a shadow copy was published
   machine is hosted in an internal per-tree Orleans grain,
   so every silo's
   `BootstrapAsync` call for a given tree id routes to the same
-  activation. The grain reads the persisted `InProgress` flag on
+  activation. The grain reads its persisted in-progress flag on
   entry: a concurrent call from the same source cluster is a no-op
   (idempotent retry); a concurrent call from a different source
   cluster throws `InvalidOperationException`. No distributed lock
@@ -641,7 +649,7 @@ Failed -> IncrementalHandoff (automatic retry after a shadow copy was published
 - **Durable, crash-resumable state.** The grain uses the same
   keepalive-reminder plus phase-timer coordinator pattern as
   the core tree-resize coordinator. Phase, source cluster id,
-  and a `LastAppliedHlc` cursor are persisted to the
+  and a last-applied-HLC cursor are persisted to the
   `LatticeOptions.StorageProviderName` storage provider. After a
   silo crash, Orleans reactivates the grain on a surviving silo
   within the keepalive reminder period and the phase pump resumes
@@ -674,7 +682,9 @@ Failed -> IncrementalHandoff (automatic retry after a shadow copy was published
   `LatticeReplicationOptions.BootstrapTransientRetry.RetryableExceptionClassifier`
   (default: `LatticeBootstrapTransientFaultClassifier.IsTransient` -
   `TimeoutException`, `HttpRequestException`, `SocketException`,
-  `IOException`, `EnumerationAbortedException`, aggregate wrappers, and
+  `IOException`, `LatticeTreeBootstrappingException`,
+  `EnumerationAbortedException`, a source deferring the export until a
+  cross-tree precondition holds, aggregate wrappers, and
   gRPC `RpcException` carrying
   `Unavailable`, `DeadlineExceeded`, or `Aborted`), the coordinator
   retries the drain in-place using a bounded exponential backoff
@@ -1045,7 +1055,7 @@ registry shard of the tree, followed by the tombstone pass described under
    chain and emits a `SnapshotEntry` with `IsPrepared = true` for
    every `(transactionId, key)` pair in any leaf's per-tx pending
    bucket whose registry status in the captured snapshot is
-   `InFlight`, `Indeterminate`, or absent (an `Indeterminate` saga whose
+   still in flight, undetermined, or absent (an undetermined saga whose
    decision is still stored is first resolved to it; see below). The emitted row carries the
    source-stamped
    prepare-time HLC verbatim, plus `IsTombstone`, `TransactionId`,
@@ -1058,9 +1068,9 @@ registry shard of the tree, followed by the tombstone pass described under
    via the resilient `ScanEntriesAsync` wrapper over
    `ILattice.EntriesAsync`, under the same frozen registry scope.
    Sagas the snapshot recorded as
-   `Committed` surface their prepared value as the live one; sagas
-   recorded as `Aborted` are dropped; sagas still `InFlight` (or
-   `Indeterminate`) against
+   committed surface their prepared value as the live one; sagas
+   recorded as aborted are dropped; sagas still in flight (or
+   undetermined) against
    the snapshot are hidden from the committed scan because the
    prepared rows pass above has already shipped them. Each emitted row
    carries the key's value, commit-time HLC, and absolute
@@ -1088,23 +1098,23 @@ transaction-registry linearization point.
 committed projection pass because a source-side terminal that drains
 a pending bucket between the two would otherwise erase the saga from
 the export entirely: the committed pass under the frozen snapshot
-would hide the saga (the snapshot still says `InFlight`), the
+would hide the saga (the snapshot still reads it as in flight), the
 prepared pass would find the bucket already drained, and the
 prepare-time WAL records - stamped at HLC <= `asOfHlc` - would never
 re-arrive through the post-snapshot incremental stream (which starts
 at `asOfHlc`). Capturing prepared rows first guarantees every
-`InFlight` saga's per-key state is shipped to the receiver's pending
+in-flight saga's per-key state is shipped to the receiver's pending
 bucket, and the incremental stream delivers the terminal record to
 flip visibility.
 
 **An aged-out decision is shipped, not dropped.** A decision whose
 tombstone has outlived `LatticeOptions.TxDecisionRetention` is carried
-in the frozen snapshot as `Indeterminate` rather than omitted from it.
+in the frozen snapshot as undetermined rather than omitted from it.
 Omission used to fold two different facts onto one reading - "no
 decision was ever recorded" and "a decision was recorded and the source
 is no longer entitled to report it". Locally that collapse was
 invisible, but in this export it was load-bearing in the wrong
-direction: an aged-out `Committed` saga reached the receiver as
+direction: an aged-out committed saga reached the receiver as
 absence, was read as still preparing, and could never be corrected,
 because the terminal that would have flipped it was already behind the
 incremental stream the receiver drains after the snapshot. The source
@@ -1113,7 +1123,7 @@ repair path on either side. Carrying the row explicitly means absence
 in this payload once again means only what it says.
 
 **The verdict behind an aged-out row is exported, not the mask.** The
-prepared rows pass resolves an `Indeterminate` saga whose decision the
+prepared rows pass resolves an undetermined saga whose decision the
 registry still stores to that recorded verdict
 (the transaction registry recorded-verdict read), once per saga, before it
 emits any of the saga's rows. Both passes then treat the saga as
@@ -1138,12 +1148,12 @@ converges to. The source's read path keeps masking the row: the export
 transfers state the source owns rather than disclosing an outcome to a
 reader. Two cases still ship as prepared rows:
 
-- An `Indeterminate` saga with no stored verdict, such as a cross-tree
+- An undetermined saga with no stored verdict, such as a cross-tree
   delegation whose coordinator could not be reached.
 - A saga whose row has already been purged reads as absent. Its export
   carries the split the source itself serves (#4508).
 
-A saga the producer's registry recorded as `Committed` before the
+A saga the producer's registry recorded as committed before the
 snapshot is naturally folded into the committed projection by the
 leaf scan's pending-transaction read step - which honors
 the frozen registry scope - so the receiver observes the post-saga
@@ -1151,9 +1161,9 @@ value directly without a separate prepared/terminal round trip. A
 bucket of such a saga that the terminal has not yet drained is also
 emitted as a committed row by the prepared rows pass, because the scan
 need not enumerate a key held only in a pending bucket. The
-same applies in reverse for `Aborted`: the prepared mutation is
+same applies in reverse for an aborted saga: the prepared mutation is
 correctly dropped from the committed pass and not shipped as a
-prepared row. A `Committed` saga's pending **delete** is the exception
+prepared row. A committed saga's pending **delete** is the exception
 to the fold: the committed pass reads the deleted key as absent and
 emits nothing, so the prepared rows pass ships it itself as a committed
 tombstone row (`IsTombstone` set, `IsPrepared` clear, at the prepare's
@@ -1315,7 +1325,7 @@ the export opened and that the export neither carries in flight nor
 decides. The sender holds nothing back during such a bootstrap, so a saga
 staged after the export opened is not stale: its terminal is still to
 come, and it keeps its bucket. A saga the
-source still knows but cannot settle (an `Indeterminate` row with no
+source still knows but cannot settle (an undetermined row with no
 recorded verdict) ships as a value-less row that names it with no
 `SettledDecision`, so the receiver does not take it for a purged one;
 a receiver that predates it skips the row like any other value-less row.
@@ -1433,7 +1443,7 @@ Two rules keep the window closed:
 one at a time on the held shadow, so readers continue to use the original
 until the resize alias cutover publishes the shadow only after the import
 completes. The complete imported copy is not routable before that point, and
-the whole import becomes visible at once when the alias cutover completes.The decision rows
+the whole import becomes visible at once when the alias cutover completes. The decision rows
 and the settle above keep each saga's outcome atomic across the import
 itself. In particular, a prepared row the drain imports after the
 saga's terminal has already reached the receiver through the live

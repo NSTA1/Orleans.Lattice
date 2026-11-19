@@ -98,12 +98,17 @@ under. It is
 **not** re-drivable: each call mints a
 fresh operation id, so re-issuing a load after it (or part of it) has
 completed fails on the shards that already hold data. Only the per-shard retry
-inside a single call is idempotent, and only while nothing else reaches the
-shard: if a shard's load fails part-way and a read or write reaches that shard
-before the retry, the shard's root replays whatever the failed attempt had
-already written, and the retry is refused as non-empty. Nothing is lost - those
-rows are readable - but the load does not complete
-([#5812](https://github.com/NSTA1/Orleans.Lattice/issues/5812)). So after a crash mid-import restart
+inside a single call is idempotent, and on a shard that no read or write had
+reached before the load, only while nothing else reaches the shard: if such a
+shard's load fails part-way and a read or write reaches it before the retry,
+the shard's root replays whatever the failed attempt had already written, and
+the retry is refused as non-empty. Nothing is lost - those rows are readable -
+but the load does not complete
+([#5812](https://github.com/NSTA1/Orleans.Lattice/issues/5812)). (A shard that a
+read had already given its empty root before the load can instead accept that
+retry while the failed attempt's bulk switch is still open, relocating those
+rows into the loaded tree last-writer-wins; a silo whose WAL append-fence gate
+is closed opens no switch, so there the retry is refused as above.) So after a crash mid-import restart
 against a fresh tree, or drive the import through the resumable chunk protocol
 below. For append-style ingestion that re-flushes batches over time, use
 `SetAsync`, `SetManyAsync`, or the streaming extension below; `BulkLoadAsync`
@@ -247,8 +252,9 @@ They are now readable, and counts and scans report each key once.
 
 The number of rows placed this way is reported by
 `orleans.lattice.shard_root.bulk.relocated_rows` (see
-[Metrics](metrics.md)); it stays at zero for an import into a quiet tree in
-ascending key order.
+[Metrics](metrics.md)), tagged by tree, tenant and `source` - `below_edge`,
+`rightmost_leaf` or `replaced_root`, one per bullet above; it stays at zero for
+an import into a quiet tree in ascending key order.
 
 ## Efficiency compared with `SetManyAsync`
 

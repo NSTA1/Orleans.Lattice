@@ -1163,7 +1163,7 @@ internal sealed class WalCommitLogWriter(
     }
 
     /// <summary>
-    /// One partition's slice of an <see cref="AppendManyAsync"/> batch: its
+    /// One partition's slice of an <see cref="AppendManyAsync(IReadOnlyList{WalRecord}, CancellationToken)"/> batch: its
     /// stamped records, the caller-order indexes those records came from, and
     /// the routing metadata the dispatch histogram tags with.
     /// </summary>
@@ -1432,7 +1432,7 @@ internal sealed class WalCommitLogWriter(
     /// hit - which is every append after a tree's first - and on the
     /// system-tree branch. Declared as <c>async Task&lt;T&gt;</c> the method
     /// still allocated a <c>Task&lt;ValueTuple&lt;...&gt;&gt;</c> per call even
-    /// though it never suspended, and <see cref="AppendManyAsync"/> awaits it
+    /// though it never suspended, and <see cref="AppendManyAsync(IReadOnlyList{WalRecord}, CancellationToken)"/> awaits it
     /// once per entry, so a batch of N paid N such allocations on the
     /// foreground commit path. The split fast/slow shape below mirrors
     /// <c>ShardRootGrain.GetRoutingTableSnapshotAsync</c> and

@@ -9,8 +9,8 @@ load-bearing decisions: every grant mints a strictly-increasing fencing token, a
 renew or release is honoured only for the current holder's token, and an expired
 lease is reclaimed and handed to the head of the FIFO queue - never to anyone
 else. Orleans.Lattice drives those decisions from a single **verified core** -
-a pure, deterministic function that both the production grain and an
-out-of-solution verification layer execute - so the lock's fencing and admission
+a pure, deterministic function that both the production grain and a Coyote
+concurrency model in the test project execute - so the lock's fencing and admission
 properties are machine-checked, not just asserted by prose and integration tests.
 
 This document describes the verification apparatus: the proven-core pattern, the
@@ -30,7 +30,7 @@ tick). Each function is:
   `now` as a tick value) and returns a verdict. No `Task`/`await`, no wall-clock
   read, no Orleans types, no storage, no allocation. Given the same inputs it
   always returns the same output.
-- **The single source of the decision** - the production `LatticeLockGrain` hot
+- **The single source of the decision** - the production lock grain's hot
   path calls the core to make the real decision (mint a token, decide grant vs
   hold, validate a renew / release token, reclaim an expired lease), and the
   Coyote model calls the *same* core to check it. There is no second, model-only

@@ -96,7 +96,8 @@ public static class LatticeDataApiGrpcServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Maps the data-API RPC routes (the ten unary write / read RPCs) on the
+    /// Maps the data-API RPC routes (the eleven unary write / read RPCs and the
+    /// duplex-streaming <c>StreamSetMany</c> RPC) on the
     /// supplied <paramref name="endpoints"/>. The host must have called
     /// <see cref="AddLatticeDataApiGrpc"/> and must expose
     /// <c>ILatticeDataApi</c> (via <c>AddLatticeDataApi</c>) in the same service

@@ -65,7 +65,7 @@ public static class LatticeApiBackupServiceCollectionExtensions
         // The transport-agnostic control facade. Registered as a silo singleton
         // that every transport binding (gRPC and MCP) adapts over.
         // The accept-then-poll operations facade (#4122) is the same singleton, so
-        // a blocking verb and a start share one authorization path and one engine.
+        // the control verbs and the starts share one authorization path and one engine.
         builder.Services.TryAddSingleton<LatticeBackupControl>();
         builder.Services.TryAddSingleton<ILatticeBackupControl>(sp => sp.GetRequiredService<LatticeBackupControl>());
         builder.Services.TryAddSingleton<ILatticeBackupOperations>(sp => sp.GetRequiredService<LatticeBackupControl>());

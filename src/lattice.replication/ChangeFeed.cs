@@ -25,8 +25,8 @@ namespace Orleans.Lattice.Replication;
 /// list and sorting by <see cref="HybridLogicalClock"/>. This is
 /// O(N log N) in the number of entries that pass the cursor filter and
 /// is acceptable for the bootstrap-and-test use cases this seam
-/// enables; the outbound shipper will swap to a streaming k-way merge
-/// if the change-feed consumer count grows.
+/// enables. The outbound shipper does not consume this feed: it tails
+/// each WAL partition directly.
 /// </para>
 /// <para>
 /// Range-delete entries are not filtered out by either cursor shape: they

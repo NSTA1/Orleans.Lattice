@@ -16,9 +16,13 @@ namespace Orleans.Lattice.Explorer.UI.Navigation;
 /// </para>
 /// <para>
 /// Areas are resolved per circuit. <see cref="ExplorerAreaDirectory"/> asks each
-/// one for its availability, time-boxed, and treats a fault, a cancellation or a
-/// timeout as <see cref="AreaAvailability.Hidden"/>: an area that cannot say it
-/// may be seen is not shown.
+/// one for its availability, time-boxed. A definite fault answers
+/// <see cref="AreaAvailability.Hidden"/>: an area that cannot say it may be seen
+/// is not shown. A transient fault, no answer in time, or the area itself
+/// reporting that it could not check answers <see cref="AreaAvailability.Unchecked"/>
+/// (shown demoted and asked again), except that an area already known to be
+/// hidden for the caller stays hidden, and one already known to be shown keeps
+/// that answer, marked stale.
 /// </para>
 /// </remarks>
 internal interface IExplorerArea

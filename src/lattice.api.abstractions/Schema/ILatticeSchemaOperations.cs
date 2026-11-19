@@ -5,7 +5,7 @@ namespace Orleans.Lattice.Api.Schema;
 
 /// <summary>
 /// Accept-then-poll schema remediation and eager migration. Each start verb
-/// authorizes exactly as its blocking twin on <see cref="ILatticeSchemaControl"/>,
+/// authorizes the caller fail-closed before it is accepted,
 /// records the operation durably, starts the work in the background and returns a
 /// <see cref="LatticeOperationHandle"/> at once; the caller then polls
 /// <see cref="ILatticeOperations.GetOperationStatusAsync"/> for the phase (dry run,

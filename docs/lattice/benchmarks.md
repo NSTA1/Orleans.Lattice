@@ -280,17 +280,17 @@ silo, a transport or a storage provider in the loop. The dispatch in
 | Suite | Covers |
 |---|---|
 | `observer` | The replication observer's per-commit producer-side work on every locally originating, replication-eligible write. |
-| `authdecision` | The warm authorization decision path (`PolicyEvaluator.Evaluate`). |
+| `authdecision` | The warm authorization decision path: evaluating one access request against the loaded policy. |
 | `hotpath` | Three steady-state allocation trims on grain hot paths: the shard root's batch-write guard, the batched CRDT receiver fold's ambient scope, and the atomic-write saga prepare's touched-shard set. |
-| `hashalloc` | View-maintenance UTF-8 hashing allocation trims (`AggregationRowCodec.Slot`, `AggregationApplier.OperationId`, `ViewMaintainerGrain.ComputeTreeDigestAsync`). |
+| `hashalloc` | View-maintenance UTF-8 hashing allocation trims: the aggregation row codec's slot hash, the aggregation applier's operation id, and the view maintainer's tree digest. |
 | `identitydigestalloc` | Three SHA-256 identity-digest allocation trims: the credential-cache key's metadata digest, the Explorer cookie credential's revocation identity, and the content hash of every backup artifact. |
 | `repocontexthashstaging` | Four repository-context hash-staging allocation trims: the per-source identifier a vector membership or coverage probe derives, the per-file content hash the context bundler computes, the per-unit reuse receipt and possession tokens, and the declaration digest taken for every symbol extracted during ingest. |
 | `ordedup` | Observed-remove reconcile paths - OR-Set live-dot counting and remove de-duplication, OR-Map live-entry counting, and the flag family's disable/enable de-duplication - plus the cost of `BoundedRegister`'s deep-copy clone and candidate measurements for dot-equality order, set construction and the byte-sequence tie-breaker comparison. |
 | `mergefold` | The CRDT merge fold: folding an incoming dot delta into an accumulated dot list. |
-| `catalog` | Tree-catalog enumeration: per-page and full-pagination cost of `LatticeStateQuery.ListTreesAsync`. |
+| `catalog` | Tree-catalog enumeration: per-page and full-pagination cost of the state API's tree-catalog listing. |
 | `rowcodec` | The aggregation-view row codec's encode and decode paths on the projection write and read path. |
 | `replayadmission` | The WAL replay-permit admission gate: the activation-time admission decision every replaying leaf passes (healthy, saturated, circulating-capacity and stale-mean-expired queues, the last exercising the freshness test on its smoothed-wait arm), the wait fold that feeds that mean, and background starvation-drive admission for a WAL GC sweep drive, a coverage-lag timer drive and a refused drive. |
-| `replayownership` | The leaf WAL replay pass-1 ownership gate every replayed record passes: the pre-#3601 `ShouldApply` judgement against `ShouldApply` plus the disjoint range-delete check, over a key-scoped `Set`, a disjoint range delete and an overlapping one. |
+| `replayownership` | The leaf WAL replay pass-1 ownership gate every replayed record passes: the pre-#3601 ownership judgement alone against that judgement plus the disjoint range-delete check, over a key-scoped `Set`, a disjoint range delete and an overlapping one. |
 | `fanout` | Three read sites that replaced N sequential awaited grain reads with one batched multi-get. Prints a host-independent round-trip census first, also written to a `fanout-roundtrips.json` sidecar; set `BENCH_FANOUT_ROUNDTRIPS_ONLY=true` to skip the latency pass. |
 | `crosstree` | The allocation trim to the string sets the cross-tree and view coordination barriers canonicalise on every call. |
 | `alloctrims` | Three steady-state allocation trims on warm dictionary and set maintenance paths. |
@@ -335,10 +335,10 @@ silo, a transport or a storage provider in the loop. The dispatch in
 | `tagrowtrims` | Tag-index membership-row parsing and the aggregation applier's per-shard gathers. |
 | `tagindexbatching` | Tag-index round-trip reductions: batched membership-row adds, overlapped removals, a windowed intersection probe, and on the orphan-reconcile and flag-mode add paths a windowed orphan confirmation, overlapped orphan deletes and an overlapped flag-mode enable wave, plus the atomic flag-mode commit's batched row-state read and the covered-marker self-heal's batched marker write. |
 | `decisionstamp` | The replication cross-tree decision stamper's per-tree sequence issue and confirm, issued concurrently rather than as P serial grain calls each. |
-| `registryprojection` | Routing reads that derive the routed copy and shard map from one registry entry read instead of separate `ResolveAsync` / `GetShardMapAsync` round trips: among them the state observer's subscription open, the bootstrap read fence's shard resolve, a snapshot export's generation captures and tombstone and prepared passes, a restore's shadow validation, and a restore commit's or remediation cutover's alias-swap prepare. |
+| `registryprojection` | Routing reads that derive the routed copy and shard map from one registry entry read instead of separate alias-resolve and shard-map round trips: among them the state observer's subscription open, the bootstrap read fence's shard resolve, a snapshot export's generation captures and tombstone and prepared passes, a restore's shadow validation, and a restore commit's or remediation cutover's alias-swap prepare. |
 | `leafchainwalk` | Leaf-chain walks that read a leaf's payload and its next-sibling pointer in one combined leaf call instead of two (or k + 1) round trips: the replication local version-vector seed and bootstrap receiver scans, the stale-pending clear and bootstrap pending capture, the multi-transaction pending discard of abandoned-copy and poisoned-saga cleanup, the bounded leaf walk every maintenance drain advances through (key range and next sibling in one call), the replication snapshot provider's tombstone and prepared-pending captures, and the shard root's count, emptiness-probe, range-clock, projection-rebuild and range-bounded page-fill walks (key range and next sibling in one call after the per-leaf payload). |
 | `cursorseedfanout` | The state observer's change-cursor seed, reading every WAL partition's tail (and, on a resume, its retention) concurrently rather than one partition after another. |
-| `autonomicprobes` | Three control-plane grain-call elisions: tree creation's registry round trips (three serial calls to one), the autonomic maintenance-in-flight probe (eight serial calls to four, reading the coordinators without the `ILattice` hop), and the hot-shard sampling fan-out (three status calls per shard to one). |
+| `autonomicprobes` | Three control-plane grain-call elisions: tree creation's registry round trips (three serial calls to one), the autonomic maintenance-in-flight probe (eight serial calls to four, reading the coordinators without the `ILattice` hop), and the hot-shard sampling fan-out (three status calls per shard to one). Run unfiltered, it also runs the `maintenanceelisions` and `provisioningheads` sites below. |
 | `viewrebuildfanout` | Three corpus-sized round-trip reductions: the view-generation clear, the shard purge's internal-node sweep, and the view rebuild's source read. |
 | `bulkloadfanout` | Three structural round-trip reductions where a loop awaited one grain call before issuing the next: the bulk-load leaf chain, the shard purge's internal-node pre-walk, and the write-fence fan-out. |
 | `fanoutcollapse` | Three serial grain-call chains collapsed so a batch no longer pays one round-trip per item. |
@@ -386,6 +386,48 @@ silo, a transport or a storage provider in the loop. The dispatch in
 | `setkeytrims` | The base64 string the OR-set and RW-set delta accessors built on every staged remove only to probe a dictionary, against encoding into a stack or pooled span and probing through an alternate lookup. |
 | `replayscanloop` | The leaf replay scan loop bounded by the exclusive WAL head, which made one extra empty slice read past the newest entry per pass, against bounding it by the newest offset (head - 1). |
 | `coveragestall` | The shipping coverage timer stall eligibility, including its per-live-partition WAL-head probe and jittered re-arm, for caught-up and lagging one-row leaves. Uses allocation-free coordinator and runtime fakes. |
+| `adminsampling` | Dispatch model of three tree-admin sampling paths: view sample fusion, the runtime-view lookup and the tree-stat read overlap. |
+| `catalogsampling` | The page and participant paths of the same model: fresh catalog page lookup batches, settled sample waves and participant existence checks. |
+| `adminstatus` | Dispatch-only model of the tree-admin status-read elisions: resize status from five hops to one fused coordinator read, reshard status from three to one, and view status from two maintainer reads to one. |
+| `bootstrapcalls` | Three bootstrap transport-call reductions: the pre-capture delta, live entries and sibling pointer read together, the foreign scan's overlapped live and pending reads as one leaf call, and four stale saga discards as one call and one persist per leaf. |
+| `settlementcalls` | Dispatch model of conditional registry fallback reads at three callers (replicated prepare, migration precheck and forwarded prepare); the status read and the conditional supplementary read are kept, only transport dispatches disappear. |
+| `settlementfusion` | The same model at three further sites: self-terminalisation on activation, migration cleanup batches and forwarded local prepare probes. |
+| `terminalcalls` | Three terminal-delivery dispatch reductions: reusing the initial leaf chain at delivery, fusing clock reads into the first walk, and skipping clock reads for a tracked saga with no WAL writer. |
+| `readfusion` | The dispatch removed by WAL activation metadata, observer resume-floor and whole-tree structure reads; provider I/O and topology traversal are unchanged in both lanes. |
+| `pointtopology` | A subset of the `readfusion` model: stamped point warmup (two calls to one) and a bounded overlap of eight topology reads (eight calls either way, so not a call reduction). |
+| `ownershipbarriers` | A subset of the `readfusion` model: fresh structural ownership checks, re-add index reads and matching-origin barrier abandonment. |
+| `decommissionmerkle` | A subset of the `readfusion` model: peer decommission marker and Merkle node reads (two calls to one) and one-owner pending verdict reads (32 calls to one). |
+| `leafcount` | A leaf's bulk-append capacity read: the former full key enumeration counted by the caller against the shipping count-only read. |
+| `maintenancecalls` | Shard emptiness probes over 32 physical shards (a hit on the first shard, and an all-empty miss whose call count is unchanged), plus the shard purge's internal-node descent and its read-then-clear pass over 32 chain leaves. |
+| `replaymaintenance` | Forty prepares in one registry shard reduced to one bounded batch, a purge probe with no participants and no recorded terminal reduced from two reads to one, and forty independent registry stamp reads overlapped at width 32. |
+| `reseedsampling` | Reseed probes and tenant sampling - one undecided transaction's status and participants as one probe, eight partition heads captured before marker publication, eight warm tenant-usage reports applied in input order - plus the three `coordinatorcleanup` sites. |
+| `coordinatorcleanup` | A subset of `reseedsampling`: restore-shadow cleanup and existing bootstrap tree registration each read from one registry entry, and the post-source-observation head vector. |
+| `leafmaintenance` | Split-aware counts and projection rebuilds (eight calls to four each) and bulk-append births (twenty calls to ten) over four leaves, plus the three `leafbinding` sites. |
+| `leafbinding` | A subset of `leafmaintenance`: root creation's binding (two calls to one) and single-key and batch CRDT repair of one unbound leaf (four calls to three each). |
+| `internalnodefusion` | Three internal-node grain-call reductions: split sibling seeding, bulk-graft rightmost-edge descent and the node-binding walk, plus the `internalnodebinding` and `parentstructure` sites. |
+| `internalnodebinding` | A subset of `internalnodefusion`: tree binding plus initialisation at three construction sites (root, bulk and sibling). The bulk lane sums per-node dispatch work, so it is not bulk-load wall time. |
+| `parentstructure` | A subset of `internalnodefusion`: leaf adoption, internal adoption and a matching-owner targeted topology read, each with a two-to-one call budget. |
+| `walpolling` | Idle subscriber reads, retention-tail reads and independent view-alias notifications on the leaf-chain hop model; provider I/O inside the combined tail call is unchanged. |
+| `viewdrainheads` | The WAL head probes one view-maintainer drain tick pays across the default eight WAL partitions: an idle tick drops from 16 calls to 8, and a busy tick that reads two partitions overlaps its guard probes (18 calls either way). |
+| `frontierprobes` | Three held-source call elisions in the replication causal-frontier check: the shipping check against its former per-identity probe loop. |
+| `frontierwaves` | The replication tree frontier's three origin waves: the previous serial awaits against the shipped bounded fan-out (the total call count does not change). |
+| `leafsummary` | Count, diagnostics and storage-footprint summary walks over four leaves, extending the leaf-chain dispatch model. |
+| `snapshotcontrol` | Bootstrap complete-pin resolution and snapshot front-door entry reuse (two registry calls to one), and independent WAL-head capture through the production bounded fan-out. |
+| `maintenanceoptions` | One awaited registry dispatch plus full options construction against the production configuration-only maintenance paths. |
+| `maintenanceelisions` | A subset of `autonomicprobes`: reshard shrink's snapshot/merge stand-off and consolidation donor retirement's stand-off (four calls to two each), and lazy options seeding of an incomplete registry row (three calls to two). |
+| `provisioningheads` | A subset of `autonomicprobes`: app tree provisioning's existence and registration pair, and replay-horizon and source-lineage boundary capture across eight independent WAL partitions. |
+| `domainfaultcatch` | The catch-filter cost used by the scan and coordinator refusal audit; not an end-to-end scan throughput measurement. |
+| `walclockfloor` | The hot-path cost of the WAL clock floor, on the real production code: the admission check on an unreplicated tree and on a replicated partition with a fresh stamp above its floor, and the commit-log writer's carried-stamp classification. |
+| `reportrouting` | Report registry reuse and the first split-sweep probe; report construction uses the production options and routing, with transport and the split head read modelled. |
+| `migrationcontrol` | Warm-activation dispatch model for partition heads, cache refresh and migration freeze. |
+| `shardcontrol` | The `migrationcontrol` lanes plus the shard-merge membership loop measured against the production merge helper. |
+| `partitionfloorsampling` | WAL GC floor-holder candidate sampling: bounded per-partition samples against one tree-wide sample for the same pin population. |
+| `coordinatorreads` | A merge front-door existence/options/intent pipeline and a resize-undo bootstrap-fence topology read, plus the bounded materialiser-lag metadata walk over the leaf chain; the registry and leaf halves each write their own results file. |
+| `diagnosticregistry` | Registry-read elisions on diagnostic paths: a cache hit in the per-tree diagnostics aggregator, one WAL partition's physical and retained accounting calls, and a complete-pin WAL report refresh. |
+| `registryoptions` | A subset of `registryprojection`: a resize's emptiness check before it chooses its fast path, a resize capturing options and its predecessor for undo, and a deletion resolving its contiguous allocated-shard range. |
+| `registrymaintenance` | A subset of `registryprojection`: one hot-shard monitor sampling tick, one shard-healing sweep, and a de-enrolled tree's dropped cross-tree terminal discarding its pending bucket. |
+| `registrypairs` | A subset of `registryprojection`: a cutover prepare, an explicit-alias carry-across and a resize alias swap, each reading two registry rows. |
+| `registryhops` | A subset of `registryprojection`: a merge initiation resolving its target alias, a moving explicit-alias carry-across restamping lineage, and an admin alias set reporting the resulting alias state. |
 
 ```powershell
 $env:BENCH_MICROBENCH_SUITE = 'catalog'
@@ -400,7 +442,7 @@ that census is host-independent and is also written to a
 `catalog-roundtrips.json` sidecar next to the run's `results.json`. It then
 runs the BenchmarkDotNet latency arms, which compare the per-entry projection
 shape against the batched one over identical captured page partitions, plus an
-end-to-end arm driving the real `LatticeStateQuery`. Set
+end-to-end arm driving the state API's real catalog query. Set
 `BENCH_CATALOG_ROUNDTRIPS_ONLY=true` to print the census and skip the latency
 pass, which takes a few seconds instead of a few minutes.
 
@@ -566,7 +608,7 @@ without touching Azure. A Layer 3 replay accepts either `-DryRun -Layer3` or
 
 The harness is **not** driven through `./benchmark.ps1` and does not
 push to the local history VictoriaMetrics stack - the result is the
-`[silo] FINAL ops=... failed=... elapsed=...` line in the silo
+`[silo] FINAL ops=... failed=... discarded=... elapsed=...` line in the silo
 journal plus the headline summary block `run-cohort.ps1` prints to the
 console and also returns as a `LatticeBench.CohortResult` object. Cohort sampling methodology, the full `BENCH_*` saturation-
 knobs catalogue, the A/B procedure for WAL optimisations, the VM-SKU

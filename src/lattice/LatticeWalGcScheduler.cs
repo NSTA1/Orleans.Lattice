@@ -8242,7 +8242,7 @@ internal sealed class LatticeWalGcScheduler(
     /// one partition of one leaf.
     /// </para>
     /// <para>
-    /// <see cref="ClassifyCheckpoint"/> already reads exactly that number and
+    /// <see cref="ClassifyCheckpoint(LeafNodeState, int)"/> already reads exactly that number and
     /// collapses it to an enum, so the read is free: this overload simply stops
     /// discarding it. Printed beside the pin offset on the floor-holder census
     /// line, it discriminates in one sweep - equality means the checkpoint is

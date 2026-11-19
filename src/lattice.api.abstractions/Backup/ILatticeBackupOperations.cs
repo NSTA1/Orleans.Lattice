@@ -4,8 +4,8 @@ using Orleans.Lattice.Backup;
 namespace Orleans.Lattice.Api.Backup;
 
 /// <summary>
-/// Accept-then-poll backup and restore. Each start verb authorizes exactly as its
-/// blocking twin on <see cref="ILatticeBackupControl"/>, records the operation
+/// Accept-then-poll backup and restore. Each start verb authorizes the caller
+/// fail-closed before it is accepted, records the operation
 /// durably, starts the work in the background and returns a
 /// <see cref="LatticeOperationHandle"/> at once; the caller then polls
 /// <see cref="ILatticeOperations.GetOperationStatusAsync"/> for progress and the

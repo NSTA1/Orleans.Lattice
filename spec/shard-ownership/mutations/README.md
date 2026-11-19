@@ -30,7 +30,7 @@ own name.
   lands, the mutation stays, as the regression check for the behaviour it
   replaced. The refinement notes list them against their issues.
 - **Regression checks for fixed defects.** The #4357, #4358, #4362 and #4369
-  torn-batch family, #4453, #4452, #4454, #4455, #4473, #4474, #4475, #4503, #4522, #4545, #4564, #4611, #4613, #4618, #4619, #4689, #5125 and #5130, are reproduced as standing checks.
+  torn-batch family, #4453, #4452, #4454, #4455, #4473, #4474, #4475, #4503, #4522, #4545, #4564, #4611, #4613, #4618, #4619, #4689, #5125, #5130, #6083 and #6089, are reproduced as standing checks.
 - **Checks against a naive fix.** Where the obvious fix for an open defect
   would break a different property, a mutation stands against it:
   `AtomicOnOwnerDiscardedCopyTerminalRedirects` is #4474's broadcast following
@@ -59,8 +59,12 @@ action, and so declare no `PERTURBS`; the write half is reproduced separately,
 inside `LaterWrite`. The #4522 reproductions edit `TermRow`, the operator the
 terminal broadcast applies, or the stamp operators `BVal`, `KnowsP` and
 `WVal` that the read gate, the drain and the later write share, and likewise
-declare no `PERTURBS`; `NoKeyLostLaterWriteBelowP` breaks property H the same way. Every mutant in both catalogues was checked free of deadlock with only
-`TypeOK` checked, apart from the two whose target is `TypeOK` itself.
+declare no `PERTURBS`; `NoKeyLostLaterWriteBelowP` breaks property H the same way. Every mutant in the `ShardOwnership` and `ShardOwnershipRetention`
+catalogues was checked free of deadlock with only `TypeOK` checked, apart from
+the two whose target is `TypeOK` itself. Two mutants in the later catalogues
+are deadlocks by construction and declare `DEADLOCK: off`:
+`SagaSettlesDiscardRouted` (cutover) and `MigrationCompletesFoldNeverFreezes`
+(fold).
 
 ## Inventory: ShardOwnership
 

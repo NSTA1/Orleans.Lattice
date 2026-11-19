@@ -291,11 +291,11 @@ services:
       # is one deliberate override, and an alarm rather than routine).
       LATTICE_WAL_PIN_SHED_CEILING_SECONDS: "120"
       # Bound how long a batch write's per-shard fan-out may run before it is
-      # refused with a LatticeSaturatedException. The library ships this
-      # UNBOUNDED so that upgrading cannot regress any existing caller (#3386),
-      # which is the right default for a library and the wrong setting here:
-      # this deployment issues wide batch writes against trees that are
-      # demonstrably saturated, and an unbounded fan-out converts that
+      # refused with a LatticeSaturatedException. The library default is now
+      # 30s too (it shipped unbounded before 10.0, #3386); this host pins the
+      # value explicitly because this deployment issues wide batch writes
+      # against trees that are demonstrably saturated, and an unbounded fan-out
+      # converts that
       # saturation into an indefinitely-held call instead of a refusal the
       # caller can see, retry, or shed. The held call is the wedge; a refusal is
       # a signal. 30s is the figure #3348's measurements support and matches
@@ -305,7 +305,7 @@ services:
       # shards, so committed branches stay committed and in-flight branches are
       # left running rather than cancelled. The durable outcome is identical to
       # an unbounded wait; only WHEN the caller learns changes.
-      # Rollback is "0", which restores the unbounded library default exactly -
+      # "0" disarms the budget (an unbounded wait, the pre-10.0 library default) -
       # a rollback to the wedge, not to data loss.
       LATTICE_SETMANY_FANOUT_BUDGET_SECONDS: "30"
       # Advisory per-tree ceiling on the WAL bytes held on disk. The library ships
@@ -459,7 +459,8 @@ services:
       # every shard reaching the ceiling comparison has already cleared the
       # floor; a sub-floor ceiling is then unconditionally true and rewrites
       # the whole shard on every trim. 128 MiB is 2048x that floor. Since #3211
-      # the registration-time validator refuses 0 < ceiling < floor outright,
+      # the file WAL's options validator refuses 0 < ceiling < floor outright
+      # when the WAL provider is first constructed,
       # so getting this wrong downward now costs a refused start rather than
       # silent amplification - but the validator only sees values this host
       # passes through, so it is a backstop and not a licence to guess.

@@ -35,7 +35,7 @@ The full-capture engine.
 
 The incremental-capture engine.
 
-- `Task<LatticeBackupCaptureResult> CaptureIncrementalAsync(LatticeBackupIncrementalCaptureRequest request, CancellationToken cancellationToken = default)` - captures an incremental backup layered on a base backup and records the base id as the manifest's `BaseBackupId`. The base manifest is read from the sink, and the increment inherits the base's scope (the request scope is advisory). When a sound delta cannot be produced - the base resume point was trimmed off the WAL, a range delete surfaced in the delta window, the base chain was captured on a different cluster, or the base predates the recording of the atomic batches it held back as undecided - it falls back to a fresh full capture and returns that result instead. Throws `ArgumentNullException` when `request` is null, `KeyNotFoundException` when the sink holds no manifest for `BaseBackupId`, and `LatticeAuthorizationDeniedException` when the caller is not authorized over the base's scope, plus the tenancy exceptions `CaptureAsync` documents. A fallback full capture can also throw the replay-budget, saturation, and snapshot-expiry exceptions `CaptureAsync` documents.
+- `Task<LatticeBackupCaptureResult> CaptureIncrementalAsync(LatticeBackupIncrementalCaptureRequest request, CancellationToken cancellationToken = default)` - captures an incremental backup layered on a base backup and records the base id as the manifest's `BaseBackupId`. The base manifest is read from the sink, and the increment inherits the base's scope (the request scope is advisory). When a sound delta cannot be produced - the base resume point was trimmed off the WAL, a range delete surfaced in the delta window, the base chain was captured on a different cluster, the base predates the recording of the atomic batches it held back as undecided, a committed atomic write's prepared writes precede the delta window, the saga decision gate was not held for the whole drain, or a retention pass began pruning the base while the delta drained (the increment's manifest is then withdrawn rather than published with no base) - it falls back to a fresh full capture and returns that result instead. Throws `ArgumentNullException` when `request` is null, `KeyNotFoundException` when the sink holds no manifest for `BaseBackupId`, and `LatticeAuthorizationDeniedException` when the caller is not authorized over the base's scope, plus the tenancy exceptions `CaptureAsync` documents. A fallback full capture can also throw the replay-budget, saturation, and snapshot-expiry exceptions `CaptureAsync` documents.
 
 ### `ILatticeBackupRestoreService`
 
@@ -535,6 +535,14 @@ Why restore-copy retirement retires nothing of a tree: `None`, `UnknownRevertTar
 
 `Disabled = 0` (never probe), `Warn = 1` (the default - probe, log loudly, annotate health, but start), `FailFast = 2` (a positively refuted sink blocks silo start). See [Configuration](configuration.md).
 
+### `BackupSetMembershipMode`
+
+How a backup-set schedule chooses its trees: `Explicit = 0` (exactly the scopes the schedule names, one per distinct tree), `AllTrees = 1` (every user tree visible in the registering caller's tenant, whole, less any tree under `ExcludedTreePrefixes`; `IncludeNewTrees` decides whether the membership is re-resolved at every run or pinned at registration).
+
+### `BackupSetScheduleTrigger`
+
+What started a backup-set schedule run: `Schedule = 0` (the schedule's reminder fired), `Manual = 1` (a caller asked for a run now).
+
 ## Options
 
 `LatticeBackupOptions`, `LatticeBackupScheduleOptions`, and `LatticeBackupHealthOptions` are documented in full in [Configuration](configuration.md). `LatticeBackupHealthOptions` configures the periodic health monitor cluster-wide: `bool Enabled` (default `true` - health monitoring is auto-enrolled) and `TimeSpan DefaultInterval` (default six hours), plus the static `MinimumInterval` (one minute) the sweep reminder clamps up to and the static `DefaultSweepInterval` (six hours) that `DefaultInterval` defaults to. The monitor stays inert against a non-durable sink regardless of these options.
@@ -580,7 +588,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Backup.BackupCatalogIndexProjection`
 
-[Source](../../src/lattice.backup/BackupCatalogIndexProjection.cs) (line 33).
+[Source](../../src/lattice.backup/BackupCatalogIndexProjection.cs) (line 35).
 
 `public sealed class BackupCatalogIndexProjection : ILatticeViewProjection`
 
@@ -606,7 +614,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Backup.BackupCatalogRebuildReport`
 
-[Source](../../src/lattice.backup/BackupCatalogRebuildReport.cs) (line 13).
+[Source](../../src/lattice.backup/BackupCatalogRebuildReport.cs) (line 15).
 
 `public sealed record BackupCatalogRebuildReport`
 
@@ -667,7 +675,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Backup.BackupContentHash`
 
-[Source](../../src/lattice.backup/BackupContentHash.cs) (line 14).
+[Source](../../src/lattice.backup/BackupContentHash.cs) (line 15).
 
 `public static class BackupContentHash`
 
@@ -806,6 +814,9 @@ The following inventory includes directly declared public members and overloads,
 
 - `public const string Capturing`
 - `public const string CapturingMembers`
+- `public const string WritingMembers`
+- `public const string ResolvingMembers`
+- `public const string ApplyingRetention`
 - `public const string Cataloguing`
 - `public const string Bootstrapping`
 - `public const string Validating`
@@ -995,6 +1006,80 @@ The following inventory includes directly declared public members and overloads,
 
 - `Primary constructor / positional members: (string BackupId, string TreeId)`
 
+### `Orleans.Lattice.Backup.BackupSetMembershipMode`
+
+[Source](../../src/lattice.backup/BackupSetMembershipMode.cs) (line 7).
+
+`public enum BackupSetMembershipMode`
+
+- `Explicit = 0`
+- `AllTrees = 1`
+
+### `Orleans.Lattice.Backup.BackupSetScheduleRun`
+
+[Source](../../src/lattice.backup/BackupSetScheduleRun.cs) (line 7).
+
+`public sealed record BackupSetScheduleRun`
+
+- `public BackupSetScheduleRun( DateTimeOffset startedAtUtc, DateTimeOffset finishedAtUtc, BackupSetScheduleTrigger trigger, BackupScopeRunOutcome outcome, string? setId, int memberCount, int attempts, string? failureReason)`
+- `public DateTimeOffset StartedAtUtc { get; init; }`
+- `public DateTimeOffset FinishedAtUtc { get; init; }`
+- `public BackupSetScheduleTrigger Trigger { get; init; }`
+- `public BackupScopeRunOutcome Outcome { get; init; }`
+- `public string? SetId { get; init; }`
+- `public int MemberCount { get; init; }`
+- `public int Attempts { get; init; }`
+- `public string? FailureReason { get; init; }`
+
+### `Orleans.Lattice.Backup.BackupSetScheduleRunProgress`
+
+[Source](../../src/lattice.backup/BackupSetScheduleRunProgress.cs) (line 21).
+
+`public sealed record BackupSetScheduleRunProgress`
+
+- `public BackupSetScheduleRunProgress( DateTimeOffset startedAtUtc, BackupSetScheduleTrigger trigger, int attempt, string phase, long completedUnits, long? totalUnits, string? unitName, string? currentTreeId, DateTimeOffset updatedAtUtc)`
+- `public DateTimeOffset StartedAtUtc { get; init; }`
+- `public BackupSetScheduleTrigger Trigger { get; init; }`
+- `public int Attempt { get; init; }`
+- `public string Phase { get; init; }`
+- `public long CompletedUnits { get; init; }`
+- `public long? TotalUnits { get; init; }`
+- `public string? UnitName { get; init; }`
+- `public string? CurrentTreeId { get; init; }`
+- `public DateTimeOffset UpdatedAtUtc { get; init; }`
+
+### `Orleans.Lattice.Backup.BackupSetScheduleStatus`
+
+[Source](../../src/lattice.backup/BackupSetScheduleStatus.cs) (line 9).
+
+`public sealed record BackupSetScheduleStatus`
+
+- `public BackupSetScheduleStatus( string name, LatticeBackupSetScheduleRequest request, IReadOnlyList<BackupScopeSelector> memberScopes, bool isScheduled, DateTimeOffset? nextRunUtc, bool isRunning, DateTimeOffset registeredAtUtc, DateTimeOffset? lastRunUtc, DateTimeOffset? lastSuccessUtc, BackupScopeRunOutcome lastOutcome, string? lastFailureReason, int consecutiveFailures, IReadOnlyList<BackupSetScheduleRun> recentRuns, IReadOnlyList<ScheduledBackupSet> retainedSets, BackupSetScheduleRunProgress? currentRun = null)`
+- `public string Name { get; init; }`
+- `public LatticeBackupSetScheduleRequest Request { get; init; }`
+- `public IReadOnlyList<BackupScopeSelector> MemberScopes { get; init; }`
+- `public bool IsScheduled { get; init; }`
+- `public DateTimeOffset? NextRunUtc { get; init; }`
+- `public bool IsRunning { get; init; }`
+- `public DateTimeOffset RegisteredAtUtc { get; init; }`
+- `public DateTimeOffset? LastRunUtc { get; init; }`
+- `public DateTimeOffset? LastSuccessUtc { get; init; }`
+- `public BackupScopeRunOutcome LastOutcome { get; init; }`
+- `public string? LastFailureReason { get; init; }`
+- `public int ConsecutiveFailures { get; init; }`
+- `public IReadOnlyList<BackupSetScheduleRun> RecentRuns { get; init; }`
+- `public IReadOnlyList<ScheduledBackupSet> RetainedSets { get; init; }`
+- `public BackupSetScheduleRunProgress? CurrentRun { get; init; }`
+
+### `Orleans.Lattice.Backup.BackupSetScheduleTrigger`
+
+[Source](../../src/lattice.backup/BackupSetScheduleTrigger.cs) (line 6).
+
+`public enum BackupSetScheduleTrigger`
+
+- `Schedule = 0`
+- `Manual = 1`
+
 ### `Orleans.Lattice.Backup.BackupSinkResolution`
 
 [Source](../../src/lattice.backup/BackupSinkResolution.cs) (line 19).
@@ -1141,7 +1226,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Backup.ILatticeBackupIncrementalCaptureService`
 
-[Source](../../src/lattice.backup/ILatticeBackupIncrementalCaptureService.cs) (line 22).
+[Source](../../src/lattice.backup/ILatticeBackupIncrementalCaptureService.cs) (line 25).
 
 `public interface ILatticeBackupIncrementalCaptureService`
 
@@ -1319,6 +1404,7 @@ The following inventory includes directly declared public members and overloads,
 - `public const string ReasonCancellation`
 - `public const string ReasonUnknown`
 - `public const string ReasonIncrementalFallback`
+- `public const string ReasonCrossTreeFence`
 - `public static readonly Counter<long> Captures`
 - `public static readonly Histogram<long> BackupBytes`
 - `public static readonly Histogram<long> BackupArtifacts`
@@ -1364,6 +1450,9 @@ The following inventory includes directly declared public members and overloads,
 - `public TimeSpan CrossTreeFenceDrainTimeout { get; set; }`
 - `public TimeSpan CrossTreeFencePollInterval { get; set; }`
 - `public int MaxCrossTreeFenceAttempts { get; set; }`
+- `public long CrossTreeSetPinnedEntryBudget { get; set; }`
+- `public int SetScheduleFenceRetries { get; set; }`
+- `public TimeSpan SetScheduleFenceRetryDelay { get; set; }`
 - `public BackupSinkSharingEnforcement SinkSharingEnforcement { get; set; }`
 - `public TimeSpan SinkSharingProbeTimeout { get; set; }`
 - `public TimeSpan? RestoreRevertRetention { get; set; }`
@@ -1440,6 +1529,27 @@ The following inventory includes directly declared public members and overloads,
 - `public LatticeBackupSetCaptureResult( BackupSetManifest setManifest, IReadOnlyList<LatticeBackupCaptureResult> members)`
 - `public BackupSetManifest SetManifest { get; init; }`
 - `public IReadOnlyList<LatticeBackupCaptureResult> Members { get; init; }`
+
+### `Orleans.Lattice.Backup.LatticeBackupSetScheduleRequest`
+
+[Source](../../src/lattice.backup/LatticeBackupSetScheduleRequest.cs) (line 17).
+
+`public sealed record LatticeBackupSetScheduleRequest`
+
+- `public const int MaxNameLength`
+- `public LatticeBackupSetScheduleRequest( string name, BackupSetMembershipMode membership, IReadOnlyList<BackupScopeSelector>? scopes, TimeSpan interval, int? retentionKeepLast, TimeSpan? retentionMaxAge, bool crossTreeConsistent = true, bool includeNewTrees = true, IReadOnlyList<string>? excludedTreePrefixes = null)`
+- `public string Name { get; init; }`
+- `public BackupSetMembershipMode Membership { get; init; }`
+- `public IReadOnlyList<BackupScopeSelector> Scopes { get; init; }`
+- `public TimeSpan Interval { get; init; }`
+- `public int? RetentionKeepLast { get; init; }`
+- `public TimeSpan? RetentionMaxAge { get; init; }`
+- `public bool CrossTreeConsistent { get; init; }`
+- `public bool IncludeNewTrees { get; init; }`
+- `public IReadOnlyList<string> ExcludedTreePrefixes { get; init; }`
+- `public static LatticeBackupSetScheduleRequest ForTrees( string name, IReadOnlyList<BackupScopeSelector> scopes, TimeSpan interval, int? retentionKeepLast, TimeSpan? retentionMaxAge, bool crossTreeConsistent = true)`
+- `public static LatticeBackupSetScheduleRequest ForAllTrees( string name, TimeSpan interval, bool includeNewTrees, int? retentionKeepLast, TimeSpan? retentionMaxAge, IReadOnlyList<string>? excludedTreePrefixes = null, bool crossTreeConsistent = true)`
+- `public static void ValidateName(string name)`
 
 ### `Orleans.Lattice.Backup.LatticeBackupTenantIsolationException`
 
@@ -1540,3 +1650,28 @@ The following inventory includes directly declared public members and overloads,
 - `public int ShardCount { get; }`
 - `public IReadOnlyList<string> ManifestChain { get; }`
 - `public IReadOnlyList<string> SourceTreeIds { get; init; }`
+
+### `Orleans.Lattice.Backup.ScheduledBackupSet`
+
+[Source](../../src/lattice.backup/ScheduledBackupSet.cs) (line 10).
+
+`public sealed record ScheduledBackupSet`
+
+- `public ScheduledBackupSet( string setId, string name, DateTimeOffset createdAtUtc, DateTimeOffset lastCapturedAtUtc, bool crossTreeConsistent, IReadOnlyList<ScheduledBackupSetMember> members)`
+- `public string SetId { get; init; }`
+- `public string Name { get; init; }`
+- `public DateTimeOffset CreatedAtUtc { get; init; }`
+- `public DateTimeOffset LastCapturedAtUtc { get; init; }`
+- `public bool CrossTreeConsistent { get; init; }`
+- `public IReadOnlyList<ScheduledBackupSetMember> Members { get; init; }`
+
+### `Orleans.Lattice.Backup.ScheduledBackupSetMember`
+
+[Source](../../src/lattice.backup/ScheduledBackupSetMember.cs) (line 7).
+
+`public sealed record ScheduledBackupSetMember`
+
+- `public ScheduledBackupSetMember(BackupScopeSelector scope, string backupId)`
+- `public BackupScopeSelector Scope { get; init; }`
+- `public string BackupId { get; init; }`
+- `public string TreeId`

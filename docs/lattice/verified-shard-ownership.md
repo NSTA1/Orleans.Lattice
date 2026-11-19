@@ -16,7 +16,7 @@ stays bound to the physical copy it prepared on. Ownership is what keeps all of
 that consistent: at every moment each key has exactly one place that answers for
 it, and no move loses or resurrects a value.
 
-This document describes the formal coverage of that ownership protocol: four TLA+
+This document describes the formal coverage of that ownership protocol: five TLA+
 modules checked by TLC, the pure cores production is routed through, and the
 Coyote models that check those cores. It is an assurance document; the runtime
 behaviour it protects is documented in the pages linked above.
@@ -142,9 +142,9 @@ artefact the models check is the artefact that runs:
 
 | Core | Decision | Called from |
 |------|----------|-------------|
-| `ResizeFence` | Whether a fenced old copy admits a saga bound to it, and whether a failed alias flip lifts the fence | `ShardRootGrain`, `TreeResizeGrain` |
-| `SagaCopyBinding` | Whether the routing tier dispatches a bound saga's prepare, and whether the saga stays bound, re-binds or commits across an alias move | `LatticeGrain`, `AtomicWriteGrain` |
-| `RoutingPairPublishGate` | Whether a routing lookup may publish the pair it read, given invalidations since it began | `LatticeGrain` |
+| `ResizeFence` | Whether a fenced old copy admits a saga bound to it, and whether a failed alias flip lifts the fence | The shard root's write path, the resize coordinator |
+| `SagaCopyBinding` | Whether the routing tier dispatches a bound saga's prepare, and whether the saga stays bound, re-binds or commits across an alias move | The routing tier behind `ILattice`, the atomic-write saga coordinator |
+| `RoutingPairPublishGate` | Whether a routing lookup may publish the pair it read, given invalidations since it began | The routing tier behind `ILattice` |
 
 Each core has unit tests, and each has a Coyote model (`ResizeFenceModel`,
 `SagaCopyBindingModel`, `RoutingPairPublishModel`) with a fixed-design test and

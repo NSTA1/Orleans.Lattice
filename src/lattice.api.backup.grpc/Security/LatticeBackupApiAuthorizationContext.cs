@@ -54,8 +54,9 @@ public enum LatticeBackupApiOperation
     /// </summary>
     Unknown,
 
-    // The values below were appended after Unknown (#4122) so the shipped
-    // numeric values of every earlier member, Unknown included, stay stable.
+    // The values below were appended after Unknown (#4122). Removing the deprecated
+    // blocking operations (#4749) renumbered the members that followed them, so the
+    // numeric values are not stable across releases; compare by member name.
 
     /// <summary>The <c>StartBackup</c> accept-then-poll full-capture RPC.</summary>
     StartBackup,
@@ -136,7 +137,9 @@ public enum LatticeBackupApiOperation
 /// <see cref="Operation"/> being invoked, an optional <see cref="TargetId"/>
 /// (the backup id for a backup-scoped call, or the target/scope tree id for a
 /// capture or restore that is not yet keyed by a backup id;
-/// <see langword="null"/> for the whole-catalog and discovery operations), and
+/// <see langword="null"/> for an operation that names no single backup or tree,
+/// such as a catalog listing, a backup-set schedule call, a catalog rebuild or
+/// scrub, or a tracked-operation status, list or cancel), and
 /// the underlying gRPC <see cref="ServerCallContext"/> for header / identity /
 /// peer inspection.
 /// </summary>

@@ -184,8 +184,8 @@ administrator made while it ran, mixing two copies, because the swap was fenced
 only on the alias it read just before it and the explicit set never consulted
 the reservation. DestinationStampedAtTargetTransformDropsStamp is the #5243
 shape: transform remediation of a versioned tree wrote decoded bodies with no
-envelope. Both are fixed in the schema-assurance integration bucket; this is
-integration-branch evidence, not a claim the fixes are released.
+envelope. Both are fixed in the schema-assurance integration bucket, which
+landed on `main` with #5330 and shipped in the 10.3.0 release.
 AbortPublishesNothingDryRunNamesValidValue stands in for #5208 and #5252, whose
 fixes made an un-upcastable value abort naming it rather than throw out of the
 slice holding the reservation. RedirectsCoverSourceArmsInheritedLayout is the

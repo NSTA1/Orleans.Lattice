@@ -49,8 +49,9 @@ Done.
 
 - You need the cluster (not just clients) to reject writes of values that are
   not well-formed - JSON, UTF-8, size-bounded, matching a regular expression, or
-  matching a structured predicate. (A plain, non-atomic last-writer-wins
-  replication apply, a backup restore and a tree merge are not checked; see
+  matching a structured predicate. (Replicated writes are checked only under
+  strict-mode ingest, and a backup restore and a tree merge are never checked;
+  see
   [strict-mode ingest](../../docs/lattice.schema/schema-enforcement.md#strict-mode-ingest).)
 - You are evolving a value schema over time and want old and new values to coexist,
   with readers always seeing the current shape.

@@ -348,7 +348,7 @@ public interface ILattice : IGrainWithStringKey
     /// to the exact set of keys submitted on the first call. Re-submitting
     /// the same <paramref name="operationId"/> with a different set of keys
     /// (added, removed, or renamed) throws
-    /// <see cref="InvalidOperationException"/>. Reordering the keys or
+    /// <see cref="LatticeIdempotencyKeyMismatchException"/>. Reordering the keys or
     /// changing their values is allowed - the fingerprint hashes the
     /// sorted key set only.
     /// </para>

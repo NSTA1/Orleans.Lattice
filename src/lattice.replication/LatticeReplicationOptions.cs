@@ -1132,8 +1132,9 @@ public class LatticeReplicationOptions
     /// <see cref="EncodedBatchHeader"/>: <c>treeName</c>,
     /// <c>originClusterId</c>, and the length-prefixed entry segments)
     /// when the shipper builds an outbound batch. Defaults to dict-less
-    /// <see cref="LatticeCompression.Zstd"/> (Zstandard at the level
-    /// configured by <see cref="FramingCompressionLevel"/>); set this to
+    /// <see cref="LatticeCompression.Zstd"/> (Zstandard at the registered
+    /// compressor's level, <see cref="DefaultFramingCompressionLevel"/> for the
+    /// built-in registration); set this to
     /// <see cref="LatticeCompression.None"/> to opt out and frame the
     /// tail uncompressed.
     /// <para>
@@ -1164,13 +1165,20 @@ public class LatticeReplicationOptions
     public LatticeCompression FramingCompression { get; set; } = DefaultFramingCompression;
 
     /// <summary>
-    /// Compression level forwarded to the algorithm-specific
+    /// Intended compression level for the algorithm-specific
     /// <see cref="ILatticeCompressor"/> when
     /// <see cref="FramingCompression"/> is non-<see cref="LatticeCompression.None"/>.
-    /// Interpreted by the algorithm: for <see cref="LatticeCompression.Zstd"/>
-    /// the valid range is <c>1</c> (fastest, lowest ratio) to
-    /// <c>22</c> (slowest, highest ratio); the canonical default is
-    /// <c>3</c>. Defaults to <see cref="DefaultFramingCompressionLevel"/>.
+    /// <b>Validated but not applied:</b> nothing reads this value when a batch
+    /// is compressed. The level is fixed when the compressor is constructed -
+    /// the built-in Zstd registration uses <see cref="DefaultFramingCompressionLevel"/>,
+    /// and <c>AddLatticeZstdDictionaryCompressor</c> takes its own
+    /// <c>compressionLevel</c> argument - so a host that wants another level
+    /// registers its own <see cref="ILatticeCompressor"/> before calling
+    /// <c>AddLatticeReplication</c>. When <see cref="FramingCompression"/> is
+    /// <see cref="LatticeCompression.Zstd"/> or
+    /// <see cref="LatticeCompression.ZstdDictionary"/>, the options validator
+    /// still rejects a value outside <c>1</c> to <c>22</c>. Defaults to
+    /// <see cref="DefaultFramingCompressionLevel"/>.
     /// </summary>
     public int FramingCompressionLevel { get; set; } = DefaultFramingCompressionLevel;
 
@@ -1553,10 +1561,9 @@ public class LatticeReplicationOptions
     /// resets the consecutive-failure count and closes the breaker; a failed
     /// half-open trial re-opens it for another cooldown. A "failure" is a
     /// remediation pass whose re-ship reported zero entries shipped despite
-    /// candidate entries having been selected, or whose orchestration faulted
-    /// outside the re-replay and fallback repairs. A re-replay or fallback repair
-    /// that throws is logged and treated as not attempted, so it does not count as
-    /// a failure and, like any non-failing pass, resets the count.
+    /// candidate entries having been selected, a re-replay or fallback repair
+    /// that threw (the repair helper logs and swallows the fault to protect the
+    /// cadence, but still reports it), or a pass whose orchestration faulted.
     /// <para>
     /// Only consulted when <see cref="AutoRemediateOnDigestMismatch"/> is
     /// <see langword="true"/>. Defaults to
@@ -2044,8 +2051,8 @@ public class LatticeReplicationOptions
 
     /// <summary>
     /// Default value for <see cref="FramingCompressionLevel"/>: <c>3</c>,
-    /// the standard Zstandard "fast" preset that is the canonical
-    /// online-compression knee on modern hardware.
+    /// the standard Zstandard "fast" preset, and the level the built-in
+    /// Zstd compressor registration is constructed with.
     /// </summary>
     public const int DefaultFramingCompressionLevel = 3;
 

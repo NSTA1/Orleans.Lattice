@@ -20,7 +20,7 @@ public sealed class LatticeOidcAuthenticatorOptions
     public string Authority { get; set; } = string.Empty;
 
     /// <summary>
-    /// The explicit OIDC discovery document address. When <c>null</c> it is
+    /// The explicit OIDC discovery document address. When <c>null</c>, empty or whitespace it is
     /// derived from <see cref="Authority"/> by appending
     /// <c>/.well-known/openid-configuration</c>. Set it explicitly for a provider
     /// that publishes its metadata somewhere other than the conventional path.

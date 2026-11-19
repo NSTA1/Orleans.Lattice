@@ -10,7 +10,7 @@ namespace Orleans.Lattice.BPlusTree;
 /// with the authoring cluster's id; <c>LwwValue.Merge</c> ranks the origin last
 /// because of exactly that. The WAL record of an own write, however, carries the
 /// tree's resolved origin (<c>WalCommitLogWriter</c> fills an empty origin from
-/// <see cref="Grains.ILatticeOriginClusterIdResolver"/>: the local cluster id on a
+/// <see cref="ILatticeOriginClusterIdResolver"/>: the local cluster id on a
 /// replicated tree, <see cref="string.Empty"/> on a single-cluster host), because
 /// the shipper and receivers need it. Copying that stamp into a row rebuilt from
 /// the WAL - a leaf's projection or replay, a snapshot's fold - gave one own row

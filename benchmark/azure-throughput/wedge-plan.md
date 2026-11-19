@@ -70,7 +70,7 @@ This is **at the .NET runtime / Orleans grain-task-proxy boundary**. Source-walk
 ## 5. What this cycle did NOT establish
 
 - Whether `Task.WaitAsync(...)` on a task returned by `Orleans` source-generated `.AsTask()` proxy genuinely cannot be cancelled from the threadpool. A minimal console repro outside Lattice would confirm or falsify.
-- Whether Orleans 10.1.0's grain RPC machinery captures the caller's SynchronizationContext into the returned Task in a way that affects `WaitAsync`'s callback dispatch. The 10.1.0 source for `GrainReference.InvokeAsync<T>(...)` and `ResponseCompletionSource` would clarify.
+- Whether the Orleans grain RPC machinery captures the caller's SynchronizationContext into the returned Task in a way that affects `WaitAsync`'s callback dispatch. The Orleans source for `GrainReference.InvokeAsync<T>(...)` and `ResponseCompletionSource` would clarify.
 - Whether a third-party diagnostic (eg `dotnet-counters monitor System.Threading.Tasks.TplEventSource` attached to the wedged silo) would surface anything new.
 
 ## 6. Repro built and incrementally extended - the wedge does NOT reproduce in isolation
@@ -92,7 +92,7 @@ end of the analysis phase; each commit is one scenario:
 
 **Every individual condition the analysis phase nominated is falsified. The
 five conditions stacked are also falsified.** `Task.WaitAsync` against an
-Orleans 10.1.0 grain RPC return Task works correctly under every load,
+Orleans grain RPC return Task works correctly under every load,
 helper-hop, chained-back-pressure, activation-churn, and messaging-config
 shape this repro can construct.
 
@@ -142,7 +142,7 @@ demonstrably work in isolation. The next investigation should be:
 
 ### Bonus finding: ORLEANS0014 analyzer
 
-The repro''s build surfaces an `ORLEANS0014` warning - Orleans 10''s analyzer
+The repro's build surfaces an `ORLEANS0014` warning - the Orleans analyzer
 flags `ConfigureAwait(false)` in grain code. **The same analyzer should be
 firing on `WalCommitLogWriter`''s `.ConfigureAwait(false)` calls.** Either
 the analyzer is grain-class-only (and `WalCommitLogWriter` is `internal

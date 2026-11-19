@@ -45,7 +45,7 @@ The service maps facade outcomes onto explicit gRPC statuses rather than letting
 | `ArgumentException` | `InvalidArgument` | Every RPC: a malformed request, including a continuation or resume token that is malformed or names an unknown, drained, or closed cursor. |
 | `LatticeTenantAccessDeniedException` | `PermissionDenied` | Every RPC: fail-closed tenant resolution refused the call. |
 | `LatticeAuthorizationDeniedException` | `PermissionDenied` | Every RPC: the core access gate refused the caller the read - for example a `GetMetricsSnapshot` or `ObserveMetrics` sample, which is a whole-tree aggregate, under a grant narrowed to part of the tree. It is not logged as a server fault. |
-| `LatticeSaturatedException` | `ResourceExhausted` | The unary query RPCs other than `GetMetricsSnapshot`: the tree is WAL-saturated and shed the operation (for example a snapshot scan open); back off and retry. |
+| `LatticeSaturatedException` | `ResourceExhausted` | Every RPC: the tree is WAL-saturated and shed the operation (for example a snapshot scan open), or the store refused the request under storage back-pressure; back off and retry. |
 | `LatticeTreeBootstrappingException` | `Unavailable` | The unary query RPCs other than `GetMetricsSnapshot`: the tree's replica is being bootstrapped from a snapshot and its reads are fenced until the import completes; back off and retry. |
 | `LatticeStateCursorExpiredException` | `FailedPrecondition` | `ObserveChanges`: the resume token fell outside the write-ahead-log retention window. |
 | `KeyNotFoundException` | `NotFound` | `ObserveChanges`: an unknown, system, or unreadable tree. The unary RPCs do not map it, so there it arrives as `Internal`. |
@@ -55,7 +55,7 @@ The service maps facade outcomes onto explicit gRPC statuses rather than letting
 | `LatticeWalQuiescingException` | `Unavailable` | A WAL shard is briefly quiesced for a placement move: the write was refused without being applied and the shard accepts writes again once the move lifts its fence. Retry after a short backoff. Logged at Warning (#5800). |
 | anything else | `Internal` | Logged server-side and returned with a generic message, without echoing the exception text. |
 
-The authorization interceptor's refusal is a `PermissionDenied` as well.
+The authorization interceptor's refusal is a `PermissionDenied` as well. A call that presents a credential the cluster recognises and refuses (for example a wrong password) is failed earlier, with `Unauthenticated`, before the authorizer runs and whether or not `RequireAuthorization` is set - see [Security](security.md#the-authorization-seam).
 
 ## Messages
 

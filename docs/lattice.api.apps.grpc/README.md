@@ -55,7 +55,8 @@ installing a new app never adds a new service, credential bridge or interceptor.
   fixed, generic status message, so neither the exception message nor a stack trace or
   inner exception is forwarded: cancellation is `Cancelled`, an authorization or tenant
   denial `PermissionDenied`, an `ArgumentException` `InvalidArgument`, a
-  `KeyNotFoundException` `NotFound`, an `InvalidOperationException`
+  `KeyNotFoundException` `NotFound`, storage back-pressure (`LatticeSaturatedException`)
+  the retryable `ResourceExhausted`, an `InvalidOperationException`
   `FailedPrecondition`, a grain-call `TimeoutException` `DeadlineExceeded` (the outcome
   is unknown, so confirm state before retrying a write), an
   `OrleansMessageRejectionException` such as `SiloUnavailableException`, an
@@ -114,9 +115,11 @@ mapped one to one from its `AppBridgeFailure` (`Denied` to `PermissionDenied`,
 `NotFound` to `NotFound`, `Invalid` to `InvalidArgument`, `TooLarge` to
 `ResourceExhausted`, `Conflict` to `Aborted`, `Unavailable` to `Unavailable`),
 carrying only the fixed message, and `LatticeAppBridgeApiGrpcClient` rethrows it as
-an `AppBridgeException` with the same failure. The bridge vocabulary has no
-outcome-unknown code, so a grain-call timeout, an unavailable silo or a lost remote
-enumeration on a bridge RPC crosses the wire as `Unavailable`.
+an `AppBridgeException` with the same failure. An authorization or tenant denial on a
+bridge RPC crosses the wire as `PermissionDenied` (`Denied`). The bridge vocabulary has
+no outcome-unknown code, so a grain-call timeout, an unavailable silo, a lost remote
+enumeration, storage back-pressure, a WAL shard quiesced for a placement move, or any
+other unexpected fault on a bridge RPC crosses the wire as `Unavailable`.
 
 ## Hosting the service
 

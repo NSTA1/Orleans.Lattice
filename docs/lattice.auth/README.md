@@ -16,6 +16,23 @@ Authorization and enforcement add-on for [Orleans.Lattice](../../README.md).
 
 Registering the package installs the enforcing gate. A cluster that does not register it runs with the core allow-all gate and pays no authorization cost on the data path (see [Zero cost when disabled](#zero-cost-when-disabled)).
 
+## Features
+
+| Feature | Public surface | Reference |
+|---|---|---|
+| Durable, introspectable policy store | `ILatticeAuthorizationPolicyStore` | [Rule](#rule) |
+| Rule model | `LatticeAuthorizationRule`, `LatticeSubjectSelector`, `LatticeScope`, `LatticeEffect`, `LatticeAuthOperations` | [Rule](#rule), [Scope](#scope) |
+| Subject-relative scopes | `LatticeScope.SubjectPlaceholder`, `LatticeScope.GroupPlaceholder` | [Subject-relative scopes](#subject-relative-scopes) |
+| Deterministic precedence and default-deny | `LatticeAuthOptions.DefaultEffect`, `LatticeAuthOptions.UserRuleBeatsGroupRuleAtEqualScope` | [Precedence](#precedence) |
+| Opt-in all-trees tier and access-administration delegation | `LatticeAuthOptions.AllTreesGrantsEnabled`, `LatticeAuthOptions.AccessAdministrationDelegationEnabled` | [Configuration](configuration.md) |
+| Break-glass root of trust | `LatticeAuthOptions.BootstrapAdministrators` | [Bootstrap administrators](#bootstrap-administrators) |
+| In-memory compiled decision engine | `ILatticeDecisionEngine` | [The compiled snapshot](architecture.md#the-compiled-snapshot) |
+| Strict policy-epoch fence | `LatticePolicyEpochFenceContext`, `LatticeAuthOptions.StrictConsistencyTrees` | [Consistency modes](#consistency-modes) |
+| Reserved rule-id namespaces | `LatticeAppRuleIds`, `LatticeAppOwnedRuleException`, `LatticeTenantRuleIds`, `LatticeTenantOwnedRuleException` | [Rule](#rule), [Tenant-tier rule ids](tenant-layer.md#tenant-tier-rule-ids) |
+| Tenant rule layer and tenant-isolation seams | `ITenantRuleLayer`, `ITenantGateEnforcer` | [The tenant rule layer](tenant-layer.md) |
+| Metrics and audit trail | `LatticeAuthMetrics`, `ILatticeAuthAuditSink`, `LatticeAuthDecisionEvent`, `LatticeAuthAuditVerbosity` | [Observability](observability.md) |
+| Opt-in enforcement with zero cost when absent | `LatticeAuthServiceCollectionExtensions` | [Zero cost when disabled](#zero-cost-when-disabled) |
+
 ## Setup
 
 Register the three layers in order on the silo: the core lattice, then membership, then authorization.
@@ -154,7 +171,7 @@ When more than one rule matches, the decision engine resolves them deterministic
 1. **Most-specific scope wins.** A hit at a more specific tier (exact key, then longest matching prefix, then tree-wide) is never overridden by a less specific one. A key-scoped allow carves an exception out of a tree-scoped deny, and a key-scoped deny carves a hole out of a tree-scoped allow.
 2. **Within a single scope tier, deny overrides allow.** Two sibling rules at the same specificity that disagree resolve to deny (deny-override).
 3. **A user rule outranks a group rule at equal scope** (configurable through `UserRuleBeatsGroupRuleAtEqualScope`, default on), so a user-specific allow can lift an individual out of a group-level deny.
-4. **Default-deny.** With no matching rule, the configured `DefaultEffect` applies. The recommended and default posture is `Deny`, so anything not explicitly granted is refused. `DefaultEffect` never applies to a control-plane request - the reserved `sys-auth-*` and `sys-tenant-*` namespaces, the schema `sys-schema-*` and backup `sys-backup-*` backing stores, the membership `sys-membership-*` stores, the installable-apps `sys-app-*` namespace (the app registry, activation status and `sys-app-trees` tree ownership ledger), the tenant-administration capability ids, and a cluster-wide capability request on the `*` sentinel (such as `Telemetry`): there only an explicit matched allow grants access, so an unmatched request is denied even under `DefaultEffect = Allow`.
+4. **Default-deny.** With no matching rule, the configured `DefaultEffect` applies. The recommended and default posture is `Deny`, so anything not explicitly granted is refused. `DefaultEffect` never applies to a control-plane request - the reserved `sys-auth-*` and `sys-tenant-*` namespaces, the schema `sys-schema-*` and backup `sys-backup-*` backing stores, the membership `sys-membership-*` stores, the shared tag-index `tag-*` backing trees, the installable-apps `sys-app-*` namespace (the app registry, activation status and `sys-app-trees` tree ownership ledger), the tenant-administration capability ids, and a cluster-wide capability request on the `*` sentinel (such as `Telemetry`): there only an explicit matched allow grants access, so an unmatched request is denied even under `DefaultEffect = Allow`.
 5. **All-trees tier (opt-in).** With `AllTreesGrantsEnabled` set, `Tree:*` rules also govern every application tree: an all-trees deny wins outright, otherwise the tree's own most-specific verdict applies, otherwise an all-trees allow grants, otherwise `DefaultEffect` applies. The tier never reaches a control-plane namespace; see [Configuration](configuration.md).
 6. **Tenant layer (opt-in).** Every rule above is an **operator** rule, and a matched operator verdict, allow or deny, is final. With [delegated tenant access administration](../lattice.tenancy/README.md#delegated-tenant-access-administration) on, a request on a tenant's own tree that no operator rule matches is decided by that tenant's tenant-tier rules before `DefaultEffect` applies: a tenant-wide deny, then the tree's most-specific tenant verdict, then a tenant-wide allow. A tenant rule therefore never overrides an operator rule. See [The tenant rule layer](tenant-layer.md).
 

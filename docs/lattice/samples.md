@@ -105,9 +105,9 @@ Four samples have a detailed section of their own further down: [HelloWorld](#he
 
 ## HelloWorld
 
-[`samples/HelloWorld`](../../samples/HelloWorld)
+[`samples/HelloWorld`](../../samples/HelloWorld) - see its [`README.md`](../../samples/HelloWorld/README.md).
 
-Minimal interactive REPL over a single-silo, in-memory Orleans cluster. Starts a silo configured with `AddLattice(...)` + in-memory grain storage and reminders, then prompts for commands - `create`, `read`, `update`, `delete`, `list`, `exit` - and applies each one against a tree named `hello-world`. Every operation is timed with `Stopwatch` and reported as `[OK]` / `[FAIL]` with the elapsed milliseconds, so it doubles as a quick sanity check that a local build of `Orleans.Lattice` behaves correctly (the sample references the library project directly).
+Minimal interactive REPL over a single-silo, in-memory Orleans cluster. Starts a silo configured with `AddLattice(...)` + in-memory grain storage and reminders, then prompts for commands - `create`, `read`, `update`, `delete`, `list`, and `exit` (or `quit`) - and applies each one against a tree named `hello-world`. Every operation is timed with `Stopwatch` and reported as `[OK]` / `[FAIL]` with the elapsed milliseconds, so it doubles as a quick sanity check that a local build of `Orleans.Lattice` behaves correctly (the sample references the library project directly).
 
 Run it with:
 
@@ -119,7 +119,7 @@ dotnet run --project samples/HelloWorld
 
 [`samples/MultiSiteManufacturing`](../../samples/MultiSiteManufacturing)
 
-Regulated process-engineering traceability demo built on Blazor Server + gRPC + Orleans + Orleans.Lattice, backed by Azure Table Storage and Azure Storage Queues (Azurite for local development). Models a turbine-blade lifecycle (forge -> heat-treat -> machining -> NDT -> MRB -> FAI) across seven process sites, with a bulk-loaded inventory, operator-driven fact emission, a chaos fly-out for fault injection (site pause, delay and reorder, per-backend storage faults, a simulated intra-cluster partition, and a cross-cluster replication pause), and a live divergence feed comparing a baseline LWW backend against the Orleans.Lattice fact store.
+Regulated process-engineering traceability demo built on Blazor Server + gRPC + Orleans + Orleans.Lattice, backed by Azure Table Storage and Azure Storage Queues (Azurite for local development). Models a turbine-blade lifecycle (forge -> heat-treat -> machining -> NDT -> MRB -> FAI) across seven process sites, with a bulk-loaded inventory, operator-driven fact emission, a chaos fly-out for fault injection (site pause, delay and reorder, per-backend storage faults, a simulated intra-cluster partition, and a cross-cluster replication pause), and a live divergence feed comparing a naive baseline backend, which folds facts in arrival order and so drifts under reorder, against the HLC-ordered fold over the Orleans.Lattice fact store.
 
 The sample runs as **two independent Orleans clusters** (`us` and `eu`), each with two silos, connected by an opt-in cross-cluster replication link over gRPC so changes in one cluster converge on the other.
 
@@ -150,7 +150,7 @@ The full stack (Azurite + Silo + gRPC API + Blazor WASM UI) runs under Docker Co
 ./samples/VehicleFleetSimulator/run.ps1
 ```
 
-UI on `http://localhost:8090`, API on `http://localhost:8080`. See [`samples/VehicleFleetSimulator/README.md`](../../samples/VehicleFleetSimulator/README.md) for the full project layout, the on-import test-parallelism fix, and the planned Lattice-bridge sample.
+UI on `http://localhost:8090`, API on `http://localhost:8080`. See [`samples/VehicleFleetSimulator/README.md`](../../samples/VehicleFleetSimulator/README.md) for the four-tier stack and the project behind each tier, the on-import test-parallelism fix, and the planned Lattice-bridge sample.
 
 ## ClusterScaling
 

@@ -39,10 +39,20 @@ are required. Each run starts from an empty cluster.
 
 - `ILatticeBackupScheduler` - trigger backups on demand, register or cancel
   schedules, and prune a scope's chain.
-- `ILatticeBackupCatalogStore` - enumerate the catalogued backups.
+- `ILatticeBackupCatalogStore` - enumerate, look up, register, or remove
+  catalogued backups.
 - `ILatticeBackupRestoreService` - restore a backup (and its base chain) into a
-  target tree, restore every tree of a backup set as one unit, or revert a
-  shadow-cutover restore.
+  target tree, restore every tree of a backup set as one unit, revert or release
+  a shadow-cutover restore, and audit or repair the physical copies
+  shadow-cutover restores leave behind.
 - The `orleans.lattice.backup.*` metrics (on the dedicated `orleans.lattice.backup` meter)
   report capture / restore durations, bytes and entries processed, failures by
   phase and reason, and live inventory gauges.
+- The sample also registers the transport-agnostic backup control facade
+  (`AddLatticeBackupApi`) that the gRPC and MCP bindings adapt over; the run
+  itself drives the services above directly.
+
+## Feature docs
+
+- [docs/lattice.backup/README.md](../../docs/lattice.backup/README.md)
+- [docs/lattice.api.backup/README.md](../../docs/lattice.api.backup/README.md)

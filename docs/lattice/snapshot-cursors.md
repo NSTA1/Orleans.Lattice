@@ -105,7 +105,11 @@ returning the cursor ID:
    cursor: the coordinate records only a diagnostic registry clock, which
    is currently always zero, and a transport failure of that read does not
    fail the open (any other registry fault does). Saga visibility is fixed
-   by the gated baseline capture above.
+   by the gated baseline capture above. The coordinate does carry one
+   saga-related list from that capture: the ids of the pending atomic
+   writes the capture resolved as undecided (and so holds pre-saga), which
+   an incremental backup layered on the snapshot looks up again so a saga
+   that commits later is not missed.
 
 The captured values are packaged as a
 `LatticeSnapshotCoordinate` (Orleans-serializable; alias `ol.lsc`) and

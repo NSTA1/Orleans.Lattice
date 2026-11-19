@@ -640,9 +640,10 @@ all 29 independent one-target pairs have also passed against that exact source.
 
 ## Configurations and reproducibility
 
-Every base and larger-bound configuration retains all nine invariants and all
-eleven properties, including TypeOK. All three completed runs below use exactly
-the current source SHA-256
+At the original quotient, every base and larger-bound configuration retained all nine
+invariants and all eleven properties, including TypeOK (the current counts, after the
+additions described below, are ten and sixteen). All three completed runs below use
+exactly the original source SHA-256
 `657769D201A472F5EFFF54C85EC17A2F56D0CB81F6F4844F0B91E49426BB10D0`.
 Each finished with no error after checking all five temporal branches, using
 the original periodic launch policy, two state-exploration workers, two visible
@@ -664,7 +665,7 @@ Retained arrivals (#5992) add `RetainedBounded` and four properties, for ten
 invariants, sixteen properties and six temporal branches. On their source the
 base explores 1,020,744 distinct / 9,563,793 generated states (depth 30, 9 min
 40 s with twelve workers), PartialPrefix 1,526,360 / 14,278,545 (depth 31) and
-TwoPartitions 4,061,816 / 38,634,041 (depth 4,061,816EPTH). A local run of the base at
+TwoPartitions 4,061,816 / 38,634,041. A local run of the base at
 `DepthPerPermit = 2`, with the same memory-pressure walk-down, explores
 1,020,744 / 9,533,969 states with every property passing; it is evidence for the
 Interactive-bound disjunct at a second depth, not an enrolled configuration.

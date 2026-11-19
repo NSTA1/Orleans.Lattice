@@ -135,7 +135,9 @@ These disciplines make those results mean something:
   tenancy for the tenancy journeys: there an open tenant switcher, and the
   Tenancy directory with its **New tenant** dialog open, are swept in each
   configured appearance combination, but the rest of the Tenancy area's pages are
-  not swept or reflow-tested, and no Telemetry page is swept in the browser.
+  not swept or reflow-tested, and no Telemetry page is swept in the browser. A
+  third test cluster serves delegated tenant access administration for its own
+  journeys, and none of its pages is swept.
 - **Most of the lane runs in one engine.** Only the app frame's isolation, AppKit
   boot and task-board pilot tests run in Firefox and WebKit as well as Chromium; the accessibility
   sweep, structure, keyboard and reflow tests run in Chromium.

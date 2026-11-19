@@ -16,7 +16,7 @@ guarantee. The design authority remains [`design/LiveAdvanceDesign.md`](design/L
 | H | `WalHandOffFence` | E's entry check | `HandOffBound`, `AbsentMarkerHolds`, `CloseHeadMonotone`, `DeferredHeadAtRaisedGeneration` |
 | R | `WalRoutingFloor` | E's entry check | `StraddlerBelowInit`, `LiveGenerationAboveFloor`, `InitHeadCoversPriorAllocations` |
 | B | `WalBulkSwitch` | nothing | `BulkHintBound`, `ContestedKeyAgrees`, `SeedCovered`, `ReplacedRootRelocated`, `SwitchCloseCoversPriorAllocations` |
-| C | `WalLiveAdvanceCore` | every guarantee above | `ReadPositionHonest`, `SnapshotHonest`, `NoTrimPastAcked`, and liveness |
+| C | `WalLiveAdvanceCore` | every guarantee above | `ReadPositionHonest`, `SnapshotHonest`, `NoTrimPastAcked`, `OldNeverRejected`, and liveness |
 
 The edges are E <- H, E <- R, and {E, H, R, B} <- C. No other edge exists, so
 the graph is acyclic. A module that finds it needs a further assumption raises it
@@ -168,8 +168,9 @@ C models the other modules only as environment constraints:
   close leaves and its resolution at the arm (C2, C5), and a stale donor's routed and
   unrouted writes are modelled in the core itself. Its assumptions on the other modules
   are that a re-claim only raises the loaded generation (R's cold load, C7) and, for a
-  bulk-born leaf, `SwitchCloseCoversPriorAllocations`. The composite check does not yet
-  compose the lazy arm's edges.
+  bulk-born leaf, `SwitchCloseCoversPriorAllocations`. The composite check composes these
+  edges as `ColdLoadMeetsCoreStraddler`, `BulkCloseMeetsCoreClose` and
+  `DeferredCloseMeetsCoreResolve` (#5839).
 
 C then checks `ReadPositionHonest`, `SnapshotHonest` and `NoTrimPastAcked` over
 `Armed(a)` and the live advance, and the armed-newborn liveness property,

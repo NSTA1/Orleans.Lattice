@@ -48,7 +48,11 @@ that is persisted and replayed, so a plan is safe to persist (a persisted step c
 only ever name an allow-listed, pre-registered handler - resolution
 [fails closed](../../.github/instructions/security.instructions.md)).
 
-Register handlers with `AddLatticeAtomicAction` alongside `AddLattice`:
+Register handlers with `AddLatticeAtomicAction` alongside `AddLattice`. The call is
+what enables the coordinator, so make it even for a plan of built-in `TreeWrite`
+steps only (the `configure` callback is optional). Declare every handler in one
+call: the handler catalog is registered once, so a second `AddLatticeAtomicAction`
+call's handlers are ignored.
 
 ```csharp verify
 siloBuilder.AddLatticeAtomicAction(handlers => handlers
@@ -72,7 +76,9 @@ siloBuilder.AddLatticeAtomicAction(handlers => handlers
 The `versionTag` is stamped into each step when a saga starts and re-checked on a
 crash-resume: if a redeploy changes a handler's tag while a saga is in flight, the
 saga parks rather than replaying a changed effect against a partially completed
-plan. Bump the tag whenever the forward/compensate semantics change in a way that
+plan: the resume fails with an `InvalidOperationException` before the step's effect
+runs, and the saga stays non-terminal (its keepalive reminder keeps retrying) until a
+handler with the original tag is registered again. Bump the tag whenever the forward/compensate semantics change in a way that
 is unsafe to replay.
 
 Handler ids must be unique, and must not start with the `ol.` prefix, which is
@@ -121,7 +127,8 @@ without re-running any effect, so a client that retries after a timeout observes
 original result rather than a duplicate action. Re-issuing a *different* plan under
 a used id is rejected with an `ArgumentException`.
 
-The operation id must be non-empty and must not contain `/`, which is reserved as
+The operation id must be non-empty (an empty or whitespace-only id is refused) and
+must not contain `/`, which is reserved as
 the grain-key separator: a `TreeWrite` step dispatches to a per-tree saga keyed
 `{treeId}/{operationId}::aa::{index}`, and a tree id may itself be segmented (a
 tenant-composed `t/{tenant}/{name}`), so an operation id carrying a separator would
@@ -248,7 +255,8 @@ visibility model is what differs.
 
 ## When compensation itself fails
 
-If a compensating effect faults (after the coordinator's retry budget), the saga
+If a compensating effect still faults after the coordinator's per-step retry budget
+(one retry), the saga
 cannot guarantee it undid every committed step - the caller's compensation contract
 was violated. The saga enters the terminal `CompensationFailed` state, and
 `ExecuteAsync` throws `CompensationFailedException` rather than silently swallowing:
@@ -292,8 +300,9 @@ observes the memoized outcome while saga state does not leak forever.
 | `LatticeOptions.MaxAtomicActionArgsBytes` | 32 KiB | Maximum size of a custom step's args payload. |
 | `LatticeOptions.AtomicActionRetention` | 48h | How long a terminal saga's memoized outcome is retained before its state is cleared. |
 
-A plan with more steps than `MaxAtomicActionSteps` is rejected with an
-`ArgumentException`, and a custom step whose args payload exceeds
+A plan with no steps, or with more steps than `MaxAtomicActionSteps`, is rejected
+with an `ArgumentException` (as is a `TreeWrite` step that stages no entry), and a
+custom step whose args payload exceeds
 `MaxAtomicActionArgsBytes` with an `ArgumentOutOfRangeException`, before any effect
 runs.
 

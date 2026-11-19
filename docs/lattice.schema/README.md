@@ -16,12 +16,12 @@ independent, composable, strictly opt-in capabilities:
   tree's write operations carry, against a declarative policy (JSON
   well-formedness, UTF-8, a maximum byte length, a regex, or a structured
   predicate over a JSON document). A rejected local write fails fast; in strict
-  mode a rejected *ingested* item that reaches the check (a replicated
-  typed-CRDT entry, or an entry of a replicated atomic batch) is dead-lettered
-  rather than applied to the governed tree. The dead-letter write is awaited;
-  storage failure or cancellation can still fail that intercepted write. A plain (non-atomic)
-  last-writer-wins replication apply, a backup restore and a tree merge write
-  below the check, so their values are not validated (see
+  mode a rejected *replicated* item (a plain last-writer-wins write, a
+  typed-CRDT entry, an entry of a replicated atomic batch, or a row a receiver
+  bootstrap drains from a peer's export) is dead-lettered rather than applied to
+  the governed tree. The dead-letter write is awaited; storage failure or
+  cancellation can still fail that intercepted write. A backup restore and a
+  tree merge write below the check, so their values are not validated (see
   [strict-mode ingest](schema-enforcement.md#strict-mode-ingest)). Existing
   data can be brought into compliance by a background, crash-safe
   shadow-build-and-cutover remediation.

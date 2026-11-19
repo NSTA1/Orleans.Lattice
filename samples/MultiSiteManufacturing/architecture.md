@@ -199,7 +199,7 @@ flowchart LR
     crdt --> opReg
     crdt -.->|"PartChanged"| broadcaster
     router -.->|"FactRouted · FactReplicated · ChaosConfigChanged"| broadcaster
-    broadcaster -.->|"publish Fact"| dashStream
+    broadcaster -.->|"publish Fact / part change"| dashStream
     dashStream -.->|"subscribe → fan out to circuits"| broadcaster
     broadcaster -.-> razor
 

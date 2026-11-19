@@ -100,8 +100,8 @@ row, so every other silo kept its setting indefinitely.
 CacheCurrentOrPendingOvertakenLoadInstalls is the #5247 race: a load that read
 the row before a change installed its result after the eviction ran, leaving the
 pre-change setting cached even on the committing silo. Both are fixed in the
-schema-assurance integration bucket; this is integration-branch evidence, not a
-claim the fixes are released.
+schema-assurance integration bucket, which landed on `main` with #5330 and
+shipped in the 10.3.0 release.
 
 ## Deliberate abstraction gaps
 

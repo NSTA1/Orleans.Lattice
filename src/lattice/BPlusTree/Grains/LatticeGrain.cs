@@ -4972,7 +4972,7 @@ internal sealed partial class LatticeGrain(
     /// </para>
     /// <para>
     /// System trees are excluded because both setters reject them outright via
-    /// <see cref="ThrowIfSystemTree"/>: a primed arm on a tree that can never arm
+    /// <see cref="ThrowIfSystemTree()"/>: a primed arm on a tree that can never arm
     /// it would assert a measured zero for a measurement that cannot be taken.
     /// </para>
     /// <para>

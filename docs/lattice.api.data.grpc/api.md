@@ -419,7 +419,7 @@ The following inventory includes directly declared public members and overloads,
 
 ### `Orleans.Lattice.Api.Data.Grpc.LatticeDataApiAuthorizationContext`
 
-[Source](../../src/lattice.api.data.grpc/Security/LatticeDataApiAuthorizationContext.cs) (line 64).
+[Source](../../src/lattice.api.data.grpc/Security/LatticeDataApiAuthorizationContext.cs) (line 74).
 
 `public readonly struct LatticeDataApiAuthorizationContext`
 

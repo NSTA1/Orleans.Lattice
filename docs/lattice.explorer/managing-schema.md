@@ -12,7 +12,7 @@ Schema is tenant-scoped. In a tenant-rooted Explorer, the same address under `/t
 
 Schema is visible when its fail-closed capability probe returns a grant for an installed feature. The probe names a reserved sentinel tree and does not change schema or data. When the sentinel grants a signed-in caller nothing, the first 64 trees the catalogue lists are probed, eight at a time, and a grant on any of them admits the area, so a caller whose grants name trees still reads their schema. Definite answers expire after 30 seconds and are invalidated by sign-in, endpoint or tenant changes. A transport fault is not remembered, so the next navigation asks again. Replies from a previous caller cannot restore old grants or open editors.
 
-The area is hidden when the schema facade is absent, when a signed-in identity receives no grant or is refused by the probe, when the cluster does not serve schema administration, or when the connection is unavailable.
+The area is hidden when the schema facade is absent, when a signed-in identity receives no grant or is refused by the probe, when the cluster does not serve schema administration, or when the probe faults definitely (for example, no connection is configured). A probe the cluster did not answer (a transient fault) leaves the area not checked rather than hidden, and is not remembered; see [Area availability](area-availability.md#faults-the-cluster-did-not-answer).
 
 An anonymous caller whose probe returns no grants, or is refused, sees the area as unavailable. The exact sentence shown is:
 
@@ -31,7 +31,7 @@ Panel-level denials are shown beside the panel, for example **You may not read t
 | Versioning only | The engine supports this, but the stock schema API registration still requires enforcement. This facade combination is not supported. |
 | Full registration | Visible for permitted features; installed support and per-tree readiness gate each action separately. |
 | Unauthorized | Hidden for a signed-in caller with no grant; anonymous callers see the sign-in unavailable state. Direct routes still require per-tree grants. |
-| Unreachable | Hidden without caching the failure. Direct routes show a retryable load error, not an authorization claim. |
+| Unreachable | Not checked: shown demoted and not openable, without caching the failure, and asked again on the next navigation. Direct routes show a retryable load error, not an authorization claim. |
 
 ## Addresses
 

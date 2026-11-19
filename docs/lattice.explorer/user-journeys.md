@@ -128,7 +128,9 @@ the run.
 The lane also reads `LATTICE_E2E_STORAGE`, `LATTICE_E2E_BACKUP_STORAGE` and
 `LATTICE_E2E_EAST_STORAGE` (connection strings to existing accounts),
 `LATTICE_E2E_HOSTS_DIR` (a directory of published hosts, as CI publishes them
-once per job), `LATTICE_E2E_VIEWPORT`, and `LATTICE_E2E_PROMETHEUS_BINARY` (a
+once per job), `LATTICE_E2E_VIEWPORT`, `LATTICE_E2E_TRACES` (set to `always` to
+keep every persona session's Playwright trace, not only a failed test's), and
+`LATTICE_E2E_PROMETHEUS_BINARY` (a
 Prometheus binary of the pinned version, run as a local process in place of
 the Prometheus container where there is no Docker daemon).
 

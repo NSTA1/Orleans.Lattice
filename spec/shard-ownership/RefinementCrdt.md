@@ -14,7 +14,7 @@ that added the module.
 
 ## What this module is for
 
-The other two modules model last-writer-wins keys, where every path that brings
+The area's other modules model last-writer-wins keys, where every path that brings
 two copies of a key together may keep the newer one. A CRDT-mode key breaks that
 assumption: two copies can each hold a contribution the other lacks, so keeping
 either copy whole loses whatever the other alone held, whatever their stamps.

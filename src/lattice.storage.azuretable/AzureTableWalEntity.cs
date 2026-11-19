@@ -4,15 +4,19 @@ using Azure.Data.Tables;
 namespace Orleans.Lattice.Storage.AzureTable;
 
 /// <summary>
-/// Azure Table entity carrying one persisted <see cref="WalEntry"/>.
-/// One entity per appended entry; the per-partition head-pointer
-/// sentinel uses the same shape with a fixed <see cref="ITableEntity.RowKey"/>.
+/// Azure Table entity for every row the WAL provider stores: one entry row per
+/// appended <see cref="WalEntry"/>, plus the per-batch manifest M-rows, the
+/// per-shard <c>TAIL</c> pointer and candidate rows, which reuse the same shape
+/// and leave the properties they do not use at their defaults. The per-partition
+/// head-sentinel key (<see cref="AzureTableWalStorageProvider.HeadRowKey"/>) is
+/// reserved but never written.
 /// <para>
 /// Internal because the WAL contract is the public surface - the
 /// table-row schema is an implementation detail of the Azure provider.
-/// Kept simple (two domain properties + the four mandatory
-/// <see cref="ITableEntity"/> fields) so a future schema migration
-/// can be diffed against this single class.
+/// Every column lives on this one class (seven domain properties - offset,
+/// payload, payload bytes, compression tag, batch hash, batch entry count and
+/// commit nonce - plus the four mandatory <see cref="ITableEntity"/> fields)
+/// so a future schema migration can be diffed against it.
 /// </para>
 /// </summary>
 internal sealed class AzureTableWalEntity : ITableEntity

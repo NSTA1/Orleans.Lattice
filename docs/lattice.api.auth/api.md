@@ -30,8 +30,9 @@ Every method first requires the caller to hold a whole-tree `Admin` verdict on t
 | `LatticeAppOwnedRuleException` | `PutRuleAsync`, `RemoveRuleAsync` | The rule id is in the app-owned `app:` namespace. |
 | `LatticeTenantOwnedRuleException` | `PutRuleAsync` | The rule id is in the tenant-tier `tenant:` namespace. |
 | `ArgumentException` | `PutRuleAsync` | The policy store refuses the rule shape, or the scope is a tenant-wide sentinel tree. |
+| `LatticeTenantAccessDeniedException` | `ListRulesAsync` | `AuthPageRequest.ActiveTenantOnly` is set and the caller's active-tenant assertion is refused; the listing is never narrowed to a defaulted tenant. |
 
-All of these derive from `ArgumentException`, which the [gRPC binding](../lattice.api.auth.grpc/api.md) maps to `InvalidArgument`; it maps the administrator-check denial, an `UnauthorizedAccessException`, to `PermissionDenied`.
+Every exception above except `LatticeTenantAccessDeniedException` derives from `ArgumentException`, which the [gRPC binding](../lattice.api.auth.grpc/api.md) maps to `InvalidArgument`; it maps the administrator-check denial (`LatticeAuthorizationDeniedException`, an `UnauthorizedAccessException`) and a refused tenant assertion to `PermissionDenied`.
 
 ## `LatticeTenantOwnedGroupException`
 

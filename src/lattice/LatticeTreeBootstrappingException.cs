@@ -2,10 +2,14 @@ namespace Orleans.Lattice;
 
 /// <summary>
 /// Thrown by a read on a tree whose replica is being <b>bootstrapped from a
-/// snapshot</b> (issue #4526). While a receiver drains a source cluster's snapshot
-/// into the tree, it applies the snapshot's rows one at a time, so a read part-way
-/// through could observe some of a committed atomic batch's keys and not the rest.
-/// Every read of the tree - point reads, multi-key reads, scans, counts, the
+/// snapshot in place</b> (issue #4526). A bootstrap normally stages the import on an
+/// online shadow copy and cuts the alias over when it completes, leaving the current
+/// tree readable and never raising this exception. Only an in-place import - a
+/// legacy bootstrap, or one resuming a partial import an earlier failed attempt left
+/// fenced - arms the read fence. Such a drain applies the snapshot's rows one at a
+/// time into the tree, so a read part-way through could observe some of a committed
+/// atomic batch's keys and not the rest.
+/// Every read of a fenced tree - point reads, multi-key reads, scans, counts, the
 /// read-modify-write verbs (<c>GetOrSetAsync</c>, conditional and predicate writes)
 /// and snapshot-cursor and backup captures - is therefore refused until the drain
 /// has applied every snapshot entry, at which point the whole import becomes

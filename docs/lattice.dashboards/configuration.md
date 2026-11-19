@@ -19,7 +19,7 @@ registers only the `orleans.lattice` family exports no runtime telemetry at all.
 
 | Meter | Emitted by | Dashboards that need it |
 |---|---|---|
-| `orleans.lattice` | the core library, always (the grain-index package publishes onto it too) | `Overview`, `CommitPath`, `AtomicWrites`, `MaterialisedViews`, `GrainIndex`, and the WAL, WAL-compaction and WAL GC panels on `Replication` |
+| `orleans.lattice` | the core library, always (the grain-index package publishes onto it too) | `Overview`, `CommitPath`, `AtomicWrites`, `MaterialisedViews`, `GrainIndex`, and the WAL, WAL-compaction, WAL GC and coordinated-restore closed-copy panels on `Replication` |
 | `orleans.lattice.replication` | the replication package, only when registered on the silo | `Replication` |
 | `orleans.lattice.replication.grpc` | the gRPC replication transport, only when registered on the silo | `ReplicationGrpc` |
 | `orleans.lattice.auth`, `orleans.lattice.membership` | the auth / membership packages, only when registered on the silo | `Authorization` |
@@ -66,13 +66,14 @@ Two details are worth getting right rather than assuming:
 
 ### Cardinality cost
 
-Measured on a single silo under Orleans 10.2.2 rather than estimated:
-`Microsoft.Orleans` produced 54 distinct series and `System.Runtime` 29.
+Measured on a single silo rather than estimated: `Microsoft.Orleans` produced
+54 distinct series and `System.Runtime` 29. Re-measure after an Orleans upgrade,
+because the series the runtime publishes can change between releases.
 
 Every `System.Runtime` dimension is a fixed enumeration (GC generation, CPU
 mode), so its cost does not grow with load at all. The only Orleans dimensions
-that grow are the grain-type tags: `grain_type` on `orleans-grains` (and, from
-Orleans 10.4, on the per-type activation and working-set gauges) and `type` on
+that grow are the grain-type tags: `grain_type` on `orleans-grains` (and, on the Orleans release this
+repository pins, on the per-type activation and working-set gauges) and `type` on
 `orleans-system-targets`. Both are bounded by the number of grain **types** in
 the image - a compile-time constant - not by the number of grain activations. Neither meter carries a
 per-key, per-tree, or per-activation tag, so neither is a cardinality risk on a

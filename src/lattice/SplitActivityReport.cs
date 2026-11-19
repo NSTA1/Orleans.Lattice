@@ -9,12 +9,15 @@ namespace Orleans.Lattice;
 /// in-process rather than scraping a metrics pipeline.
 /// <para>
 /// The figure is assembled from the per-tree heartbeat footprints each autonomic
-/// monitor reports every sampling pass, derived from the authoritative shard
-/// <c>IsSplitting</c> status. Adaptive split sources and consolidation fold donors
+/// monitor reports every sampling pass, derived from each shard's own record of
+/// whether it is migrating. Adaptive split sources and consolidation fold donors
 /// both contribute. Each footprint carries a time-to-live, so a silo
 /// that crashes mid-migration has its share reclaimed on expiry rather than pinning
-/// the count above zero forever. A report is therefore a point-in-time lower
-/// bound that trails real activity by at most one monitor sampling interval.
+/// the count above zero forever. A report is therefore a point-in-time estimate
+/// that trails real activity by about one monitor sampling interval: it can briefly
+/// under-count work started since the last footprint, or over-count work that
+/// finished or was rejected after it (a monitor publishes its post-trigger count,
+/// erring towards holding scale-in).
 /// </para>
 /// <para>
 /// A tree that has never reported an in-flight migration (or whose last pass

@@ -41,7 +41,7 @@ Tears the stack down and removes the Azurite volume.
 
 ## Test parallelism
 
-`tests/VehicleFleetSimulator.Tests` shares a single Orleans `TestCluster` across collection-bound tests. Six pure-unit-test classes carry no `[Collection]` attribute and were running in parallel with the cluster-fixture tests by default - that races `StreamSubscriberOrderTests` against its 15s telemetry-collection budget under load. The on-import patch:
+`tests/VehicleFleetSimulator.Tests` shares a single Orleans `TestCluster` across collection-bound tests. Six pure-unit-test classes carry no `[Collection]` attribute (nor does `TelemetrySinkSwappabilityTests`, which deploys its own `TestCluster`) and were running in parallel with the cluster-fixture tests by default - that races `StreamSubscriberOrderTests` against its 15s telemetry-collection budget under load. The on-import patch:
 
 ```csharp
 [assembly: CollectionBehavior(DisableTestParallelization = true)]

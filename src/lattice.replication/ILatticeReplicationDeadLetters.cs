@@ -53,7 +53,10 @@ public interface ILatticeReplicationDeadLetters
     /// because that lineage is not the one the tree has drained since
     /// (<see cref="ApplyResult.SourceLineageRefused"/> is
     /// <see langword="true"/>) applied nothing either, and the entry stays
-    /// parked for the operator to discard. Returns
+    /// parked for the operator to discard. So does a replay the tenant
+    /// isolation gate refuses
+    /// (<see cref="ApplyResult.TenantIsolationRefused"/> is
+    /// <see langword="true"/>). Returns
     /// <c>null</c> when no entry with that id exists.
     /// </summary>
     Task<ApplyResult?> ReplayAsync(string treeId, long entryId, CancellationToken cancellationToken = default);

@@ -119,7 +119,7 @@ against a placeholder name that is never read or written.
 | Replication | Neither replication facade is served, or neither the peer status read nor a replication configuration with at least one tree admits the caller, and neither read met a transient fault. | Never. When neither read admits and either one met no answer, the area is not checked, and that read is not reused. |
 | Backups | The backup control facade is not served, or the probe faults definitely. | The caller cannot list backups: "You do not hold a backup grant on this cluster. Ask an administrator for one." A probe the cluster did not answer is not checked. |
 | Telemetry | The telemetry catalogue read fails definitely. | Never. A catalogue read the cluster did not answer is not checked, and is read again on the next ask. |
-| Cluster | The tree administration facade is not registered, or the caller is refused. | The Explorer is disconnected, the cluster does not serve tree administration, or the probe did not answer. |
+| Cluster | The tree administration facade is not registered, or the caller is refused the cluster-wide storage summary and holds no tree-lifecycle or tree-admin grant on any of the first 64 trees the catalogue lists. | The Explorer is disconnected, the cluster does not serve tree administration, or the probe did not answer. |
 
 The areas themselves are described in [The Explorer areas](areas.md).
 

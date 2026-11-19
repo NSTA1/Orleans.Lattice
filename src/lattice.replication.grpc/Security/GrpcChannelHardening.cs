@@ -59,10 +59,10 @@ internal static class GrpcChannelHardening
         if (!string.Equals(endpoint.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException(
-                $"GrpcPushTransport refuses to ship to peer '{peerClusterId}' over a non-https endpoint ('{endpoint}'). "
+                $"Replication gRPC refuses to connect to peer '{peerClusterId}' over a non-https endpoint ('{endpoint}'). "
                 + "Replication batches carry secret-shaped CRDT mutations and must travel over TLS. "
                 + $"Configure an https://... endpoint, or - only for loopback / diagnostic scenarios - set "
-                + $"{nameof(GrpcPushTransportOptions)}.{nameof(GrpcPushTransportOptions.AllowPlaintextEndpoints)} = true.");
+                + $"{nameof(LatticeReplicationGrpcOptions)}.{nameof(LatticeReplicationGrpcOptions.AllowPlaintextEndpoints)} = true.");
         }
     }
 

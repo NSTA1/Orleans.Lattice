@@ -34,7 +34,7 @@ bulk-born leaf any read position and any held records.
 `Next` keeps a step only if every producer guarantee still holds after it. Each edge
 invariant then holds unless a kept step of its kind fails the assumption its consumer makes.
 A red edge is therefore a step the producers allow and the consumer does not model. The base
-has 131,423 distinct states and is checked in seconds.
+has 402,394 distinct states.
 
 ## Scope cuts
 
@@ -46,11 +46,6 @@ covered by a module's own configuration or by no module at all, as stated.
   restart against their own environments.
 - **A purge never follows a bulk birth.** No module combines the two either: C's `Recreate`
   and `Bulk` variants are separate configurations, and B models no purge.
-- **The bulk switch's own close is not a step.** The composite's `Close` is `F`'s, of a window
-  `F` opened (`fWin`); while a bulk switch creates L the open window is the switch's, so `F`
-  opens none. C's `Close` guard `phase = "live"` therefore holds of every kept close. B's
-  protocol closes the switch's token only once its graft is no longer pending, after the
-  birth, but no B guarantee states that, so no edge checks the switch's close.
 - **Two offsets, one hand-off window.** The modules check three or four offsets
   (`WalBulkSwitch.cfg`) and up to three windows (`WalHandOffFence.WideWindows.cfg`). The
   composite's edges each need one stamped append of each kind before or after one close or

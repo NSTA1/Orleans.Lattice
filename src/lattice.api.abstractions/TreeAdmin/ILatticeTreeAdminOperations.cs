@@ -5,8 +5,9 @@ namespace Orleans.Lattice.Api.TreeAdmin;
 /// <summary>
 /// Accept-then-poll tree maintenance: a materialised-view rebuild or reconcile, a
 /// tag-index reconcile sweep, a WAL partition move, and a whole-tree orphaned-leaf
-/// audit or repair. Each start verb authorizes exactly as its blocking twin on
-/// <see cref="ILatticeTreeAdmin"/>, records the operation durably, starts the work
+/// audit or repair. Each start verb authorizes the caller fail-closed before it is
+/// accepted (the grant each verb requires is stated on the verb), records the
+/// operation durably, starts the work
 /// in the background and returns a <see cref="LatticeOperationHandle"/> at once; the
 /// caller then polls <see cref="ILatticeOperations.GetOperationStatusAsync"/> for
 /// the phase, the units completed and the outcome. The work is independent of the
@@ -95,8 +96,8 @@ public interface ILatticeTreeAdminOperations : ILatticeOperations
     /// Starts an online move of one WAL partition to another storage provider key
     /// (kind <see cref="TreeAdminOperationKinds.WalMove"/>), authorized as
     /// whole-tree <see cref="LatticeOperation.TreeLifecycle"/>. The source tail is
-    /// retained until <see cref="ILatticeTreeAdmin.ReclaimMovedWalSourceAsync"/>, as
-    /// for the blocking move. Cancelling before the placement flip leaves the source
+    /// retained until <see cref="ILatticeTreeAdmin.ReclaimMovedWalSourceAsync"/>.
+    /// Cancelling before the placement flip leaves the source
     /// live; once the flip has run the move is committed.
     /// </summary>
     /// <param name="treeId">The tree whose partition to move. Must not be <c>null</c>, empty, or reserved.</param>

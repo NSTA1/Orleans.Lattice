@@ -72,8 +72,9 @@ and the app's tool would otherwise be advertised under the built-in tool's name.
 
 ## Exact pairing
 
-For each enabled app the surface pairs the manifest's `mcpTools` declarations with
-the union of every provider registered for the app's slug. The pairing must be
+For each enabled install whose consented ceiling is pinned to its installed version, the
+surface pairs that version's manifest `mcpTools` declarations with the union of every
+provider registered for the app's slug. The pairing must be
 exact: a declared tool with no implementation, an implementation the manifest does
 not declare, a local name declared or implemented twice, an implementation with no
 name, or a declaration naming a role the manifest does not declare **fails the whole
@@ -110,8 +111,10 @@ App tools are served in-process by the silo that hosts the app, so a `region`
 argument is accepted only when it names the current region; a peer region is
 rejected rather than served locally under its name.
 
-The tool catalogue is rebuilt whenever the app registry changes, shortly after the
-change commits; each session selects from the prebuilt lists.
+The tool catalogue is rebuilt on the first tool discovery or invocation after the app
+registry changes: the silo's registry projection is first brought current with the
+cluster-wide registry, so a change committed on another silo is seen. Each session
+selects from the prebuilt lists.
 
 ## See also
 

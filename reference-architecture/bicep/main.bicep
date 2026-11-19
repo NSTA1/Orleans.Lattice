@@ -448,7 +448,7 @@ output perRegion array = [for (region, i) in regions: {
 @description('Per-region storage seams (keyless table endpoint backing the WAL + Orleans clustering) in region-list order.')
 output perRegionStorage array = storage.outputs.perRegionStorage
 
-@description('Keyless blob endpoint of the shared global backup sink (feeds LATTICE_BACKUP_BLOB_ENDPOINT on every silo).')
+@description('Keyless blob endpoint of the shared global backup sink (feeds the Storage:BlobServiceUri host setting on every silo).')
 output backupBlobEndpoint string = storage.outputs.backupBlobEndpoint
 
 @description('Name of the shared global backup blob account (single source of truth for cold-restore).')

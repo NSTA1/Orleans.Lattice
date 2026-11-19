@@ -250,11 +250,14 @@ newer offset, allowing a later trim past entries a rebuild still needs.
 
 Each silo probes that provider once as it becomes active. The probe writes a
 reserved row twice, then writes it again with the first ETag. The default
-`LatticeGrainStorageFencingMode.Warn` logs when the stale write is accepted;
-`Reject` fails silo start for that verdict; `Disabled` skips the probe. A probe
-that cannot reach a verdict, for example because storage faults or all retry
-attempts race another silo's probe, warns rather than rejecting. Configure the
-mode with `ConfigureLatticeGrainStorageFencing`.
+`LatticeGrainStorageFencingMode.Reject` fails silo start when the stale write is
+accepted; `Warn` (the default before Orleans.Lattice 10.0) only logs that
+verdict; `Disabled` skips the probe. A probe
+that cannot reach a verdict, for example because storage faults, all retry
+attempts race another silo's probe, or the probe outlasts
+`LatticeGrainStorageFencingOptions.ProbeTimeout` (30 s by default), warns
+rather than rejecting. Configure the mode with
+`ConfigureLatticeGrainStorageFencing`.
 
 ## Provider catalogue
 

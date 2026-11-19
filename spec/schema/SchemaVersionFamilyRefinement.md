@@ -133,8 +133,8 @@ holding the alias reservation. ShadowAtOwnTargetLiveTarget is the side of that
 fix that makes each value re-stamp from its own stamp to the migration's own
 target rather than through the live config. ConfigNeverRewritesData is the
 #5238 contract that a target advance re-projects nothing. Both fixes are in the
-schema-assurance integration bucket; this is integration-branch evidence, not a
-claim the fixes are released.
+schema-assurance integration bucket, which landed on `main` with #5330 and
+shipped in the 10.3.0 release.
 
 ## Deliberate abstraction gaps
 

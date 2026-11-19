@@ -4,9 +4,9 @@ The package contributes app tools to the existing Lattice MCP endpoint; it does 
 
 ## Build and advertise
 
-For each enabled install, the surface pairs every manifest `mcpTools` declaration with all registered providers for the app slug. Pairing is exact: duplicate names, undeclared implementations, missing implementations, empty names, undeclared roles, or a reserved built-in namespace causes that app to contribute no tools. Advertised names are `{slug}_{tool}`; the slug syntax excludes the separator, making the mapping unambiguous.
+For each enabled install whose consented ceiling is pinned to its installed version, the surface pairs every manifest `mcpTools` declaration with all registered providers for the app slug. Pairing is exact: duplicate names, undeclared implementations, missing implementations, empty names, undeclared roles, or a reserved built-in namespace causes that app to contribute no tools. Advertised names are `{slug}_{tool}`; the slug syntax excludes the separator, making the mapping unambiguous.
 
-The tool catalogue is rebuilt when the registry projection changes and is shared across sessions. Each caller sees only tools for installs in the caller's active tenant whose declared role is held by a bound membership group and not removed by the shared access gate's explicit-deny check.
+The tool catalogue is rebuilt on the first discovery or invocation after the registry projection's epoch advances (the projection is first made current with the cluster-wide registry) and is shared across sessions; a successful activation is reused across rebuilds while the install's version is unchanged. Each caller sees only tools for installs in the caller's active tenant whose declared role is held by a bound membership group and not removed by the shared access gate's explicit-deny check.
 
 ## Invocation
 

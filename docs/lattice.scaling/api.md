@@ -13,6 +13,14 @@ The read-only facade. Resolve it from the silo's service provider (registered by
 cluster-aggregate snapshot. It is cheap to call repeatedly - it returns the
 cached sample - so it can back a per-scrape HTTP endpoint.
 
+```
+Task<ScalingSignal> GetScalingSignalAsync(CancellationToken cancellationToken = default)
+```
+
+A token that is already cancelled yields a cancelled task. Before the first
+sample completes it returns the warming-up signal described under
+`ScalingSignal` below.
+
 ```csharp verify
 using System.Threading;
 using Orleans.Lattice.Scaling;
@@ -44,10 +52,10 @@ All are immutable, serializable value types.
 
 | Member | Type | Meaning |
 |---|---|---|
-| `Activation` | `double` | Normalised grain-activation pressure (0..1). |
-| `Resource` | `double` | Normalised host-resource pressure (0..1), worst-case CPU and memory. |
-| `WalDispatch` | `double` | Normalised WAL-dispatch pressure (0..1). |
-| `WalSaturation` | `WalSaturationState` | Worst-case WAL saturation across every tree the answering silo has observed (the silo-local WAL saturation signal). |
+| `Activation` | `double` | Normalised grain-activation pressure (0..1): the worst silo's activation count against `ActivationWorkingSetTarget`. A cluster aggregate. |
+| `Resource` | `double` | Normalised host-resource pressure (0..1), worst-case CPU and memory, taken from the worst silo. A cluster aggregate. |
+| `WalDispatch` | `double` | Normalised WAL-dispatch pressure (0..1): a step mapping of `WalSaturation` - `0.0` for `Healthy`, `0.5` for `Throttled`, `1.0` for `Saturated` - so, like it, it reflects the answering silo only. |
+| `WalSaturation` | `WalSaturationState` | Worst-case WAL saturation across every tree the answering silo has observed (the silo-local WAL saturation signal); `Healthy` when the core `AddLattice` registration is absent. |
 
 ### `StoragePressure`
 
@@ -57,7 +65,7 @@ All are immutable, serializable value types.
 | `WalRetainedBytes` | `long` | Total retained WAL bytes across every catalogue key, over the trees whose figure was complete. |
 | `Accounts` | `IReadOnlyList<WalAccountPressure>` | Per-catalogue-key breakdown; never `null`. |
 | `Recommendation` | `WalRebalanceRecommendation?` | Optional rebalance suggestion, or `null`. |
-| `ExcludedPartialTrees` | `int` | Trees left out of the byte figures and capacity comparisons because their WAL byte figure was partial (a lower bound). Their saturation still counts toward throughput classification. |
+| `ExcludedPartialTrees` | `int` | Trees left out of the byte figures and capacity comparisons because their storage-usage report was partial (a lower bound - see [storage pressure](storage-pressure.md#what-it-measures)). Their saturation still counts toward throughput classification. |
 
 ### `WalAccountPressure`
 
@@ -102,11 +110,12 @@ callback binds `LatticeScalingSignalOptions`.
 IEndpointConventionBuilder MapLatticeScalingSignal(this IEndpointRouteBuilder endpoints, string? path = null)
 ```
 
-Declared on `LatticeScalingEndpointRouteBuilderExtensions`. Maps the scrape endpoint on the co-hosted web host. Serves the `ScalingSignal` as
+Declared on `LatticeScalingEndpointRouteBuilderExtensions`. Maps a `GET` scrape endpoint on the co-hosted web host. Serves the `ScalingSignal` as
 JSON with a stable, camelCase top-level `scaleValue` property (plus
 `rawScaleValue`, `recommendedReplicas`, the compute and storage breakdown, the
 `reason` and `sampledAt`; enums are serialized as strings). `path` overrides `LatticeScalingSignalOptions.EndpointPath`
-for this mapping. The endpoint is unauthenticated by default because it is a
+for this mapping; with no `path` and no bound options it falls back to
+`LatticeScalingSignalOptions.DefaultEndpointPath`. The endpoint is unauthenticated by default because it is a
 scrape target: it serves no tree data, though the storage breakdown does name WAL
 provider keys and, in a recommendation, a tree id. The returned
 `IEndpointConventionBuilder` composes with the host pipeline like any other
@@ -119,8 +128,11 @@ it.
 IHealthChecksBuilder AddLatticeScalingHealthCheck(this IHealthChecksBuilder builder, string? name = null, HealthStatus? failureStatus = null, IEnumerable<string>? tags = null)
 ```
 
-Registers the health check that projects the signal onto a single `HealthStatus`.
-`name` defaults to `LatticeScalingHealthCheckOptions.DefaultName`. See
+Declared on `LatticeScalingServiceCollectionExtensions`. Registers the health
+check that projects the signal onto a single `HealthStatus`. It reads the
+`ILatticeScalingSignal` facade, so call it on a host that also calls
+`AddLatticeScalingSignal`. `name` defaults to
+`LatticeScalingHealthCheckOptions.DefaultName`. See
 [configuration](configuration.md#latticescalinghealthcheckoptions).
 
 ## Options types
@@ -142,5 +154,7 @@ Every member, its default and guidance are in [configuration](configuration.md).
 
 ## Metrics
 
-`LatticeScalingMetrics` exposes the `orleans.lattice.scaling` meter and its
-instrument-name constants. See [observability](observability.md).
+`LatticeScalingMetrics` exposes the `orleans.lattice.scaling` meter name
+(`MeterName`), the `Meter` instance itself (so a subscriber can match by
+reference), and the eight instrument-name constants. See
+[observability](observability.md).

@@ -32,7 +32,7 @@ public class EntraCredentialAuthenticator : JwtCredentialAuthenticator
     /// <param name="options">The Entra authenticator configuration. Must not be <c>null</c>.</param>
     /// <param name="groupResolver">Optional resolver used for the groups-overage case; <c>null</c> to use the token-only fallback.</param>
     /// <exception cref="ArgumentNullException"><paramref name="options"/> is <c>null</c>.</exception>
-    /// <exception cref="ArgumentException"><paramref name="options"/> has no authority, tenant, or audience configured.</exception>
+    /// <exception cref="ArgumentException"><paramref name="options"/> configures no audience, or sets neither an authority nor a metadata address.</exception>
     public EntraCredentialAuthenticator(
         LatticeEntraAuthenticatorOptions options,
         IEntraGroupResolver? groupResolver = null)
@@ -49,7 +49,7 @@ public class EntraCredentialAuthenticator : JwtCredentialAuthenticator
     /// <param name="configurationSource">The OIDC configuration source that supplies the JWKS-backed configuration manager. Must not be <c>null</c>.</param>
     /// <param name="groupResolver">Optional resolver used for the groups-overage case; <c>null</c> to use the token-only fallback.</param>
     /// <exception cref="ArgumentNullException"><paramref name="options"/> or <paramref name="configurationSource"/> is <c>null</c>.</exception>
-    /// <exception cref="ArgumentException"><paramref name="options"/> has no authority, tenant, or audience configured.</exception>
+    /// <exception cref="ArgumentException"><paramref name="options"/> configures no audience, or sets neither an authority nor a metadata address.</exception>
     internal EntraCredentialAuthenticator(
         LatticeEntraAuthenticatorOptions options,
         IEntraOpenIdConfigurationSource configurationSource,

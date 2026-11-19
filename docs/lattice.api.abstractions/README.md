@@ -31,7 +31,7 @@ The `Orleans.Lattice.Api.Region` namespace carries the transport-agnostic region
 
 Full signatures: [`Orleans.Lattice.Api.Region` in the Public API](api.md#orleanslatticeapiregion).
 
-The package implements none of its service interfaces and has no registration extension and no background work; beyond the declarations it carries only small helpers on its models and one internal mapping shared by the backup, schema and tree-administration facades (see [Architecture](architecture.md)). Facade packages reference it and implement the interfaces; binding and MCP packages reference it and consume them.
+The package implements none of its service interfaces and has no registration extension and no background work. Beyond the declarations it carries only small helpers on its models, the default bodies of a few additive interface members (the streamed write `SetManyStreamAsync` and the streamed bulk load `BulkLoadStreamAsync` run over their interface's own verbs; the others throw `NotSupportedException` until an implementation overrides them), and one internal mapping shared by the backup, schema and tree-administration facades (see [Architecture](architecture.md)). Facade packages reference it and implement the interfaces; binding and MCP packages reference it and consume them.
 
 ## Why it exists
 
@@ -41,12 +41,22 @@ Publishing the contract as a real, versioned public package removes those cross-
 
 ## Core properties
 
-- **Contract-only.** Interfaces, DTOs and their typed exceptions, no behaviour. There is nothing to register from this package directly.
+- **Contract-only.** Interfaces, DTOs and their typed exceptions, with no behaviour beyond model helpers and the default bodies of a few additive interface members. There is nothing to register from this package directly.
 - **Stable wire identity.** Every serializable model keeps its existing `[Alias]`, so the move between assemblies is wire-compatible: persisted and in-flight payloads are unaffected.
 - **Source-compatible.** Namespaces are unchanged, so a consumer's `using` directives and type references keep resolving after the move.
 - **Trusted system-origin seam.** A co-hosted infrastructure consumer that must run a trusted, gate-bypassing introspection uses the public `LatticeSystemOrigin` seam in the core library rather than an internal-visibility grant.
 
-## Usage
+## Features
+
+| Feature | What it gives you | Docs |
+|---|---|---|
+| **Service interfaces** | One transport-agnostic interface set per facade - state, data, auth, backup, schema, replication, telemetry, tree administration, tenant administration and installable apps - that the facade implements in-process and the bindings, the MCP server and the Explorer consume. | [Public API](api.md#namespace-map) |
+| **Request / response models** | The records, pages, results and enums each interface exchanges; every Orleans-serializable model carries a stable `[Alias]` from its namespace's alias class. | [Public API](api.md#conventions) |
+| **Typed exceptions** | The faults the interfaces document (for example `TenantNotFoundException`, `TreeNotEmptyException` and `TelemetryQueryNotFoundException`), so a binding can surface each as a distinct outcome. | [Public API](api.md#conventions) |
+| **Long-running operations contract** | `ILatticeOperations` and its handle, status, scope and page models: the shared accept-then-poll status, list and cancel surface the backup, schema and tree-administration facades implement. | [Long-running operations](operations.md) |
+| **Region discovery contract** | `ILatticeRegionCatalog` and its descriptors: the regions a server can route a call to, each facade group's reachability there, and - on a tenant-scoped call - the tenant's standing in each region. | [Public API](api.md#orleanslatticeapiregion) |
+
+## Quick start
 
 You do not register anything from this package directly. Register a facade (which implements these contracts); the now-public interface then resolves straight from DI for a co-hosted, in-process consumer, with no `InternalsVisibleTo` grant into the facade package:
 

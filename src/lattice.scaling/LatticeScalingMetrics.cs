@@ -21,9 +21,12 @@ namespace Orleans.Lattice.Scaling;
 /// per-account list on the scrape path.
 /// </para>
 /// <para>
-/// The gauges are created when the facade starts, so a snapshot
-/// <see cref="MeterListener"/> attached before any silo has started will not see
-/// them; subscribers should enumerate by the published <c>...Name</c> constants.
+/// The gauges are created when the facade starts, not when this type is first
+/// touched, so an instrument enumeration taken before any silo has started finds
+/// none of them. A <see cref="MeterListener"/> that is already started is still
+/// notified through <see cref="MeterListener.InstrumentPublished"/> when they are
+/// created; subscribers should select them by <see cref="MeterName"/> or the
+/// published <c>...Name</c> constants.
 /// </para>
 /// </remarks>
 public static class LatticeScalingMetrics

@@ -138,7 +138,8 @@ internal sealed partial class LatticeGrain
         // atomic batch (which strict ingest judges) or by a plain write: it can be
         // the only delivery of a saga the source withheld. Judging every drained
         // row keeps the export from being a path past strict ingest. A steady-state
-        // plain write keeps its documented bypass.
+        // plain write is judged by the branch below under the logical tree's
+        // strict policy (issue #5684).
         if (WriteInterceptionActive && IsBootstrapDrainApply())
         {
             var ttl = expiresAtTicks > 0

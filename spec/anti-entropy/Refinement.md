@@ -139,8 +139,9 @@ The final local TLC run checked the complete base graph (`MaxSwap = 0`) with
 3,681,022 generated and 475,438 distinct states, depth 32, and no violations.
 The `Alias` variant (one key, `MaxSwap = 1`) checked 1,467,371 generated and
 200,460 distinct states, depth 32, with no violations. The two alias mutants
-raise `MaxSwap` to 1 through their `BOUNDS` line; every other mutant runs at
-the base bounds. Each anchored mutant was generated from that same
+raise `MaxSwap` to 1 through their `BOUNDS` line, and `LatchToggles` and
+`RestartClearsLatch` raise `MaxEnv` to 2 through theirs; every other mutant
+runs at the base bounds. Each anchored mutant was generated from that same
 source, selected only its target property, and reported that target without a
 deadlock. No mutant changes fairness or disables the deadlock check.
 The temporal witnesses are scheduler-dependent, so their early-found state

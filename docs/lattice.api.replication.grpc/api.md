@@ -31,7 +31,7 @@ Each is an extension method on the public static `LatticeReplicationApiGrpcServi
 | Decommission peer | `Task<ReplicationDecommissionPeerResult> DecommissionPeerAsync(string peerClusterId, CancellationToken cancellationToken = default)` |
 | Probe capabilities | `Task<ReplicationCapabilities> ProbeCapabilitiesAsync(string treeId, CancellationToken cancellationToken = default)` |
 
-The result and report types (`ReplicationEnableResult`, `ReplicationDisableResult`, `ReplicationConfigReport`, `ReplicationTreeConfigEntry`, `ReplicationCapabilities`) are the shared facade model records documented in the [facade API reference](../lattice.api.replication/api.md#model-types).
+The result and report types (`ReplicationEnableResult`, `ReplicationDisableResult`, `ReplicationConfigReport`, `ReplicationTreeConfigEntry`, `ReplicationCapabilities`, `ReplicationDecommissionPeerResult`) are the shared facade model records documented in the [facade API reference](../lattice.api.replication/api.md#model-types).
 
 `LatticeReplicationStatusGrpcClient` is the public typed client for the peer-status service. It implements `ILatticeReplicationStatus`, so a caller can swap an in-process facade for it with no adapter.
 
@@ -80,7 +80,7 @@ The request and response records the RPCs carry are public, `[GenerateSerializer
 | `ReplicationProbeCapabilitiesRequestMessage` | `ProbeCapabilities` request | `TreeId` (required) |
 | `ReplicationCapabilitiesResponse` | `ProbeCapabilities` response | `TreeId` (required; the effective, tenant-scoped id), `CanConfigure` |
 
-The typed client maps these onto the facade model records, so a caller of `LatticeReplicationApiGrpcClient` sees `ReplicationEnableResult`, `ReplicationDisableResult`, `ReplicationConfigReport`, and `ReplicationCapabilities` rather than the wire records.
+The typed client maps these onto the facade model records, so a caller of `LatticeReplicationApiGrpcClient` sees `ReplicationEnableResult`, `ReplicationDisableResult`, `ReplicationConfigReport`, `ReplicationCapabilities`, and `ReplicationDecommissionPeerResult` rather than the wire records.
 
 The peer-status service has no wire records of its own: its `GetPeerStatus` RPC carries the facade's `ReplicationPeerStatusQuery` as the request and `ReplicationPeerStatusPage` as the response, Orleans-serialized under the `oir.` aliases of `ApiReplicationTypeAliases` in `Orleans.Lattice.Api.Abstractions`.
 
@@ -93,7 +93,8 @@ The peer-status service has no wire records of its own: its `GetPeerStatus` RPC 
 | Malformed request (for example a null or empty tree id) | `InvalidArgument` |
 | Request cancelled | `Cancelled` |
 | Grain-call timeout inside the cluster (outcome unknown; confirm state before retrying a write) | `DeadlineExceeded` |
-| Silo unavailable, message rejected, or a remote enumeration lost mid-read (transient; retry after a short backoff) | `Unavailable` |
+| Storage back-pressure (`LatticeSaturatedException`; nothing was applied, retry after a short backoff) | `ResourceExhausted` |
+| Silo unavailable, message rejected, a remote enumeration lost mid-read, or a WAL shard briefly quiesced for a placement move (transient; retry after a short backoff) | `Unavailable` |
 | Any other fault | `Internal` (with a non-leaking message) |
 
 `GetPeerStatus` follows the same mapping, except that it has no `FailedPrecondition` outcome: a negative page size or a malformed continuation token is `InvalidArgument`.

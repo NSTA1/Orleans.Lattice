@@ -23,11 +23,12 @@ namespace Orleans.Lattice.GrainIndex;
 /// </code>
 /// </para>
 /// <para>
-/// Every figure it reports is read from the index-registry system tree - the
-/// stored declaration record and the crawl's durable checkpoint - rather than
-/// from whatever a live activation happens to remember, so two silos asked the
-/// same question give the same answer and a silo that has never run a pass
-/// still reports the truth.
+/// The declaration record is read from the index-registry system tree, and the
+/// crawl's state and progress come from the one backfill activation that owns the
+/// index cluster-wide, which loads the crawl's durable checkpoint on first use and
+/// writes every change through to it. Two silos asked the same question therefore
+/// give the same answer, and a silo that has never run a pass still reports the
+/// truth.
 /// </para>
 /// <para>
 /// The control methods delegate to the one backfill activation that owns the

@@ -8,8 +8,8 @@ It exposes the facade as a code-first, Orleans-serialized gRPC service and ships
 a strongly-typed `LatticeReplicationApiGrpcClient` that re-exposes the whole
 control surface over the wire: enabling replication for a tree (fixing its wire
 merge mode), disabling it, inspecting the effective replicated-tree set
-(runtime and static enrollment reconciled), and permanently decommissioning a peer
-cluster. Every
+(runtime and static enrollment reconciled), permanently decommissioning a peer
+cluster, and the side-effect-free replication capability probe. Every
 wire message rides the Orleans serializer, so the contract stays versioned and
 additive-only. A second service, added with `AddLatticeReplicationStatusApiGrpc()`
 after `AddLatticeReplicationApiGrpc()` and mapped with
