@@ -96,7 +96,10 @@ internal static class SchemaRemediationDriver
 
     /// <summary>
     /// How many slices in a row may time out before the driver gives up and fails
-    /// the run with the cause (issue #5440). A slice that completes resets the count.
+    /// the run with the cause (issue #5440). A slice that completes resets the count,
+    /// as does a timeout after which the coordinator's published status shows the
+    /// followed remediation durably advanced, since that retry was only queued behind
+    /// a slice still making progress.
     /// </summary>
     internal const int MaxConsecutiveSliceTimeouts = 5;
 
@@ -130,6 +133,7 @@ internal static class SchemaRemediationDriver
         var report = accepted;
         var followed = report.OperationId;
         var consecutiveTimeouts = 0;
+        var durableMark = report;
         if (progress is not null && report.InProgress)
         {
             await ReportAsync(progress, report, phaseTotal: null, cancellationToken).ConfigureAwait(false);
@@ -168,7 +172,16 @@ internal static class SchemaRemediationDriver
                 // queues behind it on the non-reentrant coordinator and resumes from
                 // that cursor; a destination write is idempotent, so a repeated value
                 // is written again, never twice. The operation stays Running while the
-                // retries last.
+                // retries last. A retry can spend its whole call queued behind a slice
+                // that is still advancing on a loaded cluster, so only timeouts with no
+                // durable progress between them count towards the bound.
+                if (await DurableProgressAsync(grain, followed, durableMark).ConfigureAwait(false) is { } advanced)
+                {
+                    durableMark = advanced;
+                    consecutiveTimeouts = 0;
+                    continue;
+                }
+
                 if (++consecutiveTimeouts >= MaxConsecutiveSliceTimeouts)
                 {
                     throw new TimeoutException(
@@ -186,6 +199,7 @@ internal static class SchemaRemediationDriver
             }
 
             report = slice.Report;
+            durableMark = report;
             if (progress is not null && report.InProgress)
             {
                 await ReportAsync(progress, report, slice.PhaseTotal, cancellationToken).ConfigureAwait(false);
@@ -193,6 +207,35 @@ internal static class SchemaRemediationDriver
         }
 
         return report;
+    }
+
+    /// <summary>
+    /// After a slice call timed out, reads the coordinator's published status, which
+    /// never queues behind a running slice, and returns it when the followed
+    /// remediation has durably advanced past <paramref name="mark"/>; otherwise
+    /// <see langword="null"/>. A status read that itself fails counts as no progress.
+    /// </summary>
+    private static async Task<LatticeSchemaRemediationReport?> DurableProgressAsync(
+        ILatticeSchemaRemediationGrain grain, string? followed, LatticeSchemaRemediationReport mark)
+    {
+        LatticeSchemaRemediationReport status;
+        try
+        {
+            status = await grain.GetStatusAsync().ConfigureAwait(false);
+        }
+        catch (TimeoutException)
+        {
+            return null;
+        }
+
+        if (!string.Equals(status.OperationId, followed ?? mark.OperationId, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        return status.Phase != mark.Phase || status.ScannedCount != mark.ScannedCount || status.InProgress != mark.InProgress
+            ? status
+            : null;
     }
 
     /// <summary>
