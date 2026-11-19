@@ -169,6 +169,88 @@ public sealed class AggregationApplierReadWaveTests
     }
 
     [Test]
+    public async Task Inverse_contribution_reads_membership_and_target_shard_in_one_wave()
+    {
+        var store = new OverlapRecordingStore();
+        var applier = new AggregationApplier(store, AggregationKind.Min, fanout: 1, maxGroupEntries: 0, operationEpoch: "e1");
+        await applier.ApplyAsync(AggregationContribution.OfNumeric("g", "s2", 7.0, Hlc()));
+
+        store.Recording = true;
+        await applier.ApplyAsync(AggregationContribution.OfNumeric("g", "s1", 3.0, Hlc()));
+
+        var g = await store.GetAsync("g");
+        Assert.Multiple(() =>
+        {
+            Assert.That(store.PeakInFlight, Is.EqualTo(2),
+                "the membership and target shard reads must be outstanding together, not serialised");
+            Assert.That(LatticeAggregationValue.DecodeDouble(g!), Is.EqualTo(3.0).Within(1e-9));
+        });
+    }
+
+    [Test]
+    public async Task Inverse_regroup_moves_the_member_exactly()
+    {
+        var store = new OverlapRecordingStore();
+        var applier = new AggregationApplier(store, AggregationKind.Min, fanout: 1, maxGroupEntries: 0, operationEpoch: "e1");
+        await applier.ApplyAsync(AggregationContribution.OfNumeric("a", "s1", 1.0, Hlc()));
+        await applier.ApplyAsync(AggregationContribution.OfNumeric("a", "s2", 5.0, Hlc()));
+        await applier.ApplyAsync(AggregationContribution.OfNumeric("b", "s3", 4.0, Hlc()));
+
+        await applier.ApplyAsync(AggregationContribution.OfNumeric("b", "s1", 2.0, Hlc()));
+
+        var a = await store.GetAsync("a");
+        var b = await store.GetAsync("b");
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeAggregationValue.DecodeDouble(a!), Is.EqualTo(5.0).Within(1e-9),
+                "the old group loses the moved member");
+            Assert.That(LatticeAggregationValue.DecodeDouble(b!), Is.EqualTo(2.0).Within(1e-9),
+                "the new group gains the moved member's value");
+        });
+    }
+
+    [Test]
+    public async Task Approximate_inverse_same_group_overwrite_rereads_the_shard_it_retracted_from()
+    {
+        // With a group-entry bound the same-group overwrite is not fused: it
+        // retracts from and adds to the very shard the wave prefetched, so the
+        // add must observe the retraction's write rather than the stale row.
+        var store = new OverlapRecordingStore();
+        var applier = new AggregationApplier(store, AggregationKind.Min, fanout: 1, maxGroupEntries: 4, operationEpoch: "e1");
+        await applier.ApplyAsync(AggregationContribution.OfNumeric("g", "s1", 1.0, Hlc()));
+        await applier.ApplyAsync(AggregationContribution.OfNumeric("g", "s2", 6.0, Hlc()));
+
+        await applier.ApplyAsync(AggregationContribution.OfNumeric("g", "s1", 9.0, Hlc()));
+
+        var g = await store.GetAsync("g");
+        Assert.That(LatticeAggregationValue.DecodeDouble(g!), Is.EqualTo(6.0).Within(1e-9),
+            "the overwritten member's old minimum must be gone and its new value must not shadow s2");
+    }
+
+    [Test]
+    public async Task Fold_contribution_reads_membership_and_target_shard_in_one_wave_and_regroups_exactly()
+    {
+        var store = new OverlapRecordingStore();
+        var fold = new LatticeFoldProjection(_ => "g", () => [], (acc, _, value, _) => [.. acc, .. value], "v1");
+        var applier = new AggregationApplier(
+            store, AggregationKind.Fold, fanout: 1, maxGroupEntries: 0, operationEpoch: "e1", fold: fold);
+        await applier.ApplyAsync(AggregationContribution.Fold("a", "s1", [1], Hlc()));
+        await applier.ApplyAsync(AggregationContribution.Fold("b", "s2", [2], Hlc()));
+
+        store.Recording = true;
+        await applier.ApplyAsync(AggregationContribution.Fold("b", "s1", [3], Hlc()));
+
+        var b = await store.GetAsync("b");
+        Assert.Multiple(() =>
+        {
+            Assert.That(store.PeakInFlight, Is.GreaterThanOrEqualTo(2),
+                "the membership and target fold shard reads must be outstanding together");
+            Assert.That(b, Is.EquivalentTo(new byte[] { 2, 3 }),
+                "the new group folds both members");
+        });
+    }
+
+    [Test]
     public async Task Retraction_reads_intent_and_membership_in_one_wave()
     {
         var store = new OverlapRecordingStore();

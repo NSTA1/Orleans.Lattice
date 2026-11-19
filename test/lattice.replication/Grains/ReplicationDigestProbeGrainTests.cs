@@ -32,16 +32,18 @@ public partial class ReplicationDigestProbeGrainTests
         FakePersistentState<ReplicationDigestProbeState> State,
         ILattice Lattice,
         IReplicationDigestProbeTransport Transport,
-        IShardCountProvider ShardCounts) CreateProbeGrain(
+        IShardCountProvider ShardCounts,
+        IShardDigestStub Digests) CreateProbeGrain(
             bool enabled = true,
             bool maintainProjectionDigest = true,
             int shardCount = 1,
             IEnumerable<string>? peers = null,
             ReplicationDigestProbeState? seed = null,
-            bool merkleWalkEnabled = false)
+            bool merkleWalkEnabled = false,
+            string tree = Tree)
     {
         var context = Substitute.For<IGrainContext>();
-        context.GrainId.Returns(GrainId.Create("digest-probe-grain", Tree));
+        context.GrainId.Returns(GrainId.Create("digest-probe-grain", tree));
         var reminders = Substitute.For<IReminderRegistry>();
 
         var replicationMonitor = Substitute.For<IOptionsMonitor<LatticeReplicationOptions>>();
@@ -66,21 +68,23 @@ public partial class ReplicationDigestProbeGrainTests
         var replicationTransport = Substitute.For<IReplicationTransport>();
         var batchEncoder = Substitute.For<IReplicationBatchEncoder>();
         var shardCounts = Substitute.For<IShardCountProvider>();
-        shardCounts.GetShardIndicesAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IReadOnlyList<int>>(Enumerable.Range(0, shardCount).ToArray()));
+        shardCounts.GetShardRoutingAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new RoutingInfo("phys", ShardMap.CreateDefault(shardCount, shardCount))));
 
         var lattice = Substitute.For<ILattice>();
         var grainFactory = Substitute.For<IGrainFactory>();
-        grainFactory.GetGrain<ILattice>(Tree).Returns(lattice);
+        grainFactory.GetGrain<ILattice>(tree).Returns(lattice);
 
         // Wire the routing snapshot and an empty-shard root so the
         // localise-stage walk (when enabled) resolves a physical tree id
         // and terminates cleanly without emitting localise/abort metrics.
         lattice.GetRoutingAsync(true, Arg.Any<CancellationToken>())
             .Returns(new ValueTask<RoutingInfo>(new RoutingInfo("phys", ShardMap.CreateDefault(1, 1))));
-        var shardRoot = Substitute.For<IShardRootGrain>();
-        shardRoot.GetRootNodeRefAsync().Returns(Task.FromResult<ShardRootNodeRef?>(null));
-        grainFactory.GetGrain<IShardRootGrain>(Arg.Any<string>()).Returns(shardRoot);
+        // Every shard root is a per-key substitute whose digest read delegates to
+        // the per-shard digest stub, so tests stub and assert digests by shard
+        // index while the tree's ILattice forwarder stays untouched.
+        var digests = Substitute.For<IShardDigestStub>();
+        ShardRootDigestStubs.Wire(grainFactory, "phys", digests);
 
         var state = new FakePersistentState<ReplicationDigestProbeState>();
         if (seed is not null)
@@ -96,17 +100,17 @@ public partial class ReplicationDigestProbeGrainTests
             replicationTransport, batchEncoder, shardCounts, grainFactory, snapshotProvider,
             Substitute.For<ILatticeMergeModeResolver>(), state);
 
-        return (grain, state, lattice, transport, shardCounts);
+        return (grain, state, lattice, transport, shardCounts, digests);
     }
 
     [Test]
     public async Task ProcessNextPhaseAsync_does_nothing_when_disabled_by_default()
     {
-        var (grain, state, lattice, transport, _) = CreateProbeGrain(enabled: false);
+        var (grain, state, lattice, transport, _, digests) = CreateProbeGrain(enabled: false);
 
         await grain.ProcessNextPhaseAsync();
 
-        await lattice.DidNotReceive().GetLeafProjectionDigestAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await digests.DidNotReceive().GetLeafProjectionDigestAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
         await transport.DidNotReceive().ProbeDigestAsync(
             Arg.Any<string>(), Arg.Any<DigestProbeRequest>(), Arg.Any<CancellationToken>());
         Assert.That(state.State.LastProbeTicks, Is.EqualTo(0L));
@@ -115,12 +119,12 @@ public partial class ReplicationDigestProbeGrainTests
     [Test]
     public async Task ProcessNextPhaseAsync_skips_when_maintain_projection_digest_is_false()
     {
-        var (grain, state, lattice, transport, _) =
+        var (grain, state, lattice, transport, _, digests) =
             CreateProbeGrain(maintainProjectionDigest: false);
 
         await grain.ProcessNextPhaseAsync();
 
-        await lattice.DidNotReceive().GetLeafProjectionDigestAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await digests.DidNotReceive().GetLeafProjectionDigestAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
         await transport.DidNotReceive().ProbeDigestAsync(
             Arg.Any<string>(), Arg.Any<DigestProbeRequest>(), Arg.Any<CancellationToken>());
         // Cadence advances so the next interval re-checks (the option can be flipped back).
@@ -130,12 +134,12 @@ public partial class ReplicationDigestProbeGrainTests
     [Test]
     public async Task ProcessNextPhaseAsync_advances_cadence_when_no_peers()
     {
-        var (grain, state, lattice, transport, _) =
+        var (grain, state, lattice, transport, _, digests) =
             CreateProbeGrain(peers: Array.Empty<string>());
 
         await grain.ProcessNextPhaseAsync();
 
-        await lattice.DidNotReceive().GetLeafProjectionDigestAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await digests.DidNotReceive().GetLeafProjectionDigestAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
         await transport.DidNotReceive().ProbeDigestAsync(
             Arg.Any<string>(), Arg.Any<DigestProbeRequest>(), Arg.Any<CancellationToken>());
         Assert.That(state.State.LastProbeTicks, Is.GreaterThan(0L));
@@ -144,8 +148,8 @@ public partial class ReplicationDigestProbeGrainTests
     [Test]
     public async Task ProcessNextPhaseAsync_permanently_skips_on_latched_registry()
     {
-        var (grain, _, lattice, transport, _) = CreateProbeGrain();
-        lattice.GetLeafProjectionDigestAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+        var (grain, _, lattice, transport, _, digests) = CreateProbeGrain();
+        digests.GetLeafProjectionDigestAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Throws(new InvalidOperationException("digest maintenance disabled"));
 
         // First pass detects the latch and disables further passes.
@@ -153,7 +157,7 @@ public partial class ReplicationDigestProbeGrainTests
         // Second pass must short-circuit before any further digest read.
         await grain.ProcessNextPhaseAsync();
 
-        await lattice.Received(1).GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>());
+        await digests.Received(1).GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>());
         await transport.DidNotReceive().ProbeDigestAsync(
             Arg.Any<string>(), Arg.Any<DigestProbeRequest>(), Arg.Any<CancellationToken>());
     }
@@ -161,9 +165,9 @@ public partial class ReplicationDigestProbeGrainTests
     [Test]
     public async Task ProcessNextPhaseAsync_records_match_when_digests_equal()
     {
-        var (grain, _, lattice, transport, _) = CreateProbeGrain();
+        var (grain, _, lattice, transport, _, digests) = CreateProbeGrain();
         var hash = new byte[] { 1, 2, 3 };
-        lattice.GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>())
+        digests.GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(Digest(hash)));
         transport.ProbeDigestAsync("site-b", Arg.Any<DigestProbeRequest>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new DigestProbeResponse { DigestAvailable = true, Digest = Digest(hash) }));
@@ -193,10 +197,10 @@ public partial class ReplicationDigestProbeGrainTests
         // silently disabled detection and remediation on exactly the estates that
         // need them. The read must run under a system-origin scope, and the scope
         // must be restored afterwards.
-        var (grain, _, lattice, transport, _) = CreateProbeGrain();
+        var (grain, _, lattice, transport, _, digests) = CreateProbeGrain();
         var hash = new byte[] { 1, 2, 3 };
         bool? systemOriginDuringRead = null;
-        lattice.GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>())
+        digests.GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>())
             .Returns(_ =>
             {
                 systemOriginDuringRead = LatticeAccessGateContext.IsSystemOrigin;
@@ -217,8 +221,8 @@ public partial class ReplicationDigestProbeGrainTests
     [Test]
     public async Task ProcessNextPhaseAsync_records_mismatch_when_digests_differ_same_version()
     {
-        var (grain, _, lattice, transport, _) = CreateProbeGrain();
-        lattice.GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>())
+        var (grain, _, lattice, transport, _, digests) = CreateProbeGrain();
+        digests.GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(Digest(new byte[] { 1, 2, 3 })));
         transport.ProbeDigestAsync("site-b", Arg.Any<DigestProbeRequest>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new DigestProbeResponse
@@ -245,8 +249,8 @@ public partial class ReplicationDigestProbeGrainTests
     [Test]
     public async Task ProcessNextPhaseAsync_does_not_walk_on_mismatch_when_merkle_walk_disabled()
     {
-        var (grain, _, lattice, transport, _) = CreateProbeGrain(merkleWalkEnabled: false);
-        lattice.GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>())
+        var (grain, _, lattice, transport, _, digests) = CreateProbeGrain(merkleWalkEnabled: false);
+        digests.GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(Digest(new byte[] { 1, 2, 3 })));
         transport.ProbeDigestAsync("site-b", Arg.Any<DigestProbeRequest>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new DigestProbeResponse
@@ -268,8 +272,8 @@ public partial class ReplicationDigestProbeGrainTests
     [Test]
     public async Task ProcessNextPhaseAsync_walks_on_mismatch_when_merkle_walk_enabled()
     {
-        var (grain, _, lattice, transport, _) = CreateProbeGrain(merkleWalkEnabled: true);
-        lattice.GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>())
+        var (grain, _, lattice, transport, _, digests) = CreateProbeGrain(merkleWalkEnabled: true);
+        digests.GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(Digest(new byte[] { 1, 2, 3 })));
         transport.ProbeDigestAsync("site-b", Arg.Any<DigestProbeRequest>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new DigestProbeResponse
@@ -291,10 +295,10 @@ public partial class ReplicationDigestProbeGrainTests
         // Issue #4180: the tree's stateless worker caches its alias per activation,
         // and nothing on the localise path routes a key, so a cached resolve would
         // walk the physical tree a resize or restore retired.
-        var (grain, _, lattice, transport, _) = CreateProbeGrain(merkleWalkEnabled: true);
+        var (grain, _, lattice, transport, _, digests) = CreateProbeGrain(merkleWalkEnabled: true);
         lattice.GetRoutingAsync(Arg.Any<CancellationToken>())
             .Returns(new ValueTask<RoutingInfo>(new RoutingInfo("phys-retired", ShardMap.CreateDefault(1, 1))));
-        lattice.GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>())
+        digests.GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(Digest(new byte[] { 1, 2, 3 })));
         transport.ProbeDigestAsync("site-b", Arg.Any<DigestProbeRequest>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new DigestProbeResponse
@@ -310,26 +314,61 @@ public partial class ReplicationDigestProbeGrainTests
     }
 
     [Test]
+    public async Task ProcessNextPhaseAsync_reads_each_shard_digest_from_its_shard_root_after_one_routing_read()
+    {
+        // The probe resolves the live routing once per pass and reads every
+        // shard's digest straight from its "{physicalTreeId}/{shard}" root,
+        // never through the tree's ILattice digest forwarder (which re-resolves
+        // routing per shard and adds a hop per shard).
+        var (grain, _, lattice, _, shardCounts, digests) = CreateProbeGrain(shardCount: 3);
+
+        await grain.ProcessNextPhaseAsync();
+
+        await shardCounts.Received(1).GetShardRoutingAsync(Tree, Arg.Any<CancellationToken>());
+        await digests.Received(1).GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>());
+        await digests.Received(1).GetLeafProjectionDigestAsync(1, Arg.Any<CancellationToken>());
+        await digests.Received(1).GetLeafProjectionDigestAsync(2, Arg.Any<CancellationToken>());
+        await lattice.DidNotReceive().GetLeafProjectionDigestAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ProcessNextPhaseAsync_skips_system_trees_without_reading_routing()
+    {
+        // The forwarder rejected system trees per shard; the direct read guards
+        // the whole pass up front and only advances the cadence.
+        var systemTree = LatticeConstants.SystemTreePrefix + "probe";
+        var (grain, state, _, transport, shardCounts, digests) = CreateProbeGrain(tree: systemTree);
+
+        await grain.ProcessNextPhaseAsync();
+
+        await shardCounts.DidNotReceive().GetShardRoutingAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await digests.DidNotReceive().GetLeafProjectionDigestAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await transport.DidNotReceive().ProbeDigestAsync(
+            Arg.Any<string>(), Arg.Any<DigestProbeRequest>(), Arg.Any<CancellationToken>());
+        Assert.That(state.State.LastProbeTicks, Is.GreaterThan(0));
+    }
+
+    [Test]
     public async Task ProcessNextPhaseAsync_probes_the_shards_of_the_live_map_not_the_pinned_count()
     {
         // Issue #4206 (the #3753 class): an adaptive split or a reshard moves slots
         // to a physical index above the pinned ShardCount, so enumerating
         // 0..ShardCount-1 skipped shard 5 and probed shard 2, which owns nothing.
-        var (grain, _, lattice, _, shardCounts) = CreateProbeGrain();
-        shardCounts.GetShardIndicesAsync(Tree, Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IReadOnlyList<int>>([0, 1, 5]));
+        var (grain, _, lattice, _, shardCounts, digests) = CreateProbeGrain();
+        shardCounts.GetShardRoutingAsync(Tree, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new RoutingInfo("phys", new ShardMap { Slots = [0, 1, 0, 5, 0, 1, 5, 1], Version = 3 })));
 
         await grain.ProcessNextPhaseAsync();
 
-        await lattice.Received(1).GetLeafProjectionDigestAsync(5, Arg.Any<CancellationToken>());
-        await lattice.DidNotReceive().GetLeafProjectionDigestAsync(2, Arg.Any<CancellationToken>());
+        await digests.Received(1).GetLeafProjectionDigestAsync(5, Arg.Any<CancellationToken>());
+        await digests.DidNotReceive().GetLeafProjectionDigestAsync(2, Arg.Any<CancellationToken>());
     }
 
     [Test]
     public async Task ProcessNextPhaseAsync_records_version_skew_and_no_mismatch()
     {
-        var (grain, _, lattice, transport, _) = CreateProbeGrain();
-        lattice.GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>())
+        var (grain, _, lattice, transport, _, digests) = CreateProbeGrain();
+        digests.GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(Digest(new byte[] { 1, 2, 3 }, version: 0)));
         transport.ProbeDigestAsync("site-b", Arg.Any<DigestProbeRequest>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new DigestProbeResponse
@@ -356,8 +395,8 @@ public partial class ReplicationDigestProbeGrainTests
     [Test]
     public async Task ProcessNextPhaseAsync_records_remote_unavailable_and_no_mismatch()
     {
-        var (grain, _, lattice, transport, _) = CreateProbeGrain();
-        lattice.GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>())
+        var (grain, _, lattice, transport, _, digests) = CreateProbeGrain();
+        digests.GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(Digest(new byte[] { 1, 2, 3 })));
         transport.ProbeDigestAsync("site-b", Arg.Any<DigestProbeRequest>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new DigestProbeResponse { DigestAvailable = false }));

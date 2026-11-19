@@ -243,8 +243,8 @@ public partial class ReplicationDigestProbeGrainTests
             .Returns(Task.FromResult(new ReplicationAck { Accepted = true }));
         var batchEncoder = Substitute.For<IReplicationBatchEncoder>();
         var shardCounts = Substitute.For<IShardCountProvider>();
-        shardCounts.GetShardIndicesAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<IReadOnlyList<int>>([0]));
+        shardCounts.GetShardRoutingAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new RoutingInfo("phys", ShardMap.CreateDefault(1, 1))));
 
         var lattice = Substitute.For<ILattice>();
         var grainFactory = Substitute.For<IGrainFactory>();
@@ -253,8 +253,6 @@ public partial class ReplicationDigestProbeGrainTests
             .Returns(new ValueTask<RoutingInfo>(new RoutingInfo("phys", ShardMap.CreateDefault(1, 1))));
 
         // Detection: the shard digest mismatches the peer.
-        lattice.GetLeafProjectionDigestAsync(0, Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(Digest(new byte[] { 1, 2, 3 })));
         transport.ProbeDigestAsync(Peer, Arg.Any<DigestProbeRequest>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new DigestProbeResponse { DigestAvailable = true, Digest = Digest(new byte[] { 9, 9, 9 }) }));
         // Localise: a single-leaf root that diverges at depth 0 covers the whole
@@ -272,6 +270,8 @@ public partial class ReplicationDigestProbeGrainTests
         var leaf = Substitute.For<IBPlusLeafGrain>();
         leaf.GetProjectionDigestAsync().Returns(Task.FromResult(Digest(new byte[] { 1, 2, 3 })));
         grainFactory.GetGrain<IBPlusLeafGrain>(Arg.Any<GrainId>()).Returns(leaf);
+        shardRoot.GetShardProjectionDigestAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(Digest(new byte[] { 1, 2, 3 })));
         grainFactory.GetGrain<IShardRootGrain>(Arg.Any<string>()).Returns(shardRoot);
 
         // WAL seam: the re-replay source reads the retained orphan from the

@@ -5,7 +5,7 @@ namespace Orleans.Lattice.Replication.Tests;
 
 /// <summary>
 /// Unit coverage of <see cref="DefaultShardCountProvider"/>: the thin wrapper that
-/// exposes the physical shard indices and shard-root keys of a tree's live routing
+/// exposes the live routing and shard-root keys of a tree's live routing
 /// through the <see cref="IShardCountProvider"/> seam.
 /// </summary>
 [TestFixture]
@@ -37,29 +37,29 @@ public class DefaultShardCountProviderTests
     }
 
     // ==================================================================
-    // GetShardIndicesAsync - the physical shards the live routing reaches
+    // GetShardRoutingAsync - the live routing (physical tree id and shard map)
     // ==================================================================
 
     [Test]
-    public void GetShardIndicesAsync_throws_when_tree_id_is_null()
+    public void GetShardRoutingAsync_throws_when_tree_id_is_null()
     {
         var (provider, _) = CreateProvider();
         Assert.That(
-            async () => await provider.GetShardIndicesAsync(null!),
+            async () => await provider.GetShardRoutingAsync(null!),
             Throws.InstanceOf<ArgumentException>());
     }
 
     [Test]
-    public void GetShardIndicesAsync_throws_when_tree_id_is_empty()
+    public void GetShardRoutingAsync_throws_when_tree_id_is_empty()
     {
         var (provider, _) = CreateProvider();
         Assert.That(
-            async () => await provider.GetShardIndicesAsync(string.Empty),
+            async () => await provider.GetShardRoutingAsync(string.Empty),
             Throws.InstanceOf<ArgumentException>());
     }
 
     [Test]
-    public void GetShardIndicesAsync_observes_cancellation_before_dispatch()
+    public void GetShardRoutingAsync_observes_cancellation_before_dispatch()
     {
         var (provider, factory) = CreateProvider();
         var lattice = StubRouting(factory, new RoutingInfo(UserTree, ShardMap.CreateDefault(8, 2)));
@@ -67,24 +67,25 @@ public class DefaultShardCountProviderTests
         cts.Cancel();
 
         Assert.That(
-            async () => await provider.GetShardIndicesAsync(UserTree, cts.Token),
+            async () => await provider.GetShardRoutingAsync(UserTree, cts.Token),
             Throws.InstanceOf<OperationCanceledException>());
         _ = lattice.DidNotReceive().GetRoutingAsync(Arg.Any<bool>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
-    public async Task GetShardIndicesAsync_returns_every_physical_shard_of_an_unsplit_tree()
+    public async Task GetShardRoutingAsync_returns_every_physical_shard_of_an_unsplit_tree()
     {
         var (provider, factory) = CreateProvider();
         StubRouting(factory, new RoutingInfo(UserTree, ShardMap.CreateDefault(12, 3)));
 
-        var indices = await provider.GetShardIndicesAsync(UserTree);
+        var routing = await provider.GetShardRoutingAsync(UserTree);
 
-        Assert.That(indices, Is.EqualTo(new[] { 0, 1, 2 }));
+        Assert.That(routing.PhysicalTreeId, Is.EqualTo(UserTree));
+        Assert.That(routing.Map.GetPhysicalShardIndices(), Is.EqualTo(new[] { 0, 1, 2 }));
     }
 
     [Test]
-    public async Task GetShardIndicesAsync_includes_a_split_target_above_the_pinned_shard_count()
+    public async Task GetShardRoutingAsync_includes_a_split_target_above_the_pinned_shard_count()
     {
         // Issue #4206 (the #3753 class): an adaptive split or a reshard moves slots
         // to a physical index above the pinned ShardCount without changing it, so
@@ -92,25 +93,25 @@ public class DefaultShardCountProviderTests
         var (provider, factory) = CreateProvider();
         StubRouting(factory, new RoutingInfo(UserTree, new ShardMap { Slots = [0, 1, 0, 5, 0, 1, 5, 1], Version = 3 }));
 
-        var indices = await provider.GetShardIndicesAsync(UserTree);
+        var routing = await provider.GetShardRoutingAsync(UserTree);
 
-        Assert.That(indices, Is.EqualTo(new[] { 0, 1, 5 }));
+        Assert.That(routing.Map.GetPhysicalShardIndices(), Is.EqualTo(new[] { 0, 1, 5 }));
     }
 
     [Test]
-    public async Task GetShardIndicesAsync_forces_a_routing_refresh()
+    public async Task GetShardRoutingAsync_forces_a_routing_refresh()
     {
         var (provider, factory) = CreateProvider();
         var lattice = StubRouting(factory, new RoutingInfo(UserTree, ShardMap.CreateDefault(8, 2)));
 
-        await provider.GetShardIndicesAsync(UserTree);
+        await provider.GetShardRoutingAsync(UserTree);
 
         _ = lattice.Received(1).GetRoutingAsync(true, Arg.Any<CancellationToken>());
         _ = lattice.DidNotReceive().GetRoutingAsync(false, Arg.Any<CancellationToken>());
     }
 
     [Test]
-    public void GetShardIndicesAsync_propagates_a_routing_failure()
+    public void GetShardRoutingAsync_propagates_a_routing_failure()
     {
         var (provider, factory) = CreateProvider();
         var lattice = Substitute.For<ILattice>();
@@ -119,7 +120,7 @@ public class DefaultShardCountProviderTests
         factory.GetGrain<ILattice>(UserTree).Returns(lattice);
 
         Assert.That(
-            async () => await provider.GetShardIndicesAsync(UserTree),
+            async () => await provider.GetShardRoutingAsync(UserTree),
             Throws.InstanceOf<InvalidOperationException>().With.Message.EqualTo("registry unreachable"));
     }
 

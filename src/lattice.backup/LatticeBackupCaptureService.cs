@@ -1925,12 +1925,18 @@ internal sealed class LatticeBackupCaptureService(
         var routing = await lattice.GetRoutingAsync(forceRefresh: true, cancellationToken).ConfigureAwait(false);
         var physicalShards = routing.Map.GetPhysicalShardIndices();
 
-        var digests = new List<string>(physicalShards.Count);
-        foreach (var shardIndex in physicalShards)
-        {
-            digests.Add(await ResolveShardDigestAsync(lattice, shardIndex, startInclusive, endExclusive, cancellationToken)
-                .ConfigureAwait(false));
-        }
+        // The per-shard digest reads are independent observations of distinct
+        // shard roots, so they overlap in one bounded wave instead of paying one
+        // serial round trip per shard. Each still goes through the tree's public
+        // digest forwarder, because the topology runs under the caller's origin
+        // and that forwarder's uniform range-read gate must still apply. Results
+        // are returned in shard order and the wave settles every read before a
+        // fault is surfaced.
+        var digests = await BoundedFanOut.RunAsync(
+            physicalShards.Count,
+            BoundedFanOut.DefaultWidth,
+            i => ResolveShardDigestAsync(lattice, physicalShards[i], startInclusive, endExclusive, cancellationToken),
+            cancellationToken).ConfigureAwait(false);
 
         return new BackupTopologySnapshot(physicalShards.Count, routing.Map.VirtualShardCount, digests);
     }
