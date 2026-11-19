@@ -1205,6 +1205,13 @@ if (string.Equals(suite, "digestprobewaves", StringComparison.OrdinalIgnoreCase)
     return digestProbeWaveSummary.HasCriticalValidationErrors ? 1 : 0;
 }
 
+if (string.Equals(suite, "tagindexcallelision", StringComparison.OrdinalIgnoreCase))
+{
+    Console.WriteLine("[microbench] suite   -> tagindexcallelision (TagIndexCallElisionBenchmarks)");
+    var tagIndexCallElisionSummary = BenchmarkRunner.Run<TagIndexCallElisionBenchmarks>(config);
+    return tagIndexCallElisionSummary.HasCriticalValidationErrors ? 1 : 0;
+}
+
 if (string.Equals(suite, "partitionwaves", StringComparison.OrdinalIgnoreCase))
 {
     Console.WriteLine("[microbench] suite   -> partitionwaves (PartitionWaveBenchmarks)");

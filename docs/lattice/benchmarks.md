@@ -346,6 +346,7 @@ silo, a transport or a storage provider in the loop. The dispatch in
 | `partitionwaves` | The three remaining serial per-target waves: the per-partition source-head HLC scan, the producer-designation probe, and the orphan-shadow purge. |
 | `viewreadwaves` | Three view and tag-index read paths: the numeric applier's overlapped read wave, the buffered batch's read cache, and the tag-index fingerprint's direct shard wave. |
 | `digestprobewaves` | Three grain-call reductions: the replication digest probe reading shard roots directly, the backup topology's overlapped forwarder digest reads, and the inverse / fold applier's membership-and-shard read wave. |
+| `tagindexcallelision` | Three tag-index grain-call reductions: multi-tree handles sharing their existence, marker and schedule caches, an eventual value+tags write skipping its existence probe, and a tag replacement overlapping its add and removal. |
 | `batchhoisttrims` | Three per-entry costs a batched write or read wave paid for a batch-invariant result: batch event publication, the WAL route task shape, and a leaf-cache double probe. |
 | `condsetmanyadmission` | The declared-span admission step at the front of the conditional batch write path. |
 | `orphanedsurvey` | A shard's orphaned-leaf audit against its opt-in full survey, on one 128-key orphan. |

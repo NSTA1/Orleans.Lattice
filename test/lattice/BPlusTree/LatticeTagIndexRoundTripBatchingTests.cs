@@ -40,6 +40,13 @@ public partial class LatticeTagIndexRoundTripBatchingTests
         public int ExistsAsyncCalls;
         public int GateAccountedCalls;
         public int ApplyCrdtDeltaCalls;
+        public int TreeExistsAsyncCalls;
+
+        /// <summary>What <c>TreeExistsAsync</c> reports for the subject tree.</summary>
+        public bool TreeExists = true;
+
+        /// <summary>Optional gate awaited by every batched write, used to prove overlap.</summary>
+        public Func<Task>? SetManyGate;
         public readonly List<int> SetManyWidths = [];
         public readonly List<int> GetManyWidths = [];
         public readonly List<int> GateAccountedWidths = [];
@@ -75,7 +82,11 @@ public partial class LatticeTagIndexRoundTripBatchingTests
         {
             var tree = Substitute.For<ILattice>();
 
-            tree.TreeExistsAsync(Arg.Any<CancellationToken>()).Returns(_ => Task.FromResult(true));
+            tree.TreeExistsAsync(Arg.Any<CancellationToken>()).Returns(_ =>
+            {
+                Interlocked.Increment(ref TreeExistsAsyncCalls);
+                return Task.FromResult(TreeExists);
+            });
 
             tree.GetAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
                 .Returns(ci =>
@@ -146,6 +157,11 @@ public partial class LatticeTagIndexRoundTripBatchingTests
                     var entries = ci.Arg<List<KeyValuePair<string, byte[]>>>();
                     SetManyAsyncCalls++;
                     SetManyWidths.Add(entries.Count);
+                    var gate = SetManyGate;
+                    if (gate is not null)
+                    {
+                        return AwaitGateThenSetMany(gate, entries);
+                    }
                     foreach (var entry in entries)
                     {
                         Data[entry.Key] = entry.Value;
@@ -192,6 +208,18 @@ public partial class LatticeTagIndexRoundTripBatchingTests
                 .Returns(ci => Range(ci.ArgAt<string?>(0), ci.ArgAt<string?>(1), ci.ArgAt<bool>(2)));
 
             Lattice = tree;
+        }
+
+        private async Task AwaitGateThenSetMany(Func<Task> gate, List<KeyValuePair<string, byte[]>> entries)
+        {
+            await gate().ConfigureAwait(false);
+            lock (Data)
+            {
+                foreach (var entry in entries)
+                {
+                    Data[entry.Key] = entry.Value;
+                }
+            }
         }
 
         private async Task<bool> AwaitGateThenRemove(Func<Task> gate, string key)

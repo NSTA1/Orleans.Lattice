@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using Orleans.Lattice.BPlusTree;
 
@@ -61,10 +62,23 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
 
     private bool FlagMode => _membershipMode is LatticeMergeMode.OrFlag or LatticeMergeMode.RwFlag;
 
-    // Per-context caches. The accepted-tree set memoises open-mode existence
-    // checks; the hint cache memoises the covered-tree set.
-    private readonly HashSet<string> _acceptedTrees = new(StringComparer.Ordinal);
-    private HashSet<string>? _hintCache;
+    // Caches shared by a context and every per-subject context derived from it
+    // through ForSubject. The accepted-tree set memoises open-mode existence
+    // checks; the hinted-tree set memoises covered-tree marker writes. They are
+    // shared (rather than copied per ForSubject call) so a long-lived multi-tree
+    // index pays each tree's existence probe, marker write and reconcile-schedule
+    // call once, not once per Tree(t) handle; concurrent dictionaries because a
+    // shared multi-tree index may be driven from several tasks at once.
+    private readonly SharedCaches _caches;
+
+    private sealed class SharedCaches
+    {
+        public readonly ConcurrentDictionary<string, byte> AcceptedTrees = new(StringComparer.Ordinal);
+
+        // Replaced wholesale by GetCoveredTreesAsync with the authoritative
+        // marker set, so it is read and swapped through Volatile.
+        public ConcurrentDictionary<string, byte>? HintedTrees;
+    }
 
     private LatticeTagIndexContext(
         IGrainFactory grainFactory,
@@ -75,8 +89,10 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
         ILattice subjectTree,
         IReadOnlyCollection<string>? allowlist,
         LatticeMergeMode membershipMode,
-        string? replicaId)
+        string? replicaId,
+        SharedCaches? caches = null)
     {
+        _caches = caches ?? new SharedCaches();
         _grainFactory = grainFactory;
         _indexName = indexName;
         _indexTreeId = indexTreeId;
@@ -187,10 +203,7 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
         var subject = string.Equals(treeId, _subjectTreeId, StringComparison.Ordinal)
             ? _subjectTree
             : _grainFactory.GetGrain<ILattice>(treeId);
-        return new LatticeTagIndexContext(_grainFactory, _indexName, _indexTreeId, _indexTree, treeId, subject, _allowlist, _membershipMode, _replicaId)
-        {
-            _hintCache = _hintCache,
-        };
+        return new LatticeTagIndexContext(_grainFactory, _indexName, _indexTreeId, _indexTree, treeId, subject, _allowlist, _membershipMode, _replicaId, _caches);
     }
 
     // ── ILatticeTagIndex ─────────────────────────────────────────────
@@ -876,6 +889,34 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
 
         ReconcileTagSet(tags, current, out var toAdd, out var toRemove);
 
+        if (toAdd is not null && toRemove is not null)
+        {
+            // The add and the removal touch disjoint tags, so they write
+            // disjoint membership rows and need not run one after the other.
+            // Everything that could reject the add is checked first, so a
+            // rejection still lands before either side has written anything,
+            // exactly as when the add ran (and threw) ahead of the removal. The
+            // removed tags came from the stored rows, but they are validated
+            // too, as RemoveTagsForKeyAsync does. The operation was never
+            // atomic: a mid-flight fault leaves a partial reconcile either way,
+            // and a retry re-reads the stored tags and converges.
+            CheckAllowlist(treeId);
+            await EnsureExistsAsync(treeId, cancellationToken).ConfigureAwait(false);
+            for (var i = 0; i < toAdd.Count; i++)
+            {
+                ValidateTag(toAdd[i]);
+            }
+            for (var i = 0; i < toRemove.Count; i++)
+            {
+                ValidateTag(toRemove[i]);
+            }
+
+            await Task.WhenAll(
+                AddTagsForKeyAsync(treeId, key, toAdd, cancellationToken),
+                RemoveTagsForKeyAsync(treeId, key, toRemove, cancellationToken)).ConfigureAwait(false);
+            return;
+        }
+
         if (toAdd is not null)
         {
             await AddTagsForKeyAsync(treeId, key, toAdd, cancellationToken).ConfigureAwait(false);
@@ -1154,14 +1195,20 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
                 }
             }
             await builder.CommitAsync(cancellationToken).ConfigureAwait(false);
+            MarkAccepted(treeId);
             await EnsureHintAsync(treeId, cancellationToken).ConfigureAwait(false);
             return;
         }
 
         // Eventual (or atomic with no tags): two independent durable writes.
+        // The value write registers the subject tree, so once it succeeds the
+        // open-mode existence probe the tag write would otherwise issue
+        // (TreeExistsAsync, a grain call plus its registry read) can only
+        // answer "registered": record the tree as accepted instead.
         await subject.SetAsync(key, value, cancellationToken).ConfigureAwait(false);
         if (tags.Length > 0)
         {
+            MarkAccepted(treeId);
             await AddTagsForKeyAsync(treeId, key, tags, cancellationToken).ConfigureAwait(false);
         }
     }
@@ -1588,7 +1635,7 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
 
         if (set.Count > 0)
         {
-            _hintCache = new HashSet<string>(set, StringComparer.Ordinal);
+            ReplaceHintedTrees(set);
             return set.ToList();
         }
 
@@ -1607,8 +1654,18 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
             }
         }
         await WriteMarkerRowsAsync(set, cancellationToken).ConfigureAwait(false);
-        _hintCache = new HashSet<string>(set, StringComparer.Ordinal);
+        ReplaceHintedTrees(set);
         return set.ToList();
+    }
+
+    private void ReplaceHintedTrees(SortedSet<string> set)
+    {
+        var hinted = new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
+        foreach (var treeId in set)
+        {
+            hinted.TryAdd(treeId, 0);
+        }
+        Volatile.Write(ref _caches.HintedTrees, hinted);
     }
 
     // Persists one covered-tree marker per discovered tree for the self-heal
@@ -1661,12 +1718,21 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
         // The cache is only a write-dedup memo here (reads go to GetCoveredTrees-
         // Async, which is authoritative): a stale cache at worst issues a
         // redundant idempotent marker write, never a missed one.
-        if (_hintCache is not null && _hintCache.Contains(treeId))
+        var hinted = Volatile.Read(ref _caches.HintedTrees);
+        if (hinted is not null && hinted.ContainsKey(treeId))
         {
             return;
         }
         await WriteRowAsync(CoveredMarkerKey(treeId), cancellationToken).ConfigureAwait(false);
-        (_hintCache ??= new HashSet<string>(StringComparer.Ordinal)).Add(treeId);
+        hinted = Volatile.Read(ref _caches.HintedTrees);
+        if (hinted is null)
+        {
+            hinted = Interlocked.CompareExchange(
+                ref _caches.HintedTrees,
+                new ConcurrentDictionary<string, byte>(StringComparer.Ordinal),
+                null) ?? Volatile.Read(ref _caches.HintedTrees)!;
+        }
+        hinted.TryAdd(treeId, 0);
 
         // First time this index covers a tree it is materialised: ensure the
         // background reconciliation coordinator's schedule reminder. Idempotent
@@ -1713,7 +1779,7 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
         {
             return; // closed mode is enforced by CheckAllowlist
         }
-        if (_acceptedTrees.Contains(treeId))
+        if (_caches.AcceptedTrees.ContainsKey(treeId))
         {
             return;
         }
@@ -1723,7 +1789,18 @@ internal sealed class LatticeTagIndexContext : ILatticeTagIndex
             throw new InvalidOperationException(
                 $"Tree '{treeId}' is not registered; write a value to it (e.g. via SetValueWithTags) before tagging its keys, or supply a closed allowlist of accepted trees.");
         }
-        _acceptedTrees.Add(treeId);
+        _caches.AcceptedTrees.TryAdd(treeId, 0);
+    }
+
+    // Records that a value write to the subject tree just succeeded, which
+    // proves the tree is registered (the write registers it), so a following
+    // open-mode tag write need not probe TreeExistsAsync for it.
+    private void MarkAccepted(string treeId)
+    {
+        if (_allowlist is null)
+        {
+            _caches.AcceptedTrees.TryAdd(treeId, 0);
+        }
     }
 
     // Above this many tags the linear dedup scan below is outgrown by a hash
