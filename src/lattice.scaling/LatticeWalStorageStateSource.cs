@@ -66,6 +66,8 @@ internal sealed class LatticeWalStorageStateSource(
             }
 
             var now = _timeProvider.GetUtcNow();
+            var anyWalSaturated = _saturationSignal is not null
+                && _saturationSignal.GetAggregateState() != WalSaturationState.Healthy;
             var trees = new WalTreeSample[perTree.Length];
             var liveTreeIds = new string[perTree.Length];
             for (var i = 0; i < perTree.Length; i++)
@@ -76,10 +78,14 @@ internal sealed class LatticeWalStorageStateSource(
 
                 var partitions = await SamplePartitionsAsync(admin, report.TreeId, cancellationToken).ConfigureAwait(false);
 
-                var saturation = _saturationSignal is null
-                    ? WalSaturationState.Healthy
-                    : _saturationSignal.GetCurrentState(
+                var saturation = _saturationSignal?.GetCurrentState(report.TreeId) ?? WalSaturationState.Healthy;
+                if (saturation == WalSaturationState.Healthy && anyWalSaturated)
+                {
+                    // Only a resized tree reads healthy by its own id while its WAL is
+                    // saturated, so the routing read is paid only while some WAL is.
+                    saturation = _saturationSignal!.GetCurrentState(
                         await ResolveWalTreeIdAsync(report.TreeId, cancellationToken).ConfigureAwait(false));
+                }
                 var saturatedFor = TrackContinuity(report.TreeId, saturation, now);
 
                 trees[i] = new WalTreeSample

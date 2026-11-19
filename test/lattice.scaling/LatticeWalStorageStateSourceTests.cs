@@ -93,6 +93,7 @@ public sealed class LatticeWalStorageStateSourceTests
         factory.GetGrain<ILattice>("orders").Returns(lattice);
 
         var saturation = Substitute.For<IWalSaturationSignal>();
+        saturation.GetAggregateState().Returns(WalSaturationState.Saturated);
         saturation.GetCurrentState("orders").Returns(WalSaturationState.Healthy);
         saturation.GetCurrentState("orders/resized/op1").Returns(WalSaturationState.Saturated);
 
@@ -119,12 +120,30 @@ public sealed class LatticeWalStorageStateSourceTests
         factory.GetGrain<ILattice>("t1").Returns(lattice);
 
         var saturation = Substitute.For<IWalSaturationSignal>();
-        saturation.GetCurrentState("t1").Returns(WalSaturationState.Throttled);
+        saturation.GetAggregateState().Returns(WalSaturationState.Saturated);
+        saturation.GetCurrentState("t1").Returns(WalSaturationState.Healthy);
 
         var sample = await new LatticeWalStorageStateSource(new MutableTimeProvider(T0), Catalog("acct-a"), saturation, factory)
             .SampleAsync(CancellationToken.None);
 
-        Assert.That(sample.Trees[0].Saturation, Is.EqualTo(WalSaturationState.Throttled));
+        Assert.That(sample.Trees[0].Saturation, Is.EqualTo(WalSaturationState.Healthy));
+        await lattice.Received(1).GetRoutingAsync(true, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task No_routing_read_is_made_while_no_wal_is_saturated()
+    {
+        var admin = Substitute.For<ILatticeAdmin>();
+        admin.GetTotalStorageUsageAsync(Arg.Any<CancellationToken>()).Returns(ClusterReport(("t1", 500)));
+        admin.GetWalPlacementAsync("t1", Arg.Any<CancellationToken>()).Returns(Placement("t1", (0, "acct-a")));
+        var factory = FactoryFor(admin);
+        var saturation = Substitute.For<IWalSaturationSignal>();
+        saturation.GetAggregateState().Returns(WalSaturationState.Healthy);
+
+        await new LatticeWalStorageStateSource(new MutableTimeProvider(T0), Catalog("acct-a"), saturation, factory)
+            .SampleAsync(CancellationToken.None);
+
+        factory.DidNotReceiveWithAnyArgs().GetGrain<ILattice>(default(string)!);
     }
 
     [Test]
