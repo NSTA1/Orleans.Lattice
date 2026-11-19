@@ -235,4 +235,12 @@ public sealed class SchemaFormatPatternsTests
             Assert.That(tooLong, Does.StartWith("A pattern may be at most"));
         });
     }
+
+    [Test]
+    [SetCulture("fi-FI")]
+    public void A_too_long_pattern_states_its_limit_with_invariant_separators()
+    {
+        Assert.That(SchemaPatterns.TryCompile(new string('a', SchemaPatterns.MaximumPatternLength + 1), out _, out var tooLong), Is.False);
+        Assert.That(tooLong, Is.EqualTo("A pattern may be at most 2,000 characters."));
+    }
 }

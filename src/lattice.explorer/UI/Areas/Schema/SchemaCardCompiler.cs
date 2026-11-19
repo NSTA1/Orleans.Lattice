@@ -73,7 +73,7 @@ internal static class SchemaCardCompiler
 
                 if (bytes > int.MaxValue)
                 {
-                    error = $"The largest size can be at most {int.MaxValue:N0} bytes.";
+                    error = string.Create(CultureInfo.InvariantCulture, $"The largest size can be at most {int.MaxValue:N0} bytes.");
                     return false;
                 }
 

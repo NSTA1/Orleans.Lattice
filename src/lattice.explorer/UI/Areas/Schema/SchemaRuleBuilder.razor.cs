@@ -697,7 +697,7 @@ public partial class SchemaRuleBuilder : IDisposable
 
     private static string? Example(SchemaShapeNode node) =>
         node.Numbers is { } numbers ? $"{SchemaShape.Show(numbers.Min)} to {SchemaShape.Show(numbers.Max)}"
-        : node.ItemCounts is { } counts ? $"{counts.Min:N0} to {counts.Max:N0} items"
+        : node.ItemCounts is { } counts ? string.Create(CultureInfo.InvariantCulture, $"{counts.Min:N0} to {counts.Max:N0} items")
         : node.Distinct is [var first, ..] && node.Dominant == SchemaValueType.Text ? Clip(first)
         : null;
 

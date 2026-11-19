@@ -48,7 +48,7 @@ public partial class ReplicationEstatePage
             var shown = _filter.IsActive
                 ? $"{ReplicationFormat.Count(_filtered.Count)} of {ReplicationFormat.Count(_estate.Links.Count, "link", "links")} match."
                 : ReplicationFormat.Count(_estate.Links.Count, "link", "links") + ".";
-            return $"{shown} Read at {_estate.ReadAt.UtcDateTime:HH:mm:ss} UTC.";
+            return $"{shown} Read at {ReplicationFormat.ReadAt(_estate.ReadAt)} UTC.";
         }
     }
 

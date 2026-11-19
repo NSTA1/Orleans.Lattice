@@ -211,6 +211,17 @@ public sealed class TelemetryModelTests
     }
 
     [Test]
+    [SetCulture("fi-FI")]
+    public void Too_many_points_states_the_counts_with_invariant_separators()
+    {
+        var bounds = new TelemetryQueryBounds { MaxPoints = 1000 };
+        var window = TelemetryWindow.FromAddress(ExplorerAddress.Parse("/telemetry?range=1h&step=1s"));
+        var chart = TelemetryChartRequest.For(TelemetryTestData.Range("q", "Q", bounds: bounds), window, TelemetryTestData.Now, false);
+
+        Assert.That(chart.Problem, Is.EqualTo("At this step the window needs 3,601 points and this chart draws at most 1,000. Choose a coarser step or a shorter range."));
+    }
+
+    [Test]
     public void A_window_outside_the_entrys_bounds_is_explained_rather_than_sent()
     {
         var tight = new TelemetryQueryBounds { MaxRange = TimeSpan.FromHours(24), MaxLookback = TimeSpan.FromDays(2), MaxPoints = 100 };

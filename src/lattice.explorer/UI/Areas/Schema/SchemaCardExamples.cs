@@ -125,15 +125,15 @@ internal static class SchemaCardExamples
                 var present = seen.Seen - seen.Nulls;
                 if (structural || !HoldsStructure(seen))
                 {
-                    return $"Set in {present:N0} of {Documents(seen):N0} sampled values.";
+                    return string.Create(CultureInfo.InvariantCulture, $"Set in {present:N0} of {Documents(seen):N0} sampled values.");
                 }
 
                 // The older presence check reads an object or a list as missing.
                 var scalars = present - seen.Types.GetValueOrDefault(SchemaValueType.Object) - seen.Types.GetValueOrDefault(SchemaValueType.List);
-                return $"Set as text, a number or true or false in {scalars:N0} of {Documents(seen):N0} sampled values.";
+                return string.Create(CultureInfo.InvariantCulture, $"Set as text, a number or true or false in {scalars:N0} of {Documents(seen):N0} sampled values.");
 
             case SchemaCardKind.Type when seen?.Dominant is { } dominant:
-                return "Seen as " + string.Join(", ", seen.Types.OrderByDescending(pair => pair.Value).Select(pair => $"{SchemaCardText.TypePhrase(pair.Key)} ({pair.Value:N0})")) + ".";
+                return "Seen as " + string.Join(", ", seen.Types.OrderByDescending(pair => pair.Value).Select(pair => string.Create(CultureInfo.InvariantCulture, $"{SchemaCardText.TypePhrase(pair.Key)} ({pair.Value:N0})"))) + ".";
 
             case SchemaCardKind.OneOf when seen is not null && seen.Distinct.Count > 0:
                 return (seen.ManyValues || seen.Distinct.Count > 4 ? "Many values, such as " : "Seen: ") + string.Join(", ", seen.Distinct.Take(4).Select(Clip)) + ".";
@@ -142,7 +142,7 @@ internal static class SchemaCardExamples
                 return $"Seen {SchemaShape.Show(numbers.Min)} to {SchemaShape.Show(numbers.Max)}{(seen.AllWhole ? ", all whole" : string.Empty)}.";
 
             case SchemaCardKind.TextLength when seen?.TextLengths is { } lengths:
-                return $"Seen {lengths.Min:N0} to {lengths.Max:N0} characters.";
+                return string.Create(CultureInfo.InvariantCulture, $"Seen {lengths.Min:N0} to {lengths.Max:N0} characters.");
 
             case SchemaCardKind.Format when seen is not null && SchemaFormatPatterns.Matching(seen.Texts) is [var first, ..]:
                 return $"Every value seen is {SchemaFormatPatterns.PhraseOf(first)}.";
@@ -151,7 +151,7 @@ internal static class SchemaCardExamples
                 return $"Every value seen starts with \"{prefix}\".";
 
             case SchemaCardKind.ListLength when seen?.ItemCounts is { } counts:
-                return $"Seen {counts.Min:N0} to {counts.Max:N0} items.";
+                return string.Create(CultureInfo.InvariantCulture, $"Seen {counts.Min:N0} to {counts.Max:N0} items.");
 
             case SchemaCardKind.EveryItem when seen?.Items is { Dominant: { } itemType }:
                 return $"Items seen are mostly {SchemaCardText.TypePhrase(itemType)}.";

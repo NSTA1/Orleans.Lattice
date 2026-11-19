@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace Orleans.Lattice.Backup.Tests;
 
 /// <summary>
@@ -108,6 +110,24 @@ public sealed class BackupSetScheduleModelTests
             Assert.That(BackupSetSchedulerGrain.NextRun(anchor, period, anchor.AddHours(6)), Is.EqualTo(anchor.AddHours(12)));
             Assert.That(BackupSetSchedulerGrain.NextRun(anchor, period, anchor.AddHours(13)), Is.EqualTo(anchor.AddHours(18)));
         });
+    }
+
+    [TestCase("th-TH")]
+    [TestCase("ar-SA")]
+    [TestCase("fi-FI")]
+    public void SetName_stamps_a_gregorian_utc_time_whatever_the_silo_culture(string culture)
+    {
+        var startedAt = new DateTimeOffset(2026, 5, 4, 13, 7, 9, TimeSpan.Zero);
+        var original = CultureInfo.CurrentCulture;
+        try
+        {
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo(culture);
+            Assert.That(BackupSetSchedulerGrain.SetName("nightly", startedAt), Is.EqualTo("nightly-20260504T130709Z"));
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = original;
+        }
     }
 
     [Test]

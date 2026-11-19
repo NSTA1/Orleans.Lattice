@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.RegularExpressions;
 
 namespace Orleans.Lattice.Explorer.UI.Areas.Schema;
@@ -42,7 +43,7 @@ internal static class SchemaPatterns
 
         if (pattern.Length > MaximumPatternLength)
         {
-            error = $"A pattern may be at most {MaximumPatternLength:N0} characters.";
+            error = string.Create(CultureInfo.InvariantCulture, $"A pattern may be at most {MaximumPatternLength:N0} characters.");
             return false;
         }
 

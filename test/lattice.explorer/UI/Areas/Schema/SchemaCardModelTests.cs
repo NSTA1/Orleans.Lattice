@@ -132,6 +132,16 @@ public sealed class SchemaCardModelTests
     }
 
     [Test]
+    [SetCulture("fi-FI")]
+    public void A_size_past_the_limit_states_the_limit_with_invariant_separators()
+    {
+        var card = Card(SchemaCardKind.MaxSize, string.Empty, card => card.MaxBytes = "99999999999");
+
+        Assert.That(SchemaCardCompiler.TryCompile(card, out _, out var error), Is.False);
+        Assert.That(error, Is.EqualTo("The largest size can be at most 2,147,483,647 bytes."));
+    }
+
+    [Test]
     public void Only_predicate_cards_can_be_grouped_or_made_optional()
     {
         Assert.Multiple(() =>

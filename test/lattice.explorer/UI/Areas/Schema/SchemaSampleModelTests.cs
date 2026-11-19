@@ -211,6 +211,23 @@ public sealed class SchemaSampleModelTests
     }
 
     [Test]
+    [SetCulture("fi-FI")]
+    public void The_gallery_examples_group_counts_with_invariant_separators()
+    {
+        var text = new string('x', 1234);
+        var list = string.Join(",", Enumerable.Repeat("0", 1234));
+        var shape = Shape(Enumerable.Repeat($"{{\"s\":\"{text}\",\"l\":[{list}]}}", 1001).ToArray());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(SchemaCardExamples.Example(SchemaCardKind.TextLength, shape.Find("s")), Is.EqualTo("Seen 1,234 to 1,234 characters."));
+            Assert.That(SchemaCardExamples.Example(SchemaCardKind.ListLength, shape.Find("l")), Is.EqualTo("Seen 1,234 to 1,234 items."));
+            Assert.That(SchemaCardExamples.Example(SchemaCardKind.Required, shape.Find("s")), Is.EqualTo("Set in 1,001 of 1,001 sampled values."));
+            Assert.That(SchemaCardExamples.Example(SchemaCardKind.Type, shape.Find("s")), Is.EqualTo("Seen as text (1,001)."));
+        });
+    }
+
+    [Test]
     public void The_gallery_examples_come_from_the_sample_when_there_is_one()
     {
         var shape = Shape("{\"n\":2,\"s\":\"ab-1\",\"e\":\"a@example.com\",\"l\":[1,2]}", "{\"n\":9,\"s\":\"ab-2\",\"e\":\"b@example.com\",\"l\":[3]}");
