@@ -280,9 +280,9 @@ Guidance:
   `lattice-app.css`, so your UI starts with the Explorer's Paper and Board materials,
   type and controls without linking anything. The kit sets the theme, contrast,
   density and reduced-motion attributes on `<html>` and updates them on
-  `context.changed`. The frame starts in the console's appearance, but the web head
-  does not yet send `context.changed`, so an app that is already open keeps the
-  appearance it started with until it is opened again. Keep layouts fluid: the frame
+  `context.changed`. The frame starts in the console's appearance, and the host
+  sends `context.changed` to an app that is already open when the Explorer shell
+  hosting it changes its theme, contrast or density. Keep layouts fluid: the frame
   fills its window at every width, down to a phone.
 - **Digests.** Pin every asset's digest and the bundle digest in the manifest. The
   [task-board sample](../../samples/Explorer/Apps/TaskBoard/README.md) computes them

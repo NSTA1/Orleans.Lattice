@@ -66,6 +66,8 @@ internal sealed class LatticeWalStorageStateSource(
             }
 
             var now = _timeProvider.GetUtcNow();
+            var anyWalSaturated = _saturationSignal is not null
+                && _saturationSignal.GetAggregateState() != WalSaturationState.Healthy;
             var trees = new WalTreeSample[perTree.Length];
             var liveTreeIds = new string[perTree.Length];
             for (var i = 0; i < perTree.Length; i++)
@@ -77,6 +79,13 @@ internal sealed class LatticeWalStorageStateSource(
                 var partitions = await SamplePartitionsAsync(admin, report.TreeId, cancellationToken).ConfigureAwait(false);
 
                 var saturation = _saturationSignal?.GetCurrentState(report.TreeId) ?? WalSaturationState.Healthy;
+                if (saturation == WalSaturationState.Healthy && anyWalSaturated)
+                {
+                    // Only a resized tree reads healthy by its own id while its WAL is
+                    // saturated, so the routing read is paid only while some WAL is.
+                    saturation = _saturationSignal!.GetCurrentState(
+                        await ResolveWalTreeIdAsync(report.TreeId, cancellationToken).ConfigureAwait(false));
+                }
                 var saturatedFor = TrackContinuity(report.TreeId, saturation, now);
 
                 trees[i] = new WalTreeSample
@@ -106,6 +115,28 @@ internal sealed class LatticeWalStorageStateSource(
         {
             _logger.LogWarning(ex, "Failed to sample WAL storage state; reporting an empty sample.");
             return default;
+        }
+    }
+
+    /// <summary>
+    /// The id the saturation signal keys a tree's WAL by: its physical tree id.
+    /// After a resize the logical name aliases a copy whose WAL writes - and so
+    /// whose saturation samples - land under the copy's id, so a lookup by the
+    /// logical name would always read healthy. A failed resolve falls back to the
+    /// report's own id, which is the physical id for a tree that was never moved.
+    /// </summary>
+    private async ValueTask<string> ResolveWalTreeIdAsync(string treeId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var routing = await _grainFactory!.GetGrain<ILattice>(treeId)
+                .GetRoutingAsync(forceRefresh: true, cancellationToken).ConfigureAwait(false);
+            return string.IsNullOrEmpty(routing?.PhysicalTreeId) ? treeId : routing.PhysicalTreeId;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogDebug(ex, "Failed to resolve the physical WAL tree of {TreeId}; reading its saturation by its own id.", treeId);
+            return treeId;
         }
     }
 

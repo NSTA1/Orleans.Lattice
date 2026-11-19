@@ -26,7 +26,7 @@ namespace Orleans.Lattice.Replication;
 /// <see cref="IReplicationBatchEncoder"/> via DI.
 /// </para>
 /// </summary>
-internal sealed class OrleansBinaryReplicationBatchEncoder : IReplicationBatchEncoder
+internal sealed class OrleansBinaryReplicationBatchEncoder : IReplicationBatchEncoder, IDisposable
 {
     /// <summary>
     /// Canonical binary content type stamped on outbound HTTP / gRPC
@@ -40,6 +40,7 @@ internal sealed class OrleansBinaryReplicationBatchEncoder : IReplicationBatchEn
     private readonly Serializer<ReplicationBatchEnvelope> _serializer;
     private readonly FrozenDictionary<byte, ILatticeCompressor> _compressors;
     private readonly IOptionsMonitor<LatticeReplicationOptions>? _options;
+    private readonly ZstdLatticeCompressor? _ownedZstd;
 
     /// <summary>
     /// Initialises the encoder with the supplied
@@ -128,8 +129,46 @@ internal sealed class OrleansBinaryReplicationBatchEncoder : IReplicationBatchEn
                     nameof(compressors));
             }
         }
+
+        // The stock Zstd compressor is one DI singleton shared with storage
+        // providers, so whichever package registered it first fixed its level. A
+        // configured FramingCompressionLevel therefore gets an encoder-owned
+        // instance at that level; the default level keeps the shared instance,
+        // so a host that pre-registered its own level keeps it.
+        if (dict.TryGetValue((byte)LatticeCompression.Zstd, out var shared)
+            && shared is ZstdLatticeCompressor
+            && ResolveFramingCompressionLevel(options) is { } level
+            && level != LatticeReplicationOptions.DefaultFramingCompressionLevel)
+        {
+            _ownedZstd = new ZstdLatticeCompressor(level);
+            dict[(byte)LatticeCompression.Zstd] = _ownedZstd;
+        }
+
         _compressors = dict.ToFrozenDictionary();
     }
+
+    /// <summary>The framing compression level the encoder compresses at, when a valid one is configured.</summary>
+    private static int? ResolveFramingCompressionLevel(IOptionsMonitor<LatticeReplicationOptions>? options)
+    {
+        if (options is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            var level = options.CurrentValue.FramingCompressionLevel;
+            return level is >= 1 and <= 22 ? level : null;
+        }
+        catch (OptionsValidationException)
+        {
+            // Invalid options fail at their own resolution sites; the encoder keeps the registered compressor.
+            return null;
+        }
+    }
+
+    /// <inheritdoc />
+    public void Dispose() => _ownedZstd?.Dispose();
 
     /// <inheritdoc />
     public string ContentType => BinaryContentType;

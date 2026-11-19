@@ -87,7 +87,8 @@ See [Transport](transport.md), [Orleans.Lattice.Replication.Grpc](../lattice.rep
 | Type | Kind | Purpose | Key public members |
 |---|---|---|---|
 | `IReplicationTransport` | interface | Sends a batch to a peer cluster and returns the receiver ack. | `SendAsync(ReplicationBatch, CancellationToken)` |
-| `ReplicationBatch` | readonly record struct | Logical outbound batch routing metadata plus payload. | `TargetClusterId`, `TreeName`, `OriginClusterId`, `Payload`, `Envelope`, `EncodedEnvelope` |
+| `ReplicationBatch` | readonly record struct | Logical outbound batch routing metadata plus payload. | `TargetClusterId`, `TreeName`, `OriginClusterId`, `Payload`, `Envelope`, `EncodedEnvelope`, `ReseedAfterEpoch` (the sender's forced-gap re-seed request, carried out of band beside the batch; `null` when none) |
+| `IReplicationReseedResponder` | interface | Receiver side of the forced-gap re-seed for a custom transport, registered by `AddLatticeReplication`. The receiving end calls it with the transport-authenticated origin before handing the entries to `IReplicationApplier`, and echoes the epoch it returns in `ReplicationAck.BootstrapEpoch`. Only a tree enrolled for replication on this receiver is answered; any other gets no epoch and starts nothing. | `RespondAsync` (answers the request and, when `AutoBootstrapOnFallOffLog` allows it, starts the bootstrap; returns the epoch to echo or `null`), `RefusesStragglerAsync` (whether a push carrying a saga record from a sender still being re-seeded must be refused with a not-accepted ack) |
 | `ReplicationBatchEnvelope` | readonly record struct | Decoded transport envelope. | `WireVersion`, `TreeName`, `OriginClusterId`, `Entries`; the `CurrentVersion` and `CurrentMinorVersion` constants |
 | `ReplicationBatchEncodedEnvelope` | readonly record struct | Pre-encoded envelope used by transport implementations. | `Header` (an `EncodedBatchHeader`), `EncodedEntries` (the pre-encoded entry segments) |
 | `ReplicationAck` | readonly record struct | Receiver acknowledgement and hints. | `Accepted`, `HighestAppliedHlc`, `BlockedAtHlc`, the flow-control hints `SuggestedBatchSize` / `PauseForMs`, and the capability hints `SupportedWireVersion`, `AdvertisedDictionaryIds`, `AdvertisedDictionaries` |
@@ -102,7 +103,7 @@ See [Replication Apply](replication-apply.md) and [Deltas](deltas.md).
 | Type | Kind | Purpose | Key public members |
 |---|---|---|---|
 | `IReplicationApplier` | interface | Applies inbound WAL records to the local tree. | `ApplyAsync`, `ApplyBatchAsync` |
-| `ApplyResult` | readonly record struct | Apply outcome and high-water-mark visibility. | `Applied`, `HighWaterMark`, `Deferred` (the batch was held back by an inbound receive fence and must be retried), `SourceLineageRefused` (the sender read it under a source lineage this tree no longer holds; the sender re-resolves its binding, and a refused dead-letter replay stays parked), `TenantIsolationRefused` (the tenant-isolation gate refused the entry's authenticated direct sender - `RejectSourceNotResident` or `RejectMissingSourceIdentity`; a refused dead-letter replay stays parked, so a sender that is not currently authorized cannot consume it) |
+| `ApplyResult` | readonly record struct | Apply outcome and high-water-mark visibility. | `Applied`, `HighWaterMark`, `Deferred` (the batch was held back by an inbound receive fence and must be retried), `SourceLineageRefused` (the sender read it under a source lineage this tree no longer holds; the sender re-resolves its binding, and a refused dead-letter replay stays parked), `TenantIsolationRefused` (the tenant-isolation gate refused the entry's authenticated direct sender - `RejectSourceNotResident` or `RejectMissingSourceIdentity`; a refused dead-letter replay stays parked, so a sender that is not currently authorized cannot consume it), `DeadLettered` (the applier refused the entry as terminal and holds it in the tree's dead-letter queue - a merge-mode mismatch, a tenant-isolation refusal, or a lost causal dependency; a dead-letter replay refused this way stays parked) |
 | `IReplicationLocalVcSeeder` | interface | Rebuilds a tree's local vector clock from the vector-clock slots on its values after an intra-cluster snapshot restore, so inbound dependency checks do not run against a zeroed vector. A no-op for a non-replicated tree. | `SeedFromTreeAsync(string, CancellationToken)` returning `LocalVcSeedReport` |
 | `LocalVcSeedReport` | readonly record struct | Observable result of local version-vector seeding. | `TreeName`, `Frontier`, `EntriesScanned`, `SeedApplied` |
 
@@ -143,7 +144,7 @@ See [Dead-Letter Queue](dead-letter-queue.md).
 | `ILatticeReplicationDeadLetters` | interface | Lists, discards, and replays quarantined apply failures; host-trusted receiver saga poison and quarantine release. | `ListAsync`, `CountAsync`, `DiscardAsync`, `ReplayAsync`, `PoisonSagaAsync`, `ReleaseQuarantinedSagaAsync` |
 | `DeadLetterEntry` | readonly record struct | Retained failed apply entry. | `EntryId`, `Entry`, `FailureReason`, `RetryCount`, `EnqueuedAtTicks`, `SourceLineageClusterId`, `SourceLineage` (the source lineage the entry's sender stamped, which a replay is checked against; `null` when unstamped), `ReasonTag` (a stable machine-readable reason tag), `AuthenticatedSenderClusterId` (the authenticated direct sender that delivered the entry, separate from its origin lineage; `null` on older entries, which therefore cannot pass source checks during replay) |
 
-Replay runs the parked entry through the canonical applier and removes it on any non-throwing return that is neither deferred nor refused, whether or not the entry applied. A replay that an in-flight coordinated restore's receive fence defers leaves the entry parked, as does a replay refused for its source lineage (`SourceLineageRefused`) or by the tenant-isolation gate (`TenantIsolationRefused`), and a thrown exception (see [Replay semantics](dead-letter-queue.md#replay-semantics)).
+Replay runs the parked entry through the canonical applier and removes it on any non-throwing return that is neither deferred nor refused, whether or not the entry applied. A replay that an in-flight coordinated restore's receive fence defers leaves the entry parked, as does a replay refused for its source lineage (`SourceLineageRefused`) or by the tenant-isolation gate (`TenantIsolationRefused`), a replay the applier dead-letters again for the cause the entry was parked for (`DeadLettered`), and a thrown exception (see [Replay semantics](dead-letter-queue.md#replay-semantics)).
 
 ## Operator, admin, and WAL introspection
 
@@ -156,7 +157,7 @@ See [Auto-Bootstrap](auto-bootstrap.md), [WAL](wal.md), and [Observability](obse
 | `ILatticeReplicationPeerDecommissioner` | interface | Permanently decommissions a peer cluster id: drops it from every tree's durable enrollment (releasing any cross-tree decision hold waiting on it), abandons the undecided cross-tree barriers it originated on this receiver, settles the pending buckets it left, and records a durable decommissioned marker, so a later re-add of the same id bootstraps fresh. Refused while the peer is still configured. | `DecommissionPeerAsync` returning `LatticeReplicationPeerDecommissionOutcome` |
 | `LatticeReplicationPeerDecommissionOutcome` | readonly record struct | Decommission outcome. | `PeerClusterId`, `TreeCount`, `AlreadyDecommissioned` |
 | `LatticeReplicationPeerStillConfiguredException` | exception | Thrown by `DecommissionPeerAsync` while the peer is still in the configured peer set; remove it from `ReplicationPeers` first. Implements `ILatticeDomainFault`. | `PeerClusterId` |
-| `ILatticeFallOffLogDetector` | interface | Receiver-side check of the local per-origin high-water mark against this receiver's local retained WAL for that origin; on local fall-off it records the metric and, when `AutoBootstrapOnFallOffLog` is on, starts a bootstrap. Source WAL trims are detected by the sender shipper, which asks the receiver to re-seed through a request the transport carries out of band on each push (the gRPC binding sends it as a call header); the request is not part of the public `ReplicationBatch` surface. | `CheckAndTriggerAsync` returning `FallOffLogDecision` |
+| `ILatticeFallOffLogDetector` | interface | Receiver-side check of the local per-origin high-water mark against this receiver's local retained WAL for that origin; on local fall-off it records the metric and, when `AutoBootstrapOnFallOffLog` is on, starts a bootstrap. Source WAL trims are detected by the sender shipper, which asks the receiver to re-seed through `ReplicationBatch.ReseedAfterEpoch`, which the transport carries out of band on each push (the gRPC binding sends it as a call header; a custom transport answers it at the receiving end through `IReplicationReseedResponder`). | `CheckAndTriggerAsync` returning `FallOffLogDecision` |
 
 The admin surface rate-limits routine re-seeds through `OperatorReseedMinInterval`; the force method bypasses that rate limit for disaster-recovery and scheduled re-seed scenarios.
 
@@ -337,6 +338,7 @@ The following inventory includes directly declared public members and overloads,
 - `public bool Deferred { get; init; }`
 - `public bool SourceLineageRefused { get; init; }`
 - `public bool TenantIsolationRefused { get; init; }`
+- `public bool DeadLettered { get; init; }`
 
 ### `Orleans.Lattice.Replication.BootstrapCoordinatorStatus`
 
@@ -750,6 +752,15 @@ The following inventory includes directly declared public members and overloads,
 `public interface IReplicationLocalVcSeeder`
 
 - `Task<LocalVcSeedReport> SeedFromTreeAsync(string treeName, CancellationToken cancellationToken = default)`
+
+### `Orleans.Lattice.Replication.IReplicationReseedResponder`
+
+[Source](../../src/lattice.replication/IReplicationReseedResponder.cs) (line 24).
+
+`public interface IReplicationReseedResponder`
+
+- `Task<long?> RespondAsync( string treeName, string authenticatedOriginClusterId, long reseedAfterEpoch, CancellationToken cancellationToken = default)`
+- `Task<bool> RefusesStragglerAsync( string treeName, string authenticatedOriginClusterId, IReadOnlyList<WalRecord> entries, CancellationToken cancellationToken = default)`
 
 ### `Orleans.Lattice.Replication.IReplicationTenantIsolationGate`
 
@@ -1804,6 +1815,7 @@ The following inventory includes directly declared public members and overloads,
 - `public ReadOnlyMemory<byte> Payload { get; init; }`
 - `public ReplicationBatchEnvelope? Envelope { get; init; }`
 - `public ReplicationBatchEncodedEnvelope? EncodedEnvelope { get; init; }`
+- `public long? ReseedAfterEpoch { get; init; }`
 
 ### `Orleans.Lattice.Replication.ReplicationBatchEncodedEnvelope`
 

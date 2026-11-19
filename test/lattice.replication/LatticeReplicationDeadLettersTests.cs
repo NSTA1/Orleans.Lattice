@@ -158,6 +158,87 @@ public class LatticeReplicationDeadLettersTests
         await grain.Received(1).RemoveReplayedAsync(7, Arg.Any<CancellationToken>());
     }
 
+    [TestCase(ReplicationTenantIsolationDecision.RejectOutOfRegion)]
+    [TestCase(ReplicationTenantIsolationDecision.RejectSuspendedTenant)]
+    [TestCase(ReplicationTenantIsolationDecision.RejectUnknownTenant)]
+    public async Task ReplayAsync_keeps_the_entry_parked_when_the_tenant_gate_refuses_it_again(
+        ReplicationTenantIsolationDecision decision)
+    {
+        var gate = Substitute.For<IReplicationTenantIsolationGate>();
+        gate.IsActive.Returns(true);
+        gate.EvaluateAsync(TenantTreeId, Arg.Any<string?>(), Arg.Any<CancellationToken>())
+            .Returns(new ValueTask<ReplicationTenantIsolationDecision>(decision));
+        var (seam, grain) = BuildRefusingReplay(LatticeMergeMode.LwwRegister, gate);
+
+        var result = await seam.ReplayAsync(TenantTreeId, 7);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result?.Applied, Is.False);
+            Assert.That(result?.DeadLettered, Is.True);
+        });
+        await grain.DidNotReceive().RemoveReplayedAsync(Arg.Any<long>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ReplayAsync_keeps_the_entry_parked_when_its_merge_mode_still_mismatches()
+    {
+        var (seam, grain) = BuildRefusingReplay(LatticeMergeMode.OrSet, tenantGate: null);
+
+        var result = await seam.ReplayAsync(TenantTreeId, 7);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result?.Applied, Is.False);
+            Assert.That(result?.DeadLettered, Is.True);
+        });
+        await grain.DidNotReceive().RemoveReplayedAsync(Arg.Any<long>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// A replay seam over a real applier whose tree is enrolled under
+    /// <paramref name="localMode"/>, replaying a parked last-writer-wins entry.
+    /// </summary>
+    private static (LatticeReplicationDeadLetters seam, IReplicationDeadLetterGrain grain) BuildRefusingReplay(
+        LatticeMergeMode localMode,
+        IReplicationTenantIsolationGate? tenantGate)
+    {
+        var grain = Substitute.For<IReplicationDeadLetterGrain>();
+        var grainFactory = Substitute.For<IGrainFactory>();
+        grainFactory.GetGrain<IReplicationDeadLetterGrain>(TenantTreeId).Returns(grain);
+        grain.TryGetAsync(7, Arg.Any<CancellationToken>()).Returns(new DeadLetterEntry
+        {
+            EntryId = 7,
+            Entry = new WalRecord
+            {
+                TreeId = TenantTreeId,
+                Op = MutationKind.Set,
+                Key = "k",
+                Value = [1],
+                Timestamp = HybridLogicalClock.Tick(HybridLogicalClock.Zero),
+                OriginClusterId = "origin",
+                Mode = LatticeMergeMode.LwwRegister,
+            },
+            FailureReason = "parked",
+            AuthenticatedSenderClusterId = "origin",
+        });
+
+        var context = Substitute.For<ILatticeReplicationContext>();
+        context.ResolveMergeMode(TenantTreeId).Returns(localMode);
+        var innerFactory = Substitute.For<IGrainFactory>();
+        innerFactory.GetGrain<IReplicationDeadLetterGrain>(TenantTreeId).Returns(grain);
+        var options = Substitute.For<Microsoft.Extensions.Options.IOptionsMonitor<LatticeReplicationOptions>>();
+        var replicationOptions = new LatticeReplicationOptions { ClusterId = "receiver" };
+        options.CurrentValue.Returns(replicationOptions);
+        options.Get(Arg.Any<string>()).Returns(replicationOptions);
+        var applier = new ReplicationApplier(
+            innerFactory,
+            options,
+            replicationContext: context,
+            tenantIsolationGate: tenantGate);
+        return (new LatticeReplicationDeadLetters(grainFactory, applier), grain);
+    }
+
     [Test]
     public void DiscardAsync_throws_on_null_or_empty_tree_id()
     {

@@ -323,15 +323,17 @@ var dashboardProviderYaml = loadTextContent('grafana/dashboards.yaml')
 // entry becomes an ACA secret mounted read-only into the dashboard-provider
 // path, so Grafana loads them on start-up with no external fetch.
 var dashboardFiles = [
-  { secretName: 'dashboard-overview', fileName: 'overview.json', content: loadTextContent('../../../src/lattice.dashboards/Grafana/OrleansLatticeOverview.json') }
-  { secretName: 'dashboard-commitpath', fileName: 'commit-path.json', content: loadTextContent('../../../src/lattice.dashboards/Grafana/OrleansLatticeCommitPath.json') }
-  { secretName: 'dashboard-atomicwrites', fileName: 'atomic-writes.json', content: loadTextContent('../../../src/lattice.dashboards/Grafana/OrleansLatticeAtomicWrites.json') }
-  { secretName: 'dashboard-materialisedviews', fileName: 'materialised-views.json', content: loadTextContent('../../../src/lattice.dashboards/Grafana/OrleansLatticeMaterialisedViews.json') }
-  { secretName: 'dashboard-backup', fileName: 'backup.json', content: loadTextContent('../../../src/lattice.dashboards/Grafana/OrleansLatticeBackup.json') }
-  { secretName: 'dashboard-authorization', fileName: 'authorization.json', content: loadTextContent('../../../src/lattice.dashboards/Grafana/OrleansLatticeAuthorization.json') }
-  { secretName: 'dashboard-scaling', fileName: 'scaling.json', content: loadTextContent('../../../src/lattice.dashboards/Grafana/OrleansLatticeScaling.json') }
-  { secretName: 'dashboard-replication', fileName: 'replication.json', content: loadTextContent('../../../src/lattice.dashboards/Grafana/OrleansLatticeReplication.json') }
-  { secretName: 'dashboard-replicationgrpc', fileName: 'replication-grpc.json', content: loadTextContent('../../../src/lattice.dashboards/Grafana/OrleansLatticeReplicationGrpc.json') }
+  { secretName: 'dashboard-overview', fileName: 'overview.json', content: string(loadJsonContent('../../../src/lattice.dashboards/Grafana/OrleansLatticeOverview.json')) }
+  { secretName: 'dashboard-commitpath', fileName: 'commit-path.json', content: string(loadJsonContent('../../../src/lattice.dashboards/Grafana/OrleansLatticeCommitPath.json')) }
+  { secretName: 'dashboard-atomicwrites', fileName: 'atomic-writes.json', content: string(loadJsonContent('../../../src/lattice.dashboards/Grafana/OrleansLatticeAtomicWrites.json')) }
+  { secretName: 'dashboard-materialisedviews', fileName: 'materialised-views.json', content: string(loadJsonContent('../../../src/lattice.dashboards/Grafana/OrleansLatticeMaterialisedViews.json')) }
+  { secretName: 'dashboard-backup', fileName: 'backup.json', content: string(loadJsonContent('../../../src/lattice.dashboards/Grafana/OrleansLatticeBackup.json')) }
+  { secretName: 'dashboard-authorization', fileName: 'authorization.json', content: string(loadJsonContent('../../../src/lattice.dashboards/Grafana/OrleansLatticeAuthorization.json')) }
+  { secretName: 'dashboard-scaling', fileName: 'scaling.json', content: string(loadJsonContent('../../../src/lattice.dashboards/Grafana/OrleansLatticeScaling.json')) }
+  { secretName: 'dashboard-replication', fileName: 'replication.json', content: string(loadJsonContent('../../../src/lattice.dashboards/Grafana/OrleansLatticeReplication.json')) }
+  { secretName: 'dashboard-replicationgrpc', fileName: 'replication-grpc.json', content: string(loadJsonContent('../../../src/lattice.dashboards/Grafana/OrleansLatticeReplicationGrpc.json')) }
+  { secretName: 'dashboard-grainindex', fileName: 'grain-index.json', content: string(loadJsonContent('../../../src/lattice.dashboards/Grafana/OrleansLatticeGrainIndex.json')) }
+  { secretName: 'dashboard-tenancy', fileName: 'tenancy.json', content: string(loadJsonContent('../../../src/lattice.dashboards/Grafana/OrleansLatticeTenancy.json')) }
 ]
 
 // Base secrets always present: admin password + the two provisioning YAMLs.

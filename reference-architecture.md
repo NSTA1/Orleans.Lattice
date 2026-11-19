@@ -552,10 +552,10 @@ sequenceDiagram
   by that managed Prometheus datasource, so the telemetry tool returns live
   metrics.
 - **Self-hosted Grafana** runs as a stateless, scale-to-zero container app on the
-  stock `grafana/grafana-oss` image, provisioned with nine of the eleven bundled
+  stock `grafana/grafana-oss` image, provisioned with all eleven bundled
   `Orleans.Lattice.Dashboards` (Overview, Commit Path, Atomic Writes,
-  Materialised Views, Backup, Authorization, Scaling, Replication and
-  Replication gRPC; the Grain Index and Tenancy dashboards are not provisioned)
+  Materialised Views, Backup, Authorization, Scaling, Replication,
+  Replication gRPC, Grain Index and Tenancy)
   and the managed-Prometheus datasource via Grafana
   provisioning config. No database or persistent volume; it is a visualization
   head only. Any alerting rides Prometheus / Azure Monitor rules, not Grafana

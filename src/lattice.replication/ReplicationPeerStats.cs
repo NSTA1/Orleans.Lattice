@@ -288,8 +288,10 @@ public partial class ReplicationPeerStats
 
     /// <summary>
     /// Records a successful inbound contact with the named peer (a
-    /// per-origin run of entries authored by the peer applied
-    /// successfully on the local receiver). Resets the inbound
+    /// per-origin run of entries authored by the peer that the local
+    /// receiver admitted and handled without a fault: applied, filtered as a
+    /// re-delivery, or deferred by anything other than the durable receive
+    /// fence, whose paused runs record no contact). Resets the inbound
     /// consecutive-error counter to zero and stamps the inbound
     /// last-contact timestamp. Inbound rows are bounded: once the
     /// inbound-row cap is reached, a contact for a new

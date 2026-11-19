@@ -69,6 +69,39 @@ public class CompressedFramingRoundtripTests
         };
 
     [Test]
+    public void Configured_framing_compression_level_is_applied_over_the_shared_compressor_level()
+    {
+        var random = new Random(42);
+        var body = new byte[64 * 1024];
+        for (var i = 0; i < body.Length; i++) body[i] = (byte)('a' + random.Next(0, 6) + (i % 64 == 0 ? 10 : 0));
+        var entries = new[] { new ArraySegment<byte>(body) };
+
+        byte[] Encode(OrleansBinaryReplicationBatchEncoder encoder)
+        {
+            var writer = new ArrayBufferWriter<byte>();
+            encoder.EncodeFraming(Header(1, LatticeCompression.Zstd), "tree-1", "site-a", entries, writer);
+            return writer.WrittenMemory.ToArray();
+        }
+
+        var services = new ServiceCollection();
+        services.AddOptions<LatticeReplicationOptions>().Configure(o => o.FramingCompressionLevel = 19);
+        var monitor = services.BuildServiceProvider().GetRequiredService<IOptionsMonitor<LatticeReplicationOptions>>();
+        using var configured = new OrleansBinaryReplicationBatchEncoder(
+            _serializer, new ILatticeCompressor[] { new ZstdLatticeCompressor(1) }, monitor);
+
+        var atConfigured = Encode(configured);
+        var atLevel19 = Encode(NewEncoderWithZstd(19));
+        var atShared = Encode(NewEncoderWithZstd(1));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(atShared, Is.Not.EqualTo(atLevel19), "the fixture must distinguish the two levels");
+            Assert.That(atConfigured, Is.EqualTo(atLevel19));
+            Assert.That(configured.TryDecodeFraming(atConfigured, out _, out _, out _, out _), Is.True);
+        });
+    }
+
+    [Test]
     public void Encoder_constructor_rejects_duplicate_compressor_algorithm()
     {
         Assert.That(

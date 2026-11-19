@@ -1076,7 +1076,9 @@ The pass handles both last-writer-wins and recognised CRDT trees, by
 different mechanics, choosing between them from the tree's merge-mode
 resolution on each pass. A tree whose resolution yields no mode - one
 disabled or made ambiguous at runtime, whose shipper keeps running -
-takes the last-writer-wins path. For a tree whose declared `LatticeMergeMode` is
+is not coalesced: the pass ships that drained batch verbatim, because the
+tree may be a CRDT tree whose every delta carries a contribution and the
+mode may resolve again before the batch header is stamped. For a tree whose declared `LatticeMergeMode` is
 `LwwRegister` the receiver applies each entry by last-writer-wins
 ordered by HLC (an exact HLC tie falls to the replica-invariant
 tombstone, expiry, and value-byte fields before the observer-relative

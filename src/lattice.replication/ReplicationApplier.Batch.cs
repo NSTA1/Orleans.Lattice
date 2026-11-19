@@ -69,7 +69,14 @@ internal sealed partial class ReplicationApplier
             try
             {
                 var r = await ApplyAsync(single, cancellationToken).ConfigureAwait(false);
-                RecordInboundContact(single, success: true);
+
+                // A run the receive fence paused records no contact on the
+                // batch path, so a fenced single entry records none either.
+                if (!r.ReceiveFenced)
+                {
+                    RecordInboundContact(single, success: true);
+                }
+
                 return r;
             }
             catch

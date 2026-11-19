@@ -371,32 +371,6 @@ internal sealed partial class LatticeBackupControl
     }
 
     /// <summary>
-    /// Awaits the in-process work this call started and returns the engine's own
-    /// result or rethrows its own exception. Cancelling
-    /// <paramref name="cancellationToken"/> cancels the operation.
-    /// </summary>
-    private async Task<TResult> AwaitOperationAsync<TResult>(
-        string tenantId,
-        LatticeOperationLaunch<TResult> launch,
-        CancellationToken cancellationToken)
-    {
-        // A wrapper always starts under a freshly generated id, so it always owns
-        // the work; a launch without it would mean the id collided.
-        var completion = launch.Completion ?? throw new InvalidOperationException(
-            $"Operation '{launch.Record.OperationId}' already existed, so there is no work to wait for.");
-
-        try
-        {
-            return await completion.WaitAsync(cancellationToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested && !completion.IsCompleted)
-        {
-            await _operations.Runner.RequestCancelAsync(tenantId, launch.Record.OperationId).ConfigureAwait(false);
-            throw;
-        }
-    }
-
-    /// <summary>
     /// Whether the caller may see an operation: it must be a backup kind, its
     /// recorded scopes must decode, and the caller must hold the read grant - or,
     /// for a restore, the restore grant - over every one of them. Anything else is

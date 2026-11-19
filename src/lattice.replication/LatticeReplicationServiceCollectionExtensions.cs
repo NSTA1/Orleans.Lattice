@@ -264,6 +264,10 @@ public static partial class LatticeReplicationServiceCollectionExtensions
 
         builder.Services.TryAddSingleton<IReplicationBatchEncoder, OrleansBinaryReplicationBatchEncoder>();
 
+        // Receiver side of the forced-gap re-seed for custom transports; the
+        // gRPC transport runs the same logic internally.
+        builder.Services.TryAddSingleton<IReplicationReseedResponder, ReplicationReseedResponderService>();
+
         // Framing-tail compressor registry. Each algorithm-specific
         // implementation is registered as an ILatticeCompressor so the
         // canonical encoder's IEnumerable<ILatticeCompressor>
@@ -273,13 +277,13 @@ public static partial class LatticeReplicationServiceCollectionExtensions
         // so this registration backs the out-of-the-box behaviour (not
         // just an opt-in); the underlying ZstdSharp.Port library is pure
         // managed code so the registration cost when the algorithm is
-        // never used is one allocation at startup. The default
+        // never used is one allocation at startup. The shared
         // compressor uses LatticeReplicationOptions.DefaultFramingCompressionLevel
-        // (3, the canonical "fast" preset). Hosts that want a non-default
-        // level pre-register their own ILatticeCompressor singleton
-        // (constructed with their preferred level) before calling
-        // AddLatticeReplication, and TryAddEnumerable preserves that
-        // entry. Hosts that want a custom algorithm cast a byte in
+        // (3, the canonical "fast" preset); a non-default
+        // LatticeReplicationOptions.FramingCompressionLevel makes the
+        // framing encoder compress with its own instance at that level,
+        // so the option applies whichever package registered this
+        // shared instance first. Hosts that want a custom algorithm cast a byte in
         // [0x80, 0xFF] into LatticeCompression as the
         // ILatticeCompressor.Algorithm tag and call
         // AddLatticeCompressor on the service collection - the encoder

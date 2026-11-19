@@ -144,7 +144,9 @@ internal sealed class DeadLetterTrackingReplicationApplier(
         var key = KeyFor(entry);
         _failures.TryRemove(key, out _);
         _firstDeferrals.TryRemove(key, out _);
-        if (recordContact)
+
+        // A receive-fence pause records no contact, matching the batch path.
+        if (recordContact && !result.ReceiveFenced)
         {
             ReplicationInboundContact.Record(peerStats, options, replicationContext, entry, success: true);
         }

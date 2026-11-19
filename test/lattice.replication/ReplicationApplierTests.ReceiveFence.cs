@@ -85,6 +85,41 @@ public partial class ReplicationApplierTests
         Assert.That(result.Applied, Is.True);
     }
 
+    [TestCase(1)]
+    [TestCase(2)]
+    public async Task ApplyBatchAsync_records_no_inbound_contact_for_a_fenced_push_of_any_size(int size)
+    {
+        var factory = Substitute.For<IGrainFactory>();
+        var hwm = HighWaterMarkTestGrains.Substitute();
+        factory.GetGrain<IReplicationApplyGrain>(Tree).Returns(Substitute.For<IReplicationApplyGrain>());
+        factory.GetGrain<IReplicationHighWaterMarkGrain>(Tree).Returns(hwm);
+        var stats = new ReplicationPeerStats();
+        var applier = new ReplicationApplier(
+            factory,
+            Monitor(),
+            peerStats: stats,
+            receiveGate: new ToggleReceiveGate { Paused = true },
+            replicationContext: new AnyTreeLwwContext());
+        var batch = Enumerable.Range(0, size).Select(i => SetEntry("k" + i, Hlc(10 + i))).ToArray();
+
+        var direct = await applier.ApplyBatchAsync(batch);
+        var tracked = await new DeadLetterTrackingReplicationApplier(
+                applier,
+                factory,
+                Monitor(),
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<DeadLetterTrackingReplicationApplier>.Instance,
+                stats,
+                new AnyTreeLwwContext())
+            .ApplyBatchAsync(batch);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(direct.Deferred, Is.True);
+            Assert.That(tracked.Deferred, Is.True);
+            Assert.That(stats.Snapshot(), Is.Empty, "a fenced push of one entry records no more contact than a fenced run");
+        });
+    }
+
     private static (LatticeReplicationDeadLetters Seam, IReplicationDeadLetterGrain Queue, IReplicationApplyGrain Apply, ToggleReceiveGate Gate)
         CreateGatedDeadLetterSeam(long entryId, WalRecord parkedEntry)
     {

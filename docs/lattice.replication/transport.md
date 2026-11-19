@@ -28,6 +28,7 @@ public readonly record struct ReplicationBatch
     public ReadOnlyMemory<byte> Payload { get; init; }
     public ReplicationBatchEnvelope? Envelope { get; init; }
     public ReplicationBatchEncodedEnvelope? EncodedEnvelope { get; init; }
+    public long? ReseedAfterEpoch { get; init; }
 }
 
 public readonly record struct ReplicationAck
@@ -54,6 +55,7 @@ public readonly record struct ReplicationAck
 | `Payload` | Opaque, framed batch payload. The byte layout is the responsibility of the binary-framing seam (typically Orleans-serializer-encoded `WalRecord` records inside a versioned envelope). Implementations treat this as a black box - they do not parse, peek into, or otherwise interpret the bytes. May be empty (heartbeat or keep-alive batch). |
 | `Envelope` | Optional pre-built typed envelope. A transport that frames entries itself sends it verbatim instead of decoding `Payload`. The anti-entropy repair path (leaf re-replay and the bootstrap fallback) populates it alongside `Payload`. |
 | `EncodedEnvelope` | Optional pre-encoded framing: a fixed header plus the per-entry segments exactly as the WAL stored them. The shipper populates only this slot - see [Framing-only ship path](#framing-only-ship-path). |
+| `ReseedAfterEpoch` | Optional: the export epoch of a forced-gap re-seed request, set when a WAL trim lost records the sender never shipped to this peer; `null` otherwise. Not part of the framing - a transport carries it beside the batch (the gRPC transport as a call header), and the receiving end answers it through `IReplicationReseedResponder` (see below). |
 
 | `ReplicationAck` member | Semantics |
 |---|---|
@@ -136,7 +138,7 @@ The shipper's outbound path is unconditionally framing-only. Every batch the shi
 
 Custom transports that want to consume the framing bytes directly read them off `ReplicationBatch.EncodedEnvelope`. There is no separate typed-transport interface or sender-side capability probe - the shipper does not branch on transport type at activation. Bytes-only transports (for example a host-supplied HTTP-framed transport) encode `EncodedEnvelope` with `IReplicationBatchEncoder.EncodeFraming` and forward the bytes as-is, as the gRPC transport's marshaller does; the default no-op transport discards the batch.
 
-The shipper also carries a source-trim re-seed request beside a batch, out of band, when a WAL trim lost records it never shipped to that peer; the gRPC transport sends it as a call header, and its receiver starts a bootstrap from the sender and echoes its completed export epoch in `ReplicationAck.BootstrapEpoch`. The request is not part of the public `ReplicationBatch` surface, so a custom transport does not carry it and fails closed: the source keeps saga records withheld and peer health remains stalled until a bootstrap from a later export is observed.
+The shipper also carries a source-trim re-seed request beside a batch, out of band, when a WAL trim lost records it never shipped to that peer: `ReplicationBatch.ReseedAfterEpoch`, `null` when there is none. The gRPC transport sends it as a call header, and its receiver starts a bootstrap from the sender and echoes its completed export epoch in `ReplicationAck.BootstrapEpoch`. A custom transport carries the epoch beside the batch the same way, and its receiving end calls `IReplicationReseedResponder` with the transport-authenticated origin before handing the entries to `IReplicationApplier`: `RefusesStragglerAsync` says whether the push must be refused with a not-accepted ack, and `RespondAsync` returns the epoch to echo in `ReplicationAck.BootstrapEpoch` (`null` when there is none to report yet). Only a tree enrolled for replication on the receiver is answered. A custom transport that does not carry the request fails closed: the source keeps saga records withheld and peer health remains stalled until a bootstrap from a later export is observed.
 
 ## Caveats
 

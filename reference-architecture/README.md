@@ -319,10 +319,10 @@ different region codes).
 ### Observability
 
 - Each region has a managed Prometheus (Azure Monitor workspace) and a
-  self-hosted Grafana head pre-provisioned with nine of the eleven bundled
+  self-hosted Grafana head pre-provisioned with all eleven bundled
   Orleans.Lattice dashboards (Overview, Commit Path, Atomic Writes, Materialised
-  Views, Backup, Authorization, Scaling, Replication and Replication gRPC; the
-  Grain Index and Tenancy dashboards are not provisioned). Reach Grafana at its
+  Views, Backup, Authorization, Scaling, Replication, Replication gRPC, Grain
+  Index and Tenancy). Reach Grafana at its
   per-region ingress; sign in with the
   `-GrafanaAdminPassword` you supplied (Prometheus is queried through the
   region's managed identity, no scraped secret).
