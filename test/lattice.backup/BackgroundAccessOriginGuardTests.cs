@@ -69,6 +69,10 @@ public sealed class BackgroundAccessOriginGuardTests
             + "reminder, and otherwise only delays and logs. It holds no ILattice reference and "
             + "opens no tree, so it has no gated read to authorize; the grain it activates is "
             + "covered by its own entry above.",
+        ["RestoreCopySweepActivationService.cs"] =
+            "Calls exactly one grain method (EnsureStartedAsync) to arm the restore-copy sweep's "
+            + "reminder, and otherwise only delays and logs. It holds no ILattice reference and opens "
+            + "no tree; the sweep grain it activates scopes its own registry reads with EnterSystemOrigin.",
         ["LatticeBackupReplicatedSinkStartupValidator.cs"] =
             "Validates at startup that a replicated host is not writing backups to a silo-local "
             + "sink. It consults ILatticeBackupSink (whose in-cluster implementation self-scopes at "

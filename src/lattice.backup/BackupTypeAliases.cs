@@ -162,4 +162,19 @@ internal static class BackupTypeAliases
 
     /// <summary>Alias for <see cref="BackupSetScheduleRunProgress"/>.</summary>
     internal const string BackupSetScheduleRunProgress = "olb.rp";
+
+    /// <summary>Alias for <see cref="IRestoreCopyRetirementGrain"/>.</summary>
+    internal const string IRestoreCopyRetirementGrain = "olb.xr";
+
+    /// <summary>Alias for <see cref="RestoreCopyRetirementState"/>.</summary>
+    internal const string RestoreCopyRetirementState = "olb.xs";
+
+    /// <summary>Alias for <see cref="IRestoreCopySweepGrain"/>.</summary>
+    internal const string IRestoreCopySweepGrain = "olb.xw";
+
+    /// <summary>Alias for <see cref="RestoreCopySweepState"/>.</summary>
+    internal const string RestoreCopySweepState = "olb.xv";
+
+    /// <summary>Alias for <see cref="RestoreCopyPassOutcome"/>.</summary>
+    internal const string RestoreCopyPassOutcome = "olb.xp";
 }

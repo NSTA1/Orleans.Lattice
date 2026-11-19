@@ -28,7 +28,7 @@ namespace Orleans.Lattice.Backup;
 /// restore retargets onto a different tree, the <c>Backup</c> capability over the
 /// tree each manifest in the chain was captured from.
 /// </summary>
-internal sealed class LatticeBackupRestoreService(
+internal sealed partial class LatticeBackupRestoreService(
     IGrainFactory grainFactory,
     ILatticeBackupSink sink,
     ILatticeBackupCatalogStore catalog,
@@ -350,11 +350,30 @@ internal sealed class LatticeBackupRestoreService(
 
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            await AliasCutoverShardMaps.ValidateRevertBindingAsync(
+            var current = await AliasCutoverShardMaps.ValidateRevertBindingAsync(
                 registry, restore.TargetTreeId, restore.ShadowPhysicalTreeId, restore.PreviousPhysicalTreeId)
                 .ConfigureAwait(false);
-            await grainFactory.GetGrain<ITreeDeletionGrain>(restore.TargetTreeId)
-                .BeginAliasChangeAsync($"{restore.OperationId}:revert").ConfigureAwait(false);
+
+            // A restore made final, or whose previous copy has been retired, can
+            // never be reverted (issue #6103). Checked before the reservation, for a
+            // refusal that changes nothing, and again under it, because a
+            // retirement pass holds the same reservation while it retires a copy.
+            await ThrowIfRevertUnreachableAsync(registry, restore, current).ConfigureAwait(false);
+            var revertDeletion = grainFactory.GetGrain<ITreeDeletionGrain>(restore.TargetTreeId);
+            var revertOperationId = $"{restore.OperationId}:revert";
+            await BeginAliasChangeYieldingToRetirementAsync(revertDeletion, revertOperationId, cancellationToken)
+                .ConfigureAwait(false);
+            try
+            {
+                await ThrowIfRevertUnreachableAsync(
+                    registry, restore, await registry.ResolveAsync(restore.TargetTreeId).ConfigureAwait(false))
+                    .ConfigureAwait(false);
+            }
+            catch (InvalidOperationException)
+            {
+                await revertDeletion.EndAliasChangeAsync(revertOperationId).ConfigureAwait(false);
+                throw;
+            }
 
             // Carry the previous tree's map back with the alias, in one registry
             // write (#4250, #4336): the commit moved the shadow's map onto the
@@ -402,7 +421,8 @@ internal sealed class LatticeBackupRestoreService(
             await ClearRetainedTreeRedirectAsync(
                 restore.PreviousPhysicalTreeId, restore.OperationId, cancellationToken).ConfigureAwait(false);
 
-            if (!string.IsNullOrEmpty(restore.ShadowPhysicalTreeId))
+            if (!string.IsNullOrEmpty(restore.ShadowPhysicalTreeId)
+                && !await IsPhysicalCopyRetiredAsync(restore.ShadowPhysicalTreeId).ConfigureAwait(false))
             {
                 RoutingInfo shadowRouting;
                 using (LatticeAccessGateContext.EnterSystemOrigin())
@@ -425,6 +445,10 @@ internal sealed class LatticeBackupRestoreService(
             await grainFactory.GetGrain<ITreeDeletionGrain>(restore.TargetTreeId)
                 .EndAliasChangeAsync($"{restore.OperationId}:revert").ConfigureAwait(false);
         }
+
+        // The reverted restore's shadow is now reachable by no revert, so it is
+        // retired, gradually and in the background (issue #6103).
+        await ScheduleCopyRetirementAsync(restore.TargetTreeId, cancellationToken).ConfigureAwait(false);
     }
 
     // ---- In-place restore ------------------------------------------------
@@ -540,8 +564,15 @@ internal sealed class LatticeBackupRestoreService(
             shadowLineage = shadowEntry?.Lineage;
             // Provenance precedes the reservation so orphan-shadow GC can
             // release it even if this host dies before the first data write.
-            await grainFactory.GetGrain<ITreeDeletionGrain>(targetTreeId)
-                .BeginAliasChangeAsync(shadowTreeId).ConfigureAwait(false);
+            await BeginAliasChangeYieldingToRetirementAsync(
+                grainFactory.GetGrain<ITreeDeletionGrain>(targetTreeId), shadowTreeId, cancellationToken)
+                .ConfigureAwait(false);
+
+            // The shadow id is derived from the request, so restoring the same
+            // backup again after a revert reuses the shadow a retirement pass may
+            // already have retired (issue #6103). Under the reservation nothing
+            // retires it further; bring it back before building into it.
+            await ReviveRetiredShadowAsync(shadowTreeId).ConfigureAwait(false);
             var targetEntry = await registry.GetEntryAsync(targetTreeId).ConfigureAwait(false);
             previousPhysical = targetEntry?.PhysicalTreeId ?? targetTreeId;
             shadowRouting = await grainFactory.GetGrain<ILattice>(shadowTreeId)
@@ -586,8 +617,20 @@ internal sealed class LatticeBackupRestoreService(
             && !string.Equals(previousPhysicalTreeId, shadowPhysicalTreeId, StringComparison.Ordinal);
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            await grainFactory.GetGrain<ITreeDeletionGrain>(targetTreeId)
-                .BeginAliasChangeAsync(shadowPhysicalTreeId).ConfigureAwait(false);
+            var commitDeletion = grainFactory.GetGrain<ITreeDeletionGrain>(targetTreeId);
+            await BeginAliasChangeYieldingToRetirementAsync(commitDeletion, shadowPhysicalTreeId, cancellationToken)
+                .ConfigureAwait(false);
+
+            // A shadow a revert moved the alias off may since have been retired
+            // (issue #6103). Committing it would serve a copy whose shards refuse
+            // every read, so it is refused; a fresh restore of the same backup
+            // revives it before building into it.
+            if (await IsPhysicalCopyRetiredAsync(shadowPhysicalTreeId).ConfigureAwait(false))
+            {
+                throw new InvalidOperationException(
+                    $"Cannot commit restore shadow '{shadowPhysicalTreeId}' of tree '{targetTreeId}': it was "
+                    + "retired after a revert made it unreachable. Run the restore again to rebuild it.");
+            }
 
             // Carry the shadow's map onto the target before the swap (#4250). Routing
             // reads the map under the target's id, but the shadow was built by
@@ -602,6 +645,13 @@ internal sealed class LatticeBackupRestoreService(
             // resumed commit can tell which physical tree the recorded map describes.
             var (replacedMap, replacedPhysical) = await AliasCutoverShardMaps.PrepareCutoverResolvingAsync(
                 grainFactory, targetTreeId, shadowPhysicalTreeId, cancellationToken).ConfigureAwait(false);
+
+            // Record which copy this restore's revert returns to, from the
+            // registry's own projection rather than the caller's result, and when
+            // it committed (issue #6103). Stamped before the swap, so a commit
+            // resumed after it still knows the copy it replaced.
+            var revertTarget = await StampRestoreRevertTargetAsync(
+                registry, shadowPhysicalTreeId, replacedPhysical, previousPhysicalTreeId).ConfigureAwait(false);
             var describesPrevious = string.Equals(replacedPhysical, previousPhysicalTreeId, StringComparison.Ordinal)
                 || string.Equals(replacedPhysical, shadowPhysicalTreeId, StringComparison.Ordinal);
             if (armRedirect && (replacedMap is null || !describesPrevious))
@@ -631,6 +681,27 @@ internal sealed class LatticeBackupRestoreService(
             {
                 retainedRouting = new RoutingInfo(previousPhysicalTreeId!, finalReplacedMap ?? replacedMap!);
             }
+
+            // Only one restore of a tree is revertible at a time: the one now cut
+            // over. A restore whose shadow this cutover replaced is final from here
+            // on, so the copy it would have reverted to is reachable by no revert
+            // and is retired (issue #6103). After the swap, so a commit that fails
+            // before it leaves the earlier restore revertible.
+            if (revertTarget is not null)
+            {
+                await RestoreCopyRetirement.FinalizeShadowAsync(registry, targetTreeId, revertTarget).ConfigureAwait(false);
+            }
+
+            // A shadow committed again after a revert moved the alias off it still
+            // carries the redirect that revert armed, back onto the copy it
+            // returned to; left in place it would bounce every read of the restored
+            // tree. Released now the alias resolves to the shadow. Idempotent, and
+            // a no-op on a shadow no revert ever armed.
+            var shadowRouting = await ResolveRetainedRoutingAsync(shadowPhysicalTreeId, cancellationToken)
+                .ConfigureAwait(false);
+            await AliasCutoverShardMaps.ReleaseRedirectsAsync(
+                grainFactory, shadowPhysicalTreeId, shadowRouting.Map, targetTreeId, cancellationToken)
+                .ConfigureAwait(false);
         }
 
         // Arm the retained (previous) physical tree to redirect logical-alias-
@@ -667,6 +738,8 @@ internal sealed class LatticeBackupRestoreService(
             await grainFactory.GetGrain<ITreeDeletionGrain>(targetTreeId)
                 .EndAliasChangeAsync(shadowPhysicalTreeId).ConfigureAwait(false);
         }
+
+        await ScheduleCopyRetirementAsync(targetTreeId, cancellationToken).ConfigureAwait(false);
     }
 
     // ---- Coordinated-restore engine seams (ILatticeCoordinatedRestoreEngine) --
@@ -977,7 +1050,8 @@ internal sealed class LatticeBackupRestoreService(
         throw new LatticeRestoreValidationException(
             $"Physical tree '{physicalTreeId}' supplied as '{field}' is neither a restore shadow of tree "
             + $"'{targetTreeId}' nor that tree's current physical tree, so it cannot take part in a "
-            + "shadow-cutover commit or revert of it.");
+            + "shadow-cutover commit or revert of it. A restore copy retired after its restore became final "
+            + "is no longer registered, so a revert that needs it is refused here.");
     }
 
     /// <inheritdoc />
@@ -1633,6 +1707,6 @@ internal sealed class LatticeBackupRestoreService(
     private static string ShadowTreeId(string targetTreeId, string operationId)
     {
         var shortId = operationId.Length > 16 ? operationId[..16] : operationId;
-        return $"{targetTreeId}-bkprestore-{shortId}";
+        return $"{targetTreeId}{RestoreCopyPlanner.ShadowInfix}{shortId}";
     }
 }

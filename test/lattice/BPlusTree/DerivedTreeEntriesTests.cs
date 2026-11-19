@@ -59,6 +59,10 @@ public sealed class DerivedTreeEntriesTests
         // configuration: a copy's shards are armed by its own bootstraps, and a
         // re-stamp that adopts a copy re-seeds it, which raises it afresh.
         nameof(TreeRegistryEntry.ReplicationFloorEpoch),
+        // Restore revert bookkeeping of one restore shadow (#6103).
+        nameof(TreeRegistryEntry.RestoreRevertPhysicalTreeId),
+        nameof(TreeRegistryEntry.RestoreCommittedAtUtc),
+        nameof(TreeRegistryEntry.RestoreFinal),
     ];
 
     private static TreeRegistryEntry WithEveryOverride() => new()

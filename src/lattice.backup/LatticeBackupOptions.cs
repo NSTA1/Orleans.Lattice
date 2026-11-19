@@ -175,4 +175,42 @@ public sealed class LatticeBackupOptions
     /// running out or the activation being lost.
     /// </summary>
     internal TimeSpan DeleteLease { get; set; } = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// How long a shadow-cutover restore stays revertible, or <see langword="null"/>
+    /// (the default) for no time limit (issue #6103). Once it elapses after the
+    /// restore committed, the restore becomes final - exactly as when a later
+    /// cutover of the same tree supersedes it, or its caller releases it with
+    /// <see cref="ILatticeBackupRestoreService.ReleaseRestoreAsync"/> - so
+    /// <see cref="ILatticeBackupRestoreService.RevertRestoreAsync"/> refuses it and
+    /// the physical copy it would have reverted to is retired and, after
+    /// <see cref="LatticeOptions.SoftDeleteDuration"/>, purged. For a restore
+    /// committed before Lattice recorded its commit time, the window runs from when
+    /// the retirement first observed it. Must be strictly positive when set.
+    /// </summary>
+    public TimeSpan? RestoreRevertRetention { get; set; }
+
+    /// <summary>
+    /// How often the estate-wide sweep looks for restore copies no revert can reach,
+    /// or <see langword="null"/> to disable it (issue #6103). The sweep schedules the
+    /// per-tree retirement, one tree a retirement pass apart, so trees left holding
+    /// unreachable copies by an earlier build - or by a later cutover that is not a
+    /// restore - are cleaned up without an operator and without a burst. A restore
+    /// commit, a revert and a release schedule their own tree directly, so this is
+    /// the safety net, not the primary path. Defaults to one day; must be at least
+    /// one minute when set.
+    /// </summary>
+    public TimeSpan? RestoreCopySweepInterval { get; set; } = TimeSpan.FromDays(1);
+
+    /// <summary>
+    /// The pause between two restore-copy retirement passes of one tree, each of
+    /// which retires at most one copy. Internal: a test shortens it.
+    /// </summary>
+    internal TimeSpan RestoreCopyRetirementPassInterval { get; set; } = TimeSpan.FromMinutes(1);
+
+    /// <summary>The longest back-off after repeated failed retirement passes.</summary>
+    internal TimeSpan RestoreCopyRetirementMaxBackoff { get; set; } = TimeSpan.FromHours(1);
+
+    /// <summary>How long after a silo starts the estate-wide sweep first runs.</summary>
+    internal TimeSpan RestoreCopySweepInitialDelay { get; set; } = TimeSpan.FromMinutes(10);
 }

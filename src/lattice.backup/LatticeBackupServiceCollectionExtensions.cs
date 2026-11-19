@@ -113,6 +113,7 @@ public static class LatticeBackupServiceCollectionExtensions
         builder.Services.TryAddSingleton<ILatticeBackupHealthStore, LatticeBackupHealthStore>();
         builder.Services.TryAddSingleton<ILatticeBackupHealthService, LatticeBackupHealthService>();
         builder.Services.AddSingleton<IHostedService, BackupHealthMonitorActivationService>();
+        builder.Services.AddSingleton<IHostedService, RestoreCopySweepActivationService>();
 
         // Rebuilds the catalog from the sink so the catalog is a disposable,
         // self-healing projection over the sink (the single source of truth). A

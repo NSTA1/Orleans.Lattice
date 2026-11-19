@@ -12,6 +12,7 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Added
 
+- **Backup - Restore copies no revert can reach are retired.** A restore's previous copy is retired once a later cutover supersedes it, it is released or its optional revert window ends, and a reverted shadow once reverted, one copy per paced pass; a daily sweep cleans up existing copies. ([#6103](https://github.com/NSTA1/Orleans.Lattice/issues/6103)) (`Orleans.Lattice`, `Orleans.Lattice.Backup`)
 - **Backup - Scheduled backup sets.** Schedule a cross-tree-consistent backup set over named or all tenant trees (optionally new ones too), with set-level retention, live run progress, history and run-now via the API, gRPC, MCP and Explorer; each retained set records its members and restores whole. ([#6067](https://github.com/NSTA1/Orleans.Lattice/issues/6067)) (`Orleans.Lattice.Backup`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.Backup`, `Orleans.Lattice.Api.Backup.Grpc`, `Orleans.Lattice.Api.Mcp`, `Orleans.Lattice.Explorer.UI`)
 - **Auth - Subject-relative scopes.** A rule's key or prefix may name the caller with `{subject}` or `{group:<prefix>}`, so one rule grants every caller their own slice: segment-bounded, ranked by resolved length, checked by the Explorer editors, allocation-free when deciding. ([#6061](https://github.com/NSTA1/Orleans.Lattice/issues/6061)) (`Orleans.Lattice.Auth`, `Orleans.Lattice.Api.Auth`, `Orleans.Lattice.Api.TenantAdmin`, `Orleans.Lattice.Api.Mcp`, `Orleans.Lattice.Explorer.UI`)
 

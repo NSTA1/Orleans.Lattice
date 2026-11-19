@@ -97,6 +97,16 @@ internal sealed class LatticeBackupOptionsValidator : IValidateOptions<LatticeBa
                 + "the longest timeout a timer can wait.");
         }
 
+        if (options.RestoreRevertRetention is { } revertRetention && revertRetention <= TimeSpan.Zero)
+        {
+            failures.Add($"{nameof(LatticeBackupOptions.RestoreRevertRetention)} must be strictly positive when supplied.");
+        }
+
+        if (options.RestoreCopySweepInterval is { } sweepInterval && sweepInterval < TimeSpan.FromMinutes(1))
+        {
+            failures.Add($"{nameof(LatticeBackupOptions.RestoreCopySweepInterval)} must be at least one minute when supplied.");
+        }
+
         return failures.Count > 0
             ? ValidateOptionsResult.Fail(failures)
             : ValidateOptionsResult.Success;

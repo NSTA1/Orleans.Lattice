@@ -86,7 +86,9 @@ public sealed partial class LatticeBackupRestoreServiceUnitTests
 
         Assert.ThrowsAsync<RevertReachedSwapException>(() => service.RevertRestoreAsync(RevertResult("orders-shadow")));
 
-        _ = registry.Received(1).GetEntryAsync("orders-shadow");
+        // Once for its provenance, which the stamp decides without the alias, and
+        // once by the revert's check that the restore is not final (#6103).
+        _ = registry.Received(2).GetEntryAsync("orders-shadow");
         _ = registry.Received(1).ResolveAsync("orders");
     }
 

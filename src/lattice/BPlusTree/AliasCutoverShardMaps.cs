@@ -280,7 +280,9 @@ internal static class AliasCutoverShardMaps
     /// Clears the map a cutover recorded on <paramref name="shadowPhysicalTreeId"/>
     /// once a revert has moved the alias off it, so a later commit of the same
     /// shadow records the logical tree's map as it then stands rather than reusing
-    /// one the tree has since moved on from.
+    /// one the tree has since moved on from. Clears the restore's revert target
+    /// and commit time with it (issue #6103): the restore has been reverted, so
+    /// nothing can revert it again.
     /// </summary>
     public static async Task CompleteRevertAsync(IGrainFactory grainFactory, string shadowPhysicalTreeId)
     {
@@ -289,12 +291,17 @@ internal static class AliasCutoverShardMaps
 
         using var systemOrigin = LatticeAccessGateContext.EnterSystemOrigin();
         var registry = grainFactory.GetLatticeRegistry();
-        if (await registry.GetEntryAsync(shadowPhysicalTreeId) is { ReplacedShardMap: not null } shadow)
+        if (await registry.GetEntryAsync(shadowPhysicalTreeId) is { } shadow
+            && (shadow.ReplacedShardMap is not null
+                || shadow.RestoreRevertPhysicalTreeId is not null
+                || shadow.RestoreCommittedAtUtc is not null))
         {
             await registry.UpdateAsync(shadowPhysicalTreeId, shadow with
             {
                 ReplacedShardMap = null,
                 ReplacedNextShardIndex = null,
+                RestoreRevertPhysicalTreeId = null,
+                RestoreCommittedAtUtc = null,
             });
         }
     }

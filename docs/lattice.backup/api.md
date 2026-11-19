@@ -43,7 +43,12 @@ The causally-faithful restore engine.
 
 - `Task<LatticeRestoreResult> RestoreAsync(LatticeRestoreRequest request, CancellationToken cancellationToken = default)` - resolves the backup's manifest (catalog first, then the sink) and authorizes the restore; only then, when the target tree is replicated, is the request handed to the coordinated restore path through `IRestoreSagaDispatcher`, whose result it returns. Otherwise it walks the base chain, validates every artifact against its recorded digest, then applies the entries per `LatticeRestoreRequest.Mode` (in-place bulk-load / merge, or atomic shadow-cutover). Idempotent under retry. Authorization covers both trees the restore names: `Restore` over the target tree, and - only when `TargetTreeId` retargets the backup onto a different tree than the one captured - `Backup` over the source tree recorded in each chain manifest's own scope, at the range actually replayed. A same-tree restore is unaffected. Throws `ArgumentNullException` (`request` null), `ArgumentException` (the target is a reserved `sys-backup-*` tree), `LatticeRestoreValidationException` (pre-apply validation failure, including a backup absent from both the catalog and the sink, a broken chain, or a requested sub-scope outside the captured scope; for a replicated target, also a coordinated restore that was refused before it started or aborted), and `LatticeAuthorizationDeniedException` (unauthorized). With a tenancy add-on active it also throws `LatticeBackupTenantIsolationException` when the target tree, or a retargeted source tree, is outside the caller's tenant. A `ShadowCutover` restore also throws `InvalidOperationException` when the target tree is deleted, a delete of it is pending, or another alias change of it (a resize, a schema remediation, or a different restore or revert) holds its alias reservation, and `LatticeTreeOwnershipDeniedException` when the registered tree ownership guard refuses its alias swap; see [Architecture](architecture.md#restore-pipeline).
 - `Task<IReadOnlyList<LatticeRestoreResult>> RestoreSetAsync(string setId, CancellationToken cancellationToken = default)` - expands a captured backup set into its member trees (a set a backup-set schedule captured resolves to the membership the schedule recorded; any other set by scanning the catalog for the manifests stamped with `setId`), authorizes `Restore` over every member tree before anything is dispatched, and restores each one via shadow-cutover, promoting to a single all-or-nothing coordinated saga when any member is replicated. A set naming one tree the caller may not restore is therefore refused whole with `LatticeAuthorizationDeniedException` (or, with a tenancy add-on active, `LatticeBackupTenantIsolationException`). Throws `ArgumentException` when `setId` is null or empty, or when it resolves to no member trees. That last failure distinguishes its two causes: an id that equals the set id a single catalogued backup would have been given (the content address of that one member id) names a single-tree set, which is captured as a plain backup and is never stamped as a set member, so the message names the exact `backupId` to pass to `RestoreAsync` instead; any other unresolved id is reported as absent from the catalog. A local per-member restore can also fail with the exceptions `RestoreAsync` documents for a `ShadowCutover` restore.
-- `Task RevertRestoreAsync(LatticeRestoreResult restore, CancellationToken cancellationToken = default)` - reverts a `ShadowCutover` restore by swapping the target tree's registry alias back to `PreviousPhysicalTreeId`. Idempotent. Authorization gates the logical target tree, so the physical tree ids on `restore` are separately re-validated against registry provenance: each must be the target itself, a shadow the engine built for that target, or the target's current physical tree. Throws `ArgumentNullException` (`restore` null), `ArgumentException` (not a shadow-cutover result), `LatticeRestoreValidationException` (a named physical tree does not belong to the target), and `LatticeAuthorizationDeniedException` (unauthorized). Also throws `InvalidOperationException` when an unrelated later physical copy superseded this restore (before taking its reservation or changing lineage), while the tree is deleted, a delete of it is pending, or another alias change holds its alias reservation, and `LatticeTreeOwnershipDeniedException` when the registered tree ownership guard refuses re-pointing the alias.
+- `Task RevertRestoreAsync(LatticeRestoreResult restore, CancellationToken cancellationToken = default)` - reverts a `ShadowCutover` restore by swapping the target tree's registry alias back to `PreviousPhysicalTreeId`. Idempotent. Authorization gates the logical target tree, so the physical tree ids on `restore` are separately re-validated against registry provenance: each must be the target itself, a shadow the engine built for that target, or the target's current physical tree. Throws `ArgumentNullException` (`restore` null), `ArgumentException` (not a shadow-cutover result), `LatticeRestoreValidationException` (a named physical tree does not belong to the target), and `LatticeAuthorizationDeniedException` (unauthorized). Also throws `InvalidOperationException` when an unrelated later physical copy superseded this restore (before taking its reservation or changing lineage), when the restore is final (a later restore of the tree committed, it was released, or `LatticeBackupOptions.RestoreRevertRetention` elapsed) or the copy it returns to has been retired, while the tree is deleted, a delete of it is pending, or another alias change holds its alias reservation, and `LatticeTreeOwnershipDeniedException` when the registered tree ownership guard refuses re-pointing the alias.
+- `Task ReleaseRestoreAsync(LatticeRestoreResult restore, CancellationToken cancellationToken = default)` - makes a `ShadowCutover` restore final: `RevertRestoreAsync` refuses it from then on, and the copy it would have reverted to is retired in the background and purged after `LatticeOptions.SoftDeleteDuration`. Idempotent. Authorizes `Restore` over the target tree and re-validates the result's physical tree ids against registry provenance, as a revert does. Throws `ArgumentNullException` (`restore` null), `ArgumentException` (not a shadow-cutover result), `LatticeRestoreValidationException` (a named physical tree does not belong to the target), `LatticeAuthorizationDeniedException` (unauthorized), and `InvalidOperationException` (the tree is deleted, or another alias change holds its alias reservation). See [Retiring restore copies](architecture.md#retiring-restore-copies).
+- `Task ReleaseRestoreSetAsync(IReadOnlyList<LatticeRestoreResult> restores, CancellationToken cancellationToken = default)` - releases every member result of a set restore, authorizing every member before any is released. Throws as `ReleaseRestoreAsync` does, and `ArgumentNullException` when `restores` is null.
+- `Task<LatticeRestoreCopyAudit> AuditRestoreCopiesAsync(string treeId, CancellationToken cancellationToken = default)` - reports the copies the tree's shadow-cutover restores left behind: its alias target, the copy a revertible restore returns to, every copy no revert can reach, and any hold that keeps them. A read that changes nothing. Authorizes `Restore` over the tree. Throws `ArgumentException` (`treeId` null, empty, or a reserved `sys-backup-*` tree) and `LatticeAuthorizationDeniedException` (unauthorized).
+- `Task<LatticeRestoreCopyAudit> RepairRestoreCopiesAsync(string treeId, CancellationToken cancellationToken = default)` - as `AuditRestoreCopiesAsync`, and schedules the retirement of the copies it reports at once; retirement runs in the background, one copy per pass. Throws as `AuditRestoreCopiesAsync` does.
+- The four members above are default interface methods that throw `NotSupportedException`, so an existing implementation of the interface still compiles; the registered service implements them.
 
 ### `ILatticeBackupScheduler`
 
@@ -322,6 +327,10 @@ Restore request.
 - Constructor: `LatticeRestoreResult(string backupId, string targetTreeId, LatticeRestoreMode mode, string operationId, IReadOnlyList<string> manifestChain, long entriesApplied, string? shadowPhysicalTreeId = null, string? previousPhysicalTreeId = null, long deadLetteredCrossTenant = 0, long deadLetteredOverQuota = 0)`. Throws `ArgumentException` (`backupId`, `targetTreeId`, or `operationId` null/empty), `ArgumentNullException` (`manifestChain` null), `ArgumentOutOfRangeException` (`entriesApplied`, `deadLetteredCrossTenant`, or `deadLetteredOverQuota` negative).
 - Properties: `string BackupId`, `string TargetTreeId`, `LatticeRestoreMode Mode`, `string OperationId`, `IReadOnlyList<string> ManifestChain`, `long EntriesApplied`, `string? ShadowPhysicalTreeId`, `string? PreviousPhysicalTreeId`, `long DeadLetteredCrossTenant` (records dead-lettered because they were addressed outside the active tenant's namespace), and `long DeadLetteredOverQuota` (records dead-lettered because admitting them would exceed the active tenant's key quota); both are zero when no tenancy add-on is active.
 
+### `LatticeRestoreCopyAudit`
+
+- Returned by `AuditRestoreCopiesAsync` and `RepairRestoreCopiesAsync`. Properties: `string TreeId`, `string AliasTargetPhysicalTreeId` (never retired), `string? RevertTargetPhysicalTreeId` (the copy the revertible restore returns to, kept), `DateTimeOffset? RevertCommittedAtUtc` (when that restore committed; its revert window runs from here), `IReadOnlyList<string> RetirablePhysicalTreeIds` (copies no revert can reach and not yet retired; empty while `Hold` is not `None`), `IReadOnlyList<string> RestoreShadowPhysicalTreeIds` (every registered restore shadow of the tree, ordinal order), and `LatticeRestoreCopyHold Hold`.
+
 ### Backup-set schedule status
 
 `BackupSetScheduleStatus` is returned by `ScheduleBackupSetAsync`, `GetBackupSetScheduleStatusAsync` and `ListBackupSetSchedulesAsync`. Tree ids are effective (tenant-composed) ids, as backup manifests carry them.
@@ -509,6 +518,10 @@ The compact row the index stores per catalogued backup - exactly the fields the 
 ### `LatticeRestoreMode`
 
 `InPlace = 0` (a bottom-up bulk-load fast path when the target tree has never been registered and a single full whole-tree backup is restored with no narrower sub-scope, otherwise a last-writer-wins merge that converges with whatever the target already holds), `ShadowCutover = 1` (build a fresh physical tree and atomically swap the registry alias).
+
+### `LatticeRestoreCopyHold`
+
+Why restore-copy retirement retires nothing of a tree: `None`, `UnknownRevertTarget` (the current restore is revertible but was committed before its revert target was recorded), `ForeignAliasTarget` (the tree resolves to a copy no restore built), and `TreeNotRegistered`.
 
 ### `BackupScopeRunOutcome`
 
@@ -1143,6 +1156,10 @@ The following inventory includes directly declared public members and overloads,
 - `Task<LatticeRestoreResult> RestoreAsync( LatticeRestoreRequest request, CancellationToken cancellationToken = default)`
 - `Task<IReadOnlyList<LatticeRestoreResult>> RestoreSetAsync( string setId, CancellationToken cancellationToken = default)`
 - `Task RevertRestoreAsync( LatticeRestoreResult restore, CancellationToken cancellationToken = default)`
+- `Task ReleaseRestoreAsync( LatticeRestoreResult restore, CancellationToken cancellationToken = default)`
+- `Task ReleaseRestoreSetAsync( IReadOnlyList<LatticeRestoreResult> restores, CancellationToken cancellationToken = default)`
+- `Task<LatticeRestoreCopyAudit> AuditRestoreCopiesAsync( string treeId, CancellationToken cancellationToken = default)`
+- `Task<LatticeRestoreCopyAudit> RepairRestoreCopiesAsync( string treeId, CancellationToken cancellationToken = default)`
 
 ### `Orleans.Lattice.Backup.ILatticeBackupScheduler`
 
@@ -1349,6 +1366,8 @@ The following inventory includes directly declared public members and overloads,
 - `public int MaxCrossTreeFenceAttempts { get; set; }`
 - `public BackupSinkSharingEnforcement SinkSharingEnforcement { get; set; }`
 - `public TimeSpan SinkSharingProbeTimeout { get; set; }`
+- `public TimeSpan? RestoreRevertRetention { get; set; }`
+- `public TimeSpan? RestoreCopySweepInterval { get; set; }`
 
 ### `Orleans.Lattice.Backup.LatticeBackupReservedTrees`
 
@@ -1430,6 +1449,31 @@ The following inventory includes directly declared public members and overloads,
 
 - `public LatticeBackupTenantIsolationException(string message)`
 - `public LatticeBackupTenantIsolationException(string message, Exception innerException)`
+
+### `Orleans.Lattice.Backup.LatticeRestoreCopyAudit`
+
+[Source](../../src/lattice.backup/LatticeRestoreCopyAudit.cs) (line 10).
+
+`public sealed record LatticeRestoreCopyAudit`
+
+- `public required string TreeId { get; init; }`
+- `public required string AliasTargetPhysicalTreeId { get; init; }`
+- `public string? RevertTargetPhysicalTreeId { get; init; }`
+- `public DateTimeOffset? RevertCommittedAtUtc { get; init; }`
+- `public IReadOnlyList<string> RetirablePhysicalTreeIds { get; init; }`
+- `public IReadOnlyList<string> RestoreShadowPhysicalTreeIds { get; init; }`
+- `public LatticeRestoreCopyHold Hold { get; init; }`
+
+### `Orleans.Lattice.Backup.LatticeRestoreCopyHold`
+
+[Source](../../src/lattice.backup/LatticeRestoreCopyHold.cs) (line 8).
+
+`public enum LatticeRestoreCopyHold`
+
+- `None = 0`
+- `UnknownRevertTarget = 1`
+- `ForeignAliasTarget = 2`
+- `TreeNotRegistered = 3`
 
 ### `Orleans.Lattice.Backup.LatticeRestoreMode`
 

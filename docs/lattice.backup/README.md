@@ -38,6 +38,7 @@ The package registers the storage and engine surface; the [`Orleans.Lattice.Api.
 | Incremental capture | `ILatticeBackupIncrementalCaptureService.CaptureIncrementalAsync` | Forward-WAL differential layered on a base backup, with full-capture fallback. |
 | Restore | `ILatticeBackupRestoreService.RestoreAsync` | Mode-faithful, validated, idempotent replay of a manifest chain. |
 | Revert | `ILatticeBackupRestoreService.RevertRestoreAsync` | Undoes a shadow-cutover restore by swapping the registry alias back. |
+| Restore-copy retirement | `ILatticeBackupRestoreService.ReleaseRestoreAsync`, `AuditRestoreCopiesAsync`, `RepairRestoreCopiesAsync` | Retires, gradually, the physical copies no revert can reach once a restore is superseded, reverted, released or its revert window ends; an estate-wide sweep cleans up copies an earlier build left. |
 | Backup-set restore | `ILatticeBackupRestoreService.RestoreSetAsync` | Restores every member tree of a multi-tree backup set as one unit via shadow-cutover, as a single all-or-nothing coordinated saga when any member is replicated. |
 | Trigger / schedule / prune | `ILatticeBackupScheduler` | On-demand triggers, recurring schedules, and chain-aware retention per scope. |
 | Schedule backup sets | `ILatticeBackupControl.ScheduleBackupSetAsync` (`Orleans.Lattice.Api.Backup`) | Recurring backup sets over named or all trees, with set-level retention, run history and run-now. |

@@ -38,6 +38,7 @@ internal sealed partial class TreeDeletionGrain
         _ when operationId.StartsWith("resize:", StringComparison.Ordinal) => "resize",
         _ when operationId.StartsWith("remediation:", StringComparison.Ordinal) => "schema remediation or migration",
         _ when operationId.EndsWith(":revert", StringComparison.Ordinal) => "restore revert",
+        _ when operationId.StartsWith("restore-retire:", StringComparison.Ordinal) => "restore copy retirement",
         _ => "alias operation (a resize, restore, restore revert, or schema remediation or migration)",
     };
 

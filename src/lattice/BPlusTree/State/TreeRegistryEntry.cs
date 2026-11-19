@@ -337,4 +337,35 @@ internal sealed record TreeRegistryEntry
     /// distinguish its own committed row from a newer alias change.
     /// </summary>
     [Id(24)] public string? AliasRoutingOperationId { get; init; }
+
+    /// <summary>
+    /// On a restore shadow (<see cref="RestoreShadowOfTreeId"/>) that a
+    /// shadow-cutover restore cut its logical tree over to: the physical copy the
+    /// logical tree resolved to immediately before that cutover, which is the copy
+    /// the restore's revert returns to (issue #6103). Stamped by the commit from
+    /// the registry's own projection, never from a caller-supplied result, and
+    /// cleared when the restore is reverted or becomes final.
+    /// <see langword="null"/> on every other entry, and on a shadow committed
+    /// before this field existed - whose revert target is then unknown, so the
+    /// restore-copy retirement retires nothing of its tree until that restore is
+    /// reverted, superseded, released or ages out.
+    /// </summary>
+    [Id(25)] public string? RestoreRevertPhysicalTreeId { get; init; }
+
+    /// <summary>
+    /// On a restore shadow: when its shadow-cutover restore committed, used to end
+    /// the restore's revert window once
+    /// <c>LatticeBackupOptions.RestoreRevertRetention</c> has elapsed.
+    /// <see langword="null"/> on every other entry.
+    /// </summary>
+    [Id(26)] public DateTimeOffset? RestoreCommittedAtUtc { get; init; }
+
+    /// <summary>
+    /// On a restore shadow: <see langword="true"/> once its shadow-cutover restore
+    /// is final - a later cutover of the same logical tree superseded it, its
+    /// caller released it, or its revert window elapsed - so it can no longer be
+    /// reverted and the copy it replaced is retired. Cleared when the shadow is
+    /// committed again.
+    /// </summary>
+    [Id(27)] public bool RestoreFinal { get; init; }
 }
