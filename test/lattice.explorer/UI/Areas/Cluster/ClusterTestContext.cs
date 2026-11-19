@@ -85,15 +85,17 @@ public abstract class ClusterTestContext : ShellChromeTestContext
     /// <summary>Renders the area's routed page at <paramref name="address"/>, the Cluster area visible.</summary>
     /// <param name="address">A Cluster address, such as <c>/cluster/trees</c>.</param>
     /// <param name="breakpoint">The measured width band, or <see langword="null"/> for none.</param>
+    /// <param name="alsoShown">Further areas the directory shows as visible beside the Cluster area.</param>
     /// <returns>The rendered page.</returns>
-    internal IRenderedComponent<ClusterPage> RenderAt(string address, LtBreakpoint? breakpoint = null)
+    internal IRenderedComponent<ClusterPage> RenderAt(string address, LtBreakpoint? breakpoint = null, params IExplorerArea[] alsoShown)
     {
         var parsed = ExplorerAddress.Parse(address);
         Navigation.NavigateTo(parsed.ToHref());
         var area = Services.GetServices<IExplorerArea>().OfType<ClusterArea>().Single();
+        var entries = alsoShown.Prepend(area).Select(shown => new ExplorerAreaEntry(shown, AreaAvailability.Visible)).ToArray();
         return Render<ClusterPage>(parameters =>
         {
-            parameters.AddCascadingValue(new ExplorerLocation(parsed, [new ExplorerAreaEntry(area, AreaAvailability.Visible)], EntriesLoaded: true, TenancyActive: false));
+            parameters.AddCascadingValue(new ExplorerLocation(parsed, entries, EntriesLoaded: true, TenancyActive: false));
             if (breakpoint is { } band)
             {
                 parameters.AddCascadingValue(LtBreakpointCascade.Name, band);

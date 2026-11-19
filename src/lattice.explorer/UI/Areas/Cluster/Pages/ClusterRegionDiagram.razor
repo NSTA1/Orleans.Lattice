@@ -41,4 +41,7 @@ else
     <p class="lt-cluster-note">@_picture.Error</p>
 }
 
-<p class="lt-cluster-note"><a class="lt-cluster-link" href="@ReplicationHref">Open Replication</a> for every link, its backlog and its last contact.</p>
+@if (ReplicationShown)
+{
+    <p class="lt-cluster-note"><a class="lt-cluster-link" href="@ReplicationHref">Open Replication</a> for every link, its backlog and its last contact.</p>
+}

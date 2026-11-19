@@ -162,7 +162,7 @@ public sealed class ClusterOverviewTests : ClusterTestContext
     }
 
     [Test]
-    public void Without_the_peer_report_it_says_so_and_still_links_to_replication()
+    public void Without_the_peer_report_it_says_so_and_offers_no_replication_link()
     {
         Services.RemoveAllKeyed<ILatticeReplicationStatus>(ShellFacades.Key);
 
@@ -172,8 +172,21 @@ public sealed class ClusterOverviewTests : ClusterTestContext
         {
             Assert.That(cut.FindAll(".lt-cluster-regions"), Is.Empty);
             Assert.That(cut.Markup, Does.Contain("This Explorer does not read the replication peer report, so no region is drawn."));
-            Assert.That(cut.Find("a.lt-cluster-link").GetAttribute("href"), Is.EqualTo("replication"));
+            Assert.That(cut.FindAll("a.lt-cluster-link"), Is.Empty, "the directory does not show Replication, so nothing links to it");
         });
+    }
+
+    [Test]
+    public void The_region_picture_links_to_replication_only_when_the_directory_shows_it()
+    {
+        var replication = new FakeArea("replication", "Replication");
+
+        var hidden = RenderAt("/cluster");
+        hidden.WaitUntil(() => Assert.That(hidden.FindAll(".lt-cluster-regions__local"), Has.Count.EqualTo(1)));
+        Assert.That(hidden.Markup, Does.Not.Contain("Open Replication"));
+
+        var shown = RenderAt("/cluster", null, replication);
+        shown.WaitUntil(() => Assert.That(shown.Find("a.lt-cluster-link").GetAttribute("href"), Is.EqualTo("replication")));
     }
 
     [Test]
