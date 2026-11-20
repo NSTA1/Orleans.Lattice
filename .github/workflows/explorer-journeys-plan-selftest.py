@@ -707,6 +707,11 @@ class SummaryTests(unittest.TestCase):
         # collector times the whole test, not its silence.
         self.assertEqual(planner.HANGS["contract"], planner.HANGS["isolated"])
 
+    def test_a_story_leg_has_a_contract_legs_hang_budget(self):
+        # A story chapter's own bounds under replay-permit starvation (#5569) exceed 20 minutes:
+        # U1's seed waits 300 s and its Data API stand-in up to 15 minutes.
+        self.assertEqual(planner.HANGS["contract"], planner.HANGS["story"])
+
     def test_a_longer_chapter_id_does_not_satisfy_a_shorter_one(self):
         write_trx(self.trx, {"total": 1}, [f"{planner.NAMESPACE}.Journeys.A10.Fixture"])
         _, problems = planner.leg_summary("isolated-a1", self.trx, None, f"{planner.NAMESPACE}.Journeys.A1.")

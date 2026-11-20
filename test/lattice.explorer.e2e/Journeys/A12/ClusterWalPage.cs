@@ -56,7 +56,9 @@ internal sealed class ClusterWalPage(ShellPage shell)
         await dialog.GetByRole(AriaRole.Button, new() { Name = "Plan", Exact = true }).ClickAsync();
         await Expect(Plan).ToBeVisibleAsync();
         await Expect(Plan.GetByRole(AriaRole.Heading)).ToHaveTextAsync($"Move plan: partition {partition} to {target}");
-        await Expect(ClusterParts.Term(shell, "Target resolves here")).ToHaveTextAsync("Yes");
+        // The plan reads the partition's WAL range, which on a loaded estate (#5569) can outlast
+        // the default 5 s while the section still shows its skeleton.
+        await Expect(ClusterParts.Term(shell, "Target resolves here")).ToHaveTextAsync("Yes", ClusterParts.Patiently);
         await Expect(shell.Page).ToHaveURLAsync(new Regex("[?&]partition=" + partition + "(&|$)"));
         Coverage.Hit("command:cluster.plan-wal-move");
         Coverage.Hit("query:cluster.partition");
