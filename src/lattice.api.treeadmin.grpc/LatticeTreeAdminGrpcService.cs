@@ -981,8 +981,15 @@ internal sealed class LatticeTreeAdminGrpcService : LatticeTreeAdminGrpcServiceB
     {
         switch (exception)
         {
-            case OperationCanceledException:
+            case OperationCanceledException when context.CancellationToken.IsCancellationRequested:
                 return new RpcException(new Status(StatusCode.Cancelled, "The tree-administration control-API request was cancelled."));
+            case OperationCanceledException:
+                // The caller did not cancel: a grain message expired inside the cluster before it
+                // was placed or answered (a grain turn held past the message's lifetime). Like a
+                // grain-call timeout the outcome is unknown and retryable, never Cancelled, which a
+                // client reads as its own cancellation and does not retry.
+                _logger.LogWarning(exception, "Api.TreeAdmin: gRPC call to {Method} expired inside the cluster; outcome unknown.", context.Method);
+                return new RpcException(new Status(StatusCode.DeadlineExceeded, "The request did not complete in time inside the cluster, so its outcome is unknown. Confirm the result before retrying a write."));
             case LatticeAuthorizationDeniedException ex:
                 return new RpcException(new Status(StatusCode.PermissionDenied, ex.Message));
             case LatticeTreeOwnershipDeniedException ex:
