@@ -1340,6 +1340,19 @@ once the passes are done the export re-reads the decision of every saga
 it shipped as prepared rows, and ships a decision row for each one that
 decided meanwhile.
 
+Such a saga's prepared rows precede its decision row, so the drain stages
+them in pending buckets before it records the decision. No terminal follows
+for a decided saga, and the buckets sit on the copy the drain staged into,
+whose leaves resolve a pending saga against the registry of their own
+physical tree, not the logical tree the decision row is recorded under. So
+once the drain has applied the export, while the shadow is still held, it
+drains every saga the export carried both as prepared rows and as a
+decision row through a terminal mark on the shards that hold its buckets,
+on the copy and on the original physical tree a bootstrap hold mirrored the
+prepares onto ([#5691](https://github.com/NSTA1/Orleans.Lattice/issues/5691)).
+A prepared row the drain applies after its decision row settles against the
+recorded decision instead, and is never staged.
+
 <a id="export-completion"></a>
 **Completion: sagas that decide while the export reads.** The passes
 read each leaf at its own instant, so a saga can decide between two of

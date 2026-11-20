@@ -1413,6 +1413,10 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
 
         ThrowIfDrainNoLongerAdmitted(treeName, mergeMode);
 
+        await SettleSagasDecidedAfterTheirPreparesAsync(
+                treeName, sourceClusterId, shippedPrepared, importedDecisions, carriedSagas, decidedSagas, cancellationToken)
+            .ConfigureAwait(true);
+
         await ReconcileReapedSourceDeletesAsync(
                 preCapture,
                 carriedKeys,
@@ -2022,6 +2026,57 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
             state.State.PoisonSettleOriginClusterId = sourceClusterId;
             state.State.PoisonSettleTransactionIds = poisoned.Distinct().ToList();
             await state.WriteStateAsync().ConfigureAwait(true);
+        }
+    }
+
+    /// <summary>
+    /// Drains the buckets of every saga the export shipped as prepared rows and
+    /// also decided with a decision row (#5691). A prepared row the drain
+    /// applies after its saga's decision row settles against the recorded
+    /// decision (#4482), but one applied before it is staged in a pending
+    /// bucket, and no terminal follows for a decided saga. The decision is
+    /// recorded in the logical tree's registry, while the buckets sit on the
+    /// copy the drain staged into, whose leaves resolve a pending saga against
+    /// the registry of their own physical tree id, so the staged keys would
+    /// never become visible. The decision is applied to those buckets through
+    /// each holding shard root's terminal mark, on the drain's copy and, when a
+    /// bootstrap hold mirrored the prepares, on the original physical tree.
+    /// </summary>
+    private async Task SettleSagasDecidedAfterTheirPreparesAsync(
+        string treeName,
+        string sourceClusterId,
+        HashSet<Guid>? shippedPrepared,
+        HashSet<Guid> importedDecisions,
+        HashSet<Guid> carriedSagas,
+        Dictionary<Guid, bool> decidedSagas,
+        CancellationToken cancellationToken)
+    {
+        if (shippedPrepared is null || importedDecisions.Count == 0)
+        {
+            return;
+        }
+
+        var decidedAfterPrepare = new HashSet<Guid>(shippedPrepared.Where(importedDecisions.Contains));
+        if (decidedAfterPrepare.Count == 0)
+        {
+            return;
+        }
+
+        var (stagedTreeId, _) = await ResolveBootstrapRoutingAsync(treeName, honourShadowCopy: true).ConfigureAwait(true);
+        var (originalTreeId, _) = await ResolveBootstrapRoutingAsync(treeName, honourShadowCopy: false).ConfigureAwait(true);
+        foreach (var physicalTreeId in new[] { stagedTreeId, originalTreeId }.Distinct(StringComparer.Ordinal))
+        {
+            await StalePendingClearer
+                .ClearAsync(
+                    _grainFactory,
+                    treeName,
+                    sourceClusterId,
+                    carriedSagas,
+                    decidedSagas,
+                    cancellationToken,
+                    onlyTransactions: decidedAfterPrepare,
+                    physicalTreeId: physicalTreeId)
+                .ConfigureAwait(true);
         }
     }
 
