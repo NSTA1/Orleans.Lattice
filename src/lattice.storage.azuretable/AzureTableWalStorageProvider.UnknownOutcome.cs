@@ -51,7 +51,7 @@ public sealed partial class AzureTableWalStorageProvider
     /// was, or will be, executed by the service: a timeout or cancellation, a
     /// transient status, or a transport failure.
     /// </summary>
-    private static bool MayHaveLanded(Exception fault) => fault switch
+    internal static bool MayHaveLanded(Exception fault) => fault switch
     {
         AggregateException aggregate => aggregate.InnerExceptions.Any(MayHaveLanded),
         RequestFailedException { Status: 0 } => true,

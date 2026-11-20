@@ -83,6 +83,20 @@ internal sealed class InMemoryWalTable
     public Func<IReadOnlyList<TableTransactionAction>, bool>? ResendAfterCommit { get; set; }
 
     /// <summary>
+    /// A hook invoked after a transaction commits, given its actions. A non-null
+    /// exception it returns is thrown to the caller in place of the response:
+    /// models a transaction the service applied whose caller saw a fault, such as a
+    /// <c>500 OperationTimedOut</c> (issue #6118).
+    /// </summary>
+    public Func<IReadOnlyList<TableTransactionAction>, Exception?>? FaultAfterCommit { get; set; }
+
+    /// <summary>
+    /// A hook invoked before every point read, given the partition and row key.
+    /// Throwing from it fails that read alone.
+    /// </summary>
+    public Action<string, string>? BeforeGet { get; set; }
+
+    /// <summary>
     /// A hook invoked before every single-entity upsert, given the entity
     /// about to be written. Throwing from it fails that write alone, which is
     /// how a phase-0 candidate-row failure is modelled without disturbing the
@@ -232,6 +246,7 @@ internal sealed class InMemoryWalTable
 
     private Task<Response<AzureTableWalEntity>> GetEntity(string partitionKey, string rowKey)
     {
+        BeforeGet?.Invoke(partitionKey, rowKey);
         lock (_gate)
         {
             if (!_rows.TryGetValue((partitionKey, rowKey), out var found))
@@ -316,6 +331,11 @@ internal sealed class InMemoryWalTable
         if (ResendAfterCommit?.Invoke(materialised) == true)
         {
             return SubmitTransaction(materialised);
+        }
+
+        if (FaultAfterCommit?.Invoke(materialised) is { } fault)
+        {
+            return Task.FromException<Response<IReadOnlyList<Response>>>(fault);
         }
 
         IReadOnlyList<Response> perAction = eTags.Select(eTag => (Response)new FakeResponse(204, eTag)).ToList();
