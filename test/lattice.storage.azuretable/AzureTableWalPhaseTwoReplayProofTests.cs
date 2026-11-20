@@ -149,11 +149,13 @@ public class AzureTableWalPhaseTwoReplayProofTests
     }
 
     [Test]
-    public async Task PhaseTwoWorker_never_resolves_a_non_conflict_fault_as_a_replay()
+    public async Task PhaseTwoWorker_never_resolves_a_definite_non_conflict_fault_as_a_replay()
     {
+        // A 400 is a refusal: the service applied nothing, so there is nothing to
+        // prove. Only a conflict or an unknown outcome (issue #6118) is re-examined.
         var verified = 0;
         await using var worker = new PhaseTwoWorker(
-            (_, _) => throw new RequestFailedException(500, "InternalError", "InternalError", innerException: null),
+            (_, _) => throw new RequestFailedException(400, "InvalidInput", "InvalidInput", innerException: null),
             "manifest",
             TimeSpan.Zero,
             verifyReplay: (_, _) =>
@@ -164,22 +166,48 @@ public class AzureTableWalPhaseTwoReplayProofTests
 
         Assert.That(
             async () => await worker.EnqueueAsync(0L, 2L, hasCandidateRow: false, payloadBytes: 30L),
-            Throws.InstanceOf<RequestFailedException>().With.Property(nameof(RequestFailedException.Status)).EqualTo(500));
+            Throws.InstanceOf<RequestFailedException>().With.Property(nameof(RequestFailedException.Status)).EqualTo(400));
         Assert.That(verified, Is.Zero);
     }
 
     [Test]
-    public async Task PhaseTwoWorker_fails_a_409_when_the_replay_proof_read_itself_fails()
+    public async Task PhaseTwoWorker_fails_an_unknown_outcome_its_replay_proof_rejects()
     {
+        var verified = 0;
+        await using var worker = new PhaseTwoWorker(
+            (_, _) => throw new RequestFailedException(500, "OperationTimedOut", "OperationTimedOut", innerException: null),
+            "manifest",
+            TimeSpan.Zero,
+            verifyReplay: (_, _) =>
+            {
+                Interlocked.Increment(ref verified);
+                return Task.FromResult<PhaseTwoReplayProof>(default);
+            });
+
+        Assert.That(
+            async () => await worker.EnqueueAsync(0L, 2L, hasCandidateRow: false, payloadBytes: 30L),
+            Throws.InstanceOf<RequestFailedException>().With.Property(nameof(RequestFailedException.Status)).EqualTo(500));
+        Assert.That(verified, Is.EqualTo(1), "the original fault surfaces once the proof finds the commit absent");
+    }
+
+    [Test]
+    public async Task PhaseTwoWorker_fails_a_409_when_the_replay_proof_read_keeps_failing()
+    {
+        var attempts = 0;
         await using var worker = new PhaseTwoWorker(
             (_, _) => throw new RequestFailedException(409, "EntityAlreadyExists", "EntityAlreadyExists", innerException: null),
             "manifest",
             TimeSpan.Zero,
-            verifyReplay: (_, _) => throw new RequestFailedException(503, "ServerBusy", "ServerBusy", innerException: null));
+            verifyReplay: (_, _) =>
+            {
+                Interlocked.Increment(ref attempts);
+                throw new RequestFailedException(503, "ServerBusy", "ServerBusy", innerException: null);
+            });
 
         Assert.That(
             async () => await worker.EnqueueAsync(0L, 2L, hasCandidateRow: false, payloadBytes: 30L),
             Throws.InstanceOf<RequestFailedException>().With.Property(nameof(RequestFailedException.Status)).EqualTo(409));
+        Assert.That(attempts, Is.EqualTo(PhaseTwoWorker.ReplayProofMaxAttempts), "a transient read fault is retried, but boundedly");
     }
 }
 

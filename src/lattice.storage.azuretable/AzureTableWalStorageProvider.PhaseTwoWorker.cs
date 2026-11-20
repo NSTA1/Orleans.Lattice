@@ -1149,13 +1149,19 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
     internal WalShardWriteTracker AbandonedSubmits { get; } = new();
 
     /// <summary>
-    /// Submits a manifest transaction, resolving a <c>409</c> / <c>404</c> as a success
-    /// when <see cref="_verifyReplay"/> proves the transaction already committed: the
-    /// SDK retry pipeline resent it after its first attempt landed and the response
-    /// was lost (issue #5520). The commit is durable, so failing it would fault every
-    /// commit in the group and the shard's appends with them. Anything not proven,
-    /// including a manifest row that records a different batch, rethrows the original
-    /// failure, so a genuine conflict still surfaces and nothing is overwritten.
+    /// Submits a manifest transaction, resolving a failure as a success when
+    /// <see cref="_verifyReplay"/> proves the transaction already committed. Two
+    /// failures leave that open: a <c>409</c> / <c>404</c> / <c>412</c> on a resend
+    /// whose first attempt landed and lost its response (issue #5520), and a fault
+    /// whose outcome is unknown - a <c>500 OperationTimedOut</c>, another transient
+    /// status, a timeout or a transport fault - for a transaction the service may
+    /// have applied (issue #6118). The commit is durable either way, so failing it
+    /// would fault every commit in the group and latch the shard's appends. Anything
+    /// not proven, including a manifest row that records a different batch, rethrows
+    /// the original failure, so a genuine conflict still surfaces and nothing is
+    /// overwritten. An unproven unknown outcome that lands later cannot commit past a
+    /// resync: its <c>TAIL</c> write is conditional on an ETag the resync's
+    /// reconciliation re-stamps (issue #5825).
     /// </summary>
     private async Task<ETag?> SubmitResolvingReplayAsync(IReadOnlyList<TableTransactionAction> actions, CancellationToken cancellationToken)
     {
@@ -1163,18 +1169,9 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
         {
             return await _submit(actions, cancellationToken).ConfigureAwait(false);
         }
-        catch (RequestFailedException rfe) when (_verifyReplay is not null && rfe.Status is 409 or 404 or 412)
+        catch (Exception fault) when (_verifyReplay is not null && MayHaveCommitted(fault, cancellationToken))
         {
-            PhaseTwoReplayProof proof;
-            try
-            {
-                proof = await _verifyReplay(actions, cancellationToken).ConfigureAwait(false);
-            }
-            catch (RequestFailedException)
-            {
-                proof = default;
-            }
-
+            var proof = await ProveReplayAsync(actions, cancellationToken).ConfigureAwait(false);
             if (!proof.Proven)
             {
                 throw;
@@ -1195,6 +1192,47 @@ internal sealed class PhaseTwoWorker : IAsyncDisposable
             // next commit as the landed attempt's response would have (#5605 W7).
             // Otherwise it is unknown, and the fence is invalidated (issue #5810).
             return proof.TailETag;
+        }
+    }
+
+    /// <summary>How many times the replay proof is attempted when its reads fault transiently.</summary>
+    internal const int ReplayProofMaxAttempts = 3;
+
+    /// <summary>
+    /// Whether <paramref name="fault"/> leaves open that the transaction committed: a
+    /// conflict a resend of a landed attempt answers, or a fault whose outcome is
+    /// unknown. The worker's own cancellation (the settle cap, or disposal) is neither.
+    /// </summary>
+    private static bool MayHaveCommitted(Exception fault, CancellationToken cancellationToken) =>
+        fault is RequestFailedException { Status: 409 or 404 or 412 }
+        || (!cancellationToken.IsCancellationRequested && AzureTableWalStorageProvider.MayHaveLanded(fault));
+
+    /// <summary>
+    /// Runs <see cref="_verifyReplay"/>, retrying up to <see cref="ReplayProofMaxAttempts"/>
+    /// times when its reads fault transiently: the brown-out that left the commit's
+    /// outcome unknown is likely to fault the first read-back too (issue #6118). A read
+    /// that keeps faulting, or faults definitively, proves nothing.
+    /// </summary>
+    private async Task<PhaseTwoReplayProof> ProveReplayAsync(
+        IReadOnlyList<TableTransactionAction> actions,
+        CancellationToken cancellationToken)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return await _verifyReplay!(actions, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception readFault) when (!cancellationToken.IsCancellationRequested
+                && (readFault is RequestFailedException || AzureTableWalStorageProvider.MayHaveLanded(readFault)))
+            {
+                if (attempt >= ReplayProofMaxAttempts || !AzureTableWalStorageProvider.MayHaveLanded(readFault))
+                {
+                    return default;
+                }
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(50 * attempt), cancellationToken).ConfigureAwait(false);
         }
     }
 
