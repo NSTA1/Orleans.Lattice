@@ -18,21 +18,50 @@ public partial class PublicApiContractTests
     // re-walk of the shard with each page's resume key, a second full scan, the
     // stage timings, and the scan-page signals the tree's shard root emitted
     // while the failing scan ran (ceiling fires, stalls, chain regressions).
+    //
+    // The leaf layout is not fixed: a leaf reactivated from a snapshot divides
+    // at the snapshot frame's median row, not at the median of every row it
+    // holds, so a reactivation between two batches turns [k00016, k00040) into
+    // [k00016, k00024) - exactly the 8 keys #5607 lost. The report therefore
+    // also records the leaf chain as the build left it, before the restart, and
+    // how the build's divisions chose their pivots.
 
     /// <summary>
-    /// Counts the scan-page measurements one tree's shard roots emit, keyed by
-    /// instrument name and non-tree tags. In-process silos publish on the same
-    /// static meter, so the listener sees them.
+    /// Counts the measurements one tree's grains emit on a selected set of
+    /// instruments, keyed by instrument name and non-tree tags. In-process silos
+    /// publish on the same static meter, so the listener sees them.
     /// </summary>
     private sealed class DeepScanSignals : IDisposable
     {
         private readonly string _treeId;
+        private readonly Func<Instrument, bool> _include;
         private readonly ConcurrentDictionary<string, long> _counts = new(StringComparer.Ordinal);
         private readonly MeterListener _listener;
 
+        /// <summary>The scan-page instruments a shard root emits while it fills pages.</summary>
+        public static bool ScanInstruments(Instrument instrument) =>
+            instrument.Name.Contains(".scan", StringComparison.Ordinal);
+
+        /// <summary>
+        /// The leaf division outcomes and the bisect refusals (issue #5607). A
+        /// division that records no refusal took its pivot from the median of an
+        /// attached snapshot frame rather than of every row the leaf held, which is
+        /// what turns the second leaf into [k00016, k00024) instead of
+        /// [k00016, k00040) after a reactivation.
+        /// </summary>
+        public static bool SplitInstruments(Instrument instrument) =>
+            ReferenceEquals(instrument, LatticeMetrics.LeafSplitAttempts)
+            || ReferenceEquals(instrument, LatticeMetrics.LeafBisectRefusals);
+
         public DeepScanSignals(string treeId)
+            : this(treeId, ScanInstruments)
+        {
+        }
+
+        public DeepScanSignals(string treeId, Func<Instrument, bool> include)
         {
             _treeId = treeId;
+            _include = include;
             _listener = MeterListening.StartForMeter(LatticeMetrics.Meter, listener =>
             {
                 // Counters are summed, so a series primed with Add(0) does not
@@ -53,7 +82,7 @@ public partial class PublicApiContractTests
 
         private void Record(Instrument instrument, long value, ReadOnlySpan<KeyValuePair<string, object?>> tags)
         {
-            if (value == 0 || !instrument.Name.Contains(".scan", StringComparison.Ordinal))
+            if (value == 0 || !_include(instrument))
             {
                 return;
             }
@@ -80,7 +109,8 @@ public partial class PublicApiContractTests
     }
 
     private async Task<string> DescribeDeepScanMissAsync(
-        ILattice tree, IReadOnlyList<string> scanned, IReadOnlyList<string> expected, string stages, DeepScanSignals signals)
+        ILattice tree, IReadOnlyList<string> scanned, IReadOnlyList<string> expected, string stages, DeepScanSignals signals,
+        string? buildLayout = null, DeepScanSignals? buildSplits = null)
     {
         var report = new StringBuilder();
         var missing = expected.Except(scanned, StringComparer.Ordinal).ToList();
@@ -93,6 +123,17 @@ public partial class PublicApiContractTests
         }
 
         report.AppendLine($"scan-page signals during the scan: {signals.Describe()}");
+        if (buildLayout is not null)
+        {
+            report.AppendLine($"leaf chain before the restart:{buildLayout}");
+        }
+
+        if (buildSplits is not null)
+        {
+            report.AppendLine(
+                $"leaf divisions during the build: {buildSplits.Describe()} "
+                + "(a divided outcome with no matching bisect refusal pivoted on a snapshot frame's median)");
+        }
         await AppendDiagnosticAsync(report, "point reads", async () =>
         {
             var reads = new List<string>(missing.Count);
@@ -126,19 +167,7 @@ public partial class PublicApiContractTests
             return owners.ToString();
         });
 
-        await AppendDiagnosticAsync(report, "leaf chain", async () =>
-        {
-            var chain = new StringBuilder();
-            var leafId = await shard.GetLeftmostLeafIdAsync();
-            for (var hop = 0; leafId is { } id && hop < 512; hop++)
-            {
-                var (leafKeys, link) = await Client.GetGrain<IBPlusLeafGrain>(id).GetKeysAndNextSiblingAsync(null, null);
-                chain.Append($"\n  {hop}: {id} {link.KeyRange} keys [{string.Join(",", leafKeys)}]");
-                leafId = link.NextSibling;
-            }
-
-            return chain.ToString();
-        });
+        await AppendDiagnosticAsync(report, "leaf chain", () => DescribeDeepScanLeafChainAsync(shard, withKeys: true));
 
         await AppendDiagnosticAsync(report, "page re-walk", async () =>
         {
@@ -187,6 +216,26 @@ public partial class PublicApiContractTests
         });
 
         return report.ToString();
+    }
+
+    /// <summary>
+    /// The leaf sibling chain from the leftmost leaf, one line per leaf with its
+    /// declared bounds and either its keys or only their count.
+    /// </summary>
+    private async Task<string> DescribeDeepScanLeafChainAsync(IShardRootGrain shard, bool withKeys)
+    {
+        var chain = new StringBuilder();
+        var leafId = await shard.GetLeftmostLeafIdAsync();
+        for (var hop = 0; leafId is { } id && hop < 512; hop++)
+        {
+            var (leafKeys, link) = await Client.GetGrain<IBPlusLeafGrain>(id).GetKeysAndNextSiblingAsync(null, null);
+            chain.Append(withKeys
+                ? $"\n  {hop}: {id} {link.KeyRange} keys [{string.Join(",", leafKeys)}]"
+                : $"\n  {hop}: {id} {link.KeyRange} {leafKeys.Count} keys");
+            leafId = link.NextSibling;
+        }
+
+        return chain.ToString();
     }
 
     private static async Task AppendDiagnosticAsync(StringBuilder report, string section, Func<Task<string>> collect)

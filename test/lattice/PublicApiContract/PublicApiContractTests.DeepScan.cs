@@ -158,8 +158,15 @@ public partial class PublicApiContractTests
     {
         var treeId = "pac-deepscan-cold-" + Guid.NewGuid().ToString("N")[..8];
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-        await CreateDepthTwoTreeAsync(treeId);
+        using var buildSplits = new DeepScanSignals(treeId, DeepScanSignals.SplitInstruments);
+        var built = await CreateDepthTwoTreeAsync(treeId);
         var buildElapsed = stopwatch.Elapsed;
+
+        // Captured before the restart so a miss reports the layout the build
+        // actually produced; it varies with activation history (#5607).
+        var builtRouting = await built.GetRoutingAsync();
+        var buildLayout = await DescribeDeepScanLeafChainAsync(
+            Client.GetGrain<IShardRootGrain>($"{builtRouting.PhysicalTreeId}/0"), withKeys: false);
 
         // Restart the cluster so the shard-root activation (and its
         // _routingTableCache) starts cold and every internal / leaf grain
@@ -186,7 +193,7 @@ public partial class PublicApiContractTests
             {
                 var stages = $"build {buildElapsed.TotalSeconds:F1}s, restart {restartElapsed.TotalSeconds:F1}s, "
                     + $"scan {scanElapsed.TotalSeconds:F1}s";
-                Assert.Fail(await DescribeDeepScanMissAsync(rehydrated, keys, expected, stages, signals));
+                Assert.Fail(await DescribeDeepScanMissAsync(rehydrated, keys, expected, stages, signals, buildLayout, buildSplits));
             }
         }
     }
