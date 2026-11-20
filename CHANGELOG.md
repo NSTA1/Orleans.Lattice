@@ -85,6 +85,8 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 - **Replication - Shipper back-off saturates instead of faulting.** A very large `ShipBackoffMax`, such as `TimeSpan.MaxValue`, now parks a failing shipper at the latest representable instant instead of throwing inside the failure path. ([#6107](https://github.com/NSTA1/Orleans.Lattice/pull/6107)) (`Orleans.Lattice.Replication`)
 - **Security - State API lockout applies at any duration.** A `LockoutDuration` past the representable range, such as `TimeSpan.MaxValue`, now locks the username until restart instead of throwing and leaving the credential open to further guesses. ([#6107](https://github.com/NSTA1/Orleans.Lattice/pull/6107)) (`Orleans.Lattice.Api.State.Grpc`)
 - **Observability - Telemetry default window clamps at the earliest instant.** A query giving only an end near `DateTimeOffset.MinValue` is now rejected as `LookbackTooOld` or served, rather than failing with an unmapped `ArgumentOutOfRangeException`. ([#6107](https://github.com/NSTA1/Orleans.Lattice/pull/6107)) (`Orleans.Lattice.Api.Telemetry`)
+- **Tests - Masked production perturbations are detected again.** Three seeded faults that later defensive checks hid from their detectors now name a detector, or drop every masking check, so the perturbation lane catches each one. ([#6125](https://github.com/NSTA1/Orleans.Lattice/issues/6125)) (`repository-wide`)
+
 ## Released
 
 ## [2026-11-17]

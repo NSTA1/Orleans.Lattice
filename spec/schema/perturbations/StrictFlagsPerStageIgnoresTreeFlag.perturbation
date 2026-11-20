@@ -1,4 +1,7 @@
 # StrictFlagsPerStage: a stage diverts only under its own per-tree flag.
+# The flag is honoured twice: OnWriteCoreAsync trusts a non-strict system-origin
+# write before validating it (#5718), and ViolationAsync re-checks it before
+# dead-lettering. Either alone masks the other, so the fault drops both.
 MODULE: SchemaStageOrdering
 ROW: StrictFlagsPerStage
 FILE: src/lattice.schema/LatticeSchemaWriteInterceptor.cs
@@ -6,7 +9,23 @@ DETECTORS: LatticeSchemaWriteInterceptorTests.OnWriteAsync_non_strict_policy_tru
 SUMMARY: enforcement dead-letters ingest on a tree whose policy is not strict
 
 --- FIND
-        if (!compiled.StrictIngest)
+        if (!compiled.StrictIngest && LatticeAccessGateContext.IsSystemOrigin)
 --- REPLACE
         if (false)
+--- END
+
+--- FIND
+        if (!compiled.StrictIngest)
+        {
+            return LatticeWriteDecision.Accept();
+        }
+
+        var entry = BuildDeadLetterEntry(key, value, reason, SourceFor(operation));
+--- REPLACE
+        if (false)
+        {
+            return LatticeWriteDecision.Accept();
+        }
+
+        var entry = BuildDeadLetterEntry(key, value, reason, SourceFor(operation));
 --- END
