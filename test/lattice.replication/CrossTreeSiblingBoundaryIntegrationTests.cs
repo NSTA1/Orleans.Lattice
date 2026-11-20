@@ -619,7 +619,9 @@ public partial class CrossTreeSiblingBoundaryIntegrationTests
         await SignalShipperAsync(_siteB.Client, sibling, SiteAClusterId);
         var westWriteArrived = await WaitForValueAsync(_siteA.Client, sibling, westWriteKey, [2], TimeSpan.FromSeconds(40));
 
-        var stable = await CaptureDrainStateAsync(tree, sibling);
+        // The test shortens SiblingBoundaryReseedAfter, so a sibling-boundary re-seed
+        // can still be in flight when the writes converge (#6019): wait it out.
+        var stable = await WaitForDrainQuiescenceAsync(tree, sibling, TimeSpan.FromSeconds(60));
         var healthyLinks = ReadOutboundHealth(tree, sibling);
         await ObserveNaturalBoundaryAsync("after-original-health-snapshot", tree, sibling);
 
@@ -667,6 +669,23 @@ public partial class CrossTreeSiblingBoundaryIntegrationTests
         }
 
         return false;
+    }
+
+    private async Task<string> WaitForDrainQuiescenceAsync(string tree, string sibling, TimeSpan timeout)
+    {
+        var deadline = Environment.TickCount64 + (long)timeout.TotalMilliseconds;
+        while (true)
+        {
+            var state = await CaptureDrainStateAsync(tree, sibling);
+            if ((state.Contains($"{tree}:A=Idle,B=LiveIncremental", StringComparison.Ordinal)
+                    && state.Contains($"{sibling}:A=Idle,B=LiveIncremental", StringComparison.Ordinal))
+                || Environment.TickCount64 >= deadline)
+            {
+                return state;
+            }
+
+            await Task.Delay(250);
+        }
     }
 
     private async Task<string> CaptureDrainStateAsync(string tree, string sibling)
