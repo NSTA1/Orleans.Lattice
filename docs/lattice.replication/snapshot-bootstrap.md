@@ -830,15 +830,22 @@ Failed -> IncrementalHandoff (automatic retry after a shadow copy was published
 A fresh bootstrap imports into a held shadow copy instead of applying snapshot
 rows to the tree readers currently use. The receiver's original tree remains
 readable throughout the drain, and concurrent receiver writes continue to be
-mirrored to the shadow. Once the snapshot, reconciliation and incremental
+mirrored to the shadow. A committed live-incremental apply that arrives during
+the hold is written to the original tree, which mirrors it to the shadow in
+the same way, so it is visible on the original as it would be without a hold.
+A replicated saga's prepares are staged on both trees ([#4791](https://github.com/NSTA1/Orleans.Lattice/issues/4791)). Once the snapshot, reconciliation and incremental
 handoff are complete, the coordinator releases the hold and uses the existing
 resize alias-cutover path to publish the imported copy. Readers therefore see
 the complete original tree before cutover or the complete imported tree
 after it, never a row-by-row mixture.
 
 If a fresh shadow import fails before cutover, the coordinator aborts the held
-copy. The original remains readable and unchanged; a later `BootstrapAsync`
-call starts a fresh attempt. `ReadFenced` remains false during this path, and
+copy. The original remains readable and holds none of the imported rows; a
+later `BootstrapAsync` call starts a fresh attempt. Committed live-incremental
+applies delivered during the hold are kept, because they were written to the
+original as well as the copy. Before this, they were written to the copy alone
+and discarded with it, while the sender had already moved past them
+([#5694](https://github.com/NSTA1/Orleans.Lattice/issues/5694)). `ReadFenced` remains false during this path, and
 readers do not receive `LatticeTreeBootstrappingException` just because a fresh
 snapshot is being imported.
 
