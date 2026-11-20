@@ -49,6 +49,7 @@ internal sealed class ClusterArea : IExplorerArea, IDisposable
 
     private readonly ClusterFacades _facades;
     private readonly ClusterTreeCatalog _catalog;
+    private readonly DetachedGrantScan _grantScan = new();
     private AreaAvailability? _verdict;
     private ClusterStorageUsageSummary? _usage;
     private bool _telemetry;
@@ -196,7 +197,12 @@ internal sealed class ClusterArea : IExplorerArea, IDisposable
             // No cluster telemetry: the estate-wide figures stay out of reach, but a
             // caller who may administer a tree still reaches that tree's pages (#5581).
             // Hidden is the default arm: only a positive grant admits.
-            if (await AdministersAnyTreeAsync(admin, cancellationToken).ConfigureAwait(false) is not { } administers)
+            // The scan outlives this check: a directory that stops waiting leaves it
+            // running, and the next check joins it rather than starting over (#6114).
+            var scan = await _grantScan
+                .JoinAsync(caller, token => AdministersAnyTreeAsync(admin, token), cancellationToken)
+                .ConfigureAwait(false);
+            if (scan is not { } administers)
             {
                 return AreaAvailability.Unavailable("The cluster did not answer. Try again in a moment.");
             }
@@ -280,6 +286,8 @@ internal sealed class ClusterArea : IExplorerArea, IDisposable
         {
             session.ConfigurationChanged -= Forget;
         }
+
+        _grantScan.Dispose();
     }
 
     private ClusterStorageUsageSummary? CurrentUsage() =>
@@ -392,6 +400,7 @@ internal sealed class ClusterArea : IExplorerArea, IDisposable
         _verdict = null;
         _usage = null;
         _telemetry = false;
+        _grantScan.Reset();
     }
 
     /// <summary>
