@@ -146,18 +146,30 @@ internal static class StalePendingClearer
     /// <paramref name="sourceClusterId"/> on <paramref name="treeName"/>. Read
     /// before a plain bootstrap's export opens: only these may be stale.
     /// </summary>
+    /// <param name="pending">
+    /// When set, the sagas found are added to this set, which is returned;
+    /// <see langword="null"/> starts a new one.
+    /// </param>
+    /// <param name="physicalTreeId">
+    /// The physical tree whose leaves hold the buckets, when it is not the one
+    /// <paramref name="treeName"/>'s alias resolves to - a bootstrap shadow copy
+    /// an earlier attempt of the drain staged into (#6123). <see langword="null"/>
+    /// uses the alias target.
+    /// </param>
     public static async Task<HashSet<Guid>> CapturePendingAsync(
         IGrainFactory grainFactory,
         string treeName,
         string sourceClusterId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        HashSet<Guid>? pending = null,
+        string? physicalTreeId = null)
     {
-        var pending = new HashSet<Guid>();
+        pending ??= new HashSet<Guid>();
         var registry = grainFactory.GetLatticeRegistry();
         // One entry read serves both the alias resolution and the routing map:
         // ResolveAsync and GetShardMapAsync are each a projection of it.
         var entry = await registry.GetEntryAsync(treeName).ConfigureAwait(false);
-        var physicalTreeId = entry?.PhysicalTreeId ?? treeName;
+        physicalTreeId ??= entry?.PhysicalTreeId ?? treeName;
         var shardMap = entry?.ShardMap
             ?? ShardMap.GetOrCreateDefaultShared(
                 LatticeConstants.DefaultVirtualShardCount,
