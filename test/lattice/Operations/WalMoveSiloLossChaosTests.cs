@@ -97,12 +97,15 @@ public sealed class WalMoveSiloLossChaosTests
         IndexGate.BlockTerminalUpdates = true;
         await _cluster.KillSiloAsync(secondary);
 
+        // The bound sits well below the 30 s Orleans response timeout the test guards
+        // against, with headroom for one slow poll on a loaded runner (#5767).
+        var pollBound = TimeSpan.FromSeconds(10);
         var longestPoll = TimeSpan.Zero;
         await TestPoll.UntilAsync(
             async () =>
             {
                 var watch = Stopwatch.StartNew();
-                var status = await survivor.GetAsync("default", operationId).WaitAsync(TimeSpan.FromSeconds(2));
+                var status = await survivor.GetAsync("default", operationId).WaitAsync(pollBound);
                 longestPoll = watch.Elapsed > longestPoll ? watch.Elapsed : longestPoll;
                 return status?.State == LatticeOperationState.Failed;
             },
@@ -111,7 +114,7 @@ public sealed class WalMoveSiloLossChaosTests
             cadence: TimeSpan.FromMilliseconds(250));
         var record = await survivor.GetAsync("default", operationId);
         Assert.That(IndexGate.Entered.Task.IsCompleted, Is.True, "The failing status path must actually encounter the blocked index.");
-        Assert.That(longestPoll, Is.LessThan(TimeSpan.FromSeconds(2)), "No poll may wait out the 30-second Orleans response timeout.");
+        Assert.That(longestPoll, Is.LessThan(pollBound), "No poll may wait out the 30-second Orleans response timeout.");
         IndexGate.Release();
 
         // Let a surviving saga (if the admin grain lived on the primary) run on; the
