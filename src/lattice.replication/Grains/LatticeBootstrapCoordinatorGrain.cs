@@ -1189,10 +1189,18 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
         // of the tree's contents happened in between.
         // The sagas already pending from the source before the export opens
         // (issue #4692): after a plain bootstrap only these can be stale. Read
-        // on every attempt, so a resumed drain reads it afresh for its new export.
-        var pendingBeforeExport = await StalePendingClearer
-            .CapturePendingAsync(_grainFactory, treeName, sourceClusterId, cancellationToken)
-            .ConfigureAwait(true);
+        // on every attempt, so a resumed drain reads it afresh for its new export,
+        // and on the shadow copy as well as the original tree: an earlier
+        // attempt's export staged its prepared rows on the copy alone (#6123).
+        HashSet<Guid>? pendingBeforeExport = null;
+        foreach (var physicalTreeId in await BootstrapPhysicalTreeIdsAsync(treeName).ConfigureAwait(true))
+        {
+            pendingBeforeExport = await StalePendingClearer
+                .CapturePendingAsync(_grainFactory, treeName, sourceClusterId, cancellationToken, pendingBeforeExport, physicalTreeId)
+                .ConfigureAwait(true);
+        }
+
+        pendingBeforeExport ??= new HashSet<Guid>();
 
         var frontierEpoch = (await _grainFactory.GetGrain<IReplicationTreeFrontierGrain>(treeName)
             .GetAsync(cancellationToken)
@@ -1461,21 +1469,29 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
         // tree re-added to replication among them (#4692) - settles only the
         // sagas that were pending before the export opened: the sender held
         // nothing back, so a saga staged since is not stale. Still behind the
-        // read fence.
+        // read fence. The buckets sit wherever the drain staged them: on the
+        // shadow copy, which also holds what a bootstrap hold mirrored from the
+        // original tree, and on the original tree itself (#6123).
         var reseed = state.State.ReseedAfterEpochs.TryGetValue(sourceClusterId, out var reseedAfter)
             && snapshot.ExportEpoch > reseedAfter;
         if (reseed || pendingBeforeExport.Count > 0)
         {
-            var cleared = await StalePendingClearer
-                .ClearAsync(
-                    _grainFactory,
-                    treeName,
-                    sourceClusterId,
-                    carriedSagas,
-                    decidedSagas,
-                    cancellationToken,
-                    onlyTransactions: reseed ? null : pendingBeforeExport)
-                .ConfigureAwait(true);
+            var cleared = 0;
+            foreach (var physicalTreeId in await BootstrapPhysicalTreeIdsAsync(treeName).ConfigureAwait(true))
+            {
+                cleared += await StalePendingClearer
+                    .ClearAsync(
+                        _grainFactory,
+                        treeName,
+                        sourceClusterId,
+                        carriedSagas,
+                        decidedSagas,
+                        cancellationToken,
+                        onlyTransactions: reseed ? null : pendingBeforeExport,
+                        physicalTreeId: physicalTreeId)
+                    .ConfigureAwait(true);
+            }
+
             if (cleared > 0)
             {
                 Logger.LogWarning(
@@ -1990,6 +2006,23 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
         return (physicalTreeId, shardMap);
     }
 
+    /// <summary>
+    /// The physical trees a drain's staged buckets can sit on: the shadow copy
+    /// the drain stages into, when one is in use, then the original tree the
+    /// alias names, whose prepared applies a bootstrap hold mirrors onto the
+    /// copy. One id when no copy is in use.
+    /// </summary>
+    private async Task<string[]> BootstrapPhysicalTreeIdsAsync(string treeName)
+    {
+        var entry = await _grainFactory.GetLatticeRegistry().GetEntryAsync(treeName).ConfigureAwait(true);
+        var originalTreeId = entry?.PhysicalTreeId ?? treeName;
+        return state.State.UseShadowCopy
+            && state.State.ShadowCopyTreeId is { } stagedTreeId
+            && !string.Equals(stagedTreeId, originalTreeId, StringComparison.Ordinal)
+                ? [stagedTreeId, originalTreeId]
+                : [originalTreeId];
+    }
+
     private async Task<string> ResolveBootstrapPhysicalTreeIdAsync(string treeName)
     {
         if (state.State.UseShadowCopy && state.State.ShadowCopyTreeId is { } shadowTreeId)
@@ -2062,9 +2095,7 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
             return;
         }
 
-        var (stagedTreeId, _) = await ResolveBootstrapRoutingAsync(treeName, honourShadowCopy: true).ConfigureAwait(true);
-        var (originalTreeId, _) = await ResolveBootstrapRoutingAsync(treeName, honourShadowCopy: false).ConfigureAwait(true);
-        foreach (var physicalTreeId in new[] { stagedTreeId, originalTreeId }.Distinct(StringComparer.Ordinal))
+        foreach (var physicalTreeId in await BootstrapPhysicalTreeIdsAsync(treeName).ConfigureAwait(true))
         {
             await StalePendingClearer
                 .ClearAsync(

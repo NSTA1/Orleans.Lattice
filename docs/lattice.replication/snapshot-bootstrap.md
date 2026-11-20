@@ -1444,6 +1444,13 @@ one durably, through a terminal mark on the shards that hold it:
   receiver's registry, because the source may have committed it: its
   committed values, if any, arrived as committed rows.
 
+The walk covers the held shadow as well as the tree the alias still
+names: the shadow holds what the original's buckets were copied or
+mirrored to, and also every prepared row an earlier attempt of a retried
+drain staged there alone. A plain full bootstrap reads the sagas pending
+before its export on both trees for the same reason
+([#6123](https://github.com/NSTA1/Orleans.Lattice/issues/6123)).
+
 The drain then consumes the request.
 
 Two rules keep the window closed:
