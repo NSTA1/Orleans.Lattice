@@ -306,6 +306,7 @@ internal sealed class CatalogGrainSurface
         public Task DiscardDerivedPhysicalTreeAsync() => throw new NotSupportedException();
         public Task<PhysicalTreeRetention> GetPhysicalRetentionAsync() => throw new NotSupportedException();
         public Task<bool> IsDiscardedAsync() => throw new NotSupportedException();
+        public Task<bool> IsRetiredByResizeAsync() => throw new NotSupportedException();
         public Task<bool> DiscardIfAbandonedDerivedCopyAsync() => throw new NotSupportedException();
         public Task<bool> HoldsCompletedPurgeAsync() => Task.FromResult(false);
         public Task<bool> HoldsDeletionAsync() => Task.FromResult(false);
