@@ -44,15 +44,41 @@ internal static class PanelSettled
         return !await failed.First.IsVisibleAsync();
     }
 
-    /// <summary>As <see cref="SettledAsync"/>, failing with the panel's own words when it did not draw.</summary>
+    /// <summary>
+    /// As <see cref="SettledAsync"/>, failing with the panel's own words when it did not draw. A
+    /// failure state that says the cluster did not answer in time (#5569) is a busy estate, not
+    /// a wrong answer, so its own <b>Try again</b> is pressed, up to <see cref="TimeoutRetries"/>
+    /// times, before the panel is judged.
+    /// </summary>
     /// <param name="drawn">What the panel shows once its read or write succeeds.</param>
     /// <param name="failed">The panel's failure state.</param>
     /// <param name="what">What was awaited, for the failure.</param>
     public static async Task ExpectDrawnAsync(ILocator drawn, ILocator failed, string what)
     {
-        if (!await SettledAsync(drawn, failed))
+        for (var retries = 0; !await SettledAsync(drawn, failed); retries++)
         {
-            Assert.Fail($"{what}: the panel ended in its failure state: {(await failed.First.Locator("xpath=..").InnerTextAsync()).ReplaceLineEndings(" ")}");
+            var panel = failed.First.Locator("xpath=..");
+            var words = (await panel.InnerTextAsync()).ReplaceLineEndings(" ");
+            var retry = panel.GetByRole(AriaRole.Button, new() { Name = "Try again", Exact = true });
+            if (retries >= TimeoutRetries
+                || !words.Contains("did not answer in time", StringComparison.Ordinal)
+                || !await retry.IsVisibleAsync())
+            {
+                Assert.Fail($"{what}: the panel ended in its failure state: {words}");
+            }
+
+            await retry.ClickAsync();
+            try
+            {
+                await Expect(failed).ToHaveCountAsync(0, new() { Timeout = 10_000 });
+            }
+            catch (PlaywrightException)
+            {
+                // The retry failed again before its loading state was seen; the next pass judges it.
+            }
         }
     }
+
+    /// <summary>How many times a panel that timed out is retried before it is judged.</summary>
+    private const int TimeoutRetries = 2;
 }
