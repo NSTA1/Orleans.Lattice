@@ -9,8 +9,8 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Import;
 /// free memory to the operating system - so the baseline does not depend on what the
 /// garbage collector happened to have done last. While it runs, the working set is sampled
 /// every 250 ms and, in parallel, the live heap is read about once a second through a forced
-/// full collection. After it, each process is settled again, until its live heap stops
-/// falling (#6115), and read once more.
+/// full collection. After it, each process is settled again, until its live heap has stopped
+/// falling for several settles in a row (#6115), and read once more.
 /// </summary>
 internal sealed class WorkingSetSampler : IAsyncDisposable
 {
@@ -23,6 +23,14 @@ internal sealed class WorkingSetSampler : IAsyncDisposable
 
     /// <summary>The most re-settles the drain takes after the first: a minute at <see cref="DrainInterval"/>.</summary>
     internal const int DrainRounds = 12;
+
+    /// <summary>
+    /// How many consecutive settles in a row must not fall before the drain ends: fifteen
+    /// seconds at <see cref="DrainInterval"/>. One quiet round is not enough, because a silo
+    /// working through the backlog a slow import queued can hold its heap level between two
+    /// batches for longer than one interval (#6115).
+    /// </summary>
+    internal const int QuietRounds = 3;
 
     private readonly IReadOnlyList<MeasuredProcess> _processes;
     private readonly Func<MeasuredProcess, bool, Task<JourneyMemoryReading>> _probe;
@@ -116,12 +124,12 @@ internal sealed class WorkingSetSampler : IAsyncDisposable
 
     /// <summary>
     /// Settles every process, then settles again after each <paramref name="pause"/> for as long
-    /// as any process's live heap is still falling by <see cref="DrainStepBytes"/> or more, at
-    /// most <paramref name="rounds"/> more times, and returns each process's lowest settled
-    /// reading (#6115). An import reports success once its last batch commits, while the
-    /// silos may still be applying work it queued; a slow run is read mid-drain, and what is
-    /// still draining is not what the process keeps. A process that keeps state does not
-    /// fall, so it is read after one more settle.
+    /// as any process's live heap has fallen by <see cref="DrainStepBytes"/> or more within the
+    /// last <see cref="QuietRounds"/> settles, at most <paramref name="rounds"/> more times, and
+    /// returns each process's lowest settled reading (#6115). An import reports success once its
+    /// last batch commits, while the silos may still be applying work it queued; a slow run is
+    /// read mid-drain, and what is still draining is not what the process keeps. A process that
+    /// keeps state does not fall, so it is read after <see cref="QuietRounds"/> more settles.
     /// </summary>
     /// <param name="settle">Settles every process and returns each live heap, in bytes.</param>
     /// <param name="pause">Waits between two settles.</param>
@@ -130,6 +138,7 @@ internal sealed class WorkingSetSampler : IAsyncDisposable
     internal static async Task<long[]> SettleUntilDrainedAsync(Func<Task<long[]>> settle, Func<Task> pause, int rounds)
     {
         var lowest = await settle();
+        var quiet = 0;
         for (var round = 0; round < rounds; round++)
         {
             await pause();
@@ -141,7 +150,8 @@ internal sealed class WorkingSetSampler : IAsyncDisposable
                 lowest[i] = Math.Min(lowest[i], next[i]);
             }
 
-            if (!draining)
+            quiet = draining ? 0 : quiet + 1;
+            if (quiet >= QuietRounds)
             {
                 break;
             }

@@ -14,19 +14,19 @@ public sealed class WorkingSetSamplerTests
     [Test]
     public async Task A_draining_heap_is_read_once_it_stops_falling()
     {
-        var readings = new Queue<long[]>([[250 * Mb, 180 * Mb], [200 * Mb, 180 * Mb], [160 * Mb, 179 * Mb], [158 * Mb, 179 * Mb], [100 * Mb, 100 * Mb]]);
+        var readings = new Queue<long[]>([[250 * Mb, 180 * Mb], [200 * Mb, 180 * Mb], [160 * Mb, 179 * Mb], [158 * Mb, 179 * Mb], [158 * Mb, 179 * Mb], [157 * Mb, 179 * Mb], [100 * Mb, 100 * Mb]]);
 
         var settled = await WorkingSetSampler.SettleUntilDrainedAsync(() => Task.FromResult(readings.Dequeue()), () => Task.CompletedTask, rounds: 12);
 
         Assert.Multiple(() =>
         {
-            Assert.That(settled, Is.EqualTo(new[] { 158 * Mb, 179 * Mb }));
-            Assert.That(readings, Has.Count.EqualTo(1), "the drain stops at the first settle that did not fall");
+            Assert.That(settled, Is.EqualTo(new[] { 157 * Mb, 179 * Mb }));
+            Assert.That(readings, Has.Count.EqualTo(1), "the drain stops after three settles in a row that did not fall");
         });
     }
 
     [Test]
-    public async Task A_heap_that_keeps_state_is_read_after_one_more_settle()
+    public async Task A_heap_that_keeps_state_is_read_after_three_more_settles()
     {
         var settles = 0;
 
@@ -35,8 +35,22 @@ public sealed class WorkingSetSamplerTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(settled, Is.EqualTo(new[] { 248 * Mb }));
-            Assert.That(settles, Is.EqualTo(2));
+            Assert.That(settled, Is.EqualTo(new[] { 246 * Mb }));
+            Assert.That(settles, Is.EqualTo(4));
+        });
+    }
+
+    [Test]
+    public async Task A_heap_that_holds_level_between_batches_is_read_once_it_has_drained()
+    {
+        var readings = new Queue<long[]>([[250 * Mb], [249 * Mb], [248 * Mb], [200 * Mb], [199 * Mb], [199 * Mb], [199 * Mb], [100 * Mb]]);
+
+        var settled = await WorkingSetSampler.SettleUntilDrainedAsync(() => Task.FromResult(readings.Dequeue()), () => Task.CompletedTask, rounds: 12);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(settled, Is.EqualTo(new[] { 199 * Mb }));
+            Assert.That(readings, Has.Count.EqualTo(1), "a fall after a level settle restarts the quiet window");
         });
     }
 
