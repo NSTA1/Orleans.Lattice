@@ -129,7 +129,9 @@ internal sealed partial class LatticeGrain
         ArgumentException.ThrowIfNullOrEmpty(originClusterId);
         // Issue #4593: mark this flow as a replication apply, so every routing
         // resolution it makes checks the copy's receive fence, and check it now.
-        ReplicationApplyScope.Enter();
+        // Issue #5694: a committed apply targets the original tree during a
+        // bootstrap hold, which mirrors it to the held copy.
+        ReplicationApplyScope.EnterCommitted();
         await GetRoutingAsync();
 
         // Issue #5551: a row a receiver bootstrap drains from the source's export
@@ -192,7 +194,9 @@ internal sealed partial class LatticeGrain
         ArgumentException.ThrowIfNullOrEmpty(originClusterId);
         // Issue #4593: mark this flow as a replication apply, so every routing
         // resolution it makes checks the copy's receive fence, and check it now.
-        ReplicationApplyScope.Enter();
+        // Issue #5694: a committed apply targets the original tree during a
+        // bootstrap hold, which mirrors it to the held copy.
+        ReplicationApplyScope.EnterCommitted();
         await GetRoutingAsync();
 
         var tombstone = LwwValue<byte[]>.Tombstone(sourceHlc)
@@ -227,11 +231,13 @@ internal sealed partial class LatticeGrain
         ArgumentNullException.ThrowIfNull(key);
 
         // Issue #5294: the read half of the full-state fold resolves routing as a
-        // replication apply, so it reaches a held bootstrap copy (#4791) and checks
-        // the copy receive fence (#4593) on every resolution, exactly as its write
-        // half, ApplySetIfVersionAsync, does. Both halves then resolve the same
-        // copy. Stored form, as ReadStoredWithVersionAsync (issue #2813).
-        ReplicationApplyScope.Enter();
+        // replication apply and checks the copy receive fence (#4593) on every
+        // resolution, exactly as its write half, ApplySetIfVersionAsync, does.
+        // Both halves then resolve the same copy: the original tree during a
+        // bootstrap hold, as for every committed apply (#5694), or the held copy
+        // inside a bootstrap drain's route scope. Stored form, as
+        // ReadStoredWithVersionAsync (issue #2813).
+        ReplicationApplyScope.EnterCommitted();
         return await GetWithVersionCoreAsync(key, decode: false, CancellationToken.None);
     }
 
@@ -250,8 +256,8 @@ internal sealed partial class LatticeGrain
         // copy receive fence and the bootstrap-hold routing apply to the fold's
         // write as to every other replicated write. Its read half,
         // ReadStoredForApplyAsync, routes under the same scope, so both resolve
-        // the same copy.
-        ReplicationApplyScope.Enter();
+        // the same copy (the original tree during a bootstrap hold, #5694).
+        ReplicationApplyScope.EnterCommitted();
         return await SetIfVersionGatedAsync(key, value, expectedVersion, CancellationToken.None);
     }
 
@@ -277,7 +283,9 @@ internal sealed partial class LatticeGrain
 
         // Issue #4593: mark this flow as a replication apply, so every routing
         // resolution it makes checks the copy's receive fence, and check it now.
-        ReplicationApplyScope.Enter();
+        // Issue #5694: a committed apply targets the original tree during a
+        // bootstrap hold, which mirrors it to the held copy.
+        ReplicationApplyScope.EnterCommitted();
         await GetRoutingAsync();
 
         // A predicate-filtered range delete ships the explicit set of keys the
@@ -402,7 +410,9 @@ internal sealed partial class LatticeGrain
 
         // Issue #4593: mark this flow as a replication apply, so every routing
         // resolution it makes checks the copy's receive fence, and check it now.
-        ReplicationApplyScope.Enter();
+        // Issue #5694: a committed apply targets the original tree during a
+        // bootstrap hold, which mirrors it to the held copy.
+        ReplicationApplyScope.EnterCommitted();
         await GetRoutingAsync();
 
         // Issue #5684: judge each plain replicated row under the logical tree's
@@ -562,7 +572,9 @@ internal sealed partial class LatticeGrain
 
         // Issue #4593: mark this flow as a replication apply, so every routing
         // resolution it makes checks the copy's receive fence, and check it now.
-        ReplicationApplyScope.Enter();
+        // Issue #5694: a committed apply targets the original tree during a
+        // bootstrap hold, which mirrors it to the held copy.
+        ReplicationApplyScope.EnterCommitted();
         await GetRoutingAsync();
 
         // Fold every delta inside this single grain turn. The grain is
@@ -666,7 +678,9 @@ internal sealed partial class LatticeGrain
         // clock), with the absolute expiry threaded through the fold.
         // Issue #4593: mark this flow as a replication apply, so every routing
         // resolution it makes checks the copy's receive fence, and check it now.
-        ReplicationApplyScope.Enter();
+        // Issue #5694: a committed apply targets the original tree during a
+        // bootstrap hold, which mirrors it to the held copy.
+        ReplicationApplyScope.EnterCommitted();
         await GetRoutingAsync();
         await ApplyCrdtDeltaGuardedAsync(key, mode, deltaBytes, expiresAtTicks, judgement: null, CancellationToken.None);
     }
@@ -818,7 +832,8 @@ internal sealed partial class LatticeGrain
     /// (issue #4791).
     /// <para>
     /// During the hold, readers and an abort both use the original tree, while
-    /// applies land on the shadow. A saga whose prepares straddle the hold's
+    /// prepared applies land on the shadow (a committed apply targets the
+    /// original, which mirrors it to the shadow, #5694). A saga whose prepares straddle the hold's
     /// start would otherwise hold some keys only on the original tree and the
     /// rest only on the shadow: a reader resolving the committed decision sees
     /// a partial batch, and an abort that discards the shadow leaves the

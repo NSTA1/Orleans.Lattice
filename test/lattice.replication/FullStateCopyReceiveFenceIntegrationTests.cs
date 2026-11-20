@@ -13,15 +13,17 @@ namespace Orleans.Lattice.Replication.Tests;
 /// committed-projection row, which carries the whole CRDT state and no typed
 /// delta) must read and write on the apply seam under the replication-apply scope,
 /// so the coordinated-restore copy receive fence (#4593) and the bootstrap-hold
-/// routing (#4791) apply to it exactly as to every other replicated write.
+/// routing (#4791, #5694) apply to it exactly as to every other replicated write.
 /// <para>
 /// The fold used to read through the unscoped stored-form read and write through
 /// the unscoped version-conditioned set, so it never consulted the copy receive
 /// fence and never followed a bootstrap hold onto its held copy: a row admitted on
 /// a stale "open" receive-gate answer landed on a restored copy a coordinated
 /// restore still held closed, or on one whose admission floor post-dated the row,
-/// and a dead-letter replay during a hold folded against, and wrote to, the
-/// original tree instead of the held copy.
+/// and a dead-letter replay during a hold did not follow the routing every other
+/// replicated write took. Since #5694 a
+/// committed replicated write during a hold, this fold included, reads and writes
+/// the original tree, whose mirror joins the folded row into the held copy.
 /// </para>
 /// <para>
 /// Each case drives a full-state PN-counter row and a full-state OR-Map row through
@@ -175,8 +177,9 @@ public sealed class FullStateCopyReceiveFenceIntegrationTests
     /// Opens a bootstrap hold on <paramref name="tree"/>, imports
     /// <paramref name="imported"/> onto the held copy as the bootstrap drain does,
     /// then replays <paramref name="replayed"/> from the replication dead-letter
-    /// queue - a delivery outside the import - and asserts it landed on the held
-    /// copy and not on the original. Returns the cut-over tree's stored row.
+    /// queue - a delivery outside the import - and asserts it landed on the original
+    /// tree, whose mirror carries it to the held copy (#5694). Returns the cut-over
+    /// tree's stored row, which must fold the replay with the import.
     /// </summary>
     private async Task<byte[]> ReplayUnderHoldAsync(string tree, WalRecord imported, WalRecord replayed)
     {
@@ -206,8 +209,8 @@ public sealed class FullStateCopyReceiveFenceIntegrationTests
 
         Assert.That(replay, Is.Not.Null);
         Assert.That(replay!.Value.Applied, Is.True, "the replayed row applies");
-        Assert.That(await lattice.GetAsync(Key), Is.Null,
-            "during a bootstrap hold a replicated write lands on the held copy, never on the original tree readers use");
+        Assert.That(await lattice.GetAsync(Key), Is.Not.Null,
+            "during a bootstrap hold a committed replicated write lands on the original tree, which mirrors it to the held copy, so an aborted copy cannot lose it (#5694)");
 
         await resize.CompleteBootstrapCopyAsync(operationId);
         var cutOver = await lattice.GetAsync(Key);

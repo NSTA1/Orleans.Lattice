@@ -7,13 +7,13 @@ DETECTORS: FullStateCopyReceiveFenceIntegrationTests.Full_state_pn_counter_row_r
 SUMMARY: the full-state fold resolves its copy without the replication-apply mark, as before #5294
 
 --- FIND
-        ReplicationApplyScope.Enter();
+        ReplicationApplyScope.EnterCommitted();
         return await GetWithVersionCoreAsync(key, decode: false, CancellationToken.None);
 --- REPLACE
         return await GetWithVersionCoreAsync(key, decode: false, CancellationToken.None);
 --- END
 --- FIND
-        ReplicationApplyScope.Enter();
+        ReplicationApplyScope.EnterCommitted();
         return await SetIfVersionGatedAsync(key, value, expectedVersion, CancellationToken.None);
 --- REPLACE
         return await SetIfVersionGatedAsync(key, value, expectedVersion, CancellationToken.None);
