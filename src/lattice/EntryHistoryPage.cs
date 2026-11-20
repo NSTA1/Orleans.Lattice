@@ -5,7 +5,8 @@ namespace Orleans.Lattice;
 /// <summary>
 /// One page of a key's revision timeline returned by
 /// <see cref="ILattice.ScanEntryHistoryAsync"/>. Revisions are ordered
-/// oldest-first by <see cref="EntryRevision.Hlc"/>. Paging is continuation-based:
+/// oldest-first by <see cref="EntryRevision.Hlc"/>, or newest-first for a reverse
+/// read. Paging is continuation-based:
 /// a non-<see langword="null"/> <see cref="Continuation"/> means more revisions
 /// are available and should be fetched by passing it back to the next call.
 /// </summary>
@@ -14,13 +15,13 @@ namespace Orleans.Lattice;
 [Immutable]
 public sealed record EntryHistoryPage
 {
-    /// <summary>The revisions in this page, ordered oldest-first by <see cref="EntryRevision.Hlc"/>.</summary>
+    /// <summary>The revisions in this page, ordered oldest-first by <see cref="EntryRevision.Hlc"/> (newest-first for a reverse read).</summary>
     [Id(0)] public IReadOnlyList<EntryRevision> Revisions { get; init; } = Array.Empty<EntryRevision>();
 
     /// <summary>
     /// An opaque token to fetch the next page, or <see langword="null"/> when this
     /// is the last page. Pass it back as the <c>continuation</c> argument of the
-    /// next <see cref="ILattice.ScanEntryHistoryAsync"/> call.
+    /// next <see cref="ILattice.ScanEntryHistoryAsync"/> call in the same direction.
     /// </summary>
     [Id(1)] public string? Continuation { get; init; }
 

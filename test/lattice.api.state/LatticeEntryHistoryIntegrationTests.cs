@@ -191,6 +191,98 @@ public sealed class LatticeEntryHistoryIntegrationTests
         });
     }
 
+    [TestCase(true)]
+    [TestCase(false)]
+    public async Task GetEntryHistoryAsync_reverse_pages_from_newest_backwards(bool withHistoryView)
+    {
+        // Issue #6117: a newest-first read must start at the newest revision and
+        // page backwards, not return the oldest page flipped.
+        var tree = withHistoryView ? "hist-revpage-view-src" : "hist-revpage-wal-src";
+        var source = await _fixture.RegisterTreeAsync(tree);
+        if (withHistoryView)
+        {
+            await _fixture.CreateHistoryViewAsync(tree, tree + "-view");
+        }
+
+        const int total = 7;
+        for (var i = 0; i < total; i++)
+        {
+            await source.SetAsync("k", new byte[] { (byte)i });
+        }
+
+        if (withHistoryView)
+        {
+            await _fixture.DrainToZeroAsync(tree + "-view");
+        }
+
+        var forward = await _fixture.Query.GetEntryHistoryAsync(Request(tree, "k"));
+        Assert.That(forward.Revisions, Has.Count.EqualTo(total));
+        var newestFirst = forward.Revisions.Select(r => r.Hlc).Reverse().ToList();
+
+        var seen = new List<HybridLogicalClock>();
+        var pages = new List<IReadOnlyList<HybridLogicalClock>>();
+        string? continuation = null;
+        for (var guard = 0; guard < 20; guard++)
+        {
+            var result = await _fixture.Query.GetEntryHistoryAsync(new EntryHistoryRequest
+            {
+                TreeId = tree,
+                Key = "k",
+                Limit = 3,
+                Reverse = true,
+                ContinuationToken = continuation,
+            });
+            pages.Add(result.Revisions.Select(r => r.Hlc).ToList());
+            seen.AddRange(result.Revisions.Select(r => r.Hlc));
+            continuation = result.ContinuationToken;
+            if (continuation is null)
+            {
+                break;
+            }
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(pages[0], Is.EqualTo(newestFirst.Take(3)), "the first reverse page holds the newest revisions");
+            Assert.That(pages.Select(p => p.Count), Is.EqualTo(new[] { 3, 3, 1 }));
+            Assert.That(seen, Is.EqualTo(newestFirst), "reverse paging covers the timeline newest to oldest without gaps or dupes");
+        });
+    }
+
+    [Test]
+    public async Task GetEntryHistoryAsync_reverse_honours_hlc_bounds()
+    {
+        const string tree = "hist-revbounds-src";
+        const string view = "hist-revbounds-view";
+        var source = await _fixture.RegisterTreeAsync(tree);
+        await _fixture.CreateHistoryViewAsync(tree, view);
+
+        for (var i = 0; i < 5; i++)
+        {
+            await source.SetAsync("k", new byte[] { (byte)i });
+        }
+
+        await _fixture.DrainToZeroAsync(view);
+
+        var all = await _fixture.Query.GetEntryHistoryAsync(Request(tree, "k"));
+        var from = all.Revisions[1].Hlc;
+        var to = all.Revisions[3].Hlc;
+
+        var bounded = await _fixture.Query.GetEntryHistoryAsync(new EntryHistoryRequest
+        {
+            TreeId = tree,
+            Key = "k",
+            FromHlc = from,
+            ToHlc = to,
+            Limit = 100,
+            Reverse = true,
+        });
+
+        Assert.That(
+            bounded.Revisions.Select(r => r.Hlc),
+            Is.EqualTo(new[] { all.Revisions[3].Hlc, all.Revisions[2].Hlc, all.Revisions[1].Hlc }));
+    }
+
     [Test]
     public async Task GetEntryHistoryAsync_honours_hlc_bounds()
     {

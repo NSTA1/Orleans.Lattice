@@ -34,12 +34,23 @@ internal sealed partial class LatticeGrain
     private ViewRegistration? _durableHistoryRegistration;
 
     /// <inheritdoc />
+    public Task<EntryHistoryPage> ScanEntryHistoryAsync(
+        string key,
+        HybridLogicalClock? fromHlc,
+        HybridLogicalClock? toHlc,
+        int limit,
+        string? continuation,
+        CancellationToken cancellationToken = default) =>
+        ScanEntryHistoryAsync(key, fromHlc, toHlc, limit, continuation, reverse: false, cancellationToken);
+
+    /// <inheritdoc />
     public async Task<EntryHistoryPage> ScanEntryHistoryAsync(
         string key,
         HybridLogicalClock? fromHlc,
         HybridLogicalClock? toHlc,
         int limit,
         string? continuation,
+        bool reverse,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(key);
@@ -71,10 +82,12 @@ internal sealed partial class LatticeGrain
         var registration = TryFindHistoryView() ?? await TryResolveDurableHistoryViewAsync(cancellationToken);
         if (registration is not null)
         {
-            return await ScanHistoryViewAsync(registration, key, fromHlc, toHlc, effectiveLimit, continuation, cancellationToken);
+            return await ScanHistoryViewAsync(registration, key, fromHlc, toHlc, effectiveLimit, continuation, reverse, cancellationToken);
         }
 
-        return await ScanWalWindowAsync(key, fromHlc, toHlc, effectiveLimit, continuation, cancellationToken);
+        return reverse
+            ? await ScanWalWindowReverseAsync(key, fromHlc, toHlc, effectiveLimit, continuation, cancellationToken)
+            : await ScanWalWindowAsync(key, fromHlc, toHlc, effectiveLimit, continuation, cancellationToken);
     }
 
     /// <summary>
@@ -176,7 +189,9 @@ internal sealed partial class LatticeGrain
 
     /// <summary>
     /// Prefix-scans the history view's active-generation tree for a key's revision
-    /// rows, decoding and mapping each into an <see cref="EntryRevision"/>. The scan
+    /// rows, decoding and mapping each into an <see cref="EntryRevision"/>. A reverse
+    /// read scans the same window descending, so the newest rows come first and the
+    /// continuation (the last, oldest, row returned) bounds the next page above. The scan
     /// is read-only and runs under an authorised view-read scope; it never perturbs
     /// the maintainer or its write-ahead-log pins.
     /// </summary>
@@ -187,13 +202,15 @@ internal sealed partial class LatticeGrain
         HybridLogicalClock? toHlc,
         int effectiveLimit,
         string? continuation,
+        bool reverse,
         CancellationToken cancellationToken)
     {
         var codec = services.GetRequiredService<HistoryRowCodec>();
         var maintainer = grainFactory.GetGrain<IViewMaintainerGrain>(registration.ViewName);
 
-        var (startInclusive, endExclusive) =
-            EntryHistoryReader.ResolveViewScanWindow(key, fromHlc, continuation);
+        var (startInclusive, endExclusive) = reverse
+            ? EntryHistoryReader.ResolveReverseViewScanWindow(key, fromHlc, toHlc, continuation)
+            : EntryHistoryReader.ResolveViewScanWindow(key, fromHlc, continuation);
 
         var revisions = new List<EntryRevision>(Math.Min(effectiveLimit, 16));
         string? continuationOut = null;
@@ -207,7 +224,7 @@ internal sealed partial class LatticeGrain
             // [StatelessWorker] LatticeGrain, so a MoveNext can land on a worker
             // that has no record of the enumerator and abort the timeline scan.
             await foreach (var entry in viewTree
-                .ScanEntriesAsync(startInclusive, endExclusive, cancellationToken: cancellationToken))
+                .ScanEntriesAsync(startInclusive, endExclusive, reverse, cancellationToken: cancellationToken))
             {
                 var row = codec.Decode(entry.Value);
 
@@ -220,6 +237,11 @@ internal sealed partial class LatticeGrain
 
                 if (toHlc is { } to && row.Timestamp.CompareTo(to) > 0)
                 {
+                    if (reverse)
+                    {
+                        continue;
+                    }
+
                     // Rows for a single key arrive in ascending HLC order, so the
                     // first one past the upper bound ends the in-range timeline.
                     continuationOut = null;
@@ -228,6 +250,13 @@ internal sealed partial class LatticeGrain
 
                 if (fromHlc is { } from && row.Timestamp.CompareTo(from) < 0)
                 {
+                    if (reverse)
+                    {
+                        // Descending order: every later row is older still.
+                        continuationOut = null;
+                        break;
+                    }
+
                     continue;
                 }
 
@@ -379,6 +408,119 @@ internal sealed partial class LatticeGrain
         {
             Revisions = revisions,
             Continuation = continuationOut,
+            Truncated = truncated,
+            EarliestAvailable = truncated ? earliest : HybridLogicalClock.Zero,
+            Source = EntryHistorySource.WalWindow,
+        };
+    }
+
+    /// <summary>
+    /// Newest-first counterpart of <see cref="ScanWalWindowAsync"/>. The continuation
+    /// is the exclusive upper offset bound: the oldest offset an earlier reverse page
+    /// returned. The log is only readable forwards, so the page makes the same single
+    /// pass from the trim point, applying the same first-record collapse, and keeps
+    /// only the newest <paramref name="effectiveLimit"/> eligible revisions below the
+    /// bound in a bounded buffer, so memory stays proportional to the page and not to
+    /// the key's history.
+    /// </summary>
+    private async Task<EntryHistoryPage> ScanWalWindowReverseAsync(
+        string key,
+        HybridLogicalClock? fromHlc,
+        HybridLogicalClock? toHlc,
+        int effectiveLimit,
+        string? continuation,
+        CancellationToken cancellationToken)
+    {
+        var reader = services.GetService<ICommitLogReader>();
+        if (reader is null)
+        {
+            return new EntryHistoryPage
+            {
+                Revisions = Array.Empty<EntryRevision>(),
+                Continuation = null,
+                Truncated = false,
+                EarliestAvailable = HybridLogicalClock.Zero,
+                Source = EntryHistorySource.None,
+            };
+        }
+
+        // Same physical-tree and pinned-partition resolution as the forward read.
+        var (physicalTreeId, _) = await GetRoutingAsync(forceRefresh: true, cancellationToken);
+        var partitions = await optionsResolver.GetWalPartitionsAsync(physicalTreeId);
+        var partition = WalPartitionHash.Compute(key, partitions);
+        var tail = await reader.GetTailOffsetAsync(physicalTreeId, partition, cancellationToken);
+        var truncated = tail > 0;
+
+        var retention = await optionsResolver
+            .GetHistoryRetentionAsync(TreeId, ResolveHybridFullValueWindow());
+        var nowTicks = DateTime.UtcNow.Ticks;
+
+        var toOffsetExclusive = long.MaxValue;
+        if (continuation is not null && long.TryParse(continuation, out var parsed))
+        {
+            toOffsetExclusive = parsed;
+        }
+
+        // Oldest-first window of the newest eligible revisions met so far; once full,
+        // each newer one evicts the oldest.
+        var window = new Queue<(long Offset, LatticeMutation Mutation)>(Math.Min(effectiveLimit, 16));
+        var eligible = 0;
+        var earliest = HybridLogicalClock.Zero;
+        var earliestResolved = false;
+        var reported = new HashSet<HybridLogicalClock>();
+
+        await foreach (var (offset, mutation) in reader
+            .ReadAsync(physicalTreeId, partition, -1, cancellationToken))
+        {
+            if (!earliestResolved)
+            {
+                earliest = mutation.Timestamp;
+                earliestResolved = true;
+            }
+
+            if (offset >= toOffsetExclusive)
+            {
+                // Every revision at or above the bound was reported by an earlier
+                // page, and a revision's first record precedes its replays.
+                break;
+            }
+
+            if (!EntryHistoryReader.WalMutationMatchesKey(mutation, key)
+                || !reported.Add(mutation.Timestamp)
+                || !EntryHistoryReader.WithinBounds(mutation.Timestamp, fromHlc, toHlc))
+            {
+                continue;
+            }
+
+            eligible++;
+            if (window.Count == effectiveLimit)
+            {
+                window.Dequeue();
+            }
+
+            window.Enqueue((offset, mutation));
+        }
+
+        var revisions = new EntryRevision[window.Count];
+        var oldestOffset = 0L;
+        var i = revisions.Length;
+        foreach (var (offset, mutation) in window)
+        {
+            if (i == revisions.Length)
+            {
+                oldestOffset = offset;
+            }
+
+            revisions[--i] = EntryHistoryReader.MapWalMutation(
+                mutation, EntryHistoryReader.DefaultValuePreviewBudget, retention, nowTicks);
+        }
+
+        return new EntryHistoryPage
+        {
+            Revisions = revisions,
+            Continuation = eligible > revisions.Length
+                ? oldestOffset.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                : null,
             Truncated = truncated,
             EarliestAvailable = truncated ? earliest : HybridLogicalClock.Zero,
             Source = EntryHistorySource.WalWindow,

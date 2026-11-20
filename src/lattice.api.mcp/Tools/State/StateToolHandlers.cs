@@ -347,11 +347,11 @@ internal static class StateToolHandlers
         string key,
         [Description("Max revisions per page (values <= 0 use the configured default; larger values are clamped to the configured maximum).")]
         int limit = 0,
-        [Description("Opaque continuation token from a prior page; null or empty starts a fresh read. Paging advances oldest to newest.")]
+        [Description("Opaque continuation token from a prior page read in the same direction; null or empty starts a fresh read.")]
         string? continuationToken = null,
         [Description("Per-revision value/delta preview byte budget (values <= 0 use the configured default; larger values are clamped). The full value length is always reported.")]
         int valuePreviewBudget = 0,
-        [Description("Order revisions within each returned page newest-first. Defaults to false (oldest-first).")]
+        [Description("Read newest-first: start at the newest revision and page backwards to older ones. Defaults to false (oldest-first, paging forwards).")]
         bool reverse = false)
     {
         ArgumentNullException.ThrowIfNull(query);
