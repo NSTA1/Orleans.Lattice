@@ -73,9 +73,6 @@ public sealed class TreeWorkspacePage(ShellPage shell)
     /// <summary>The History panel's failure state, which offers <b>Try again</b>.</summary>
     public ILocator HistoryDidNotLoad => Content.GetByRole(AriaRole.Heading, new() { Name = "The history did not load", Exact = true });
 
-    /// <summary>The History panel's empty state: the durable read found no revision of the key.</summary>
-    public ILocator NoRevisions => Content.GetByRole(AriaRole.Heading, new() { Name = "No revisions", Exact = true });
-
     /// <summary>The Keys tab's key links. Only a key link carries a title: the tree header's owner link shares the class (#5509).</summary>
     public ILocator KeyLinks => Content.Locator("a.lt-data-key[title]");
 
@@ -237,12 +234,6 @@ public sealed class TreeWorkspacePage(ShellPage shell)
     /// the point-in-time read to end. Returns whether it drew, with one revision marked in effect;
     /// otherwise the panel shows its failure state.
     /// </summary>
-    /// <remarks>
-    /// The point-in-time read is durable only, so it cannot see a revision the change-history view
-    /// has not materialised yet, although the live timeline already drew it from the change feed.
-    /// While the read finds no revisions, the page is reloaded (keeping <c>?at=</c>) until the view
-    /// catches up, within one <see cref="ServerReadBound"/>.
-    /// </remarks>
     /// <param name="instant">The instant, in whole seconds.</param>
     public async Task<bool> ShowAsOfAsync(DateTimeOffset instant)
     {
@@ -251,25 +242,10 @@ public sealed class TreeWorkspacePage(ShellPage shell)
         await Content.GetByRole(AriaRole.Button, new() { Name = "Show as of", Exact = true }).ClickAsync();
         await Expect(Page).ToHaveURLAsync(new Regex("[?&]at=" + Regex.Escape(Uri.EscapeDataString(text)) + "(&|$)"));
         var readable = instant.ToUniversalTime().ToString(TimelineTimeFormat, CultureInfo.InvariantCulture);
-        var standing = Content.GetByText("Showing the key as it stood at " + readable);
-        var deadline = DateTimeOffset.UtcNow.AddMilliseconds(ServerReadBound);
-        while (true)
+        await Expect(Content.GetByText("Showing the key as it stood at " + readable)).ToBeVisibleAsync();
+        if (!await HistorySettledAsync(RevisionInEffect))
         {
-            await Expect(standing).ToBeVisibleAsync();
-            await Expect(RevisionInEffect.Or(NoRevisions).Or(HistoryDidNotLoad).First).ToBeVisibleAsync(ServerReadEnds);
-            if (await HistoryDidNotLoad.IsVisibleAsync())
-            {
-                return false;
-            }
-
-            if (await RevisionInEffect.CountAsync() > 0)
-            {
-                break;
-            }
-
-            Assert.That(DateTimeOffset.UtcNow, Is.LessThan(deadline), $"The change-history view still had no revision of the key at {readable} after {ServerReadBound / 1000:0} s");
-            await Page.WaitForTimeoutAsync(2_000);
-            await Page.ReloadAsync();
+            return false;
         }
 
         await Expect(RevisionInEffect).ToHaveCountAsync(1);

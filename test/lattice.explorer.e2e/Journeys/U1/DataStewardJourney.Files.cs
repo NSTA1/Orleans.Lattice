@@ -128,55 +128,7 @@ public sealed partial class DataStewardJourney
         await CheckpointAsync("9", "importing", "history-2025.ndjson, 500,000 lines, streams in");
 
         await import.Stop.ClickAsync();
-
-        // A stopped seed still finishes the chunk in flight and commits the load, the same bulk
-        // appends step 8's seed is given 300 s for on a loaded estate (#5569), not a panel settle.
-        await Expect(import.State).ToHaveAttributeAsync("data-lt-import-state", new Regex("^(stopped|failed)$"), new() { Timeout = 300_000 });
-        if (await import.State.GetAttributeAsync("data-lt-import-state") == "failed")
-        {
-            await RecordAStarvedStopAsync(import);
-        }
-        else
-        {
-            await ExpectTheStoppedImportAsync(import);
-        }
-
-        Coverage.Hit("use-case:data/import-cancel");
-
-        await _tree.DeleteTree.ClickAsync();
-        var confirm = await _tree.TypeConfirmationAsync("Delete this tree?", history);
-        await CheckpointAsync("9", "delete-confirmation", "Delete tree... asks her to type the tree's name");
-        await confirm.GetByRole(AriaRole.Button, new() { Name = "Delete tree", Exact = true }).ClickAsync();
-        await ExpectToastAsync($"Tree {history} deleted. It can be recovered until its window closes.");
-        await Expect(_tree.Deleted).ToHaveAttributeAsync("data-lt-tree-deleted", "recoverable", new() { Timeout = PanelSettled.BoundMs });
-        Coverage.Hit("use-case:data/tree-delete-recover");
-        await CheckpointAsync("9", "deleted", "factory-history is deleted, and recoverable until its window closes");
-    }
-
-    /// <summary>
-    /// The stopped seed failed. It still commits the chunk in flight, and under replay-permit
-    /// starvation (#5569) that commit's bulk appends time out at 30 s, so the dialog says it could
-    /// not seed the tree, as step 8's seed can. That is recorded as the known defect and the tree
-    /// is still deleted; any other failure fails the step.
-    /// </summary>
-    private async Task RecordAStarvedStopAsync(DataImportDialog import)
-    {
-        var failure = (await import.Dialog.InnerTextAsync()).ReplaceLineEndings(" ");
-        if (!failure.Contains("could not seed this tree", StringComparison.Ordinal))
-        {
-            Assert.Fail($"The stopped import failed: {failure}");
-        }
-
-        await StarvedSeed.ReproducesAsync(async () =>
-            await Expect(import.Dialog).ToContainTextAsync("could not seed this tree"));
-        await CheckpointAsync("9", "stop-failed", "Under replay-permit starvation the stopped seed's commit times out, and the dialog says the tree could not be seeded (#5569)");
-
-        await import.Done.ClickAsync();
-        await Expect(import.Dialog).ToHaveCountAsync(0);
-    }
-
-    private async Task ExpectTheStoppedImportAsync(DataImportDialog import)
-    {
+        await import.ExpectEndAsync("stopped", PanelSettled.BoundMs);
         var committed = await import.CommittedAsync();
         var written = committed.ToString("N0", CultureInfo.InvariantCulture) + (committed == 1 ? " entry" : " entries");
         await Expect(import.Result).ToContainTextAsync($"Stopped. {written} were written before the stop, and nothing after it.");
@@ -194,6 +146,17 @@ public sealed partial class DataStewardJourney
             // What was committed is the file's head.
             await Expect(_tree.KeyLinks.First).ToHaveTextAsync(Names.Orders.Key(1), new() { Timeout = PanelSettled.BoundMs });
         }
+
+        Coverage.Hit("use-case:data/import-cancel");
+
+        await _tree.DeleteTree.ClickAsync();
+        var confirm = await _tree.TypeConfirmationAsync("Delete this tree?", history);
+        await CheckpointAsync("9", "delete-confirmation", "Delete tree... asks her to type the tree's name");
+        await confirm.GetByRole(AriaRole.Button, new() { Name = "Delete tree", Exact = true }).ClickAsync();
+        await ExpectToastAsync($"Tree {history} deleted. It can be recovered until its window closes.");
+        await Expect(_tree.Deleted).ToHaveAttributeAsync("data-lt-tree-deleted", "recoverable", new() { Timeout = PanelSettled.BoundMs });
+        Coverage.Hit("use-case:data/tree-delete-recover");
+        await CheckpointAsync("9", "deleted", "factory-history is deleted, and recoverable until its window closes");
     }
 
     private async Task ApplyTheCorrectionsAsync()

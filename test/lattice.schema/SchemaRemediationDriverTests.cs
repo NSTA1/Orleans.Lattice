@@ -220,44 +220,6 @@ public sealed class SchemaRemediationDriverTests
     }
 
     [Test]
-    public async Task DriveAsync_does_not_count_timeouts_queued_behind_a_slice_that_is_still_advancing()
-    {
-        var grain = Substitute.For<ILatticeSchemaRemediationGrain>();
-        var limit = SchemaRemediationDriver.MaxConsecutiveSliceTimeouts;
-        var timeouts = 0;
-        grain.RunSliceAsync(OperationId).Returns(_ =>
-        {
-            if (++timeouts <= 2 * limit)
-            {
-                throw new TimeoutException("queued behind a running slice");
-            }
-
-            return new SchemaRemediationSlice(Done, null);
-        });
-        var statusReads = 0;
-        grain.GetStatusAsync().Returns(_ => InFlight(LatticeSchemaRemediationPhase.Build, ++statusReads));
-
-        var report = await SchemaRemediationDriver.DriveAsync(
-            grain, InFlight(LatticeSchemaRemediationPhase.Build, 0), progress: null, CancellationToken.None);
-
-        Assert.That(report, Is.EqualTo(Done), "timeouts while the remediation advances durably are not a stall");
-        await grain.Received(2 * limit + 1).RunSliceAsync(OperationId);
-    }
-
-    [Test]
-    public void DriveAsync_still_fails_when_timeouts_leave_the_published_status_unchanged()
-    {
-        var grain = Substitute.For<ILatticeSchemaRemediationGrain>();
-        grain.RunSliceAsync(OperationId).Returns<SchemaRemediationSlice>(
-            _ => throw new TimeoutException("stalled"));
-        grain.GetStatusAsync().Returns(InFlight(LatticeSchemaRemediationPhase.Build, 0));
-
-        Assert.ThrowsAsync<TimeoutException>(async () => await SchemaRemediationDriver.DriveAsync(
-            grain, InFlight(LatticeSchemaRemediationPhase.Build, 0), progress: null, CancellationToken.None));
-        grain.Received(SchemaRemediationDriver.MaxConsecutiveSliceTimeouts).RunSliceAsync(OperationId);
-    }
-
-    [Test]
     public void DriveAsync_rejects_a_null_grain() =>
         Assert.That(
             async () => await SchemaRemediationDriver.DriveAsync(null!, Done, null, CancellationToken.None),

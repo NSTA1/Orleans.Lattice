@@ -267,7 +267,7 @@ internal sealed class JourneyStorage : IAsyncDisposable
     private static async Task StartAzuriteAsync(string name, string ports, CancellationToken cancellationToken)
     {
         var (exit, output) = await DockerAsync(
-            $"run -d --rm --name {name} {ports} {AzuriteImage} azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck --loose",
+            $"run -d --rm --name {name} {ports} {AzuriteImage} azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck --loose --inMemoryPersistence",
             cancellationToken);
         if (exit != 0)
         {

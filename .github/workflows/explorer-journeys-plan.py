@@ -160,11 +160,8 @@ TIMEOUTS = {"harness": 60, "isolated": 60, "contract": 60, "story": 150}
 # so does an isolated case: U4 consumes A2 to U6, whose establishment alone can take 18 minutes
 # on a loaded runner (#5735). A contract case for C3 or C4 establishes the whole storyline
 # first and has taken 28 minutes or more under replay-permit starvation (#5569), so both
-# carry 50 minutes, inside their 60-minute job timeouts. A story case is one chapter on the
-# already-established estate, but under the same starvation its own bounds can exceed 20
-# minutes (U1's seed waits 300 s and its Data API stand-in up to 15 minutes), so the story
-# leg carries the same 50 minutes, inside its 150-minute job timeout.
-HANGS = {"harness": 20, "isolated": 50, "contract": 50, "story": 50}
+# carry 50 minutes, inside their 60-minute job timeouts.
+HANGS = {"harness": 20, "isolated": 50, "contract": 50, "story": 20}
 # Contract legs pinned to the self-hosted pool (runner-overflow.py's `needsPool`). C4
 # establishes the whole Contoso storyline across both regions against one co-located
 # Azurite, and on a GitHub-hosted ubuntu-24.04 runner its WAL reads time out at 30 s

@@ -41,29 +41,13 @@ public sealed class C1Contract() : ChapterContract("C1")
         var olivia = ContractFacades.Of(context);
         var admin = olivia.TreeAdmin;
 
-        // Each step re-reads the deletion status before acting, so a call whose outcome a
-        // transient fault left unknown (#5569) is retried without repeating a step that landed.
-        var priyaAdmin = ContractFacades.Of(context, Personas.Priya.Id).TreeAdmin;
-        await ContractWait.UntilAsync("the archive's deletion", async () =>
+        if (!(await admin.GetTreeDeletionStatusAsync(Names.Trees.FactoryOrdersArchive)).IsDeleted)
         {
-            if ((await admin.GetTreeDeletionStatusAsync(Names.Trees.FactoryOrdersArchive)).IsDeleted)
-            {
-                return true;
-            }
+            await ContractFacades.Of(context, Personas.Priya.Id).TreeAdmin.DeleteTreeAsync(Names.Trees.FactoryOrdersArchive);
+        }
 
-            await priyaAdmin.DeleteTreeAsync(Names.Trees.FactoryOrdersArchive);
-            return (await admin.GetTreeDeletionStatusAsync(Names.Trees.FactoryOrdersArchive)).IsDeleted;
-        });
-
-        await ContractWait.UntilAsync("the archive's recovery", async () =>
-        {
-            if ((await admin.GetTreeDeletionStatusAsync(Names.Trees.FactoryOrdersArchive)).IsDeleted)
-            {
-                await admin.RecoverTreeAsync(Names.Trees.FactoryOrdersArchive);
-            }
-
-            return await ContractCalls.TreeIsLiveAsync(admin, Names.Trees.FactoryOrdersArchive);
-        });
+        await admin.RecoverTreeAsync(Names.Trees.FactoryOrdersArchive);
+        await ContractWait.UntilAsync("the archive's recovery", () => ContractCalls.TreeIsLiveAsync(admin, Names.Trees.FactoryOrdersArchive));
 
         var feed = context.Estate.LineFeed;
         var wrong = (await feed.StatusAsync()).WrongPricesWritten;
@@ -71,10 +55,8 @@ public sealed class C1Contract() : ChapterContract("C1")
         await feed.WaitUntilAsync(status => status.WrongPricesWritten >= wrong + SeederBurst, TimeSpan.FromMinutes(2));
 
         var backup = olivia.Backup;
-        var restoreRequest = new LatticeRestoreRequest(
-            context.Recall(StoryKeys.OrdersBaselineBackup), Names.Trees.FactoryOrders, mode: LatticeRestoreMode.ShadowCutover);
-        var restore = await ContractCalls.StartOperationAsync(
-            "the orders-baseline restore", operationId => backup.StartRestoreAsync(restoreRequest, operationId));
+        var restore = await backup.StartRestoreAsync(new LatticeRestoreRequest(
+            context.Recall(StoryKeys.OrdersBaselineBackup), Names.Trees.FactoryOrders, mode: LatticeRestoreMode.ShadowCutover));
         await ContractWait.SucceededAsync("the orders-baseline restore", () => backup.GetBackupOperationStatusAsync(restore.OperationId), OperationPatience);
 
         var priya = ContractFacades.Of(context, Personas.Priya.Id).Data;
@@ -85,45 +67,12 @@ public sealed class C1Contract() : ChapterContract("C1")
 
         var schema = ContractFacades.Of(context, Personas.Sam.Id).Schema;
         var remediation = await schema.StartRemediationAsync(Names.Trees.FactoryOrders, ContosoSchema.NegativeTotalToZero, ContosoSchema.OrdersRevised);
-        await AwaitRemediationPastTheReseedAsync(admin, schema, remediation.OperationId);
+        await U2Contract.AwaitRemediationAsync(
+            schema, remediation.OperationId, "the negative-total remediation of the restored orders",
+            U2Contract.AliasWaitOn(admin, Names.Trees.FactoryOrders));
         await U2Contract.MigrateAsync(schema, Names.Trees.FactoryOrders, "the re-migration to version 2");
 
         await ReplayCapturedOrdersFromEastAsync(context.Estate);
-    }
-
-    /// <summary>
-    /// Waits for the remediation of the restored orders. The restore forces a re-seed whose
-    /// bootstrap copy reserves the tree's alias, and under replay-permit starvation (#5569) that
-    /// copy can hold it past <see cref="U2Contract.AliasWaitCeiling"/>, as
-    /// <see cref="StarvedReseed"/> records for the replication settle. The wrapper runs only when
-    /// the alias wait timed out and the copy is still in progress; any other timeout stays red.
-    /// </summary>
-    private static async Task AwaitRemediationPastTheReseedAsync(
-        Api.TreeAdmin.Grpc.LatticeTreeAdminApiGrpcClient admin,
-        Api.Schema.Grpc.LatticeSchemaApiGrpcClient schema,
-        string operationId)
-    {
-        const string what = "the negative-total remediation of the restored orders";
-        try
-        {
-            await U2Contract.AwaitRemediationAsync(schema, operationId, what, U2Contract.AliasWaitOn(admin, Names.Trees.FactoryOrders));
-        }
-        catch (TimeoutException ex) when (ex.Message.Contains("waited in WaitingForAliasOperation", StringComparison.Ordinal)
-            && ex.Message.Contains("bootstrap copy of", StringComparison.Ordinal))
-        {
-            var copying = (await admin.GetResizeStatusAsync(Names.Trees.FactoryOrders)).InProgress;
-            if (!copying)
-            {
-                throw;
-            }
-
-            await StarvedReseed.ReproducesAsync(() =>
-            {
-                Assert.That(copying, Is.True, "the re-seed bootstrap copy still holds the alias when the remediation's wait gives up");
-                return Task.CompletedTask;
-            });
-            Assert.Ignore($"KNOWN DEFECT #5569: the re-seed bootstrap copy of {Names.Trees.FactoryOrders} made no headway - {ex.Message}");
-        }
     }
 
     /// <inheritdoc />

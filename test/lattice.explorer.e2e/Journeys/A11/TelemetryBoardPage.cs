@@ -262,14 +262,11 @@ internal sealed class TelemetryBoardPage(IPage page, ShellPage shell)
     public Task RefreshAsync() =>
         Content.Locator(".lt-toolbar button[data-lt-command=\"telemetry.refresh\"]").ClickAsync();
 
-    /// <summary>Reloads the document and waits for the live circuit and the board's toolbar and charts.</summary>
+    /// <summary>Reloads the document and waits for the live circuit.</summary>
     public async Task ReloadAsync()
     {
         await Page.ReloadAsync();
         await JourneyBrowser.WaitForInteractiveAsync(Page);
-        // The circuit goes live before the session is restored and the board renders, which on
-        // a busy cluster can take longer than an assertion's default wait.
-        await Expect(Charts.First).ToBeVisibleAsync(new() { Timeout = (float)SettleTimeout.TotalMilliseconds });
     }
 
     /// <summary>Reads the legend of <paramref name="chart"/>: each drawn series' name and latest reading.</summary>

@@ -111,35 +111,9 @@ internal sealed class SchemaWorkshopPage(ShellPage shell)
         await WaitForSampleAsync();
     }
 
-    /// <summary>
-    /// Waits until the sample check reports what it checked. A sample read the estate refused as
-    /// busy is retried with its own <c>Try again</c>, within <see cref="SampleCeiling"/>.
-    /// </summary>
-    public async Task WaitForSampleAsync()
-    {
-        var deadline = DateTime.UtcNow + SampleCeiling;
-        while (true)
-        {
-            try
-            {
-                await Expect(Preview).ToContainTextAsync("Checked", new() { Timeout = 30_000 });
-                return;
-            }
-            catch (PlaywrightException) when (DateTime.UtcNow < deadline)
-            {
-                var retry = Preview.GetByRole(AriaRole.Button, new() { Name = "Try again", Exact = true });
-                if (!await retry.IsVisibleAsync())
-                {
-                    throw;
-                }
-
-                await retry.ClickAsync();
-            }
-        }
-    }
-
-    /// <summary>The absolute deadline for the sample check, however many busy refusals it retries.</summary>
-    private static readonly TimeSpan SampleCeiling = TimeSpan.FromMinutes(3);
+    /// <summary>Waits until the sample check reports what it checked.</summary>
+    public Task WaitForSampleAsync() =>
+        Expect(Preview).ToContainTextAsync("Checked", new() { Timeout = 30_000 });
 
     /// <summary>Opens the composer for a new rule.</summary>
     public async Task OpenComposerAsync()
@@ -229,13 +203,9 @@ internal sealed class SchemaWorkshopPage(ShellPage shell)
     }
 
     /// <summary>Waits for a toast saying <paramref name="message"/>.</summary>
-    /// <remarks>
-    /// The toast follows a cluster write, which on a loaded estate can take longer than the
-    /// default assertion timeout, so the wait is bounded like any other settling panel.
-    /// </remarks>
     /// <param name="message">The toast's text, or part of it.</param>
     public Task ExpectToastAsync(string message) =>
-        Expect(Shell.Toasts.Filter(new() { HasText = message }).First).ToBeVisibleAsync(new() { Timeout = PanelSettled.BoundMs });
+        Expect(Shell.Toasts.Filter(new() { HasText = message }).First).ToBeVisibleAsync();
 
     /// <summary>Saves the policy, and waits for the confirmation and the read-only policy view.</summary>
     /// <param name="tree">The tree.</param>

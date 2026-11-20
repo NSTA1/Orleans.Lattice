@@ -192,14 +192,8 @@ public sealed partial class ShellPage
             return;
         }
 
-        await Expect(SessionButton(user)).ToBeVisibleAsync(new() { Timeout = (float)SignedInCeiling.TotalMilliseconds });
+        await Expect(SessionButton(user)).ToBeVisibleAsync();
     }
-
-    /// <summary>
-    /// How long the chrome may take to name the signed-in user: the next document's chrome renders
-    /// only once its circuit connects, which a busy estate can hold well past the default wait.
-    /// </summary>
-    private static readonly TimeSpan SignedInCeiling = TimeSpan.FromSeconds(60);
 
     /// <summary>
     /// Asserts the cluster refused the credential just submitted: the sign-in dialog has reopened
