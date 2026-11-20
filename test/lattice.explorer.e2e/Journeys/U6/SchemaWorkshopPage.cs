@@ -111,9 +111,35 @@ internal sealed class SchemaWorkshopPage(ShellPage shell)
         await WaitForSampleAsync();
     }
 
-    /// <summary>Waits until the sample check reports what it checked.</summary>
-    public Task WaitForSampleAsync() =>
-        Expect(Preview).ToContainTextAsync("Checked", new() { Timeout = 30_000 });
+    /// <summary>
+    /// Waits until the sample check reports what it checked. A sample read the estate refused as
+    /// busy is retried with its own <c>Try again</c>, within <see cref="SampleCeiling"/>.
+    /// </summary>
+    public async Task WaitForSampleAsync()
+    {
+        var deadline = DateTime.UtcNow + SampleCeiling;
+        while (true)
+        {
+            try
+            {
+                await Expect(Preview).ToContainTextAsync("Checked", new() { Timeout = 30_000 });
+                return;
+            }
+            catch (PlaywrightException) when (DateTime.UtcNow < deadline)
+            {
+                var retry = Preview.GetByRole(AriaRole.Button, new() { Name = "Try again", Exact = true });
+                if (!await retry.IsVisibleAsync())
+                {
+                    throw;
+                }
+
+                await retry.ClickAsync();
+            }
+        }
+    }
+
+    /// <summary>The absolute deadline for the sample check, however many busy refusals it retries.</summary>
+    private static readonly TimeSpan SampleCeiling = TimeSpan.FromMinutes(3);
 
     /// <summary>Opens the composer for a new rule.</summary>
     public async Task OpenComposerAsync()

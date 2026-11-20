@@ -41,13 +41,29 @@ public sealed class C1Contract() : ChapterContract("C1")
         var olivia = ContractFacades.Of(context);
         var admin = olivia.TreeAdmin;
 
-        if (!(await admin.GetTreeDeletionStatusAsync(Names.Trees.FactoryOrdersArchive)).IsDeleted)
+        // Each step re-reads the deletion status before acting, so a call whose outcome a
+        // transient fault left unknown (#5569) is retried without repeating a step that landed.
+        var priyaAdmin = ContractFacades.Of(context, Personas.Priya.Id).TreeAdmin;
+        await ContractWait.UntilAsync("the archive's deletion", async () =>
         {
-            await ContractFacades.Of(context, Personas.Priya.Id).TreeAdmin.DeleteTreeAsync(Names.Trees.FactoryOrdersArchive);
-        }
+            if ((await admin.GetTreeDeletionStatusAsync(Names.Trees.FactoryOrdersArchive)).IsDeleted)
+            {
+                return true;
+            }
 
-        await admin.RecoverTreeAsync(Names.Trees.FactoryOrdersArchive);
-        await ContractWait.UntilAsync("the archive's recovery", () => ContractCalls.TreeIsLiveAsync(admin, Names.Trees.FactoryOrdersArchive));
+            await priyaAdmin.DeleteTreeAsync(Names.Trees.FactoryOrdersArchive);
+            return (await admin.GetTreeDeletionStatusAsync(Names.Trees.FactoryOrdersArchive)).IsDeleted;
+        });
+
+        await ContractWait.UntilAsync("the archive's recovery", async () =>
+        {
+            if ((await admin.GetTreeDeletionStatusAsync(Names.Trees.FactoryOrdersArchive)).IsDeleted)
+            {
+                await admin.RecoverTreeAsync(Names.Trees.FactoryOrdersArchive);
+            }
+
+            return await ContractCalls.TreeIsLiveAsync(admin, Names.Trees.FactoryOrdersArchive);
+        });
 
         var feed = context.Estate.LineFeed;
         var wrong = (await feed.StatusAsync()).WrongPricesWritten;
