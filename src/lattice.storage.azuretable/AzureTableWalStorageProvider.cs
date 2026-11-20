@@ -677,21 +677,27 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
     /// transaction, surfacing the candidate-row fault first as before,
     /// but never returning while either is still running.
     /// </summary>
-    private static async Task AwaitBothAsync(Task candidateTask, Task phaseOneTask)
+    internal static async Task AwaitBothAsync(Task candidateTask, Task phaseOneTask)
     {
         try
         {
             await candidateTask.ConfigureAwait(false);
         }
-        catch
+        catch (Exception candidateFault)
         {
             try
             {
                 await phaseOneTask.ConfigureAwait(false);
             }
-            catch
+            catch (Exception phaseOneFault)
             {
-                // The candidate-row fault is the one surfaced.
+                // The candidate-row fault is the one surfaced, so it carries the
+                // phase-1 batch's unknown outcome, if any, to the WAL shard (#6116).
+                if (WalAppendOutcomeUnknown.Find(phaseOneFault) is { } unknown)
+                {
+                    WalAppendOutcomeUnknown.Mark(
+                        candidateFault, unknown.Settled, unknown.Attempts, unknown.ClientAbandonedAttempts);
+                }
             }
 
             throw;
@@ -757,6 +763,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
 
         var maxRetries = Math.Max(0, _options.PhaseOneTransientRetryMaxAttempts);
         var transientAttempt = 0;
+        var clientAbandonedAttempts = 0;
 
         try
         {
@@ -862,6 +869,11 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
                     // preserved, so the shard never faults and the storm cannot
                     // ignite. Jittered backoff desynchronises co-firing shards.
                     transientAttempt++;
+                    if (IsClientAbandonment(ex))
+                    {
+                        clientAbandonedAttempts++;
+                    }
+
                     LatticeMetrics.ProviderPhaseOneTransientRetries.Add(
                         1,
                         new System.Diagnostics.TagList
@@ -874,7 +886,17 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
                     var delay = ComputePhaseOneTransientRetryDelay(transientAttempt);
                     if (delay > TimeSpan.Zero)
                     {
-                        await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+                        try
+                        {
+                            await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException cancelled)
+                        {
+                            // The attempt just retried may still land (issue #6116).
+                            MarkPhaseOneOutcomeUnknown(
+                                cancelled, table, actions, treeId, shardIndex, transientAttempt, clientAbandonedAttempts);
+                            throw;
+                        }
                     }
                 }
                 catch (Exception ex)
@@ -889,6 +911,24 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
                             new KeyValuePair<string, object?>(LatticeMetrics.TagStatus, ResolveProviderStatusTag(ex)),
                             tenantTag,
                         });
+
+                    // An earlier attempt retried in place, or this one, may still
+                    // commit on the service after the fault surfaces (issue #6116),
+                    // so the fault is reported as an unknown outcome the WAL shard
+                    // fences until it settles. A non-replay 409 never reaches here:
+                    // rows resident at those keys mean this batch can never land.
+                    if (transientAttempt > 0 || MayHaveLanded(ex))
+                    {
+                        MarkPhaseOneOutcomeUnknown(
+                            ex,
+                            table,
+                            actions,
+                            treeId,
+                            shardIndex,
+                            attempts: transientAttempt + 1,
+                            clientAbandonedAttempts: clientAbandonedAttempts + (IsClientAbandonment(ex) ? 1 : 0));
+                    }
+
                     throw;
                 }
             }
