@@ -171,52 +171,55 @@ internal sealed partial class ShardRootGrain
     /// shard.
     /// </para>
     /// <para>
-    /// <b>Attaching is not a staleness compromise; it is serialisably
-    /// correct.</b> Because the leaf is non-reentrant, the read being attached
-    /// to holds that leaf's turn for its whole duration and every write to the
-    /// leaf is ordered strictly before or strictly after it. An attaching
-    /// caller therefore observes exactly what the original call observed: a
-    /// linearisable read taken at the point the leaf executed it. The staleness
-    /// is the staleness any slow call already has, which is why the existing
-    /// page-fill contract needs no amendment - a page fill that takes the full
-    /// ceiling already returns leaf data read at its start.
+    /// <b>Waiting on an in-flight read is serialisable; serving its rows to a
+    /// later walk is not, on its own (issue #5564).</b> Because the leaf is
+    /// non-reentrant, the read being attached to holds that leaf's turn for its
+    /// whole duration and every write to the leaf is ordered strictly before or
+    /// strictly after it, so the rows are a linearisable read taken at the point
+    /// the leaf executed it. But that point can precede the attaching walk: the
+    /// leaf may already have answered, with only the response in transit, when
+    /// a write is acknowledged and a new scan begins. Serving those rows to the
+    /// new scan omits the acknowledged write and reports success - the silent
+    /// partial read of issue #5564. So the attaching walk waits on the read,
+    /// which is what keeps queue depth from growing, and then holds its rows to
+    /// the settled-reuse gate below; rows that fail it are discarded and the
+    /// walk reads afresh, which no longer queues behind anything.
     /// </para>
     /// <para>
     /// <b>Why a completed read is not reused on the strength of recency.</b>
-    /// The serialisability argument above is specific to a read still in flight
-    /// and does not extend past its completion by even a moment: once the
-    /// leaf's turn ends, later writes are ordered after the read, so handing
-    /// its rows to a new caller on the strength of how recently it finished
-    /// returns a scan page that misses committed writes. An earlier revision of
-    /// this file retained settled results for one ceiling, reasoning that the
-    /// window was short. That was wrong, and wrong in kind rather than in
-    /// degree - a scan that misses a committed write is incorrect at any window
-    /// length, so there is no duration at which the trade becomes acceptable.
+    /// Once the leaf's turn ends, later writes are ordered after the read, so
+    /// handing its rows to a new caller on the strength of how recently it
+    /// finished returns a scan page that misses committed writes. An earlier
+    /// revision of this file retained settled results for one ceiling, reasoning
+    /// that the window was short. That was wrong, and wrong in kind rather than
+    /// in degree - a scan that misses a committed write is incorrect at any
+    /// window length, so there is no duration at which the trade becomes
+    /// acceptable. The same holds for a read that is still in flight but has
+    /// already executed, which is why the gate applies to joined reads too.
     /// </para>
     /// <para>
     /// <b>What issue #2786 changed, and what it did not.</b> It did not soften
     /// the paragraph above; recency is still not a basis for reuse and never
     /// will be. It supplied the basis that was missing: the leaf's
     /// activation-fenced revision cookie, sampled BEFORE the read is issued and
-    /// compared at attach time. Equal cookies mean no mutation was published by
-    /// that leaf across a window that strictly contains the read, so the
-    /// settled rows are not merely recent, they are provably unchanged. Every
-    /// way of failing to establish that - an unstamped entry, a leaf that has
-    /// deactivated, a faulted or cancelled read, a cookie that moved - refuses
-    /// reuse and issues afresh. See
-    /// <see cref="CanReuseSettledScanPageLeafRead"/>.
+    /// compared when the rows are handed on. Equal cookies mean no mutation was
+    /// published by that leaf across a window that strictly contains both the
+    /// read and the receiving walk's start, so the rows are not merely recent,
+    /// they are provably unchanged. Every way of failing to establish that - an
+    /// unstamped entry, a leaf that has deactivated or lives on another silo, a
+    /// faulted or cancelled read, a cookie that moved - refuses reuse and issues
+    /// afresh. See <see cref="CanReuseSettledScanPageLeafRead"/>.
     /// </para>
     /// <para>
     /// <b>What that costs, and why it is still sufficient.</b> Coalescing alone
     /// fixes divergence outright: queue depth stops growing, so an attempt is
-    /// no longer strictly worse than the one before it. It converges because
-    /// the read stays in flight and successive retries keep attaching to the
-    /// same one, so elapsed read time accumulates across attempts instead of
-    /// resetting - whichever retry is attached when the read completes carries
-    /// the rows, the continuation token advances, and the walk proceeds. The
-    /// residual case is a retry that arrives after a read completed against a
-    /// leaf that has since been written: it pays for a fresh read. That is
-    /// slower, and it is correct, which is the right way round.
+    /// no longer strictly worse than the one before it. Elapsed read time still
+    /// accumulates across attempts, because successive retries wait on the same
+    /// in-flight read instead of queueing behind it. When it completes, the
+    /// waiting retry either serves its rows, where the cookie proves them
+    /// current, or pays for one fresh read against a leaf that has just
+    /// answered and so is no longer the bottleneck. That is slower, and it is
+    /// correct, which is the right way round.
     /// </para>
     /// <para>
     /// <b>Confined to stall-guarded walks.</b> An unguarded walk cannot strand
@@ -244,20 +247,39 @@ internal sealed partial class ShardRootGrain
             return await issue().ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
         }
 
-        if (TryAttachScanPageLeafRead<TList>(key, out var attached, out var servedFromSettled))
+        if (TryAttachScanPageLeafRead<TList>(key, out var attached, out var servedFromSettled, out var attachedEntry))
         {
-            RecordScanPageLeafReadOutcome(
-                1,
-                servedFromSettled
-                    ? LatticeMetrics.OutcomeScanPageLeafReadServedTag
-                    : LatticeMetrics.OutcomeScanPageLeafReadJoinedTag);
+            if (servedFromSettled)
+            {
+                RecordScanPageLeafReadOutcome(1, LatticeMetrics.OutcomeScanPageLeafReadServedTag);
 
-            // Copied, never shared: the issuing walk owns the instance the leaf
-            // returned and appends nothing to it, but handing the same list to
-            // two walks would let one observe the other's enumeration. The copy
-            // is shallow, which is the same depth the walk's own accumulation
-            // already takes.
-            return copy(await attached.ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext));
+                // Copied, never shared: the issuing walk owns the instance the leaf
+                // returned and appends nothing to it, but handing the same list to
+                // two walks would let one observe the other's enumeration. The copy
+                // is shallow, which is the same depth the walk's own accumulation
+                // already takes.
+                return copy(await attached.ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext));
+            }
+
+            // Issue #5564. Waiting on the in-flight read rather than enqueueing a
+            // duplicate behind it is what keeps a stalled retry from diverging
+            // (issue 2585), but its ROWS are only as current as the moment the leaf
+            // executed it, which can precede this walk: a read that answered and
+            // whose response was still in transit when a write was acknowledged
+            // would hand this walk a page missing that write. So once it
+            // completes, its rows are served only if they pass the same gate a
+            // settled read must pass - the leaf's revision cookie unchanged since
+            // the read was issued, which spans this walk's start - and are
+            // otherwise discarded in favour of a fresh read, which no longer
+            // queues behind anything.
+            var rows = await attached.ConfigureAwait(ConfigureAwaitOptions.ContinueOnCapturedContext);
+            if (CanReuseSettledScanPageLeafRead(key, attachedEntry))
+            {
+                RecordScanPageLeafReadOutcome(1, LatticeMetrics.OutcomeScanPageLeafReadJoinedTag);
+                return copy(rows);
+            }
+
+            StandDownIfCeilingFired(scan);
         }
 
         // Pre-stamp. The cookie is sampled BEFORE the read is issued, never
@@ -282,14 +304,20 @@ internal sealed partial class ShardRootGrain
     }
 
     /// <summary>
-    /// Finds a read for <paramref name="key"/> that is <em>still in flight</em>,
-    /// evicting anything it may not hand on.
+    /// Finds a read for <paramref name="key"/> to wait on, evicting anything it
+    /// may not hand on.
     /// <para>
-    /// <b>An in-flight read may always be joined, and that is a serialisability
-    /// argument rather than a heuristic.</b> Because the leaf is non-reentrant
-    /// the read holds that leaf's turn for its whole duration, so every write
-    /// is ordered strictly before or strictly after it and a joiner observes
-    /// exactly what the original caller would have.
+    /// <b>An in-flight read may always be waited on, but not always served.</b>
+    /// Because the leaf is non-reentrant the read holds that leaf's turn for its
+    /// whole duration, so every write is ordered strictly before or strictly
+    /// after it, and waiting on it rather than enqueueing a duplicate behind it
+    /// is what stops a stalled retry diverging. What that ordering does not
+    /// give a joiner is recency: the leaf may have executed the read before the
+    /// joiner began, with only the response still in transit, so a write
+    /// acknowledged in between is ordered after the read and missing from it
+    /// (issue #5564). The caller therefore serves an in-flight read's rows only
+    /// once it completes and passes <see cref="CanReuseSettledScanPageLeafRead"/>,
+    /// whose cookie clause spans the joiner's start, and otherwise reads afresh.
     /// </para>
     /// <para>
     /// <b>A settled read carries no such guarantee from its own completion, and
@@ -318,9 +346,11 @@ internal sealed partial class ShardRootGrain
     private bool TryAttachScanPageLeafRead<TList>(
         ScanPageLeafReadKey key,
         out Task<TList> attached,
-        out bool servedFromSettled)
+        out bool servedFromSettled,
+        out ScanPageLeafReadEntry entryAttached)
     {
         servedFromSettled = false;
+        entryAttached = null!;
 
         lock (_scanPageLeafReadsGate)
         {
@@ -330,6 +360,7 @@ internal sealed partial class ShardRootGrain
                 return false;
             }
 
+            entryAttached = entry;
             // Completed in any manner is handed on only with a basis for
             // believing the leaf has not moved on. Issue #2786 supplies that
             // basis; where it cannot be established this degrades to the
