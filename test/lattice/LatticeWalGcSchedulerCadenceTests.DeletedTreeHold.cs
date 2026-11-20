@@ -115,6 +115,39 @@ public sealed partial class LatticeWalGcSchedulerCadenceTests
     }
 
     [Test]
+    public async Task ExecuteAsync_reports_a_resize_retired_copys_held_floor_without_an_error()
+    {
+        // A copy a resize retired is held for the undo window and released by
+        // its scheduled purge: expected, so not reported as terminal.
+        var time = new VirtualTimeProvider();
+        var (factory, leaf) = FactoryWithBlockedLeaf(StrandedTree);
+        var deletion = DeletionReporting(factory, PhysicalTreeRetention.Deleted);
+        deletion.IsRetiredByResizeAsync().Returns(Task.FromResult(true));
+        var logs = new RecordingLoggerFactory();
+
+        var scheduler = CreateScheduler(
+            factory, BlockedGc(), Adaptive(), time,
+            logger: new Microsoft.Extensions.Logging.Logger<LatticeWalGcScheduler>(logs));
+        await StartAndRunFirstPassAsync(scheduler, time);
+        await AdvanceAtLeastAsync(time, TimeSpan.FromMinutes(10));
+
+        await leaf.DidNotReceive().DriveStarvedCheckpointAsync();
+        var holds = logs.Entries.Count(e =>
+            e.Level == Microsoft.Extensions.Logging.LogLevel.Information
+            && e.Message.Contains("a resize retired", StringComparison.Ordinal));
+        Assert.Multiple(() =>
+        {
+            Assert.That(holds, Is.EqualTo(1), "the expected hold is still reported, once per episode");
+            Assert.That(
+                logs.Entries.Any(e => e.Level >= Microsoft.Extensions.Logging.LogLevel.Error),
+                Is.False,
+                "a resize-retired copy's hold is released by its purge, not terminal");
+        });
+
+        await scheduler.StopAsync(CancellationToken.None);
+    }
+
+    [Test]
     public async Task ExecuteAsync_discards_a_deleted_tree_that_is_an_abandoned_resize_copy()
     {
         // The self-heal for an estate a build predating the discard left

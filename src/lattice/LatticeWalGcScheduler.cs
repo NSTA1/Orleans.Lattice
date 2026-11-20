@@ -6091,6 +6091,37 @@ internal sealed class LatticeWalGcScheduler(
     }
 
     /// <summary>
+    /// Asks a deleted tree's deletion grain whether a resize retired it - an
+    /// expected hold its scheduled purge releases - so only any other deleted
+    /// tree's blocked floor is reported at error level. Fails toward the error
+    /// report: a fault or an overrun of <see cref="RetentionProbeBudget"/> answers
+    /// <see langword="false"/>.
+    /// </summary>
+    private async Task<bool> IsRetiredByResizeAsync(string treeId, CancellationToken stoppingToken)
+    {
+        try
+        {
+            return await Bounded(
+                    grainFactory.GetGrain<ITreeDeletionGrain>(treeId).IsRetiredByResizeAsync(),
+                    RetentionProbeBudget,
+                    stoppingToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            logger.LogDebug(
+                ex,
+                "WAL GC could not ask deleted tree {Tree} whether a resize retired it; reporting its hold as terminal.",
+                treeId);
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Handles a tree whose retention floor is stuck on a deleted physical copy
     /// instead of applying the leaf-touching remedies (issue #3930).
     /// </summary>
@@ -6117,7 +6148,10 @@ internal sealed class LatticeWalGcScheduler(
     /// the discard deleted it. The deletion grain is asked to discard such a copy,
     /// which is how an estate already holding one heals without an operator; the
     /// operator could not reach it anyway, because a derived copy's id is not a
-    /// tree the admin grants name. Any other deleted tree's floor is terminally
+    /// tree the admin grants name. A copy a resize retired that the coordinator
+    /// still names is held for the undo window and released by its scheduled
+    /// purge, so its hold is reported once per episode at information level.
+    /// Any other deleted tree's floor is terminally
     /// blocked until it is recovered or purged, and that is reported once per
     /// episode at error level, distinctly from a floor that is merely behind: no
     /// activation can lift it, so a warning that reads as transient would be the
@@ -6168,6 +6202,14 @@ internal sealed class LatticeWalGcScheduler(
 
         if (floorBlocked && _deletedTreeHolds.Add(treeId))
         {
+            if (await IsRetiredByResizeAsync(treeId, stoppingToken).ConfigureAwait(false))
+            {
+                logger.LogInformation(
+                    "WAL GC is holding tree {Tree}'s WAL: it is a physical copy a resize retired, kept soft-deleted so an undo can still recover it, and its durable materialiser pins hold the cursor floor until its scheduled purge releases them. Its leaves are not reactivated.",
+                    treeId);
+                return;
+            }
+
             logger.LogError(
                 "WAL GC cannot reclaim tree {Tree}: its cursor floor is held by durable materialiser pins of a physical tree that has been deleted. Nothing can checkpoint a deleted tree's leaves, so the floor cannot advance and its WAL is retained until the tree is purged or recovered; its leaves are not reactivated. Purging the tree releases the pins.",
                 treeId);

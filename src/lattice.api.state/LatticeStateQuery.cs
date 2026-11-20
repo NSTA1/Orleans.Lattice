@@ -1906,7 +1906,7 @@ internal sealed class LatticeStateQuery(
         var previewBudget = ClampHistoryPreviewBudget(request.ValuePreviewBudget);
 
         var page = await tree
-            .ScanEntryHistoryAsync(request.Key, request.FromHlc, request.ToHlc, limit, request.ContinuationToken, cancellationToken)
+            .ScanEntryHistoryAsync(request.Key, request.FromHlc, request.ToHlc, limit, request.ContinuationToken, request.Reverse, cancellationToken)
             .ConfigureAwait(false);
 
         // The merge mode is declared per tree, so the CRDT shape (and therefore
@@ -1927,13 +1927,6 @@ internal sealed class LatticeStateQuery(
         {
             cancellationToken.ThrowIfCancellationRequested();
             records.Add(MapRevision(effectiveTreeId, page.Revisions[i], previewBudget, shapeRegistry, decoderRegistry, deltaBuffer));
-        }
-
-        if (request.Reverse)
-        {
-            // Paging advances oldest-to-newest through the timeline; Reverse only
-            // flips the order of the revisions within this page (newest-first).
-            records.Reverse();
         }
 
         var bound = MapHistoryBound(page);

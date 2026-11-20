@@ -5,9 +5,10 @@ namespace Orleans.Lattice.Api.State;
 /// (<see cref="ILatticeStateQuery.GetEntryHistoryAsync"/>). Selects a tree and a
 /// single key, optionally bounds the revision window by hybrid-logical-clock,
 /// bounds the page size and per-revision value-preview budget, and chooses the
-/// in-page revision order. Paging is continuation-based: the first call (no
-/// <see cref="ContinuationToken"/>) starts at the oldest in-range revision and
-/// every continuation resumes immediately after the prior page.
+/// reading direction. Paging is continuation-based: the first call (no
+/// <see cref="ContinuationToken"/>) starts at the oldest in-range revision, or the
+/// newest when <see cref="Reverse"/> is set, and every continuation resumes
+/// immediately after the prior page in the same direction.
 /// </summary>
 [GenerateSerializer]
 [Alias(ApiStateTypeAliases.EntryHistoryRequest)]
@@ -42,7 +43,8 @@ public sealed record EntryHistoryRequest
     /// <summary>
     /// Opaque continuation token returned by a prior page, or
     /// <see langword="null"/> / empty to start a fresh read. The token resumes
-    /// the timeline immediately after the last revision of the prior page.
+    /// the timeline immediately after the last revision of the prior page, in the
+    /// direction that page was read; pass it back with the same <see cref="Reverse"/>.
     /// </summary>
     [Id(5)] public string? ContinuationToken { get; init; }
 
@@ -55,11 +57,10 @@ public sealed record EntryHistoryRequest
     [Id(6)] public int ValuePreviewBudget { get; init; }
 
     /// <summary>
-    /// When <see langword="true"/>, the revisions in the returned page are
-    /// ordered newest-first; when <see langword="false"/> (the default) they are
-    /// ordered oldest-first. Paging always advances through the timeline from
-    /// oldest to newest regardless of this flag - it controls only the order of
-    /// the revisions within each returned page.
+    /// When <see langword="true"/>, the read starts at the newest in-range revision,
+    /// orders each page newest-first, and each continuation pages backwards to older
+    /// revisions. When <see langword="false"/> (the default) the read starts at the
+    /// oldest in-range revision, orders each page oldest-first, and pages forwards.
     /// </summary>
     [Id(7)] public bool Reverse { get; init; }
 }

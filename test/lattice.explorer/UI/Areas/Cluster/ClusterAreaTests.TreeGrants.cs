@@ -156,6 +156,44 @@ public sealed partial class ClusterAreaTests
     }
 
     [Test]
+    public async Task A_check_that_stops_waiting_leaves_the_scan_running_for_the_next_check()
+    {
+        // The directory time-boxes each check. Were the scan cancelled with the check,
+        // a busy cluster would restart it from nothing on every recheck and the area
+        // would never be answered (#6114).
+        RefuseSummary();
+        var ids = Enumerable.Range(0, ClusterArea.GrantProbeConcurrency).Select(i => $"tree-{i:D3}").ToArray();
+        UseTrees(ids);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _admin.ProbeCapabilitiesAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(async call =>
+            {
+                var treeId = call.Arg<string>();
+                if (treeId == ClusterArea.ProbeTreeId)
+                {
+                    return ClusterTreeAccess.None(treeId);
+                }
+
+                await release.Task;
+                return ClusterTreeAccess.None(treeId) with { CanManageTreeLifecycle = treeId == ids[^1] };
+            });
+        var area = CreateArea();
+
+        using var stopWaiting = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+        Assert.That(
+            async () => await area.GetAvailabilityAsync(stopWaiting.Token),
+            Throws.InstanceOf<OperationCanceledException>());
+        release.SetResult();
+        var second = await area.GetAvailabilityAsync(CancellationToken.None).AsTask().WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(second, Is.EqualTo(AreaAvailability.Visible));
+            Assert.That(TreeProbes(), Is.EqualTo(ids.Length), "the second check joined the first scan rather than probing again");
+        });
+    }
+
+    [Test]
     public void Only_a_lifecycle_or_admin_grant_admits_the_area()
     {
         var none = ClusterTreeAccess.None("orders");

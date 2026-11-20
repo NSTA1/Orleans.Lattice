@@ -134,6 +134,14 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable, IWalAppend
     private Dictionary<WalRoutingInitiator, SemaphoreSlim>? _generationGates;
     private SemaphoreSlim?[]? _directoryGates;
 
+    /// <summary>
+    /// Serialises this activation's raises of the partition's retired floor; created on the
+    /// first raise. Retirements of different leaves hold different leaf gates and raise the
+    /// same row, so without it two first raises both insert the absent row and one is
+    /// refused (#6114), which the storage provider logs as an error.
+    /// </summary>
+    private SemaphoreSlim? _epochFloorGate;
+
     /// <summary>The tree's grain storage provider, resolved on first use.</summary>
     private IGrainStorage? _fenceStorage;
 
@@ -1412,9 +1420,30 @@ internal sealed partial class WalShardGrain : IWalAppendFenceCapable, IWalAppend
 
     /// <summary>
     /// Raises the durable retired floor to at least <paramref name="atLeast"/> as a
-    /// conditional max-merge, then the in-memory floor. The floor never moves down.
+    /// conditional max-merge, then the in-memory floor. The floor never moves down. Raises
+    /// in this activation run one at a time, so an ETag conflict means only a duplicate
+    /// activation of this WAL shard.
     /// </summary>
     private async Task RaiseEpochFloorAsync(IGrainStorage storage, long atLeast)
+    {
+        SemaphoreSlim gate;
+        lock (_stateGate)
+        {
+            gate = _epochFloorGate ??= new SemaphoreSlim(1, 1);
+        }
+
+        await gate.WaitAsync().ConfigureAwait(true);
+        try
+        {
+            await RaiseEpochFloorUnderGateAsync(storage, atLeast).ConfigureAwait(true);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    private async Task RaiseEpochFloorUnderGateAsync(IGrainStorage storage, long atLeast)
     {
         var key = WalAppendFenceRows.FloorKey(_treeId, _shardIndex);
         for (var attempt = 1; ; attempt++)

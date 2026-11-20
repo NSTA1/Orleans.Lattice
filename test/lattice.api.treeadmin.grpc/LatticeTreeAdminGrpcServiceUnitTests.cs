@@ -140,14 +140,37 @@ public sealed class LatticeTreeAdminGrpcServiceUnitTests
     }
 
     [Test]
-    public void InvokeAsync_maps_cancellation_to_Cancelled()
+    public void InvokeAsync_maps_the_callers_cancellation_to_Cancelled()
     {
-        var ex = MapFault(new OperationCanceledException());
+        using var cancelled = new CancellationTokenSource();
+        cancelled.Cancel();
+        var control = Substitute.For<ILatticeTreeAdmin>();
+        control.CheckTreeExistsAsync("orders", Arg.Any<CancellationToken>()).ThrowsAsync(new OperationCanceledException(cancelled.Token));
+        var service = CreateService(control);
+
+        var ex = Assert.ThrowsAsync<RpcException>(async () => await service.CheckTreeExists(
+            TreeRequest,
+            new FakeServerCallContext($"/{LatticeTreeAdminGrpcMethods.ServiceName}/CheckTreeExists", cancellationToken: cancelled.Token)))!;
 
         Assert.Multiple(() =>
         {
             Assert.That(ex.StatusCode, Is.EqualTo(StatusCode.Cancelled));
             Assert.That(ex.Status.Detail, Does.Contain("cancelled"));
+        });
+    }
+
+    [Test]
+    public void InvokeAsync_maps_a_cluster_message_expiry_the_caller_did_not_request_to_DeadlineExceeded()
+    {
+        // A grain message that expired before placement surfaces as OperationCanceledException
+        // while the caller's call is live; Cancelled would read as the caller's own cancellation
+        // and is not retried, so it must report the retryable outcome-unknown DeadlineExceeded.
+        var ex = MapFault(new OperationCanceledException("Message expired before placement could complete for grain viewmaintainer/secret-view."));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex.StatusCode, Is.EqualTo(StatusCode.DeadlineExceeded));
+            Assert.That(ex.Status.Detail, Does.Not.Contain("secret-view"));
         });
     }
 

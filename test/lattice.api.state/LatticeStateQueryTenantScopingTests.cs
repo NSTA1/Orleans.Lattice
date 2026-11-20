@@ -337,7 +337,7 @@ public sealed class LatticeStateQueryTenantScopingTests
         var acme = WireTree(factory, AcmeTree);
         acme.ScanEntryHistoryAsync(
                 Arg.Any<string>(), Arg.Any<HybridLogicalClock?>(), Arg.Any<HybridLogicalClock?>(),
-                Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                Arg.Any<int>(), Arg.Any<string?>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new EntryHistoryPage
             {
                 Revisions = [],

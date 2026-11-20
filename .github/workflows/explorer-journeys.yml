@@ -366,6 +366,11 @@ jobs:
       # in ci.yml's "Start Azurite" step; pool legs run the same version from npm.
       # On the pool each account is started by a script under RUNNER_TEMP, so the
       # fail-closed probe can stop the primary and start it again.
+      # --inMemoryPersistence: Azurite's on-disk Table store re-serialises its whole
+      # LokiJS database every 5 s on its one Node thread, so as the estate's WAL table
+      # grows every request queues behind the save and the WAL reads time out (#5569).
+      # Nothing reads an account across a restart: the fail-closed probe is the last step.
+      # Azurite rejects --location alongside it, so the pool start passes none.
       - name: Start Azurite
         env:
           POOL: ${{ matrix.pool }}
@@ -374,10 +379,9 @@ jobs:
           if [ "$POOL" = "true" ]; then
             start() {
               local name="$1" blob="$2" queue="$3" table="$4"
-              mkdir -p "$RUNNER_TEMP/$name"
               cat > "$RUNNER_TEMP/$name.sh" <<EOF
           #!/usr/bin/env bash
-          nohup azurite --silent --location "$RUNNER_TEMP/$name" --skipApiVersionCheck --loose \\
+          nohup azurite --silent --skipApiVersionCheck --loose --inMemoryPersistence \\
             --blobHost 127.0.0.1 --blobPort $blob --queueHost 127.0.0.1 --queuePort $queue \\
             --tableHost 127.0.0.1 --tablePort $table >> "$RUNNER_TEMP/$name.log" 2>&1 &
           echo \$! > "$RUNNER_TEMP/$name.pid"
@@ -393,7 +397,7 @@ jobs:
             start() {
               local name="$1"; shift
               docker run -d --name "$name" "$@" mcr.microsoft.com/azure-storage/azurite:3.36.0 \
-                azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck --loose
+                azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck --loose --inMemoryPersistence
             }
             start azurite -p 10000:10000 -p 10001:10001 -p 10002:10002
             start azurite-backup -p 11000:10000
@@ -712,13 +716,13 @@ jobs:
         run: |
           docker run -d --name azurite -p 10000:10000 -p 10001:10001 -p 10002:10002 \
             mcr.microsoft.com/azure-storage/azurite:3.36.0 \
-            azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck --loose
+            azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck --loose --inMemoryPersistence
           docker run -d --name azurite-backup -p 11000:10000 \
             mcr.microsoft.com/azure-storage/azurite:3.36.0 \
-            azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck --loose
+            azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck --loose --inMemoryPersistence
           docker run -d --name azurite-east -p 12000:10000 -p 12001:10001 -p 12002:10002 \
             mcr.microsoft.com/azure-storage/azurite:3.36.0 \
-            azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck --loose
+            azurite --blobHost 0.0.0.0 --queueHost 0.0.0.0 --tableHost 0.0.0.0 --skipApiVersionCheck --loose --inMemoryPersistence
 
       # Each estate that runs Prometheus starts its own container from this image,
       # on the host network with a scrape-target file the harness writes as silos

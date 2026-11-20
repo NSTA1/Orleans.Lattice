@@ -1700,4 +1700,31 @@ public interface ILattice : IGrainWithStringKey
         int limit,
         string? continuation,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Reads one page of a key's revision timeline in the chosen direction. With
+    /// <paramref name="reverse"/> <see langword="false"/> this is exactly
+    /// <see cref="ScanEntryHistoryAsync(string, HybridLogicalClock?, HybridLogicalClock?, int, string?, CancellationToken)"/>.
+    /// With <paramref name="reverse"/> <see langword="true"/> the first page holds the
+    /// newest in-range revisions, newest first, and each continuation pages backwards
+    /// to older revisions, so a newest-first timeline can show its latest changes
+    /// without first paging through the whole retained history. A continuation token
+    /// is only meaningful to a call made in the same direction as the call that
+    /// returned it.
+    /// </summary>
+    /// <param name="key">The source key whose revision timeline is read. Must not be <see langword="null"/>.</param>
+    /// <param name="fromHlc">Inclusive lower bound on revision timestamp, or <see langword="null"/> for the oldest available.</param>
+    /// <param name="toHlc">Inclusive upper bound on revision timestamp, or <see langword="null"/> for the newest available.</param>
+    /// <param name="limit">Maximum revisions in the page; clamped to a bounded ceiling. Must be greater than zero.</param>
+    /// <param name="continuation">An opaque token from a prior page's <see cref="EntryHistoryPage.Continuation"/> read in the same direction, or <see langword="null"/> to start from the first page.</param>
+    /// <param name="reverse">When <see langword="true"/>, pages from the newest revision backwards and orders each page newest first.</param>
+    /// <param name="cancellationToken">Cancels the scan.</param>
+    Task<EntryHistoryPage> ScanEntryHistoryAsync(
+        string key,
+        HybridLogicalClock? fromHlc,
+        HybridLogicalClock? toHlc,
+        int limit,
+        string? continuation,
+        bool reverse,
+        CancellationToken cancellationToken = default);
 }

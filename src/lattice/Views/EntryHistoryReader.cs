@@ -70,6 +70,43 @@ internal static class EntryHistoryReader
         return (startInclusive, endExclusive);
     }
 
+    /// <summary>
+    /// Resolves the half-open <c>[startInclusive, endExclusive)</c> view-tree key
+    /// window for a reverse (newest-first) history scan. <paramref name="continuation"/>
+    /// (a prior reverse page's last, oldest, view key) takes precedence as the
+    /// exclusive upper bound; otherwise <paramref name="toHlc"/> sets an inclusive
+    /// upper bound; otherwise the scan ends at the key's prefix successor. The lower
+    /// bound is <paramref name="fromHlc"/>'s row when set, else the key's prefix.
+    /// </summary>
+    internal static (string startInclusive, string endExclusive) ResolveReverseViewScanWindow(
+        string key,
+        HybridLogicalClock? fromHlc,
+        HybridLogicalClock? toHlc,
+        string? continuation)
+    {
+        var startInclusive = fromHlc is { } from
+            ? HistoryKey.Encode(key, from)
+            : key + HistoryKey.Separator;
+
+        string endExclusive;
+        if (continuation is not null)
+        {
+            endExclusive = continuation;
+        }
+        else if (toHlc is { } to)
+        {
+            // {row}\0 is the smallest key above the row at exactly toHlc, so the
+            // inclusive bound keeps that row and excludes every later one.
+            endExclusive = HistoryKey.Encode(key, to) + '\u0000';
+        }
+        else
+        {
+            endExclusive = key + SeparatorSuccessor;
+        }
+
+        return (startInclusive, endExclusive);
+    }
+
     /// <summary>Whether <paramref name="hlc"/> falls within the optional inclusive <c>[fromHlc, toHlc]</c> bounds.</summary>
     internal static bool WithinBounds(HybridLogicalClock hlc, HybridLogicalClock? fromHlc, HybridLogicalClock? toHlc)
     {

@@ -27,7 +27,9 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Import;
 /// <b>What is measured (#5475).</b> The live heap is read through each host's memory probe,
 /// straight after a forced full compacting collection: once settled (an aggressive collection
 /// that also returns free memory to the operating system) before the import, about once a
-/// second while it runs, and settled again after it. It is what the process references at
+/// second while it runs, and settled again after it, repeatedly for up to a minute until it has
+/// not fallen for fifteen seconds, because a slow run reports success while a silo is still applying work the
+/// import queued (#6115). It is what the process references at
 /// that instant, so it does not depend on when the garbage collector last ran. The working
 /// set is not the gate: under the server collector it also carries the allocation budgets the
 /// collector keeps committed, which its dynamic adaptation resizes with load, and which it

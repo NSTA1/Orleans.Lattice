@@ -48,6 +48,7 @@ internal sealed class SchemaAccess : IDisposable
     private readonly TimeProvider _time;
     private readonly SchemaTreeCatalog? _catalog;
     private readonly ConcurrentDictionary<string, (SchemaGrants Grants, DateTimeOffset ReadAt, ShellCallerKey Caller)> _trees = new(StringComparer.Ordinal);
+    private readonly DetachedGrantScan _grantScan = new();
     private Tuple<AreaAvailability, ShellCallerKey, DateTimeOffset>? _availability;
     private long _generation;
 
@@ -129,7 +130,10 @@ internal sealed class SchemaAccess : IDisposable
             // The sentinel speaks only for a cluster-wide grant: a caller whose grants
             // name trees (a reader of three trees, say) reads those trees' schema, so a
             // tree the catalogue lists that grants anything admits the area.
-            switch (await GrantsAnyTreeAsync(cancellationToken).ConfigureAwait(false))
+            // The scan outlives this check: a directory that stops waiting leaves it
+            // running, and the next check joins it rather than starting over (#6114).
+            var scan = await _grantScan.JoinAsync(caller, GrantsAnyTreeAsync, cancellationToken).ConfigureAwait(false);
+            switch (scan)
             {
                 case null:
                     return AreaAvailability.Unchecked;
@@ -276,6 +280,7 @@ internal sealed class SchemaAccess : IDisposable
         Interlocked.Increment(ref _generation);
         Volatile.Write(ref _availability, null);
         _trees.Clear();
+        _grantScan.Reset();
     }
 
     /// <inheritdoc />
@@ -290,5 +295,7 @@ internal sealed class SchemaAccess : IDisposable
         {
             session.ConfigurationChanged -= Forget;
         }
+
+        _grantScan.Dispose();
     }
 }

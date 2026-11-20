@@ -137,6 +137,16 @@ internal sealed partial class TreeDeletionGrain
     }
 
     /// <inheritdoc />
+    public Task<bool> IsRetiredByResizeAsync()
+    {
+        // A resize's retirement is the only soft delete that suppresses
+        // lifecycle events without delegating or discarding.
+        var s = state.State;
+        return Task.FromResult(
+            s.IsDeleted && !s.PurgeComplete && s.SuppressLifecycleEvents && !s.Delegated && !s.Discarded);
+    }
+
+    /// <inheritdoc />
     public Task<bool> IsDiscardedAsync() => Task.FromResult(state.State.Discarded);
 
     /// <summary>

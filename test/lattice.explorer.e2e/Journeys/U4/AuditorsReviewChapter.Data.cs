@@ -124,9 +124,13 @@ public sealed partial class AuditorsReviewChapter
         Coverage.Hit("use-case:data/history");
 
         // Show as of: the reading as it stood a moment ago - one revision is marked in effect.
+        // factory-telemetry has no history view, so History reads the WAL window forward from
+        // its trim point: the pages drawn above are the oldest retained revisions, and WAL GC
+        // can trim past any of them before the as-of read runs. The line feed keeps writing,
+        // so "a moment ago" is the instant furthest from the trim point.
         var times = await tree.RevisionTimesAsync();
         Assert.That(times, Has.Count.GreaterThan(3), "the latest reading has a page of revisions");
-        if (!await tree.ShowAsOfAsync(times[2].AddSeconds(1)))
+        if (!await tree.ShowAsOfAsync(DateTimeOffset.UtcNow.AddSeconds(-2)))
         {
             await HistoryTimedOutAsync(dana, tree, "as-of-did-not-load", "Show as of: the point-in-time read timed out behind a replay (#5675), and the panel offers Try again");
             return;

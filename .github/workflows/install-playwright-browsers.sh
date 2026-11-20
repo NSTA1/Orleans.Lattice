@@ -26,6 +26,19 @@ fi
 runner="$(dirname "$(realpath "${BASH_SOURCE[0]}")")/run-playwright-install.py"
 pwsh="$(command -v pwsh)"
 
+# A bounded attempt killed mid-install leaves dpkg interrupted, and every later
+# apt-get then refuses with "dpkg was interrupted" until it is reconfigured, so
+# a retry after a kill is futile without this. Best-effort: a failed repair
+# only warns, and the retry reports apt's own verdict.
+repair_dpkg() {
+  local code=0
+  echo "Reconfiguring packages a killed install-deps attempt may have left half-installed."
+  sudo --non-interactive -- timeout --kill-after=10s 120s dpkg --configure -a || code=$?
+  if [ "$code" -ne 0 ]; then
+    echo "::warning::dpkg --configure -a returned $code; retrying install-deps regardless."
+  fi
+}
+
 install_with_retry() {
   local attempt code mirror_step=0
   local -a command
@@ -50,6 +63,7 @@ install_with_retry() {
     if [ "$attempt" -lt 3 ]; then
       if [ "$1" = install-deps ] && { [ "$code" -eq 124 ] || [ "$code" -eq 137 ]; }; then
         mirror_step=$((mirror_step + 1))
+        repair_dpkg
       fi
       sleep 5
     fi

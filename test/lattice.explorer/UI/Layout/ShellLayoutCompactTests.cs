@@ -2,6 +2,7 @@ using Bunit;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Rendering;
 using Microsoft.AspNetCore.Components.Web;
+using Microsoft.Extensions.DependencyInjection;
 using Orleans.Lattice.Explorer.UI.Design.Components;
 using Orleans.Lattice.Explorer.UI.Design.Tokens;
 using Orleans.Lattice.Explorer.UI.Layout;
@@ -315,6 +316,58 @@ public sealed class ShellLayoutCompactTests : ShellLayoutTestContext
     }
 
     [Test]
+    public async Task A_session_modal_opened_from_the_overflow_menu_keeps_the_focus_rather_than_returning_it_to_the_toggle()
+    {
+        // The modal focuses itself as it opens; were the closing sheet to hand focus back
+        // to its Menu toggle, keyboard focus - and Escape - would land outside the dialog.
+        var cut = RenderLayout();
+        await SetBandAsync(cut, 0);
+        var toggle = cut.FindAll(".lt-shell-header button").Single(button => button.TextContent.Trim() == "Menu");
+        var toggleRef = MenuToggleId(cut);
+        toggle.Click();
+        var before = JSInterop.Invocations.Count;
+
+        cut.FindAll(".lt-dialog--sheet .lt-shell-overflow button")
+            .First(button => button.TextContent.Contains("Connection", StringComparison.Ordinal))
+            .Click();
+
+        var focused = JSInterop.Invocations.Skip(before)
+            .Select(invocation => invocation.Arguments.FirstOrDefault())
+            .OfType<ElementReference>()
+            .Select(element => element.Id)
+            .ToList();
+        Assert.Multiple(() =>
+        {
+            Assert.That(toggleRef, Is.Not.Null.And.Not.Empty, "the Menu toggle carries its element reference");
+            Assert.That(cut.FindAll(".lt-shell-overflow"), Is.Empty, "the menu sheet closes under the modal");
+            Assert.That(focused, Does.Not.Contain(toggleRef), "the closing sheet does not take focus back from the modal");
+        });
+    }
+
+    [Test]
+    public async Task A_sheet_reopened_after_a_session_modal_returns_focus_to_its_toggle_again()
+    {
+        var cut = RenderLayout();
+        await SetBandAsync(cut, 0);
+        var toggle = cut.FindAll(".lt-shell-header button").Single(button => button.TextContent.Trim() == "Menu");
+        var toggleRef = MenuToggleId(cut);
+        toggle.Click();
+        cut.FindAll(".lt-dialog--sheet .lt-shell-overflow button")
+            .First(button => button.TextContent.Contains("Connection", StringComparison.Ordinal))
+            .Click();
+        await cut.InvokeAsync(() => Services.GetRequiredService<Orleans.Lattice.Explorer.UI.Session.SessionChromeState>().CloseOverlay());
+
+        cut.FindAll(".lt-shell-header button").Single(button => button.TextContent.Trim() == "Menu").Click();
+        var before = JSInterop.Invocations.Count;
+        cut.Find(".lt-dialog--sheet [data-lt-command='appearance.theme.board']").Click();
+
+        Assert.That(
+            JSInterop.Invocations.Skip(before).Select(invocation => invocation.Arguments.FirstOrDefault()).OfType<ElementReference>().Select(element => element.Id),
+            Does.Contain(toggleRef),
+            "an ordinary close hands focus back to the toggle");
+    }
+
+    [Test]
     public async Task The_measured_band_reaches_the_page()
     {
         var cut = Render<ShellLayout>(parameters => parameters.Add(layout => layout.Body, builder =>
@@ -329,6 +382,10 @@ public sealed class ShellLayoutCompactTests : ShellLayoutTestContext
 
         Assert.That(cut.Find("[data-band]").GetAttribute("data-band"), Is.EqualTo("Compact"));
     }
+
+    /// <summary>The element reference the layout holds for its compact Menu toggle.</summary>
+    private static string MenuToggleId(IRenderedComponent<ShellLayout> cut) =>
+        ((ElementReference)typeof(ShellLayout).GetField("_menuToggle", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(cut.Instance)!).Id;
 
     /// <summary>The header's compact controls (Directory and Menu): its own buttons, never the wide controls' buttons.</summary>
     private static IReadOnlyList<AngleSharp.Dom.IElement> CompactControls(IRenderedComponent<ShellLayout> cut) =>

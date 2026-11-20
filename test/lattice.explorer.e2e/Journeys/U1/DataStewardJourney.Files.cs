@@ -75,7 +75,9 @@ public sealed partial class DataStewardJourney
         await WriteArchiveWhileAdvancingAsync(data, archive);
         Assert.That(await ContractCalls.CountPrefixAsync(data, archive, "order/"), Is.EqualTo(Names.Files.ArchiveRows), "the stand-in wrote every row of the archive");
 
-        await _priya.Page.ReloadAsync();
+        // Load the tree's plain address, not a reload: the page still carries ?import=seed, which
+        // would open the Import dialog again over the content and intercept the next step's clicks.
+        await _priya.Shell.GotoAsync("/data/" + archive);
         await Expect(_tree.KeyLinks.First).ToHaveTextAsync(StoryData.Archive[0].Key, new() { Timeout = 120_000 });
         await CheckpointAsync("8", "archive-keys", "The new tree holds the October orders, written through the Data API in place of the starved seed");
     }
