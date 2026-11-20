@@ -224,7 +224,7 @@ var options = new AzureTableWalStorageOptions
 
 ### `PhaseOneTransientRetryMaxAttempts`
 
-Number of additional in-place retries the provider issues when a phase-1 batch commit faults transiently. Each retry resubmits the byte-identical batch at the same offsets, so an already-durable prior attempt is resolved as an idempotent-replay success and a genuine offset collision still surfaces immediately without retry. Default is 2 (three attempts total); each retry increments `orleans.lattice.provider.phase1.transient_retries`. Set to 0 to surface every transient fault immediately. This knob is not validated: a negative value is treated as 0.
+Number of additional in-place retries the provider issues when a phase-1 batch commit faults transiently. Each retry resubmits the byte-identical batch at the same offsets, so an already-durable prior attempt is resolved as an idempotent-replay success and a genuine offset collision still surfaces immediately without retry. Default is 2 (three attempts total); each retry increments `orleans.lattice.provider.phase1.transient_retries`. Set to 0 to surface every transient fault immediately. This knob is not validated: a negative value is treated as 0. A fault surfaced after any attempt that may still commit - a retried one, a timeout, a transient status or a transport failure - is reported to the WAL shard as an unknown outcome, so the shard fences the batch's offsets until the batch's first entry row is present or 60 seconds pass without it ([Abandoned flushes](../lattice/wal.md#abandoned-flushes-holes-and-the-trim-watermark)).
 
 ### `PhaseOneTransientRetryBaseDelay`
 

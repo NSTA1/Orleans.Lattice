@@ -58,7 +58,7 @@ public sealed partial class AzureTableWalStorageProvider
             case WalShardOverlapGuard.ClaimOutcome.AboveWritten:
                 return generation;
             case WalShardOverlapGuard.ClaimOutcome.Conflict:
-                throw CreateOverlapException(treeId, shardIndex, startOffset, endOffsetInclusive, inMotionStart);
+                throw CreateOverlapException(treeId, shardIndex, startOffset, endOffsetInclusive, inMotionStart, inMotion: true);
         }
 
         long writtenStart;
@@ -76,7 +76,7 @@ public sealed partial class AzureTableWalStorageProvider
         if (writtenStart >= 0L)
         {
             guard.Release(startOffset, endOffsetInclusive);
-            throw CreateOverlapException(treeId, shardIndex, startOffset, endOffsetInclusive, writtenStart);
+            throw CreateOverlapException(treeId, shardIndex, startOffset, endOffsetInclusive, writtenStart, inMotion: false);
         }
 
         return generation;
@@ -148,7 +148,9 @@ public sealed partial class AzureTableWalStorageProvider
         int shardIndex,
         long startOffset,
         long endOffsetInclusive,
-        long otherStartOffset) =>
+        long otherStartOffset,
+        bool inMotion) =>
         new($"Append batch for '{treeId}/{shardIndex}' covering offsets {startOffset}..{endOffsetInclusive} overlaps the batch "
-            + $"starting at offset {otherStartOffset}; a WAL offset must not be written twice.");
+            + $"starting at offset {otherStartOffset} ({(inMotion ? "in motion on this instance" : "already written")}); "
+            + "a WAL offset must not be written twice.");
 }

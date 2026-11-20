@@ -1,5 +1,6 @@
 using Orleans.Lattice.BPlusTree.Grains;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using Orleans.Lattice;
@@ -31,13 +32,20 @@ public partial class WalShardGrainTests
         IPersistentState<WalShardFloorState>? floorState = null,
         IWalClockFloorGate? floorGate = null,
         IWalSaturationSignal? saturationSignal = null,
-        WalUsageScanLimiter? usageScanLimiter = null)
+        WalUsageScanLimiter? usageScanLimiter = null,
+        ILoggerFactory? loggerFactory = null)
     {
         provider ??= new InMemoryWalStorageProvider();
         var grainContext = Substitute.For<IGrainContext>();
-        if (saturationSignal is not null)
-            grainContext.ActivationServices.Returns(new ServiceCollection()
-                .AddSingleton(saturationSignal).BuildServiceProvider());
+        if (saturationSignal is not null || loggerFactory is not null)
+        {
+            var services = new ServiceCollection();
+            if (saturationSignal is not null)
+                services.AddSingleton(saturationSignal);
+            if (loggerFactory is not null)
+                services.AddSingleton(loggerFactory);
+            grainContext.ActivationServices.Returns(services.BuildServiceProvider());
+        }
         var monitor = Substitute.For<IOptionsMonitor<LatticeOptions>>();
         // Per-tree options are now resolved through the monitor on every
         // grain call (matches the BPlusTree/Grains convention); wire the

@@ -530,6 +530,17 @@ serving reads until it is deactivated. Once the call settles, its window is fina
 and are read in order, or the slot is a permanent hole, because the allocator is
 already past it. Offsets are therefore not dense.
 
+A provider call that *fails* before the deadline is not proof that nothing
+landed either (issue #6116): a request the storage client abandoned on a
+per-attempt network timeout, or one answered by a transient fault, can still
+commit on the service afterwards. A provider can mark such a fault as an
+unknown outcome, with a settle signal of its own, and the shard then fences the
+window exactly like a flush abandoned at its deadline. The Azure Table provider
+does this for a phase-1 fault after any attempt that may still commit; its
+signal completes once the batch's first entry row is present, or 60 seconds
+after the fault with the row absent, and the batch's rows, which have no
+manifest row, are reclaimed at the next reconciliation.
+
 A hole directly above a trim point looks exactly like a trim to a reader that
 judges by the lowest stored offset. Every provider therefore keeps a **trim
 watermark** (`IWalStorageProvider.GetTrimWatermarkAsync`): the highest offset any
@@ -717,7 +728,10 @@ A flush failure is fail-fast for every affected caller:
    throws. New appends (and the cutover loop's in-progress
    waiters) short-circuit with that exception until the post-failure
    resync clears the latch, so a fault that already faulted later
-   windows is never masked by a fresh successful append.
+   windows is never masked by a fresh successful append. The fault that
+   sets the latch is logged once, at Warning, with the failed window,
+   whether its outcome is unknown and the shard's abandoned windows still
+   in motion; the appends it refuses while latched are not.
 2. Every TCS in the failed window is faulted with the underlying storage
    exception.
 3. Every TCS in *every later in-flight window* is faulted with the same

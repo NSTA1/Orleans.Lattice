@@ -2540,6 +2540,16 @@ internal sealed partial class WalShardGrain(
         catch (Exception ex)
         {
             Trace($"flush.fail  [{slot.StartOffset},{slot.EndOffsetExclusive}) ex={ex.GetType().Name}: {ex.Message}");
+
+            // A provider fault whose outcome is unknown can still land the window
+            // after the resync has read the tail (issue #6116), so it is fenced as
+            // an abandoned window until the provider proves it settled: the
+            // resync re-seeds past it and no read passes it in the meantime.
+            if (WalAppendOutcomeUnknown.Find(ex) is { } unknown)
+            {
+                TrackAbandonedWindow(slot.StartOffset, slot.EndOffsetExclusive, unknown.Settled);
+            }
+
             await HandleFlushFailureAsync(node, ex).ConfigureAwait(true);
             // Failure path's terminal lifecycle stamp. A slot observed
             // at FailureHandled has had its sticky-failure published and
@@ -2640,11 +2650,13 @@ internal sealed partial class WalShardGrain(
         List<TaskCompletionSource<long>> failedAcks;
         List<InFlightFlush> laterSlots;
         List<TaskCompletionSource<long>> stalePending;
+        bool opensEpisode;
         lock (_stateGate)
         {
             // Latch sticky immediately so any concurrent append running on
             // a subsequent grain turn fails fast and does not claim offsets
             // we are about to roll back.
+            opensEpisode = _stickyFailure is null;
             _stickyFailure ??= ex;
 
             // Capture the TCS lists to fault later. We deliberately defer
@@ -2684,6 +2696,11 @@ internal sealed partial class WalShardGrain(
             _pendingOffsets = RentOffsetList();
             _pendingAcks = RentAckList();
             _pendingBatchSizeBytes = 0;
+        }
+
+        if (opensEpisode)
+        {
+            LogStickyEpisodeOpened(failedNode.Value, ex);
         }
 
         // Wait for every other in-flight slot to settle (their tasks
