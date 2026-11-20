@@ -63,6 +63,31 @@ public partial class PhaseTwoWorkerTests
         }
 
         public void Dispose() => _listener.Dispose();
+
+        /// <summary>
+        /// Waits, bounded, for <paramref name="status"/> to be recorded. The measurement
+        /// can land after the faulted commits are observed, on the emitting thread
+        /// (#5626), so a single unlocked read races it.
+        /// </summary>
+        public async Task<string[]> WaitForStatusAsync(string status, TimeSpan timeout)
+        {
+            var deadline = Environment.TickCount64 + (long)timeout.TotalMilliseconds;
+            while (true)
+            {
+                string[] snapshot;
+                lock (Statuses)
+                {
+                    snapshot = Statuses.ToArray();
+                }
+
+                if (snapshot.Contains(status) || Environment.TickCount64 >= deadline)
+                {
+                    return snapshot;
+                }
+
+                await Task.Delay(10).ConfigureAwait(false);
+            }
+        }
     }
 
     [Test]
@@ -165,7 +190,8 @@ public partial class PhaseTwoWorkerTests
             Assert.That(task.IsFaulted, Is.True, "every backlogged commit must fault all-or-nothing");
         }
 
-        Assert.That(recorder.Statuses, Has.Some.EqualTo("503"),
+        var statuses = await recorder.WaitForStatusAsync("503", TimeSpan.FromSeconds(10)).ConfigureAwait(false);
+        Assert.That(statuses, Has.Some.EqualTo("503"),
             "the RequestFailedException arm of the status-tag resolver must emit the numeric HTTP status");
     }
 

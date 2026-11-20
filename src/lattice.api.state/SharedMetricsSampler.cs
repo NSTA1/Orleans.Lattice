@@ -188,7 +188,20 @@ internal sealed class SharedMetricsSampler(
                 try
                 {
                     map = await SampleAllAsync(loop.Request, token).ConfigureAwait(false);
-                    Interlocked.Increment(ref _totalSampleCount);
+
+                    // A pass that finishes after its last subscriber detached is
+                    // dropped uncounted (#6023). Detach cancels under the gate, so
+                    // checking under it means a loop reported torn down never
+                    // records a sample afterwards. Once per tick, uncontended.
+                    lock (_gate)
+                    {
+                        if (token.IsCancellationRequested)
+                        {
+                            break;
+                        }
+
+                        Interlocked.Increment(ref _totalSampleCount);
+                    }
                 }
                 catch (OperationCanceledException)
                 {

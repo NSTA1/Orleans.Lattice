@@ -1,8 +1,11 @@
 # UncheckedStoredVerbatim: without the tree's strict flag a delta is stored as it came.
+# A delta stamped past the target is also trusted by the config re-read
+# (RefreshAboveTargetAsync, #5711), which masks this guard; a delta stamped below
+# the target reaches the strict path only through it.
 MODULE: SchemaCrossRegion
 ROW: UncheckedStoredVerbatim
 FILE: src/lattice.schema/LatticeSchemaVersionWriteInterceptor.cs
-DETECTORS: SchemaCrossRegionIngestIntegrationTests.Crdt_delta_stamped_past_the_target_of_a_tree_without_strict_ingest_is_stored_verbatim
+DETECTORS: SchemaCrossRegionIngestIntegrationTests.Crdt_delta_stamped_past_the_target_of_a_tree_without_strict_ingest_is_stored_verbatim, LatticeSchemaVersionWriteInterceptorTests.OnWriteAsync_non_strict_crdt_ingest_trusts_enveloped_delta
 SUMMARY: a trusted delta is re-judged as if the tree were strict
 
 --- FIND

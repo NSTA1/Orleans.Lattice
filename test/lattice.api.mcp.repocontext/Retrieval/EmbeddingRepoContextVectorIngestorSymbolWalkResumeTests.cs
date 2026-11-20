@@ -107,6 +107,29 @@ public sealed class EmbeddingRepoContextVectorIngestorSymbolWalkResumeTests
     };
 
     /// <summary>
+    /// Measures the page reads of a clean full walk, re-walking (at most three
+    /// times) while the count does not divide evenly across
+    /// <see cref="ExpectedPages"/>: a read the walk did not issue is noise, but a
+    /// count that never divides is a real fan-out change the caller still refuses.
+    /// </summary>
+    private async Task<(int Pages, int Walks)> CalibrateAsync(
+        EmbeddingRepoContextVectorIngestor ingestor, LatticeTreeCallCounter counter)
+    {
+        var pages = 0;
+        var walks = 0;
+        do
+        {
+            counter.Reset();
+            await ingestor.IngestSymbolsAsync(RepoId, Array.Empty<string>(), Array.Empty<string>(), Ct);
+            pages = counter.Count(PageMethod);
+            walks++;
+        }
+        while (pages % ExpectedPages != 0 && walks < 3);
+
+        return (pages, walks);
+    }
+
+    /// <summary>
     /// The core guarantee. A pass that faults partway through the range banks its
     /// position; the next pass reads only the pages it had not reached, so the walk
     /// makes monotonic progress instead of paying for the same leaves again.
@@ -128,10 +151,9 @@ public sealed class EmbeddingRepoContextVectorIngestorSymbolWalkResumeTests
         var ingestor = Ingestor(harness, reporter);
 
         // Calibration: what a walk of the WHOLE range costs in page reads, measured
-        // rather than assumed.
-        counter.Reset();
-        await ingestor.IngestSymbolsAsync(RepoId, Array.Empty<string>(), Array.Empty<string>(), Ct);
-        var fullWalkPages = counter.Count(PageMethod);
+        // rather than assumed. A page read the walk did not issue can land in the
+        // window (#5854), so a count that does not divide evenly is re-measured.
+        var (fullWalkPages, calibrationWalks) = await CalibrateAsync(ingestor, counter);
         var afterClean = reporter.Snapshot();
 
         Assert.That(fullWalkPages, Is.GreaterThan(1),
@@ -142,7 +164,7 @@ public sealed class EmbeddingRepoContextVectorIngestorSymbolWalkResumeTests
         Assert.That(fullWalkPages, Is.EqualTo(callsPerPage * ExpectedPages),
             $"Precondition: the {fullWalkPages} page-read call(s) of a full walk must divide evenly across "
             + $"the {ExpectedPages} range page(s) the corpus spans, or the fixture cannot let exactly one "
-            + "page through before faulting.");
+            + $"page through before faulting ({calibrationWalks} calibration walk(s)).");
 
         // Let exactly one page through, then fault the rest of the range.
         injector.FailAfterMatches = injector.Matched + callsPerPage;
@@ -170,7 +192,7 @@ public sealed class EmbeddingRepoContextVectorIngestorSymbolWalkResumeTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(afterClean.Complete, Is.EqualTo(1),
+            Assert.That(afterClean.Complete, Is.EqualTo(calibrationWalks),
                 "A walk that never had to bank is reported as complete, not resumed.");
             Assert.That(afterFault.Banked, Is.EqualTo(1),
                 "The faulted pass banked its position - without this arm a walk that silently restarted "
@@ -200,9 +222,8 @@ public sealed class EmbeddingRepoContextVectorIngestorSymbolWalkResumeTests
         using var reporter = new RepoContextSymbolWalkReporter();
         var ingestor = Ingestor(harness, reporter);
 
-        counter.Reset();
-        await ingestor.IngestSymbolsAsync(RepoId, Array.Empty<string>(), Array.Empty<string>(), Ct);
-        var callsPerPage = counter.Count(PageMethod) / ExpectedPages;
+        var (fullWalkPages, calibrationWalks) = await CalibrateAsync(ingestor, counter);
+        var callsPerPage = fullWalkPages / ExpectedPages;
 
         injector.FailAfterMatches = injector.Matched + callsPerPage;
         injector.FailFirst = int.MaxValue;
@@ -225,7 +246,7 @@ public sealed class EmbeddingRepoContextVectorIngestorSymbolWalkResumeTests
         {
             Assert.That(afterCircuit.Resumed, Is.EqualTo(1),
                 "Only the one pass that actually consumed banked progress is reported as resumed,");
-            Assert.That(afterCircuit.Complete, Is.EqualTo(2),
+            Assert.That(afterCircuit.Complete, Is.EqualTo(calibrationWalks + 1),
                 "and the pass after the circuit closed starts fresh, which is what lets it observe "
                 + "symbols captured while the cursor was mid-range.");
         });

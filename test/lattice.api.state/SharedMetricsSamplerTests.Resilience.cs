@@ -107,6 +107,53 @@ public partial class SharedMetricsSamplerTests
     }
 
     [Test]
+    public async Task A_pass_in_flight_when_the_last_subscriber_detaches_is_not_counted()
+    {
+        // #6023: a loop reported torn down must record no further sample, even one
+        // whose shard walk was already running when the last subscriber detached.
+        var query = new FlakyStateQuery(failuresBeforeSuccess: 0);
+        var sampler = CreateSampler(query, signal: null);
+        var request = new TreeMetricsRequest
+        {
+            TreeIds = new[] { ResilienceTree },
+            SampleInterval = TimeSpan.FromMilliseconds(20),
+        };
+
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var cts = new CancellationTokenSource();
+        var enumerator = sampler.SubscribeAsync(request, cts.Token).GetAsyncEnumerator(cts.Token);
+        Assert.That(await enumerator.MoveNextAsync(), Is.True);
+        query.Hold = release;
+        await query.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        await cts.CancelAsync();
+        try
+        {
+            await enumerator.DisposeAsync();
+        }
+        catch (OperationCanceledException)
+        {
+            // Disposing a cancelled iterator surfaces the cancellation; expected.
+        }
+
+        Assert.That(sampler.ActiveSamplerCount, Is.Zero);
+        var quiesced = sampler.TotalSampleCount;
+        var attemptsBeforeRelease = query.Attempts;
+        release.SetResult();
+        var deadline = Environment.TickCount64 + 10_000;
+        while (query.Attempts <= attemptsBeforeRelease && Environment.TickCount64 < deadline)
+        {
+            await Task.Delay(10);
+        }
+
+        Assert.That(query.Attempts, Is.GreaterThan(attemptsBeforeRelease), "the held pass completed");
+        await Task.Delay(100);
+
+        Assert.That(sampler.TotalSampleCount, Is.EqualTo(quiesced),
+            "a pass that finishes after the loop is torn down must not be recorded");
+    }
+
+    [Test]
     public async Task Subjects_differing_only_by_claim_are_not_coalesced_onto_one_loop()
     {
         var query = new FlakyStateQuery(failuresBeforeSuccess: 0);
@@ -241,22 +288,38 @@ public partial class SharedMetricsSamplerTests
     private sealed class FlakyStateQuery(int failuresBeforeSuccess) : ILatticeStateQuery
     {
         private int _attempts;
+        private TaskCompletionSource? _held;
+
+        /// <summary>When set, the next shard walk signals <see cref="Entered"/> and waits on it, ignoring cancellation.</summary>
+        public TaskCompletionSource? Hold
+        {
+            get => Volatile.Read(ref _held);
+            set => Volatile.Write(ref _held, value);
+        }
+
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public int Attempts => Volatile.Read(ref _attempts);
 
         public List<ViewStateSummary> Views { get; } = [];
 
-        public Task<ShardSummariesResult> GetShardSummariesAsync(
+        public async Task<ShardSummariesResult> GetShardSummariesAsync(
             string treeId,
             bool deep = true,
             CancellationToken cancellationToken = default)
         {
+            if (Interlocked.Exchange(ref _held, null) is { } hold)
+            {
+                Entered.TrySetResult();
+                await hold.Task;
+            }
+
             if (Interlocked.Increment(ref _attempts) <= failuresBeforeSuccess)
             {
                 throw new InvalidOperationException("shard walk unavailable");
             }
 
-            return Task.FromResult(ShardSummariesResult.Found(treeId, new[]
+            return ShardSummariesResult.Found(treeId, new[]
             {
                 new ShardStateSummary
                 {
@@ -268,7 +331,7 @@ public partial class SharedMetricsSamplerTests
                     OpsPerSecond = 0,
                     SplitInProgress = false,
                 },
-            }));
+            });
         }
 
         public Task<TreeCatalogPage> ListTreesAsync(CatalogRequest request, CancellationToken cancellationToken = default)
