@@ -158,7 +158,7 @@ public sealed class U2Contract() : ChapterContract("U2")
         TimeoutException? timedOut = null;
         for (var attempt = 1; ; attempt++)
         {
-            var migration = await schema.StartMigrationAsync(treeId);
+            var migration = await ContractCalls.StartOperationAsync(what, id => schema.StartMigrationAsync(treeId, id));
             try
             {
                 await ContractWait.SucceededWhileAdvancingAsync(what, () => schema.GetSchemaOperationStatusAsync(migration.OperationId), MigrationStall, MigrationCeiling, last);
