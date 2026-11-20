@@ -139,22 +139,43 @@ public sealed class U2Contract() : ChapterContract("U2")
     /// <summary>The absolute deadline for a migration, however steadily it advances.</summary>
     private static readonly TimeSpan MigrationCeiling = TimeSpan.FromMinutes(8);
 
-    /// <summary>Starts a migration of <paramref name="treeId"/> and waits for it to succeed while it advances.</summary>
+    /// <summary>How many times a migration is started when a saturated WAL fails it.</summary>
+    private const int MigrationSaturationAttempts = 3;
+
+    /// <summary>How long to back off before restarting a migration a saturated WAL failed.</summary>
+    private static readonly TimeSpan MigrationSaturationBackoff = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Starts a migration of <paramref name="treeId"/> and waits for it to succeed while it
+    /// advances, restarting it when a saturated WAL fails it.
+    /// </summary>
     /// <param name="schema">The Schema API.</param>
     /// <param name="treeId">The tree.</param>
     /// <param name="what">The migration, for messages.</param>
     public static async Task MigrateAsync(Orleans.Lattice.Api.Schema.Grpc.LatticeSchemaApiGrpcClient schema, string treeId, string what)
     {
-        var migration = await schema.StartMigrationAsync(treeId);
         var last = new System.Runtime.CompilerServices.StrongBox<Orleans.Lattice.Api.Operations.LatticeOperationStatus?>();
         TimeoutException? timedOut = null;
-        try
+        for (var attempt = 1; ; attempt++)
         {
-            await ContractWait.SucceededWhileAdvancingAsync(what, () => schema.GetSchemaOperationStatusAsync(migration.OperationId), MigrationStall, MigrationCeiling, last);
-        }
-        catch (TimeoutException ex)
-        {
-            timedOut = ex;
+            var migration = await schema.StartMigrationAsync(treeId);
+            try
+            {
+                await ContractWait.SucceededWhileAdvancingAsync(what, () => schema.GetSchemaOperationStatusAsync(migration.OperationId), MigrationStall, MigrationCeiling, last);
+                break;
+            }
+            catch (TimeoutException ex)
+            {
+                timedOut = ex;
+                break;
+            }
+            catch (InvalidOperationException) when (attempt < MigrationSaturationAttempts
+                && last.Value?.FailureReason?.Contains("LatticeSaturatedException", StringComparison.Ordinal) == true)
+            {
+                // A saturated WAL refuses the migration's appends and fails it terminally; the
+                // refusal asks the caller to back off and retry, so start the migration again.
+                await Task.Delay(MigrationSaturationBackoff);
+            }
         }
 
         if (timedOut is null)
