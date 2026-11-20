@@ -215,9 +215,23 @@ public sealed class StrictIngestShadowImportDeadLetterIntegrationTests
     [Test]
     public async Task Prepared_rows_decided_after_them_in_a_shadow_import_become_visible()
     {
-        Assert.Ignore("#5691: prepared rows of an import decided by a later decision row never become visible.");
-
         var tree = await StrictAliasedTreeAsync("ssi-late-decision");
+        var saga = Guid.NewGuid();
+
+        await ImportAsync(tree, Prepared(RefusedKey, Positive, saga, 0), Prepared(ValidKey, Positive, saga, 1), Decision(saga));
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(await TotalAsync(tree, RefusedKey), Is.EqualTo(40m));
+            Assert.That(await TotalAsync(tree, ValidKey), Is.EqualTo(40m));
+        });
+    }
+
+    [Test]
+    public async Task Prepared_rows_decided_after_them_in_a_shadow_import_of_an_unaliased_lax_tree_become_visible()
+    {
+        var tree = $"ssi-late-decision-plain-{Guid.NewGuid():N}";
+        await _cluster.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId).RegisterAsync(tree, new TreeRegistryEntry());
         var saga = Guid.NewGuid();
 
         await ImportAsync(tree, Prepared(RefusedKey, Positive, saga, 0), Prepared(ValidKey, Positive, saga, 1), Decision(saga));
