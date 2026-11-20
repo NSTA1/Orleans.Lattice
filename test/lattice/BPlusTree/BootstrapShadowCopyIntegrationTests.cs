@@ -61,8 +61,8 @@ public sealed class BootstrapShadowCopyIntegrationTests
 
         Assert.That(await tree.GetAsync("imported"), Is.Null,
             "Readers outside bootstrap apply must remain on the original tree until cutover.");
-        Assert.That(await tree.GetAsync("incremental"), Is.Null,
-            "Concurrent incremental replication must join the shadow copy, not become visible early.");
+        Assert.That(await tree.GetAsync("incremental"), Is.EqualTo(new byte[] { 3 }),
+            "A committed incremental apply lands on the original tree, which mirrors it to the shadow copy (#5694).");
 
         await resize.CompleteBootstrapCopyAsync(operationId);
 
@@ -96,5 +96,49 @@ public sealed class BootstrapShadowCopyIntegrationTests
         Assert.That(await tree.GetAsync("existing"), Is.EqualTo(new byte[] { 1 }));
         Assert.That(await tree.GetAsync("partial-import"), Is.Null,
             "An aborted copy must not publish any partially imported rows.");
+    }
+
+    [Test]
+    public async Task Committed_stream_applies_during_hold_survive_bootstrap_copy_abort()
+    {
+        // Issue #5694: the sender's cursor and the receiver's live dedupe cache
+        // both treat these applies as delivered, so nothing re-ships them after
+        // the copy is discarded.
+        var treeName = $"bootstrap-shadow-abort-live-{Guid.NewGuid():N}";
+        var tree = _cluster.GrainFactory.GetGrain<ILattice>(treeName);
+        var resize = _cluster.GrainFactory.GetGrain<ITreeResizeGrain>(treeName);
+        var apply = _cluster.GrainFactory.GetGrain<IReplicationApplyGrain>(treeName);
+        await tree.SetAsync("existing", [1]);
+        await tree.SetAsync("doomed", [1]);
+
+        var operationId = Guid.NewGuid().ToString("N");
+        var shadowTreeId = await resize.BeginBootstrapCopyAsync(operationId);
+        await resize.RunResizePassAsync();
+        Assert.That(await resize.IsBootstrapCopyReadyAsync(operationId), Is.True);
+
+        using (LatticeBootstrapShadowRouteContext.BeginScope(treeName, shadowTreeId))
+        {
+            await tree.SetAsync("partial-import", [2]);
+        }
+
+        var hlc = new HybridLogicalClock { WallClockTicks = DateTime.UtcNow.Ticks };
+        await apply.ApplySetAsync("live-set", [3], hlc, "source", sourceVectorClock: null, expiresAtTicks: 0);
+        await apply.ApplyMergeManyAsync(
+        [
+            new ApplyMergeItem { Key = "live-merge-a", Value = [4], SourceHlc = hlc, OriginClusterId = "source" },
+            new ApplyMergeItem { Key = "live-merge-b", Value = [5], SourceHlc = hlc, OriginClusterId = "source" },
+        ]);
+        await apply.ApplyDeleteAsync("doomed", hlc, "source", sourceVectorClock: null);
+
+        await resize.AbortBootstrapCopyAsync(operationId);
+
+        Assert.That(await tree.GetAsync("partial-import"), Is.Null,
+            "An aborted copy must not publish any partially imported rows.");
+        Assert.That(await tree.GetAsync("live-set"), Is.EqualTo(new byte[] { 3 }),
+            "A committed stream apply delivered during the hold must survive the copy's abort.");
+        Assert.That(await tree.GetAsync("live-merge-a"), Is.EqualTo(new byte[] { 4 }));
+        Assert.That(await tree.GetAsync("live-merge-b"), Is.EqualTo(new byte[] { 5 }));
+        Assert.That(await tree.GetAsync("doomed"), Is.Null,
+            "A committed stream delete delivered during the hold must survive the copy's abort.");
     }
 }

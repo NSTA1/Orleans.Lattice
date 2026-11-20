@@ -27,7 +27,8 @@ internal static class ReplicationApplyScope
     /// <summary>
     /// Whether the current replication apply targets the original (old)
     /// physical tree even while a bootstrap hold routes applies to its held
-    /// shadow copy (issue #4791).
+    /// shadow copy: a prepare's mirror (issue #4791), or any committed apply
+    /// (issue #5694, <see cref="EnterCommitted"/>).
     /// </summary>
     internal static bool IsBootstrapShadowBypassed => BypassBootstrapShadow.Value;
 
@@ -41,4 +42,22 @@ internal static class ReplicationApplyScope
     /// method, whose return discards the mark.
     /// </summary>
     internal static void EnterBootstrapShadowBypass() => BypassBootstrapShadow.Value = true;
+
+    /// <summary>
+    /// Marks the current flow as a committed (non-prepared) replication apply,
+    /// which targets the original physical tree during a bootstrap hold (issue
+    /// #5694). The original's resize mirror forwards the write to the held copy,
+    /// as it does a local write, so the write reaches both trees: an abort that
+    /// discards the copy keeps it, and a cutover publishes it. Routed to the
+    /// held copy alone, it was lost with an aborted copy, because the sender's
+    /// cursor and the receiver's live dedupe cache already count it delivered.
+    /// A bootstrap drain's own rows still reach the copy, because the drain's
+    /// route scope (<see cref="LatticeBootstrapShadowRouteContext"/>) takes
+    /// precedence. Same lifetime rule as <see cref="Enter"/>.
+    /// </summary>
+    internal static void EnterCommitted()
+    {
+        Active.Value = true;
+        BypassBootstrapShadow.Value = true;
+    }
 }
