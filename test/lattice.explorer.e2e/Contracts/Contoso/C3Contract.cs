@@ -64,16 +64,31 @@ public sealed class C3Contract() : ChapterContract("C3")
             }
         }
 
+        // A lifecycle run that outlasts the facade's accept window returns Pending and keeps
+        // running, owned rules still in place, so each step is taken only once no run is in
+        // flight and the teardown ends only when the task board has left the installed list.
         var apps = facades.Apps;
-        if (await A5Contract.InstalledAsync(apps) is { } app)
+        await ContractWait.UntilAsync("the task board's uninstall", async () =>
         {
+            if (await A5Contract.InstalledAsync(apps) is not { } app)
+            {
+                return true;
+            }
+
+            if (app.PendingState is not null)
+            {
+                return false;
+            }
+
             if (app.State == AppLifecycleState.Enabled)
             {
                 await apps.DisableAsync(Names.Apps.TaskBoard);
+                return false;
             }
 
             await apps.UninstallAsync(Names.Apps.TaskBoard);
-        }
+            return await A5Contract.InstalledAsync(apps) is null;
+        }, OperationPatience);
 
         foreach (var rule in ContosoAccess.A2RulesNamed(Names.Rules.StewardsFactory))
         {
@@ -185,7 +200,8 @@ public sealed class C3Contract() : ChapterContract("C3")
         Require(priyasGroups.Count == 0, $"priya is in no group ({string.Join(", ", priyasGroups)})");
         var rules = await ContractCalls.AllRulesAsync(auth);
         Require(!rules.Any(rule => rule.RuleId == Names.Rules.StewardsFactory), "stewards-factory is gone");
-        Require(!rules.Any(rule => rule.Subject == LatticeSubjectSelector.User(Personas.Priya.Id) || rule.Subject == LatticeSubjectSelector.Group(Names.Groups.DataStewards)), "no rule names priya or her group");
+        var naming = rules.Where(rule => rule.Subject == LatticeSubjectSelector.User(Personas.Priya.Id) || rule.Subject == LatticeSubjectSelector.Group(Names.Groups.DataStewards)).ToList();
+        Require(naming.Count == 0, $"no rule names priya or her group ({string.Join(", ", naming.Select(rule => $"{rule.Scope.TreeId}/{rule.RuleId}"))})");
 
         var app = await A5Contract.InstalledAsync(facades.Apps);
         Require(app is null, $"the task board is uninstalled ({app?.State})");

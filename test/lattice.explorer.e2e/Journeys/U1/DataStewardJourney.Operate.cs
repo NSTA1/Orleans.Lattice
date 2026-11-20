@@ -180,7 +180,7 @@ public sealed partial class DataStewardJourney
     private async Task OpenViewEntryAsync(string view, string key)
     {
         await _priya.Shell.GotoAsync($"/data/view-{view}?key={Uri.EscapeDataString(key)}");
-        await Expect(_tree.Heading).ToHaveTextAsync(view);
+        await Expect(_tree.Heading).ToHaveTextAsync(view, new() { Timeout = PanelSettled.BoundMs });
         await _tree.ExpectEntryAsync(key);
     }
 }
