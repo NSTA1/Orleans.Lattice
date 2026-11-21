@@ -17,17 +17,17 @@ public sealed partial class CiMemberPullRequestTieringTests
     [TestCase(MemberSkippedTiers)]
     public void Scheduling_shards_price_all_certified_modules_in_full_and_member_plans(string? skippedTiers)
     {
-        // Each price is the mean of two measured item durations (#5166): the
-        // receipt-free bucket push ci.yml run 40909619830 (head 9418a498d) and
-        // the nightly-equivalent coverage.yml run 40923724192 (head 0e4aa6b2a).
+        // Each price is the mean of four measured item durations: the 10.4.0
+        // release ci.yml run 44825250867 (head 94d9a3f94, receipts ignored) and
+        // the coverage.yml runs 44271784821, 44470524198 and 44737600776.
         const double itemOverheadMinutes = 0.04;
         var evidenceMinutes = new Dictionary<string, double>(StringComparer.Ordinal)
         {
-            ["formal-tlc-scheduling-replay-two-partitions"] = (35.22 + 52.78) / 2,
-            ["formal-tlc-scheduling"] = (31.71 + 30.38) / 2,
-            ["formal-tlc-scheduling-workload-b"] = (12.11 + 20.64) / 2,
-            ["formal-tlc-scheduling-shipping"] = (4.37 + 4.20) / 2,
-            ["formal-tlc-scheduling-shipping-variants"] = (22.29 + 17.23) / 2,
+            ["formal-tlc-scheduling-replay-two-partitions"] = (112.38 + 117.54 + 101.88 + 88.75) / 4,
+            ["formal-tlc-scheduling"] = (55.98 + 49.68 + 43.25 + 43.21) / 4,
+            ["formal-tlc-scheduling-workload-b"] = (41.56 + 32.39 + 23.75 + 34.56) / 4,
+            ["formal-tlc-scheduling-shipping"] = (4.41 + 4.35 + 2.69 + 4.50) / 4,
+            ["formal-tlc-scheduling-shipping-variants"] = (14.10 + 16.27 + 13.34 + 14.15) / 4,
         };
         var scheduling = Plan(["lattice"], skippedTiers)
             .Where(item => item.Shard.StartsWith("formal-tlc-scheduling", StringComparison.Ordinal)).ToArray();

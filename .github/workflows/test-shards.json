@@ -420,35 +420,35 @@
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardSchedulingReplayTwoPartitions"],
-        "note": "The ReplayPermits TwoPartitions variant remains in a dedicated one-case shard: it is the longest indivisible TLC case and so sets the cold critical path. Its measured item took 35.22 minutes in the receipt-free bucket push ci.yml run 40909619830 (head 9418a498d, job 123577568395) and 52.78 in coverage.yml run 40923724192 (head 0e4aa6b2a, job 123623834893); 44.00 is their mean, a planning input, not a future runtime guarantee. It remains separate from the other scheduling groups."
+        "note": "The ReplayPermits TwoPartitions variant remains in a dedicated one-case shard: it is the longest indivisible TLC case and so sets the cold critical path. Its measured item took 117.54, 101.88 and 88.75 minutes in coverage.yml runs 44271784821 (head 057b0d2c4), 44470524198 (head 2906eb64e) and 44737600776 (head 2506cbd44), and 112.38 in the receipt-free 10.4.0 release-line push ci.yml run 44825250867 (head 94d9a3f94, job 136598167701); 105.14 is their mean, a planning input, not a future runtime guarantee. It remains separate from the other scheduling groups."
       },
       {
         "shard": "formal-tlc-scheduling",
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardScheduling"],
-        "note": "The 106-case group contains ReplayPermits base/PartialPrefix and the WalBackPressure, MaterialiserDrain, WalAdmission, WalGcStarvationDriveWitness and TurnOccupancy cases; future scheduling modules also fall back here. Its measured item took 31.71 minutes in the receipt-free bucket push ci.yml run 40909619830 (head 9418a498d, job 123577568364) and 30.38 in coverage.yml run 40923724192 (head 0e4aa6b2a, job 123623834850), led by the PartialPrefix variant (27.06 minutes) and the ReplayPermits base (23.38); 31.05 is their mean. Estimates are planning inputs, not runtime guarantees."
+        "note": "The 106-case group contains ReplayPermits base/PartialPrefix and the WalBackPressure, MaterialiserDrain, WalAdmission, WalGcStarvationDriveWitness and TurnOccupancy cases; future scheduling modules also fall back here. Its measured item took 49.68, 43.25 and 43.21 minutes in coverage.yml runs 44271784821 (head 057b0d2c4), 44470524198 (head 2906eb64e) and 44737600776 (head 2506cbd44), and 55.98 in the receipt-free 10.4.0 release-line push ci.yml run 44825250867 (head 94d9a3f94, job 136598167648); 48.03 is their mean. Estimates are planning inputs, not runtime guarantees."
       },
       {
         "shard": "formal-tlc-scheduling-workload-b",
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardSchedulingWorkloadB"],
-        "note": "The 93-case group contains ReplayPermits mutations and the WalGcStarvationDrive, SagaReadProgress and TagIndexReconcile cases. Its measured item took 12.11 minutes in the receipt-free bucket push ci.yml run 40909619830 (head 9418a498d, job 123577568215) and 20.64 in coverage.yml run 40923724192 (head 0e4aa6b2a, job 123623834772); 16.38 is their mean. Estimates are planning inputs, not runtime guarantees."
+        "note": "The 93-case group contains ReplayPermits mutations and the WalGcStarvationDrive, SagaReadProgress and TagIndexReconcile cases. Its measured item took 32.39, 23.75 and 34.56 minutes in coverage.yml runs 44271784821 (head 057b0d2c4), 44470524198 (head 2906eb64e) and 44737600776 (head 2506cbd44), and 41.56 in the receipt-free 10.4.0 release-line push ci.yml run 44825250867 (head 94d9a3f94, job 136598167781); 33.07 is their mean. Estimates are planning inputs, not runtime guarantees."
       },
       {
         "shard": "formal-tlc-scheduling-shipping",
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardSchedulingShipping"],
-        "note": "ReplicationShipping base and all 26 paired mutations remain together (27 TLC cases), preserving process-local control behavior. Its measured item took 4.37 minutes in the receipt-free bucket push ci.yml run 40909619830 (head 9418a498d, job 123577568186) and 4.20 in coverage.yml run 40923724192 (head 0e4aa6b2a, job 123623834772); 4.29 is their mean, a planning input, not a future runtime guarantee."
+        "note": "ReplicationShipping base and all 26 paired mutations remain together (27 TLC cases), preserving process-local control behavior. Its measured item took 4.35, 2.69 and 4.50 minutes in coverage.yml runs 44271784821 (head 057b0d2c4), 44470524198 (head 2906eb64e) and 44737600776 (head 2506cbd44), and 4.41 in the receipt-free 10.4.0 release-line push ci.yml run 44825250867 (head 94d9a3f94, job 136598167648); 3.99 is their mean, a planning input, not a future runtime guarantee."
       },
       {
         "shard": "formal-tlc-scheduling-shipping-variants",
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardSchedulingShippingVariants"],
-        "note": "Every full ReplicationShipping variant, currently the one FourRecords case. Its measured item took 22.29 minutes in the receipt-free bucket push ci.yml run 40909619830 (head 9418a498d, job 123577568186) and 17.23 in coverage.yml run 40923724192 (head 0e4aa6b2a, job 123623834836); 19.76 is their mean, a planning input, not a future runtime guarantee."
+        "note": "Every full ReplicationShipping variant, currently the one FourRecords case. Its measured item took 16.27, 13.34 and 14.15 minutes in coverage.yml runs 44271784821 (head 057b0d2c4), 44470524198 (head 2906eb64e) and 44737600776 (head 2506cbd44), and 14.10 in the receipt-free 10.4.0 release-line push ci.yml run 44825250867 (head 94d9a3f94, job 136598167725); 14.47 is their mean, a planning input, not a future runtime guarantee."
       },
       {
         "shard": "formal-tlc-schema",
@@ -500,6 +500,58 @@
         "shard": "rest",
         "complement": true,
         "note": "2.2 min over 1166 tests. Root-namespace fixtures plus Archive, Bootstrap, Claims, Content, Docs, Fakes, Graph, Harness, Source, Usage."
+      }
+    ]
+  },
+  "lattice.replication": {
+    "namespaceRoot": "Orleans.Lattice.Replication.Tests",
+    "crossTiers": false,
+    "shards": [
+      {
+        "shard": "chaos",
+        "include": ["Chaos."],
+        "note": "6.5 min over 61 tests in 29 fixtures. Shard figures are wall time including per-fixture setup, measured from the lattice.replication TRX of the 10.4.0 release run 44825250867 and of a pull request run of the same week. The package was a single 41-43 minute item before it was sharded. A member pull request excludes the Chaos category, so this shard runs empty there and is reported NOT JUDGED rather than failed."
+      },
+      {
+        "shard": "cross",
+        "include": ["Cross"],
+        "note": "6.3 min over 167 tests in 9 fixtures. Root-namespace CrossCluster* and CrossTree* classes; no trailing dot, so it is a class-name prefix."
+      },
+      {
+        "shard": "reaped-bootstrap",
+        "include": ["Reaped", "Bootstrap"],
+        "note": "9.6 min over 101 tests in 7 fixtures. Reaped-key and bootstrap integration fixtures: few tests, each a multi-cluster run."
+      },
+      {
+        "shard": "materialised",
+        "include": ["Materialised"],
+        "note": "5.7 min over 367 tests in 28 fixtures. MaterialisedView* replication fixtures."
+      },
+      {
+        "shard": "rest",
+        "complement": true,
+        "note": "13.3 min over 4129 tests in 291 fixtures, about half of it per-fixture cluster setup. Led by Coordinated* (3.3 min), then Causal*, Receiver*, Strict* and Coyote."
+      }
+    ]
+  },
+  "lattice.backup": {
+    "namespaceRoot": "Orleans.Lattice.Backup.Tests",
+    "crossTiers": false,
+    "shards": [
+      {
+        "shard": "chaos",
+        "include": ["Chaos."],
+        "note": "4.0 min over 9 tests in 4 fixtures, from the lattice.backup TRX of release run 44825250867 (wall time including fixture setup). The package was a single 16-27 minute item before it was sharded. A member pull request excludes the Chaos category, so this shard runs empty there."
+      },
+      {
+        "shard": "lattice",
+        "include": ["Lattice"],
+        "note": "11.8 min over 267 tests in 36 fixtures. Root-namespace Lattice* end-to-end backup and restore fixtures; no trailing dot, so it is a class-name prefix."
+      },
+      {
+        "shard": "rest",
+        "complement": true,
+        "note": "10.7 min over 592 tests in 78 fixtures."
       }
     ]
   }

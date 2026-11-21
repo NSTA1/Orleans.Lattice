@@ -100,9 +100,8 @@ public sealed partial class CiMemberPullRequestTieringTests
     public void The_planner_skips_exactly_the_requested_tiers_and_drops_no_shard()
     {
         // One package of each shape: crossed with the tiers (lattice), sharded
-        // but untiered (repocontext), and unsharded (replication, which carries
-        // chaos fixtures).
-        string[] packages = ["lattice", "lattice.api.mcp.repocontext", "lattice.replication"];
+        // but untiered (repocontext), and unsharded (dashboards).
+        string[] packages = ["lattice", "lattice.api.mcp.repocontext", "lattice.dashboards"];
 
         var full = Plan(packages, skipTiers: null);
         var member = Plan(packages, skipTiers: MemberSkippedTiers);

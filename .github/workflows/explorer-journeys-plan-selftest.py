@@ -288,8 +288,10 @@ class PlanTests(unittest.TestCase):
             self.assertIsInstance(leg["timeout"], int)
             self.assertGreater(leg["timeout"], 0)
             self.assertTrue(leg["expect"])
-            # runner-overflow.py sends the longest legs to the pool first, by `estimate`.
-            self.assertEqual(leg["timeout"], leg["estimate"], leg["name"])
+            # runner-overflow.py sends the longest legs to the pool first, by `estimate`:
+            # the measured minutes, else the timeout, and never above the timeout.
+            self.assertEqual(planner.ESTIMATES.get(leg["name"], leg["timeout"]), leg["estimate"], leg["name"])
+            self.assertLessEqual(leg["estimate"], leg["timeout"], leg["name"])
             self.assertNotIn("runsOn", leg, "the planner plans; the lane's routing step routes")
 
     def test_story_legs_need_their_fixture(self):
@@ -490,7 +492,9 @@ class ContractLegTests(unittest.TestCase):
         self.assertNotIn(f"_C1{planner.CONFORMANCE_CASE_SUFFIX}", f"{fixture}.20_C10{planner.CONFORMANCE_CASE_SUFFIX}")
         self.assertIn("Fabrikam", legs["contract-t5"]["expect"])
         self.assertEqual(planner.TIMEOUTS["contract"], leg["timeout"])
-        self.assertEqual(leg["timeout"], leg["estimate"])
+        self.assertEqual(planner.ESTIMATES["contract-c1"], leg["estimate"])
+        self.assertEqual(planner.TIMEOUTS["contract"], legs["contract-t5"]["estimate"],
+                         "an unmeasured leg sorts as its timeout")
 
     def test_the_outline_closure_follows_consumes_transitively(self):
         graph = planner.outline_graph(self.tree.root)

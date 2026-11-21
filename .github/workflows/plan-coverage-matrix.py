@@ -112,6 +112,9 @@ def plan(root: Path, max_legs: int = 10) -> list[dict]:
         raise ValueError("No runnable coverage items")
     for leg in legs:
         leg["ui"] = any(item["package"] == UI_PACKAGE for item in leg["items"])
+        # The pool image bakes in Chromium's system packages only; a UI leg needs
+        # Firefox's and WebKit's too, so runner-overflow.py keeps it hosted.
+        leg["needsHosted"] = leg["ui"]
     return legs
 
 

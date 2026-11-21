@@ -295,15 +295,16 @@ full configurations and all twenty-six pairs in 2745.4195361 monotonic seconds.
 Its accepted launcher-artifact completion is not a recovered CLI terminal event,
 loaded-DLL attestation or peak-RSS measurement. CI routing does not compose
 those certificates. The matrix prices the five scheduling items at the means of
-two measured work-item times, from the receipt-free bucket push ci.yml run
-40909619830 (head 9418a498d) and the nightly-equivalent coverage.yml run
-40923724192 (head 0e4aa6b2a), both of which passed every case: the dedicated
-TwoPartitions item took 35.22 and 52.78 minutes (jobs 123577568395 and
-123623834893), priced 44.00; the 106-case general group 31.71 and 30.38, priced
-31.05; the 93-case group 12.11 and 20.64, priced 16.38; Shipping base/pairs 4.37
-and 4.20, priced 4.29; and FourRecords 22.29 and 17.23, priced 19.76. A single
-case varies up to 1.5x between runs on identical inputs, so the estimates are
-planning inputs, not runtime guarantees.
+four measured work-item times, from the nightly coverage.yml runs 44271784821
+(head 057b0d2c4), 44470524198 (head 2906eb64e) and 44737600776 (head 2506cbd44)
+and the receipt-free 10.4.0 release-line push ci.yml run 44825250867 (head
+94d9a3f94), all of which passed every case: the dedicated TwoPartitions item
+took 117.54, 101.88, 88.75 and 112.38 minutes (release job 136598167701), priced
+105.14; the 106-case general group 49.68, 43.25, 43.21 and 55.98, priced 48.03;
+the 93-case group 32.39, 23.75, 34.56 and 41.56, priced 33.07; Shipping
+base/pairs 4.35, 2.69, 4.50 and 4.41, priced 3.99; and FourRecords 16.27, 13.34,
+14.15 and 14.10, priced 14.47. An item varies up to 1.75x across these runs, so
+the estimates are planning inputs, not runtime guarantees.
 
 ## Defects found during the bucket
 

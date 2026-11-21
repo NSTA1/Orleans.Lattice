@@ -26,6 +26,11 @@ whenever RUNNER_POOL is set, whatever the hosted count (even an unreadable one),
 and takes no hosted slot. Pin a leg only when it is known not to pass on a
 hosted runner (explorer-journeys-plan.py's NEEDS_POOL says why per leg).
 
+A leg marked `"needsHosted": true` is the inverse pin: it never overflows to the
+pool, and it takes a hosted slot before any unpinned leg does. Coverage's UI
+legs carry it, because they need Firefox and WebKit system packages and the
+pool image bakes in Chromium's only (it cannot sudo to install the rest).
+
 FAILS TOWARD HOSTED. Without RUNNER_POOL every leg stays hosted, a pinned one
 included, so the pool is opt-in by a single repository variable. If the GitHub
 API cannot be read, every unpinned leg stays hosted too: the cost of a wrong
@@ -96,15 +101,16 @@ def route(legs_by_file: list[list[dict]], pool: list[str] | None, busy: int | No
     pinned = [leg for leg in everything if leg.get("needsPool") is True]
     for leg in pinned:
         to_pool(leg)
-    rest = [leg for leg in everything if leg.get("needsPool") is not True]
+    held = [leg for leg in everything if leg.get("needsPool") is not True and leg.get("needsHosted") is True]
+    rest = [leg for leg in everything if leg.get("needsPool") is not True and leg.get("needsHosted") is not True]
     if busy is None:
-        return len(rest), len(pinned)
-    slots = max(0, budget - busy)
+        return len(held) + len(rest), len(pinned)
+    slots = max(0, budget - busy - len(held))
     overflow = max(0, len(rest) - slots)
     longest_first = sorted(rest, key=lambda leg: float(leg.get("estimate") or 0), reverse=True)
     for leg in longest_first[:overflow]:
         to_pool(leg)
-    return len(rest) - overflow, len(pinned) + overflow
+    return len(held) + len(rest) - overflow, len(pinned) + overflow
 
 
 def _get(url: str, token: str) -> dict:
@@ -261,6 +267,18 @@ def self_test() -> int:
     t = legs(10, 30)
     t[0]["needsPool"] = "yes"
     check(route([t], pool, 5, 18) == (2, 0), "pinned: only a literal true pins")
+
+    u = legs(10, 30, 20, 5)
+    u[1]["needsHosted"] = True
+    check(route([u], pool, 25, 18) == (1, 3), "held: a hosted-pinned leg never pools, even over budget")
+    check(u[1]["pool"] is False and all(l["pool"] for i, l in enumerate(u) if i != 1),
+          "held: only the hosted-pinned leg stays hosted")
+
+    v = legs(10, 30, 20, 5)
+    v[1]["needsHosted"] = True
+    check(route([v], pool, 16, 18) == (2, 2), "held: takes a hosted slot first")
+    check({l["id"] for l in v if l["pool"]} == {"leg-3", "leg-1"},
+          "held: the longest unpinned legs overflow into the slot it took")
 
     for raw, ok in (("", None), ('["self-hosted","lattice-pool"]', pool)):
         check(parse_pool(raw) == ok, f"parse_pool({raw!r})")
