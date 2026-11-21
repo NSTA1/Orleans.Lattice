@@ -224,6 +224,14 @@ internal sealed partial class ViewMaintainerGrain
     public async Task<bool> ReconcileAsync(CancellationToken cancellationToken = default)
     {
         await GuardJointMaintenanceAdmissionAsync(cancellationToken);
+
+        // An imminent decommission cancels the reconcile's shadow build (#5729),
+        // and a repairing reconcile supersedes any sliced source-swap heal.
+        using var maintenanceLink = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, MaintenanceToken);
+        cancellationToken = maintenanceLink.Token;
+        _healEpoch++;
+        _shadowHeal = null;
+
         using var viewWriteScope = ViewWriteContext.BeginScope();
         await ReleaseUncommittedJointOwnershipAsync();
         if (HasJointOwnership)
@@ -493,7 +501,27 @@ internal sealed partial class ViewMaintainerGrain
     /// their TTL. Does not advance the checkpoint or flip the active generation;
     /// the caller swaps.
     /// </summary>
+    /// <remarks>
+    /// Runs the three build steps back to back in one turn. The source-swap heal
+    /// drives the same steps one bounded slice per drain instead (#5546; see
+    /// <c>ViewMaintainerGrain.SourceHeal.cs</c>).
+    /// </remarks>
     private async Task<ShadowBuildResult> BuildShadowAsync(ViewRegistration registration, CancellationToken cancellationToken)
+    {
+        var progress = await BeginShadowBuildAsync(registration, cancellationToken);
+        await ScanShadowKeysAsync(progress, cancellationToken);
+        await ProjectShadowSliceAsync(progress, int.MaxValue, cancellationToken);
+        return progress.ToResult();
+    }
+
+    /// <summary>
+    /// First build step: captures the resume floors, abandons staged atomic
+    /// batches, freshens the aggregation idempotency keys, and clears the shadow
+    /// generation tree. Returns the progress the remaining steps advance.
+    /// </summary>
+    private async Task<ShadowBuildProgress> BeginShadowBuildAsync(
+        ViewRegistration registration,
+        CancellationToken cancellationToken)
     {
         // As for the in-place rebuild: no shadow built from current source state
         // may be swapped in while a discarded cross-tree slice can still flip.
@@ -539,16 +567,13 @@ internal sealed partial class ViewMaintainerGrain
             await state.WriteStateAsync();
         }
 
-        var shadowGeneration = state.State.ActiveGeneration + 1;
-        var shadowTree = grainFactory.GetGrain<ILattice>(GenerationTreeId(shadowGeneration));
+        var baseGeneration = state.State.ActiveGeneration;
+        var shadowTree = grainFactory.GetGrain<ILattice>(GenerationTreeId(baseGeneration + 1));
 
         // Clear the shadow: it is empty in the steady state, but an earlier crashed
-        // build may have left a partial generation under the same id.
+        // (or abandoned sliced) build may have left a partial generation under the
+        // same id.
         await ClearTreeAsync(shadowTree, cancellationToken);
-
-        var sourceTree = grainFactory.GetGrain<ILattice>(walTreeId);
-        var highest = HybridLogicalClock.Zero;
-        var aggregationApplier = registration.IsAggregation ? CreateAggregationApplier(shadowTree) : null;
 
         // An accumulative (history) view shapes every rebuilt row under the source
         // tree's live retention policy, exactly as the incremental drain does, so a
@@ -564,6 +589,21 @@ internal sealed partial class ViewMaintainerGrain
             historyNowTicks = DateTime.UtcNow.Ticks;
         }
 
+        return new ShadowBuildProgress(
+            registration,
+            walTreeId,
+            capturedOffsets,
+            baseGeneration,
+            _healEpoch,
+            shadowTree,
+            registration.IsAggregation ? CreateAggregationApplier(shadowTree) : null,
+            historyPolicy,
+            historyNowTicks);
+    }
+
+    /// <summary>Second build step: drains the physical source's key set into <paramref name="progress"/>.</summary>
+    private async Task ScanShadowKeysAsync(ShadowBuildProgress progress, CancellationToken cancellationToken)
+    {
         // Drain the source key stream up front before the projection loop (see the
         // note in InPlaceRebuildAsync): the per-key aggregation / projection writes
         // are heavy enough that interleaving them between KeysAsync MoveNextAsync
@@ -571,6 +611,7 @@ internal sealed partial class ViewMaintainerGrain
         // the key set keeps the enumerator's lifetime to the write-free drain.
         // As there, the drain uses ScanKeysAsync: a short-lived enumerator is
         // still fully exposed to per-message stateless-worker mis-routing.
+        var sourceTree = grainFactory.GetGrain<ILattice>(progress.WalTreeId);
         var sourceKeys = new List<string>();
         await ReportMaintenanceProgressAsync(LatticeMaintenanceProgress.Scanning, 0, null, LatticeMaintenanceProgress.Keys);
         await foreach (var key in sourceTree.ScanKeysAsync(cancellationToken: cancellationToken))
@@ -580,70 +621,108 @@ internal sealed partial class ViewMaintainerGrain
                 LatticeMaintenanceProgress.Scanning, sourceKeys.Count, null, LatticeMaintenanceProgress.Keys);
         }
 
+        progress.Keys = sourceKeys.ToArray();
+        progress.NextIndex = 0;
+    }
+
+    /// <summary>
+    /// Third build step: re-projects up to <paramref name="maxKeys"/> of the
+    /// scanned source keys into the shadow tree, resuming at
+    /// <see cref="ShadowBuildProgress.NextIndex"/>. Returns <see langword="true"/>
+    /// once every scanned key has been projected.
+    /// </summary>
+    private async Task<bool> ProjectShadowSliceAsync(
+        ShadowBuildProgress progress,
+        int maxKeys,
+        CancellationToken cancellationToken)
+    {
+        var keys = progress.Keys!;
+        var start = progress.NextIndex;
+        var count = (int)Math.Min(maxKeys, (long)keys.Length - start);
+        var registration = progress.Registration;
+        var sourceTreeId = registration.SourceTreeId;
+        var walTreeId = progress.WalTreeId;
+
         // Bounded ordered read-ahead, exactly as in InPlaceRebuildAsync: source
         // reads are pure and disjoint from the shadow-tree writes, so overlapping
         // RebuildFanOutWidth of them changes only when each key is read, never
         // which value the projection sees or in what order it sees it.
-        var index = 0;
+        var index = start;
         await ReportMaintenanceProgressAsync(
-            LatticeMaintenanceProgress.Projecting, 0, sourceKeys.Count, LatticeMaintenanceProgress.Keys);
+            LatticeMaintenanceProgress.Projecting, index, keys.Length, LatticeMaintenanceProgress.Keys);
         await foreach (var versioned in BoundedFanOut.ReadAheadAsync(
-            sourceKeys,
+            new ArraySegment<string>(keys, start, count),
             RebuildFanOutWidth,
             k => ReadStoredSourceValueAsync(sourceTreeId, walTreeId, k, cancellationToken),
             cancellationToken))
         {
-            var key = sourceKeys[index++];
+            var key = keys[index++];
             await ReportMaintenanceProgressAsync(
-                LatticeMaintenanceProgress.Projecting, index, sourceKeys.Count, LatticeMaintenanceProgress.Keys);
-            if (versioned.Value is null)
+                LatticeMaintenanceProgress.Projecting, index, keys.Length, LatticeMaintenanceProgress.Keys);
+            if (versioned.Value is not null)
             {
-                continue;
+                await ProjectShadowEntryAsync(progress, key, versioned, cancellationToken);
             }
 
-            // Synthesize a Set mutation so the build reuses the exact projection
-            // logic the tail path uses, carrying the entry's absolute expiry so a
-            // rebuilt entry expires in lockstep with its source (TTL preserved).
-            var synthetic = new LatticeMutation
-            {
-                TreeId = sourceTreeId,
-                Kind = MutationKind.Set,
-                Key = key,
-                Value = versioned.Value,
-                Timestamp = versioned.Version,
-                ExpiresAtTicks = versioned.ExpiresAtTicks,
-                Category = MutationCategory.User,
-            };
+            // Advance only past a fully-applied key.
+            progress.NextIndex = index;
+        }
 
-            if (aggregationApplier is not null)
-            {
-                foreach (var contribution in registration.AggregationProjection!.Project(ProjectionInput(registration, synthetic)))
-                {
-                    await aggregationApplier.ApplyAsync(contribution, cancellationToken);
-                }
-            }
-            else if (registration.Accumulative)
-            {
-                foreach (var write in registration.Projection!.Project(ProjectionInput(registration, synthetic)))
-                {
-                    await ApplyAsync(shadowTree, ShapeHistoryWrite(write, historyPolicy, historyNowTicks), cancellationToken);
-                }
-            }
-            else
-            {
-                foreach (var write in registration.Projection!.Project(ProjectionInput(registration, synthetic)))
-                {
-                    await ApplyAsync(shadowTree, write, cancellationToken);
-                }
-            }
+        return progress.NextIndex >= keys.Length;
+    }
 
-            if (versioned.Version > highest)
+    /// <summary>Re-projects one live source entry into the shadow tree.</summary>
+    private async Task ProjectShadowEntryAsync(
+        ShadowBuildProgress progress,
+        string key,
+        VersionedValue versioned,
+        CancellationToken cancellationToken)
+    {
+        var registration = progress.Registration;
+
+        // Synthesize a Set mutation so the build reuses the exact projection
+        // logic the tail path uses, carrying the entry's absolute expiry so a
+        // rebuilt entry expires in lockstep with its source (TTL preserved).
+        var synthetic = new LatticeMutation
+        {
+            TreeId = registration.SourceTreeId,
+            Kind = MutationKind.Set,
+            Key = key,
+            Value = versioned.Value,
+            Timestamp = versioned.Version,
+            ExpiresAtTicks = versioned.ExpiresAtTicks,
+            Category = MutationCategory.User,
+        };
+
+        if (progress.AggregationApplier is { } aggregationApplier)
+        {
+            foreach (var contribution in registration.AggregationProjection!.Project(ProjectionInput(registration, synthetic)))
             {
-                highest = versioned.Version;
+                await aggregationApplier.ApplyAsync(contribution, cancellationToken);
+            }
+        }
+        else if (registration.Accumulative)
+        {
+            foreach (var write in registration.Projection!.Project(ProjectionInput(registration, synthetic)))
+            {
+                await ApplyAsync(
+                    progress.ShadowTree,
+                    ShapeHistoryWrite(write, progress.HistoryPolicy, progress.HistoryNowTicks),
+                    cancellationToken);
+            }
+        }
+        else
+        {
+            foreach (var write in registration.Projection!.Project(ProjectionInput(registration, synthetic)))
+            {
+                await ApplyAsync(progress.ShadowTree, write, cancellationToken);
             }
         }
 
-        return new ShadowBuildResult(walTreeId, capturedOffsets, highest);
+        if (versioned.Version > progress.Highest)
+        {
+            progress.Highest = versioned.Version;
+        }
     }
 
     /// <summary>
