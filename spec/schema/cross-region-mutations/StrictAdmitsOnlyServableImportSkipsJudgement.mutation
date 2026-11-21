@@ -8,7 +8,7 @@ SUMMARY: a re-seed import stores the source row verbatim, bypassing strict inges
 PERTURBS: Import
 
 --- FIND
-    /\ IF dl[e] = 1 THEN UNCHANGED <<st, tag, dl>> ELSE Ingest(e, TRUE)
+    /\ IF dl[e] = 1 THEN Rediverted(e) ELSE Ingest(e, TRUE)
 --- REPLACE
 \* MUTATION: the imported row is stored without being judged.
     /\ st' = [st EXCEPT ![e] = Landing(e)]

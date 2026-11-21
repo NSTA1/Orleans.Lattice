@@ -75,6 +75,7 @@ public class StronglyConsistentScanIntegrationTests
         await split.RunSplitPassAsync();
 
         var actual = new HashSet<string>();
+        // raw-enumeration-ok: strong consistency of the raw stream under concurrent splits is the subject
         await foreach (var k in tree.KeysAsync()) actual.Add(k);
 
         Assert.That(actual, Is.EquivalentTo(expected.Keys));
@@ -144,6 +145,7 @@ public class StronglyConsistentScanIntegrationTests
                     try
                     {
                         var seen = new HashSet<string>();
+                        // raw-enumeration-ok: strong consistency of the raw stream under concurrent splits is the subject
                         await foreach (var k in tree.KeysAsync())
                         {
                             if (cts.IsCancellationRequested) break;
@@ -174,6 +176,7 @@ public class StronglyConsistentScanIntegrationTests
                     try
                     {
                         var seen = new HashSet<string>();
+                        // raw-enumeration-ok: strong consistency of the raw stream under concurrent splits is the subject
                         await foreach (var kv in tree.EntriesAsync())
                         {
                             if (cts.IsCancellationRequested) break;
@@ -246,6 +249,7 @@ public class StronglyConsistentScanIntegrationTests
                 try
                 {
                     var seen = new HashSet<string>();
+                    // raw-enumeration-ok: strong consistency of the raw stream under concurrent splits is the subject
                     await foreach (var k in tree.KeysAsync())
                     {
                         if (cts.IsCancellationRequested) break;
@@ -343,6 +347,7 @@ public class StronglyConsistentScanIntegrationTests
         await split.RunSplitPassAsync();
 
         var actual = new HashSet<string>();
+        // raw-enumeration-ok: strong consistency of the raw stream under concurrent splits is the subject
         await foreach (var k in tree.KeysAsync(reverse: true)) actual.Add(k);
 
         Assert.That(actual, Is.EquivalentTo(expected.Keys));
@@ -366,6 +371,7 @@ public class StronglyConsistentScanIntegrationTests
             .ToHashSet();
 
         var actual = new HashSet<string>();
+        // raw-enumeration-ok: strong consistency of the raw stream under concurrent splits is the subject
         await foreach (var k in tree.KeysAsync(start, end)) actual.Add(k);
 
         Assert.That(actual, Is.EquivalentTo(expectedSubset));
@@ -399,6 +405,7 @@ public class StronglyConsistentScanIntegrationTests
                     string? prev = null;
                     var observed = new List<string>();
                     var firstBadIdx = -1;
+                    // raw-enumeration-ok: strong consistency of the raw stream under concurrent splits is the subject
                     await foreach (var k in tree.KeysAsync())
                     {
                         if (cts.IsCancellationRequested) break;
@@ -459,6 +466,7 @@ public class StronglyConsistentScanIntegrationTests
                 {
                     string? prev = null;
                     var count = 0;
+                    // raw-enumeration-ok: strong consistency of the raw stream under concurrent splits is the subject
                     await foreach (var k in tree.KeysAsync(reverse: true))
                     {
                         if (cts.IsCancellationRequested) break;
@@ -514,6 +522,7 @@ public class StronglyConsistentScanIntegrationTests
                 {
                     string? prev = null;
                     var count = 0;
+                    // raw-enumeration-ok: strong consistency of the raw stream under concurrent splits is the subject
                     await foreach (var kv in tree.EntriesAsync())
                     {
                         if (cts.IsCancellationRequested) break;
@@ -571,6 +580,7 @@ public class StronglyConsistentScanIntegrationTests
                 {
                     string? prev = null;
                     var count = 0;
+                    // raw-enumeration-ok: strong consistency of the raw stream under concurrent splits is the subject
                     await foreach (var kv in tree.EntriesAsync(reverse: true))
                     {
                         if (cts.IsCancellationRequested) break;
@@ -624,6 +634,7 @@ public class StronglyConsistentScanIntegrationTests
         Assert.That(await split.IsIdleAsync(), Is.True);
 
         var observed = new List<string>();
+        // raw-enumeration-ok: strong consistency of the raw stream under concurrent splits is the subject
         await foreach (var k in tree.KeysAsync()) observed.Add(k);
 
         Assert.Multiple(() =>

@@ -97,13 +97,17 @@ internal sealed class LatticeSchemaWriteInterceptor : ILatticeWriteInterceptor
     public ValueTask<LatticeWriteDecision> OnWriteAsync(
         in LatticeWriteRequest request,
         CancellationToken cancellationToken = default) =>
-        OnWriteCoreAsync(request.TreeId, request.Key, request.Value, request.Operation, cancellationToken);
+        OnWriteCoreAsync(
+            request.TreeId, request.Key, request.Value, request.Operation,
+            request.ReplicatedOriginClusterId, request.ReplicatedSourceHlc, cancellationToken);
 
     private async ValueTask<LatticeWriteDecision> OnWriteCoreAsync(
         string treeId,
         string key,
         byte[] value,
         LatticeOperation operation,
+        string? originClusterId,
+        HybridLogicalClock? sourceHlc,
         CancellationToken cancellationToken)
     {
         var compiled = await _provider.GetCompiledPolicyAsync(treeId, cancellationToken).ConfigureAwait(false);
@@ -143,7 +147,7 @@ internal sealed class LatticeSchemaWriteInterceptor : ILatticeWriteInterceptor
                 // newer than the target, no upcast path, or an upcast that cannot run
                 // over the body), so its body cannot be judged: fail closed.
                 reason = SchemaUndecodableValue.Reason(ex);
-                return await ViolationAsync(compiled, treeId, key, value, operation, reason, cancellationToken)
+                return await ViolationAsync(compiled, treeId, key, value, operation, reason, originClusterId, sourceHlc, cancellationToken)
                     .ConfigureAwait(false);
             }
         }
@@ -162,7 +166,7 @@ internal sealed class LatticeSchemaWriteInterceptor : ILatticeWriteInterceptor
             return LatticeWriteDecision.Accept();
         }
 
-        return await ViolationAsync(compiled, treeId, key, value, operation, reason, cancellationToken)
+        return await ViolationAsync(compiled, treeId, key, value, operation, reason, originClusterId, sourceHlc, cancellationToken)
             .ConfigureAwait(false);
     }
 
@@ -173,6 +177,8 @@ internal sealed class LatticeSchemaWriteInterceptor : ILatticeWriteInterceptor
         byte[] value,
         LatticeOperation operation,
         string reason,
+        string? originClusterId,
+        HybridLogicalClock? sourceHlc,
         CancellationToken cancellationToken)
     {
         if (!LatticeAccessGateContext.IsSystemOrigin)
@@ -188,19 +194,20 @@ internal sealed class LatticeSchemaWriteInterceptor : ILatticeWriteInterceptor
             return LatticeWriteDecision.Accept();
         }
 
-        var entry = BuildDeadLetterEntry(key, value, reason, SourceFor(operation));
+        var entry = BuildDeadLetterEntry(key, value, reason, SourceFor(operation), originClusterId, sourceHlc);
         await _deadLetters.AppendAsync(treeId, entry, cancellationToken).ConfigureAwait(false);
         return LatticeWriteDecision.DeadLetter(reason);
     }
 
     private LatticeSchemaDeadLetterEntry BuildDeadLetterEntry(
-        string key, byte[] value, string reason, LatticeSchemaDeadLetterSource source)
-    {
-        var previewLength = Math.Min(value.Length, _previewMaxBytes);
-        var preview = previewLength == 0 ? Array.Empty<byte>() : value.AsSpan(0, previewLength).ToArray();
-        return new LatticeSchemaDeadLetterEntry(
-            key, preview, value.Length, reason, source, _timeProvider.GetUtcNow());
-    }
+        string key,
+        byte[] value,
+        string reason,
+        LatticeSchemaDeadLetterSource source,
+        string? originClusterId,
+        HybridLogicalClock? sourceHlc) =>
+        SchemaDeadLetterEntries.Build(
+            key, value, reason, source, _previewMaxBytes, _timeProvider, originClusterId, sourceHlc);
 
     private static LatticeSchemaDeadLetterSource SourceFor(LatticeOperation operation) =>
         (operation & (LatticeOperation.Restore | LatticeOperation.BulkLoad)) != 0

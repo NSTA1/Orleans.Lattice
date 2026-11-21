@@ -1,0 +1,16 @@
+# Pairs with NoRedundantReseed. Reproduces production before #5794: the
+# shipper marked the forced gap at the current export epoch, so the echo of
+# the receiver's own covering bootstrap could not settle it and a second
+# re-seed ran for nothing.
+MODULE: NoRedundantReseedMarkAtCurrentEpoch
+TARGET: NoRedundantReseed
+CLASS: Invariant
+SUMMARY: the lineage-change marker is the current export epoch, so a covering receiver bootstrap is re-seeded again
+PERTURBS: Notice
+
+--- FIND
+       IN /\ marker' = m
+--- REPLACE
+       \* MUTATION: the marker is the current export epoch.
+       IN /\ marker' = epoch
+--- END

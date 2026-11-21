@@ -29,6 +29,9 @@ replication says nothing about it.
 | [`ReplicationLowWatermark.tla`](ReplicationLowWatermark.tla), [`.cfg`](ReplicationLowWatermark.cfg), [`.manifest.json`](ReplicationLowWatermark.manifest.json) and four variant configurations | The third companion module: the low watermark that makes the causal-dependency check sound (below). |
 | [`lowwatermark-mutations/`](lowwatermark-mutations/) | The third companion module's mutation catalogue. |
 | [`ReplicationLowWatermark.Refinement.md`](ReplicationLowWatermark.Refinement.md) | The third companion module's refinement note. |
+| [`ReplicationReceiverReseed.tla`](ReplicationReceiverReseed.tla), [`.cfg`](ReplicationReceiverReseed.cfg), [`.manifest.json`](ReplicationReceiverReseed.manifest.json) | The fourth companion module: the forced gap a receiver-initiated bootstrap leaves, and the covering marker that settles it without a second re-seed (#5794). |
+| [`receiver-reseed-mutations/`](receiver-reseed-mutations/) | The fourth companion module's mutation catalogue. |
+| [`ReplicationReceiverReseed.Refinement.md`](ReplicationReceiverReseed.Refinement.md) | The fourth companion module's refinement note. |
 
 ## What is modelled
 
@@ -303,6 +306,8 @@ in its Floor variant over 551,869 (1,647,259 generated) at a depth of
 Every property in `ReplicationLowWatermark.cfg` held over 330,842 distinct
 states (1,669,854 generated) at a depth of 26, and in its Sagas, Loss,
 DeadLetters and Bootstrap variants over 181,862, 27,522, 19,449 and 43,757.
+Every property in `ReplicationReceiverReseed.cfg` held over 2,402 distinct
+states (4,873 generated) at a depth of 13.
 
 ## Counts
 
@@ -319,3 +324,4 @@ This table is the one place this directory states them; see
 | `ReplicationCausalDelivery` | 2 | 1 | 5 | 6 | 6 | 19,161 |
 | `ReplicationReBootstrap` | 2 | 2 | 24 | 42 | 26 | 761,543 |
 | `ReplicationLowWatermark` | 2 | 1 | 18 | 21 | 19 | 330,842 |
+| `ReplicationReceiverReseed` | 3 | 1 | 9 | 9 | 11 | 2,402 |

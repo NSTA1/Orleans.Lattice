@@ -1,0 +1,15 @@
+# Pairs with NoLostWrite. The receiver's bootstrap replaces its contents but
+# the lineage move is never reported, so the shipper keeps its cursor past
+# writes the receiver no longer holds.
+MODULE: NoLostWriteBootstrapHidesLineageMove
+TARGET: NoLostWrite
+CLASS: Invariant
+SUMMARY: a receiver bootstrap does not move the lineage, so the shipper never sees the gap
+PERTURBS: Bootstrap
+
+--- FIND
+    /\ moved' = TRUE
+--- REPLACE
+    \* MUTATION: the lineage move is not reported.
+    /\ moved' = FALSE
+--- END

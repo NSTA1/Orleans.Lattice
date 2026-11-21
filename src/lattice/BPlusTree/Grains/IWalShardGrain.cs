@@ -392,17 +392,18 @@ internal interface IWalShardGrain : IGrainWithStringKey
     Task<long> AdvanceIncarnationAsync(CancellationToken cancellationToken);
 
     /// <summary>
-    /// Returns the state observer's resume floor in one grain call: the next
-    /// assigned sequence, sampled first, minus the trim-aware <i>live</i> entry
-    /// count read after it. The live count is the number of entries between the
-    /// lowest still-stored offset and the highest assigned offset, inclusive, so
-    /// for an untrimmed shard the floor is zero. After
+    /// Returns the state observer's resume floor in one grain call: the lowest
+    /// offset the storage provider still persists, or, when it persists none,
+    /// one past its monotonic high-water mark (zero for a shard that has never
+    /// stored an entry). The floor is derived from persisted state only, never
+    /// from the in-memory allocator, so an append whose offset is reserved but
+    /// not yet stored cannot make a still-valid cursor look expired (issue
+    /// #5205). For an untrimmed shard the floor is zero. After
     /// <see cref="IWalStorageProvider.TrimAsync"/> removes a prefix (driven by
     /// <see cref="ILatticeWalGc"/> once every consumer has acked past that point)
-    /// the floor rises by exactly the trimmed prefix length, so state-observation
+    /// the floor rises to the first still-stored offset, so state-observation
     /// cursors can detect when a requested resume offset has fallen behind the
-    /// retained prefix rather than comparing against a monotonically-growing
-    /// offset counter. This is not an atomic retention snapshot or a
+    /// retained prefix. This is not an atomic retention snapshot or a
     /// transaction-purge watermark.
     /// </summary>
     /// <param name="cancellationToken">Cancellation token.</param>

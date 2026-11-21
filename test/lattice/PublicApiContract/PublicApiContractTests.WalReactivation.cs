@@ -240,7 +240,7 @@ public partial class PublicApiContractTests
         var rehydrated = await _fixture.CreateSmallTreeAsync(treeId);
 
         var collected = new List<string>();
-        await foreach (var key in rehydrated.KeysAsync())
+        await foreach (var key in rehydrated.ScanKeysAsync())
         {
             collected.Add(key);
         }
@@ -265,7 +265,7 @@ public partial class PublicApiContractTests
         var rehydrated = await _fixture.CreateSmallTreeAsync(treeId);
 
         var collected = new List<KeyValuePair<string, string>>();
-        await foreach (var entry in rehydrated.EntriesAsync())
+        await foreach (var entry in rehydrated.ScanEntriesAsync())
         {
             collected.Add(new KeyValuePair<string, string>(entry.Key, Str(entry.Value)));
         }

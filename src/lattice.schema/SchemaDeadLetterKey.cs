@@ -13,6 +13,52 @@ internal static class SchemaDeadLetterKey
 {
     internal const int UniqueSuffixLength = 8;
 
+    /// <summary>
+    /// The deterministic uniqueness suffix for a replicated dead letter: a
+    /// FNV-1a hash of its source identity, rendered as
+    /// <see cref="UniqueSuffixLength"/> lower-case hex digits. A re-delivery of
+    /// the same source write therefore encodes the same storage key (#5714).
+    /// </summary>
+    /// <param name="originClusterId">The originating cluster id.</param>
+    /// <param name="sourceHlc">The source write's hybrid logical clock.</param>
+    /// <returns>The suffix.</returns>
+    internal static string IdentitySuffix(string originClusterId, HybridLogicalClock sourceHlc)
+    {
+        ArgumentNullException.ThrowIfNull(originClusterId);
+        const uint offsetBasis = 2166136261;
+        const uint prime = 16777619;
+        var hash = offsetBasis;
+        foreach (var c in originClusterId)
+        {
+            hash = (hash ^ (byte)c) * prime;
+            hash = (hash ^ (byte)(c >> 8)) * prime;
+        }
+
+        var wall = sourceHlc.WallClockTicks;
+        for (var i = 0; i < 8; i++)
+        {
+            hash = (hash ^ (byte)(wall >> (8 * i))) * prime;
+        }
+
+        var counter = sourceHlc.Counter;
+        for (var i = 0; i < 4; i++)
+        {
+            hash = (hash ^ (byte)(counter >> (8 * i))) * prime;
+        }
+
+        return hash.ToString("x8", CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
+    /// The record timestamp for a replicated dead letter: the source write's
+    /// wall-clock time, clamped into the <see cref="DateTimeOffset"/> range, so
+    /// the storage key does not depend on when the re-delivery was judged.
+    /// </summary>
+    /// <param name="sourceHlc">The source write's hybrid logical clock.</param>
+    /// <returns>The UTC timestamp.</returns>
+    internal static DateTimeOffset IdentityTimestamp(HybridLogicalClock sourceHlc) =>
+        new(Math.Clamp(sourceHlc.WallClockTicks, 0L, DateTimeOffset.MaxValue.UtcTicks), TimeSpan.Zero);
+
     internal static bool BelongsToTree(string storageKey, string treeId, LatticeSchemaDeadLetterEntry entry) =>
         storageKey.Length >= UniqueSuffixLength
         && string.Equals(storageKey, Encode(treeId, entry.TimestampUtc, entry.Key, storageKey[^UniqueSuffixLength..]),

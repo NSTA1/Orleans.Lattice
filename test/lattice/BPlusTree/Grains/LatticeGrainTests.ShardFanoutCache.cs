@@ -349,6 +349,7 @@ public partial class LatticeGrainTests
             Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<string?>())
             .Returns(Task.FromResult(emptyPage));
 
+        // raw-enumeration-ok: in-process grain unit test; fan-out cache hits on the raw stream are the subject
         await foreach (var _ in grain.KeysAsync()) { }
         await foreach (var _ in grain.KeysAsync()) { }
 
@@ -391,6 +392,7 @@ public partial class LatticeGrainTests
             Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<string?>())
             .Returns(Task.FromResult(emptyPage));
 
+        // raw-enumeration-ok: in-process grain unit test; fan-out cache hits on the raw stream are the subject
         await foreach (var _ in grain.EntriesAsync()) { }
         await foreach (var _ in grain.EntriesAsync()) { }
 

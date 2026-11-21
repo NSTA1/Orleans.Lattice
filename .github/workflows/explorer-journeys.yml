@@ -158,9 +158,11 @@ permissions:
 
 # A body edit and a label each get a group of their own, so checking the
 # screenshot section or adding a label never cancels the legs of the push it
-# follows.
+# follows. Only `journeys-full` shares a label group; any other label gets a
+# group keyed by its own run id, so it never cancels or queues behind anything
+# (its run plans nothing: the plan job's `if` skips the whole graph, #5625).
 concurrency:
-  group: explorer-journeys-${{ github.ref }}-${{ github.event.action == 'edited' && 'body' || github.event.action == 'labeled' && format('label-{0}', github.event.label.name) || 'code' }}
+  group: explorer-journeys-${{ github.ref }}-${{ github.event.action == 'edited' && 'body' || github.event.action == 'labeled' && (github.event.label.name == 'journeys-full' && 'label-journeys-full' || format('label-other-{0}', github.run_id)) || 'code' }}
   cancel-in-progress: true
 
 env:
@@ -173,8 +175,13 @@ jobs:
   # here alone: CiIntegrationBranchTriggerTests fails the build when this copy
   # and ci.yml's differ, and requires this job to stay a checkout and the
   # classifier step.
+  #
+  # A `labeled` event for any label but `journeys-full` skips this job, and
+  # with it every job that needs it, so adding other labels costs no runner
+  # (#5625; a pull request opened with ~30 labels once queued 29 runs).
   plan:
     name: Classify pushed ref
+    if: github.event_name != 'pull_request' || github.event.action != 'labeled' || github.event.label.name == 'journeys-full'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:

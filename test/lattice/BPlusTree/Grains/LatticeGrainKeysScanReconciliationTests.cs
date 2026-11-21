@@ -515,6 +515,7 @@ public class LatticeGrainKeysScanReconciliationTests
 
         Assert.ThrowsAsync<OperationCanceledException>(async () =>
         {
+            // raw-enumeration-ok: in-process grain unit test of the raw KeysAsync implementation
             await foreach (var _ in h.Grain.KeysAsync(cancellationToken: cts.Token))
             {
                 cts.Cancel();

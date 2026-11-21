@@ -148,6 +148,7 @@ public class LatticeGrainEntriesScanReconciliationTests
         ScriptPages(h.Shard, Page(["a", "b"], hasMore: false));
 
         var entries = new List<KeyValuePair<string, byte[]>>();
+        // raw-enumeration-ok: in-process grain unit test of the raw EntriesAsync implementation
         await foreach (var e in h.Grain.EntriesAsync()) entries.Add(e);
 
         Assert.That(
@@ -516,6 +517,7 @@ public class LatticeGrainEntriesScanReconciliationTests
 
         Assert.ThrowsAsync<OperationCanceledException>(async () =>
         {
+            // raw-enumeration-ok: in-process grain unit test of the raw EntriesAsync implementation
             await foreach (var _ in h.Grain.EntriesAsync(cancellationToken: cts.Token))
             {
                 cts.Cancel();

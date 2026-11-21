@@ -58,7 +58,7 @@ public partial class PublicApiContractTests
 
 #if LATTICE_DIAG
         var preKeys = new System.Collections.Generic.List<string>();
-        await foreach (var k in tree.KeysAsync())
+        await foreach (var k in tree.ScanKeysAsync())
             preKeys.Add(k);
         Orleans.Lattice.BPlusTree.Grains.DiagSink.Write($"[DIAG test-pre] preCount={preCount} preKeys=[{string.Join(',', preKeys)}]");
 #endif
@@ -73,7 +73,7 @@ public partial class PublicApiContractTests
         var postCount = await tree.CountAsync();
 #if LATTICE_DIAG
         var postKeys = new System.Collections.Generic.List<string>();
-        await foreach (var k in tree.KeysAsync())
+        await foreach (var k in tree.ScanKeysAsync())
             postKeys.Add(k);
         Orleans.Lattice.BPlusTree.Grains.DiagSink.Write($"[DIAG test-post] postCount={postCount} postKeys=[{string.Join(',', postKeys)}]");
 #endif

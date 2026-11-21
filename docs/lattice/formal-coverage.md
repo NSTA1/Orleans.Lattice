@@ -66,7 +66,7 @@ once, either here or in the
 | WAL durability lifecycle | 9 | 395 | 295 | 518 | [Verified WAL](verified-wal.md#the-tla-specification-and-the-scope-of-the-assurance) |
 | Shard ownership | 5 | 126 | 124 | 207 | [Verified Shard Ownership](verified-shard-ownership.md) |
 | Cross-cluster atomic visibility | 1 | 66 | 43 | 150 | [Verified Atomic-Commit: the replicated half](verified-atomic-commit.md#scope-the-single-cluster-protocol-and-the-replicated-half-checked-separately) |
-| Replication convergence | 4 | 91 | 71 | 206 | [Replication: formal verification](../lattice.replication/architecture.md#formal-verification) |
+| Replication convergence | 5 | 100 | 82 | 216 | [Replication: formal verification](../lattice.replication/architecture.md#formal-verification) |
 | Backup and restore | 7 | 123 | 122 | 229 | [Verified backup and restore](../lattice.backup/verified-backup.md) |
 | B+ tree topology | 6 | 100 | 140 | 62 | [B+ tree topology](../../spec/bplustree/README.md) |
 | Materialised-view tail and lifecycle | 1 | 22 | 27 | 30 | [Materialised views](../../spec/materialised-views/README.md) |
@@ -77,7 +77,7 @@ once, either here or in the
 | Tenant rate budgets | 1 | 14 | 23 | 22 | [Rate-budget leases](../../spec/tenant-rate-budget/README.md) |
 | Tenant isolation | 1 | 25 | 25 | 31 | [Isolation epochs and leases](../../spec/tenant-isolation/README.md) |
 | Scheduling and progress | 10 | 203 | 251 | 132 | [Verified Scheduling and Progress](verified-scheduling.md) |
-| Schema enforcement and versioning | 9 | 149 | 178 | 299 | [Schema enforcement and versioning](../../spec/schema/README.md) |
+| Schema enforcement and versioning | 9 | 150 | 178 | 301 | [Schema enforcement and versioning](../../spec/schema/README.md) |
 | Schema and view composition | 1 | 23 | 23 | 28 | [Schema and view composition](../../spec/schema-view/README.md) |
 
 **Behaviour rows** are the rows of a refinement note's action and property tables
@@ -510,7 +510,9 @@ gaps, states its full scope.
     dependencies and their low watermark, and an in-place re-bootstrap after
     the source reaped a delete, including the bootstrap drop floor, and
     concurrent mutual re-seeds through shadow copies that a source's cutover
-    aborts and re-drives.
+    aborts and re-drives, and the forced re-seed a receiver-initiated bootstrap
+    leaves, settled without a second re-seed by a covering export
+    (`ReplicationReceiverReseed`).
   - **Does not cover:** atomic-write sagas carried over replication (the
     cross-cluster area covers them), anti-entropy repair, and more than one WAL
     partition per cluster, except in the low-watermark companion
@@ -660,14 +662,15 @@ gaps, states its full scope.
     cutover whose captured source was superseded. Cross-region
     (`SchemaCrossRegion`): each receiver judges every replicated entry, a plain
     write included, and atomic batches by its own policy and catalog, on the
-    stream, anti-entropy repair and a re-seed import alike, and a refused batch entry is
-    dead-lettered durably while its siblings commit.
+    stream, anti-entropy repair and a re-seed import alike, a refused batch entry is
+    dead-lettered durably while its siblings commit, and a refused plain row
+    keeps exactly one dead-letter record however often it is re-delivered or
+    repaired.
   - **Does not cover:** writes during a remediation or migration build
     (quiescence is required), an ownership-guard refusal of the swap, the
     timing of policy propagation to other silos, and split or fold
     publication; local writes below the choke point (backup restore, tree
-    merge), which are never validated or stamped; a second dead-letter record
-    for a re-delivered refused row, and a repair or re-seed admitting a row
+    merge), which are never validated or stamped; a repair or re-seed admitting a row
     diverted for an unservable stamp once the receiver's catalog serves it; replication of any schema definition between regions; re-applying
     a diverted entry, which stays diverted after the version is registered;
     and the batched merges the merge-result observer (`ILatticeMergeObserver`)

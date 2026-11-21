@@ -217,7 +217,7 @@
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardReBootstrap"],
-        "note": "The bases and mutants of the replication companion modules (ReplicationReBootstrap, ReplicationLowWatermark, ReplicationCausalDelivery) and ReplicationLowWatermark's variant configurations. Companion modules stay whole in this measured group; their bases run here so each serves its mutants' full-bound controls (#5161). 70 cases, 53.7 case-minutes in a 13.90-minute item in the receipt-free bucket push run 40909619830 (#5166)."
+        "note": "The bases and mutants of the replication companion modules (ReplicationReBootstrap, ReplicationLowWatermark, ReplicationCausalDelivery, ReplicationReceiverReseed) and ReplicationLowWatermark's variant configurations. Companion modules stay whole in this measured group; their bases run here so each serves its mutants' full-bound controls (#5161). 72 cases: ReplicationReceiverReseed's base and one mutant (#5794) joined after the measurement of the other 70 at 53.7 case-minutes in a 13.90-minute item in the receipt-free bucket push run 40909619830 (#5166)."
       },
       {
         "shard": "formal-tlc-replication-wal",

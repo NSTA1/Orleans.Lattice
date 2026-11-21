@@ -233,6 +233,7 @@ public partial class LatticeMetricsIntegrationTests
         for (var i = 0; i < 3; i++)
             await tree.SetAsync($"k{i}", Encoding.UTF8.GetBytes("v"));
 
+        // raw-enumeration-ok: metrics emitted by the raw KeysAsync stream are the subject
         await foreach (var _ in tree.KeysAsync()) { }
 
         var keysScan = recorder.Records.Any(r =>
@@ -251,6 +252,7 @@ public partial class LatticeMetricsIntegrationTests
         for (var i = 0; i < 3; i++)
             await tree.SetAsync($"k{i}", Encoding.UTF8.GetBytes("v"));
 
+        // raw-enumeration-ok: metrics emitted by the raw EntriesAsync stream are the subject
         await foreach (var _ in tree.EntriesAsync()) { }
 
         var entriesScan = recorder.Records.Any(r =>

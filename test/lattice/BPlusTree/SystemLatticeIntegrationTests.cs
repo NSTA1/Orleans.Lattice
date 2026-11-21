@@ -71,7 +71,7 @@ public class SystemLatticeIntegrationTests
         }
 
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync())
+        await foreach (var k in tree.ScanKeysAsync())
             keys.Add(k);
 
         Assert.That(keys, Has.Count.EqualTo(5));

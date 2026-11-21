@@ -1947,7 +1947,9 @@ internal sealed partial class WalShardGrain(
     /// <summary>
     /// The trim-aware number of live entries this shard persists: the entries
     /// between the lowest still-stored offset and the highest assigned offset,
-    /// inclusive. The core of <see cref="GetResumeFloorAsync"/>; not a grain call.
+    /// inclusive. Not a grain call. <see cref="GetResumeFloorAsync"/> no longer
+    /// derives from this count, because the allocator it subtracts from runs
+    /// ahead of persistence (issue #5205).
     /// </summary>
     internal async Task<long> GetLiveEntryCountAsync(CancellationToken cancellationToken)
     {
@@ -1984,8 +1986,30 @@ internal sealed partial class WalShardGrain(
     /// <inheritdoc />
     public async Task<long> GetResumeFloorAsync(CancellationToken cancellationToken)
     {
-        var next = await GetNextSequenceAsync(cancellationToken);
-        return next - await GetLiveEntryCountAsync(cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        EnsureInternalOrigin(LatticeOperation.Read);
+        EnsureInitialized();
+
+        // Persisted state only (issue #5205): AppendAsync advances _nextOffset
+        // before the provider stores the reserved offsets, so deriving the floor
+        // from the allocator reported an in-flight reservation as trimmed data
+        // and expired a still-valid cursor. The high-water mark is read first:
+        // an append landing between the two reads then only raises what the
+        // second read sees, so it can never push the floor past an offset that
+        // was absent when the first read ran.
+        var highest = await _provider.GetHighestOffsetAsync(_treeId, _shardIndex, cancellationToken).ConfigureAwait(true);
+        if (highest < 0)
+        {
+            return 0L;
+        }
+
+        var lowest = await _provider.GetLowestOffsetAsync(_treeId, _shardIndex, cancellationToken).ConfigureAwait(true);
+        var pastHighest = highest + 1L;
+
+        // Nothing stored: every entry up to the monotonic high-water mark was
+        // trimmed. A concurrent trim can also raise lowest past the sampled
+        // high-water mark; cap the floor there either way.
+        return lowest < 0 || lowest > pastHighest ? pastHighest : lowest;
     }
 
     /// <inheritdoc />

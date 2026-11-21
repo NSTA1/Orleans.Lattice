@@ -354,6 +354,53 @@ public sealed class DataHistoryPanelTests : DataTestContext
     }
 
     [Test]
+    public void A_view_sourced_history_says_it_may_be_catching_up_and_can_be_read_again()
+    {
+        // #5740: a history read from a change-history view gave no sign the view can lag its source.
+        SeedHistory("orders", "k", "\"a\"");
+        Client.HistoryBounds[("orders", "k")] = (EntryHistoryBound.BoundedByAge, default);
+
+        var cut = RenderAt("data/orders?tab=history&key=k");
+
+        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-data-timeline__rev"), Has.Count.EqualTo(1)));
+        Assert.That(cut.FindAll(".lt-data-note").Select(note => note.TextContent), Does.Contain(DataHistoryPanel.ViewCatchingUpText));
+
+        var reads = HistoryReads();
+        Client.History[("orders", "k")].Add(Client.History[("orders", "k")][0] with { Hlc = new HybridLogicalClock { WallClockTicks = Start.AddMinutes(5).UtcTicks } });
+        Button(cut, "Read again").Click();
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(HistoryReads(), Is.GreaterThan(reads));
+            Assert.That(cut.FindAll(".lt-data-timeline__rev"), Has.Count.EqualTo(2));
+        });
+    }
+
+    [Test]
+    public void A_history_read_from_the_write_ahead_log_offers_no_view_re_read()
+    {
+        SeedHistory("orders", "k", "\"a\"");
+        Client.HistoryBounds[("orders", "k")] = (EntryHistoryBound.WalWindowFallback, default);
+
+        var cut = RenderAt("data/orders?tab=history&key=k");
+
+        cut.WaitUntil(() => Assert.That(cut.FindAll(".lt-data-timeline__rev"), Has.Count.EqualTo(1)));
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut.FindAll(".lt-data-note").Select(note => note.TextContent), Has.None.EqualTo(DataHistoryPanel.ViewCatchingUpText));
+            Assert.That(cut.FindAll("button").Select(button => button.TextContent.Trim()), Has.None.EqualTo("Read again"));
+        });
+    }
+
+    private int HistoryReads()
+    {
+        lock (Client.Calls)
+        {
+            return Client.Calls.Count(call => call.StartsWith(nameof(FakeStateClient.GetEntryHistoryAsync) + ":first", StringComparison.Ordinal));
+        }
+    }
+
+    [Test]
     public void A_trimmed_history_with_no_retained_revision_says_so_in_words_not_with_a_dash()
     {
         Client.WithTree("orders");

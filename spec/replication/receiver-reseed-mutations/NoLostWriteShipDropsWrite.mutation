@@ -1,0 +1,13 @@
+# Pairs with NoLostWrite. The receiver acknowledges a write it did not apply.
+MODULE: NoLostWriteShipDropsWrite
+TARGET: NoLostWrite
+CLASS: Invariant
+SUMMARY: a shipped write is acknowledged without being applied
+PERTURBS: Ship
+
+--- FIND
+    /\ recv' = recv \cup {cursor + 1}
+--- REPLACE
+    \* MUTATION: the shipped write is not applied.
+    /\ recv' = recv
+--- END

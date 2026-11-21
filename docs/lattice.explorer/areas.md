@@ -200,7 +200,10 @@ for a key, in a [picker](navigation-model.md#pickers) that suggests the tree's k
 starting with what you type (one bounded prefix scan per query) and accepts any key. With `?prefix=`, it follows live changes under that prefix and keeps
 at most 200 changes on screen. With `?key=`, it loads durable revisions 50 at a
 time, newest first by default, with value diffs, CRDT member changes, retention
-boundary notes and a live tail. A revision whose value the tree's history
+boundary notes and a live tail. When the revisions are read from a change-history
+[view](../lattice/materialised-views.md), the timeline notes that the view is
+updated after each write and may not yet show recent changes if it is catching up,
+and offers **Read again**. A revision whose value the tree's history
 retention did not keep, only its size and hash, reads "Set - value not kept", and
 the timeline explains once, rather than under each such revision, that it is still
 a write to the key and not a metadata change. A revision of a
@@ -750,7 +753,9 @@ tree, changes nothing, and is described as expensive. It runs on the cluster as 
 [tracked operation](../lattice.api.treeadmin/operations.md) of kind
 `treeadmin.storage-usage-refresh`: the card shows its progress in trees measured,
 offers **Stop re-measuring**, and reads the refreshed shallow summary once it
-succeeds. A re-measure still running is picked up again when the overview opens. The region diagram rolls
+succeeds. Its "Measured" line is marked stale when the re-measure carried a
+tree's last-known figures for a surface it could not re-measure, even if the
+shallow summary read afterwards is not. A re-measure still running is picked up again when the overview opens. The region diagram rolls
 up the replication peer report, draws the local region and peers, marks stalled
 peers without relying on colour alone, and links to Replication only when the
 directory shows that area.

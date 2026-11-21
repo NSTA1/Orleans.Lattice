@@ -1,0 +1,13 @@
+{
+  "mutations": "receiver-reseed-mutations",
+  "refinement": "ReplicationReceiverReseed.Refinement.md",
+  "nonBehaviouralActions": ["Stutter"],
+  "counts": {
+    "invariants": 3,
+    "properties": 1,
+    "actions": 9,
+    "mutations": 9,
+    "behaviourRows": 11,
+    "distinctStates": 2402
+  }
+}

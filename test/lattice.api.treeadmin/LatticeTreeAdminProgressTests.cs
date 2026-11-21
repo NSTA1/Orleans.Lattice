@@ -177,6 +177,22 @@ public sealed class LatticeTreeAdminProgressTests
         });
     }
 
+    [Test]
+    public async Task GetSnapshotStatusAsync_reports_the_failure_reason_of_a_terminally_failed_snapshot()
+    {
+        var (factory, lattice, _) = Wire();
+        lattice.IsSnapshotCompleteAsync().Returns(true);
+        SnapshotReporting(factory, new SnapshotProgress(false, false, "op", SnapshotPhase.Copy, 0, 0, "Copy failed"));
+
+        var status = await Create(factory).GetSnapshotStatusAsync(Tree);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(status.InProgress, Is.False);
+            Assert.That(status.FailureReason, Is.EqualTo("Copy failed"));
+        });
+    }
+
     // ----- Reshard -----
 
     private static void ReshardReporting(IGrainFactory factory, ReshardProgress progress)

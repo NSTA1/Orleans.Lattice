@@ -293,8 +293,8 @@ internal sealed class LatticeStateObserver(
     /// <summary>
     /// Throws <see cref="LatticeStateCursorExpiredException"/> when
     /// <paramref name="resumeOffset"/> falls below the earliest sequence the
-    /// partition still retains. Each partition keeps its own read order (the
-    /// next sequence, then the live count) inside one call; partitions are checked concurrently.
+    /// partition still retains. Each partition answers from its persisted
+    /// offsets in one call; partitions are checked concurrently.
     /// </summary>
     private static async Task EnsureResumableAsync(
         IWalShardGrain grain,

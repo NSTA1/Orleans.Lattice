@@ -33,6 +33,7 @@ public partial class ClusterOverview : IDisposable
     private string? _refreshId;
     private bool _startingRefresh;
     private DateTimeOffset? _remeasuredAt;
+    private bool _remeasuredStale;
     private string? _refreshError;
 
     /// <summary>The tenant a tenant-rooted address names, or <see langword="null"/> on a cluster-wide address; links keep it.</summary>
@@ -213,6 +214,7 @@ public partial class ClusterOverview : IDisposable
         if (status.State == LatticeOperationState.Succeeded)
         {
             _remeasuredAt = status.FinishedAtUtc ?? Time.GetUtcNow();
+            _remeasuredStale = StorageUsageRefreshResults.TryReadSummary(status.Result, out var measured) && measured!.Stale;
             _refreshError = null;
             await RefreshUsageAsync();
         }

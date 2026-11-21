@@ -173,6 +173,23 @@ internal sealed class TreeSnapshotState
     /// state decodes to.
     /// </summary>
     [Id(18)] public HashSet<int>? DrainedPositions { get; set; }
+
+    /// <summary>
+    /// Consecutive phase-timer ticks that faulted without the snapshot
+    /// advancing. Reset to zero by any tick that succeeds. When it reaches the
+    /// coordinator's failure bound the snapshot is failed terminally (issue
+    /// #5464) rather than retried forever with its source locked.
+    /// </summary>
+    [Id(19)] public int FailedTicks { get; set; }
+
+    /// <summary>
+    /// Why the most recent snapshot failed terminally, or <see langword="null"/>
+    /// when it completed, was aborted, or is still in flight. Set together with
+    /// <see cref="InProgress"/> = <see langword="false"/> and
+    /// <see cref="Complete"/> = <see langword="false"/>; cleared when the next
+    /// snapshot starts.
+    /// </summary>
+    [Id(20)] public string? FailureReason { get; set; }
 }
 
 /// <summary>

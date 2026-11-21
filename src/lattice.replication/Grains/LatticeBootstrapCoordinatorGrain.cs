@@ -2193,9 +2193,25 @@ internal sealed partial class LatticeBootstrapCoordinatorGrain(
         {
             if (!state.State.ShadowCopyCutoverComplete)
             {
-                await _grainFactory.GetGrain<ITreeResizeGrain>(treeName)
-                    .CompleteBootstrapCopyAsync(state.State.OperationId)
-                    .ConfigureAwait(true);
+                try
+                {
+                    await _grainFactory.GetGrain<ITreeResizeGrain>(treeName)
+                        .CompleteBootstrapCopyAsync(state.State.OperationId)
+                        .ConfigureAwait(true);
+                }
+                catch (LatticeAliasOperationInProgressException ex)
+                {
+                    // The copy takes the tree's alias reservation only at cutover
+                    // (#5832), so a schema remediation or other alias operation
+                    // that started during the drain refuses it here. The copy stays
+                    // held and the import stays read-fenced; the phase timer
+                    // retries once the holder releases, rather than failing the
+                    // bootstrap and discarding a complete copy.
+                    Logger.LogInformation(
+                        "Bootstrap of tree {TreeName} from {SourceClusterId} is waiting to cut over: alias operation {Holder} is in progress.",
+                        treeName, sourceClusterId, ex.HolderOperationId);
+                    return;
+                }
             }
 
             if (!await IsShadowCopyAuthoritativeAsync().ConfigureAwait(true))

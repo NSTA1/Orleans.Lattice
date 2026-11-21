@@ -165,9 +165,11 @@ A diverted plain write leaves the receiver without a row its peer holds, by desi
 until the key is written again. With anti-entropy auto-remediation on
 (`DigestProbeEnabled`, `AutoRemediateOnDigestMismatch` and `LeafReReplayEnabled`,
 all off by default), the digest probe treats that row as a divergence on every
-round and re-ships it: the receiver diverts it again and files another dead-letter
-record each time. This is a known limitation, tracked in
-[#5714](https://github.com/NSTA1/Orleans.Lattice/issues/5714).
+round and re-ships it, and the receiver diverts it again. The dead-letter record
+is keyed by the row's source identity (origin cluster and source clock), so each
+re-delivery of the same source write overwrites its one record instead of filing
+another ([#5714](https://github.com/NSTA1/Orleans.Lattice/issues/5714)); see
+[What lands in the DLQ](dead-letter-queue.md#what-lands-in-the-dlq).
 
 Strict ingest requires **two** flags to line up, and takes effect only when both
 are set:

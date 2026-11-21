@@ -161,7 +161,7 @@ public sealed class LatticeEnforcementIntegrationTests
         var observed = new List<string>();
         using (AuthClusterFixture.AsSubject("reader"))
         {
-            await foreach (var key in _fixture.Lattice(tree).KeysAsync())
+            await foreach (var key in _fixture.Lattice(tree).ScanKeysAsync())
             {
                 observed.Add(key);
             }
@@ -185,7 +185,7 @@ public sealed class LatticeEnforcementIntegrationTests
         var observed = new List<string>();
         using (AuthClusterFixture.AsSubject("nobody"))
         {
-            await foreach (var key in _fixture.Lattice(tree).KeysAsync())
+            await foreach (var key in _fixture.Lattice(tree).ScanKeysAsync())
             {
                 observed.Add(key);
             }
@@ -307,7 +307,7 @@ public sealed class LatticeEnforcementIntegrationTests
             Assert.That(Str(await lattice.GetAsync("k")), Is.EqualTo("v"), "bootstrap admin may write and read with no rules");
 
             var keys = new List<string>();
-            await foreach (var key in lattice.KeysAsync())
+            await foreach (var key in lattice.ScanKeysAsync())
             {
                 keys.Add(key);
             }

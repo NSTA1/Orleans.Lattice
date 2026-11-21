@@ -39,7 +39,7 @@ Collaborators == {"Link", "Deps", "Copy"}
 
 VARIABLES kind, body, stamp, strict, tgt, hop, st, tag, retried, decided,
           up, faults, lastRead,
-          dl        \* dl[e]: whether the receiver holds a dead letter for entry e
+          dl        \* dl[e]: how many dead-letter records the receiver holds for entry e
 vars == <<kind, body, stamp, strict, tgt, hop, st, tag, retried, decided,
           up, faults, lastRead, dl>>
 
@@ -70,13 +70,14 @@ TypeOK ==
     /\ up \in [Collaborators -> BOOLEAN]
     /\ faults \in 0..MaxFaults
     /\ lastRead \in [e : {0} \cup Entries, out : {"None", "Body", "Fail"}]
-    /\ dl \in [Entries -> 0..1]
+    /\ dl \in [Entries -> Nat]
 
 \* Converged modulo dead letters: the receiver lacks an entry the source holds
 \* for good only where it diverted it, and every such divergence is accounted
-\* for by at least one dead-letter record, whichever path delivered the row.
+\* for by exactly one dead-letter record, however many times and by whichever
+\* paths the row was delivered (#5714).
 DivergenceAccounted ==
-    \A e \in Entries : st[e] = "Diverted" => dl[e] = 1
+    \A e \in Entries : (st[e] = "Diverted" => dl[e] = 1) /\ dl[e] <= 1
 
 \* Under strict ingest every judged entry the receiver admitted carries a body
 \* its own policy accepts and a stamp its own catalog serves.
@@ -241,6 +242,13 @@ Recover(c) ==
 \* the read decoder serves - and without it the row is stored verbatim.
 Landing(e) == IF kind[e] = "Atomic" THEN "Staged" ELSE "Stored"
 Refused(e) == body[e] # "Good" \/ ~Servable(stamp[e])
+\* A row the receiver already dead-lettered is judged afresh and refused again;
+\* its record is keyed by the source write's identity (origin and clock), so
+\* the re-diversion rewrites that one record rather than filing another.
+Rediverted(e) ==
+    /\ dl' = [dl EXCEPT ![e] = 1]
+    /\ UNCHANGED <<st, tag>>
+
 Ingest(e, lift) ==
     IF strict
     THEN IF body[e] = "Good" /\ Servable(stamp[e])
@@ -264,7 +272,7 @@ Repair(e) ==
     /\ ~Admitted(e)
     /\ strict => up["Deps"]
     /\ dl[e] = 1 => Refused(e)
-    /\ IF dl[e] = 1 THEN UNCHANGED <<st, tag, dl>> ELSE Ingest(e, FALSE)
+    /\ IF dl[e] = 1 THEN Rediverted(e) ELSE Ingest(e, FALSE)
     /\ UNCHANGED <<kind, body, stamp, strict, tgt, hop, retried, decided, up, faults, lastRead>>
 
 \* A re-seed import carries every row the source holds, a batch's staged rows
@@ -276,7 +284,7 @@ Import(e) ==
     /\ ~Admitted(e)
     /\ strict => up["Deps"]
     /\ dl[e] = 1 => Refused(e)
-    /\ IF dl[e] = 1 THEN UNCHANGED <<st, tag, dl>> ELSE Ingest(e, TRUE)
+    /\ IF dl[e] = 1 THEN Rediverted(e) ELSE Ingest(e, TRUE)
     /\ UNCHANGED <<kind, body, stamp, strict, tgt, hop, retried, decided, up, faults, lastRead>>
 
 Stutter == UNCHANGED vars

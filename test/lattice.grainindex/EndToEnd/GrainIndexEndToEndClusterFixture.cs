@@ -296,7 +296,7 @@ public sealed class GrainIndexEndToEndClusterFixture
         using (LatticeSystemOrigin.Enter())
         {
             var tree = Cluster.GrainFactory.GetGrain<ILattice>(GrainIndexTreeNames.ForIndex(indexName));
-            await foreach (var entry in tree.EntriesAsync("\u0000", "\uFFFF"))
+            await foreach (var entry in tree.ScanEntriesAsync("\u0000", "\uFFFF"))
                 entries.Add(new GrainIndexEntry(entry.Key, entry.Value));
         }
 

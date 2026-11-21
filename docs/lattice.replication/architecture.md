@@ -286,6 +286,12 @@ rather than land after the reconcile. It also checks:
   copy it applied into, so the re-drive applies every row again rather than
   lose one (#5689).
 
+A further companion,
+[`ReplicationReceiverReseed.tla`](../../spec/replication/ReplicationReceiverReseed.tla),
+checks the forced gap a shipper marks when its peer's lineage moves because
+the receiver bootstrapped on its own, and that an export covering the log's
+retained heads settles that gap without a second, redundant re-seed (#5794).
+
 **Scope.** The specification covers plain replication only. Atomic-write sagas
 carried over replication (invariant 4 above) are not modelled here; that is
 owned by #4436, as is saga atomicity across a bootstrap (#4683, #4684,

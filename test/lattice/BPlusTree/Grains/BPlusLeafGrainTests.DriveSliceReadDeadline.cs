@@ -145,4 +145,17 @@ public partial class BPlusLeafGrainTests
             Assert.That(BPlusLeafGrain.ComputeDriveSliceReadDeadline(TimeSpan.Zero), Is.EqualTo(Timeout.InfiniteTimeSpan));
         });
     }
+
+    [Test]
+    public void The_abandonment_instrument_description_names_both_reason_values()
+    {
+        // Issue #6043: the description lagged the reason tag #6015 added.
+        var description = LatticeMetrics.WalReplayStarvationDriveAbandonments.Description;
+        Assert.Multiple(() =>
+        {
+            Assert.That(description, Does.Contain("reason"));
+            Assert.That(description, Does.Contain((string)LatticeMetrics.StarvationDriveAbandonedBudget.Value!));
+            Assert.That(description, Does.Contain((string)LatticeMetrics.StarvationDriveAbandonedSliceReadDeadline.Value!));
+        });
+    }
 }

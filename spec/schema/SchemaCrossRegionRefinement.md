@@ -56,7 +56,7 @@ version as its target.
 | `Advance` | The receiver's operator advances its target, which the facade admits only to a version registered in the receiver's catalog and reachable from its current target. | `LatticeSchemaControl.AdvanceTargetVersionAsync`. | Yes: `LatticeSchemaControlVersionTargetTests.AdvanceTargetVersion_refuses_a_target_with_no_registered_path`, `SchemaCrossRegionIngestIntegrationTests.Plain_lww_entry_stamped_past_the_receivers_target_becomes_readable_once_the_receiver_advances_to_it`. |
 | `Fault(c)` | Environment: the stream, a receiver collaborator, or the receiver's physical copy becomes unavailable. | No production counterpart: an outage or a coordinated restore's receive fence is the environment here. | Not applicable. |
 | `Recover(c)` | Environment: it becomes available again. | No production counterpart: recovery from a fault. | Not applicable. |
-| `Repair(e)` | Anti-entropy repair re-ships a committed row the source holds and the receiver lacks, a diverted row included, through the ordinary transport into the receiver's applier, which judges it like any replicated entry: a refused body is diverted again, never stored. | `ReplicationDigestProbeGrain`, `LeafReReplayer`, `WalGrainReReplaySource`, `TransportLeafReReplaySink.ReplayAsync`, `BootstrapFallbackPlanner.PlanAsync`, `ReplicationApplier.ApplyAsync`. | Yes: `StrictIngestPlainReplicatedWriteIntegrationTests.A_repaired_refused_row_is_diverted_not_stored`. |
+| `Repair(e)` | Anti-entropy repair re-ships a committed row the source holds and the receiver lacks, a diverted row included, through the ordinary transport into the receiver's applier, which judges it like any replicated entry: a refused body is diverted again, never stored, and its dead letter, keyed by the source write's origin and clock, is rewritten rather than filed again (#5714). | `ReplicationDigestProbeGrain`, `LeafReReplayer`, `WalGrainReReplaySource`, `TransportLeafReReplaySink.ReplayAsync`, `BootstrapFallbackPlanner.PlanAsync`, `ReplicationApplier.ApplyAsync`. | Yes: `StrictIngestPlainReplicatedWriteIntegrationTests.A_repaired_refused_row_is_diverted_not_stored`, `StrictIngestPlainReplicatedWriteIntegrationTests.Repeated_re_delivery_of_a_dead_lettered_row_files_one_dead_letter`. |
 | `Import(e)` | A re-seed import drains every row of the source's export, staged batch rows included, through the receiver's applier under the drain flag, which judges each row like a replicated entry: a refused body is diverted under the logical tree, never stored; an admitted row is stamped at the receiver's target (#5551). | `LatticeBootstrapCoordinatorGrain.DrainSnapshotOnceAsync`, `LatticeBootstrapCoordinatorGrain.ApplyBootstrapRecordAsync`, `ReplicationApplier.ApplyAsync`, `LatticeGrain.ApplySetAsync`, `LatticeGrain.ApplyPreparedSetAsync`. | Yes: `StrictIngestShadowImportDeadLetterIntegrationTests.A_refused_committed_row_of_a_shadow_import_is_dead_lettered_under_the_logical_tree`, `StrictIngestShadowImportDeadLetterIntegrationTests.A_refused_prepared_row_decided_after_it_in_a_shadow_import_is_dead_lettered_under_the_logical_tree`. |
 | `Stutter` | No protocol step. | No production counterpart. | Not applicable. |
 
@@ -65,7 +65,7 @@ version as its target.
 | Spec property | Production property | Detector |
 |---------------|--------------------|----------|
 | `StrictAdmitsOnlyServable` | Under strict ingest every replicated entry the receiver admits - a plain write, a delta or a batch entry, whether the stream, anti-entropy repair or a re-seed import delivered it - carries a body its own policy accepts and a stamp its own catalog serves; the source's verdict and the source's catalog are never trusted, and a body the receiver refused is never re-introduced. | Yes: `StrictIngestPlainReplicatedWriteIntegrationTests.A_refused_plain_write_is_dead_lettered_under_the_logical_tree_and_not_stored`, `StrictIngestPlainReplicatedWriteIntegrationTests.A_repaired_refused_row_is_diverted_not_stored`, `StrictIngestShadowImportDeadLetterIntegrationTests.A_refused_committed_row_of_a_shadow_import_is_dead_lettered_under_the_logical_tree`, `SchemaCrossRegionIngestIntegrationTests.Strict_crdt_delta_stamped_past_the_receivers_target_is_dead_lettered_and_not_applied`, `SchemaCrossRegionIngestIntegrationTests.Strict_atomic_entry_stamped_past_the_receivers_target_is_dead_lettered_and_its_batch_siblings_commit_together`, `SchemaCrossRegionIngestIntegrationTests.Strict_atomic_entry_the_receivers_policy_refuses_is_dead_lettered_and_its_batch_siblings_commit_together`, `LatticeSchemaVersionWriteInterceptorTests.OnWriteAsync_strict_ingest_newer_than_target_dead_letters`. |
-| `DivergenceAccounted` | The receiver lacks a replicated row for good only where strict ingest diverted it, and every diversion, by any path, leaves a durable dead-letter record under the logical tree. | Yes: `StrictIngestPlainReplicatedWriteIntegrationTests.A_refused_plain_write_is_dead_lettered_under_the_logical_tree_and_not_stored`, `StrictIngestShadowImportDeadLetterIntegrationTests.A_refused_committed_row_of_a_shadow_import_is_dead_lettered_under_the_logical_tree`, `SchemaStrictIngestDeadLetterTests.Failed_dead_letter_append_fails_the_write_instead_of_diverting_it`. |
+| `DivergenceAccounted` | The receiver lacks a replicated row for good only where strict ingest diverted it, and every diversion, by any path, leaves exactly one durable dead-letter record under the logical tree, however often the row is re-delivered or repaired (#5714). | Yes: `StrictIngestPlainReplicatedWriteIntegrationTests.Repeated_re_delivery_of_a_dead_lettered_row_files_one_dead_letter`, `SchemaDeadLetterKeyTests.IdentitySuffix_is_stable_per_source_write_and_distinct_across_writes`, `StrictIngestPlainReplicatedWriteIntegrationTests.A_refused_plain_write_is_dead_lettered_under_the_logical_tree_and_not_stored`, `StrictIngestShadowImportDeadLetterIntegrationTests.A_refused_committed_row_of_a_shadow_import_is_dead_lettered_under_the_logical_tree`, `SchemaStrictIngestDeadLetterTests.Failed_dead_letter_append_fails_the_write_instead_of_diverting_it`. |
 | `AtomicAllOrNothing` | A reader sees none of a replicated batch, or every entry of it the receiver admitted, and only once every entry was admitted or diverted. | Yes: `SchemaCrossRegionIngestIntegrationTests.Strict_atomic_entry_stamped_past_the_receivers_target_is_dead_lettered_and_its_batch_siblings_commit_together`, `CrossClusterAtomicVisibilityTests.Multi_shard_saga_through_the_applier_stays_invisible_until_every_source_shard_terminal_arrives`. |
 | `StoredStampFixed` | A stored stamp is fixed when the entry lands: registering a definition, advancing the target, reading or folding never rewrites it, and a plain write admitted under strict ingest is stored with its original stamp, never re-stamped. | Yes: `SchemaCrossRegionIngestIntegrationTests.Plain_lww_entry_admitted_under_strict_ingest_is_stored_verbatim_and_never_re_stamped`, `SchemaCrossRegionIngestIntegrationTests.Plain_lww_entry_stamped_past_the_receivers_target_becomes_readable_once_the_receiver_advances_to_it`, `SchemaTargetAdvanceIntegrationTests.AdvanceTargetVersionAsync_rewrites_no_stored_value_and_a_later_registered_hop_upcasts_it_on_read`, `LatticeSchemaEnvelopeCodecTests.StripForFold_is_version_agnostic_across_targets`. |
 | `CrdtLiftedAtIngest` | Under strict ingest a typed-CRDT delta is lifted to the receiver's target once, at the boundary, so every later fold strips the same stored stamp and never upcasts. | Yes: `SchemaCrossRegionIngestIntegrationTests.Strict_crdt_delta_stamped_below_the_receivers_target_is_lifted_to_the_target_once_at_ingest`, `LatticeSchemaVersionWriteInterceptorTests.OnWriteAsync_strict_ingest_crdt_delta_upcasts_and_reenvelopes_at_target`. |
@@ -110,6 +110,7 @@ and leaves both liveness properties bounded-out to the base for the TLC budget.
 | StrictAdmitsOnlyServableRepairSkipsJudgement | Anchored action: Repair. |
 | StrictAdmitsOnlyServableImportSkipsJudgement | Anchored action: Import. |
 | DivergenceAccountedDivertWithoutRecord | Anchored action: Deliver. |
+| DivergenceAccountedReDeliveryAppends | Anchored action: Repair. |
 | AtomicAllOrNothingDecidesEarly | Anchored action: Decide. |
 | AtomicAllOrNothingEntryAppliedUnstaged | Anchored action: Deliver. |
 | StoredStampFixedAdvanceRestamps | Anchored action: Advance. |
@@ -192,20 +193,20 @@ shipped in the 10.3.0 release.
   the drain's admitted row is stamped at the receiver's target (#5551) while the
   stream's and repair's keep their original stamp.
   Production symbols: `IShardRootGrain.MergeManyAsync`.
-- **Re-delivery of a diverted row is judged afresh, and recorded again.** Repair
+- **Re-delivery of a diverted row is judged afresh, and its record rewritten.** Repair
   and a re-seed import re-judge a row whose identity the receiver dead-lettered;
-  nothing checks the dead letters for that identity, because the dead-letter
-  store keys a record by tree, wall time, key and a random suffix, so a check
-  would cost a lookup per row. Two behaviours follow, and neither is modelled.
-  A refused row diverted again files another record, and anti-entropy repair,
-  whose digest diff does not exclude dead-lettered keys, re-ships it every probe
-  round once auto-remediation is enabled (it is off by default); the model's
-  dead-letter flag stands for one or more records, so the module checks that a
-  divergence is accounted for, not that it is accounted for once. And a row
-  diverted only because its stamp was unservable is admitted once the receiver's
-  catalog serves it, while its dead letter still stands; the model's repair and
-  import take a diverted row only while the receiver would still refuse it. A
-  refused body is never admitted by any path, which the module does check.
+  nothing checks the dead letters before judging, because that would cost a lookup
+  per row. Instead a replicated diversion's record is keyed by the source write's
+  origin cluster and clock (#5714), so a re-diversion rewrites the one record and
+  the module checks that a divergence is accounted for exactly once (`Rediverted`).
+  Anti-entropy repair, whose digest diff does not exclude dead-lettered keys, still
+  re-ships such a row every probe round once auto-remediation is enabled (it is off
+  by default), bounded by the remediation rate cap and breaker; the model's repair
+  allows that re-ship but does not count it. And a row diverted only because its
+  stamp was unservable is admitted once the receiver's catalog serves it, while its
+  dead letter still stands; the model's repair and import take a diverted row only
+  while the receiver would still refuse it. A refused body is never admitted by any
+  path, which the module does check.
   Production symbols: `LatticeSchemaDeadLetterStore.AppendAsync`, `ReplicationDigestProbeGrain`, `RemediationGuard`, `RecentApplyCache`.
 - **The merge-result observer does not see batched merges.** The opt-in
   merge-result observer runs on the foreground leaf write and on CRDT apply, local

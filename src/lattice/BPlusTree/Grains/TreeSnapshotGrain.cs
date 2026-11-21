@@ -95,7 +95,8 @@ internal sealed class TreeSnapshotGrain(
         var snapshot = state.State;
         if (!snapshot.InProgress)
         {
-            return new SnapshotProgress(false, snapshot.Complete, snapshot.OperationId, snapshot.Phase, 0, 0);
+            return new SnapshotProgress(false, snapshot.Complete, snapshot.OperationId, snapshot.Phase, 0, 0,
+                snapshot.FailureReason);
         }
 
         var total = snapshot.ShardIndices?.Length ?? snapshot.ShardCount;
@@ -329,6 +330,8 @@ internal sealed class TreeSnapshotGrain(
         var prevSourceShardMap = state.State.SourceShardMap;
         var prevDrainCursors = state.State.DrainCursors;
         var prevDrainedPositions = state.State.DrainedPositions;
+        var prevFailedTicks = state.State.FailedTicks;
+        var prevFailureReason = state.State.FailureReason;
 
         // Persist intent BEFORE any shard-marking side effects.
         state.State.InProgress = true;
@@ -355,6 +358,8 @@ internal sealed class TreeSnapshotGrain(
         state.State.SourceShardMap = sourceMap;
         state.State.DrainCursors = null;
         state.State.DrainedPositions = null;
+        state.State.FailedTicks = 0;
+        state.State.FailureReason = null;
         try
         {
             await WriteSnapshotStateAsync();
@@ -380,6 +385,8 @@ internal sealed class TreeSnapshotGrain(
             state.State.SourceShardMap = prevSourceShardMap;
             state.State.DrainCursors = prevDrainCursors;
             state.State.DrainedPositions = prevDrainedPositions;
+            state.State.FailedTicks = prevFailedTicks;
+            state.State.FailureReason = prevFailureReason;
             throw;
         }
 
@@ -545,13 +552,213 @@ internal sealed class TreeSnapshotGrain(
     /// retry waits for the next tick as it always has; a teardown of the timer
     /// ends it too.
     /// </summary>
-    protected internal override Task ProcessPhaseTickAsync()
+    /// <remarks>
+    /// A standalone snapshot whose ticks keep faulting is failed terminally after
+    /// <see cref="MaxFailedPhaseTicks"/> consecutive failed ticks
+    /// (<see cref="FailSnapshotAsync"/>, issue #5464) instead of being retried
+    /// forever with its source shards locked. A snapshot driven by a resize is
+    /// left to that coordinator: it reads an idle snapshot as a finished copy, so
+    /// failing it here would let the resize swap onto a partial destination.
+    /// </remarks>
+    protected internal override async Task ProcessPhaseTickAsync()
     {
-        if (!state.State.InProgress) return Task.CompletedTask;
+        if (!state.State.InProgress) return;
 
         var drainOptions = optionsResolver.GetConfiguredOptions(SourceTreeId);
-        return RunSliceCoreAsync(drainOptions, PhaseTickSliceDuration(drainOptions),
-            yieldOnRetry: true, PhaseTickToken);
+        try
+        {
+            await RunSliceCoreAsync(drainOptions, PhaseTickSliceDuration(drainOptions),
+                yieldOnRetry: true, PhaseTickToken);
+        }
+        catch (OperationCanceledException) when (PhaseTickToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex) when (state.State.InProgress && state.State.ReleasesShadowForwardOnCompletion)
+        {
+            var failedTicks = state.State.FailedTicks + 1;
+            if (failedTicks >= MaxFailedPhaseTicks)
+            {
+                await FailSnapshotAsync(
+                    $"Snapshot of tree '{SourceTreeId}' to '{state.State.DestinationTreeId}' failed in phase " +
+                    $"{state.State.Phase} after {failedTicks} consecutive failed attempts: {ex.Message}");
+                return;
+            }
+
+            await PersistFailedTicksAsync(failedTicks);
+            throw;
+        }
+
+        if (state.State.FailedTicks != 0)
+        {
+            await PersistFailedTicksAsync(0);
+        }
+    }
+
+    /// <summary>
+    /// How many consecutive phase-timer ticks a standalone snapshot may fault
+    /// before <see cref="ProcessPhaseTickAsync"/> fails it terminally (issue #5464).
+    /// </summary>
+    internal const int MaxFailedPhaseTicks = 10;
+
+    private async Task PersistFailedTicksAsync(int failedTicks)
+    {
+        var prev = state.State.FailedTicks;
+        state.State.FailedTicks = failedTicks;
+        try
+        {
+            await WriteSnapshotStateAsync();
+        }
+        catch
+        {
+            state.State.FailedTicks = prev;
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Ends a standalone snapshot that cannot make progress (issue #5464). Best
+    /// effort, it gives the source back first: an offline snapshot unmarks every
+    /// source shard it may have locked (unmarking is idempotent, so shards the
+    /// Lock phase never reached are harmless), and an online snapshot releases
+    /// the shadow-forward it installed. It then records
+    /// <paramref name="reason"/> in <see cref="TreeSnapshotState.FailureReason"/>,
+    /// which <see cref="GetProgressAsync"/> and the tree-admin snapshot status
+    /// surface, and stops the coordinator. The destination tree stays registered
+    /// with whatever was copied so far; it is incomplete and is the operator's to
+    /// delete. <see cref="TreeSnapshotState.DestinationTreeId"/> and
+    /// <see cref="TreeSnapshotState.OperationId"/> are kept for diagnosis.
+    /// </summary>
+    internal async Task FailSnapshotAsync(string reason)
+    {
+        if (state.State.Mode == SnapshotMode.Online)
+        {
+            try
+            {
+                await ReleaseSourceShadowForwardAsync();
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex,
+                    "Failed to release the shadow-forward of failed snapshot of tree {TreeId}.", SourceTreeId);
+            }
+        }
+        else
+        {
+            var shardIndices = CopiedShardIndices;
+            for (int i = 0; i < shardIndices.Length; i++)
+            {
+                try
+                {
+                    await grainFactory.GetGrain<IShardRootGrain>($"{SourcePhysicalTreeId}/{shardIndices[i]}")
+                        .UnmarkDeletedAsync();
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning(ex,
+                        "Failed to unlock source shard {ShardIndex} of failed snapshot of tree {TreeId}.",
+                        shardIndices[i], SourceTreeId);
+                }
+            }
+        }
+
+        var prevInProgress = state.State.InProgress;
+        var prevComplete = state.State.Complete;
+        var prevNextShardIndex = state.State.NextShardIndex;
+        var prevShardRetries = state.State.ShardRetries;
+        var prevPhase = state.State.Phase;
+        var prevReleasesShadowForward = state.State.ReleasesShadowForwardOnCompletion;
+        var prevShardIndices = state.State.ShardIndices;
+        var prevSourceShardMap = state.State.SourceShardMap;
+        var prevDrainCursors = state.State.DrainCursors;
+        var prevDrainedPositions = state.State.DrainedPositions;
+        var prevFailedTicks = state.State.FailedTicks;
+        var prevFailureReason = state.State.FailureReason;
+
+        state.State.InProgress = false;
+        state.State.Complete = false;
+        state.State.NextShardIndex = 0;
+        state.State.ShardRetries = 0;
+        state.State.Phase = SnapshotPhase.Lock;
+        state.State.ReleasesShadowForwardOnCompletion = false;
+        state.State.ShardIndices = null;
+        state.State.SourceShardMap = null;
+        state.State.DrainCursors = null;
+        state.State.DrainedPositions = null;
+        state.State.FailedTicks = 0;
+        state.State.FailureReason = reason;
+        try
+        {
+            await WriteSnapshotStateAsync();
+        }
+        catch
+        {
+            state.State.InProgress = prevInProgress;
+            state.State.Complete = prevComplete;
+            state.State.NextShardIndex = prevNextShardIndex;
+            state.State.ShardRetries = prevShardRetries;
+            state.State.Phase = prevPhase;
+            state.State.ReleasesShadowForwardOnCompletion = prevReleasesShadowForward;
+            state.State.ShardIndices = prevShardIndices;
+            state.State.SourceShardMap = prevSourceShardMap;
+            state.State.DrainCursors = prevDrainCursors;
+            state.State.DrainedPositions = prevDrainedPositions;
+            state.State.FailedTicks = prevFailedTicks;
+            state.State.FailureReason = prevFailureReason;
+            throw;
+        }
+
+        Logger.LogError("Snapshot of tree {TreeId} failed terminally: {Reason}", SourceTreeId, reason);
+        await CompleteCoordinatorAsync();
+    }
+
+    /// <inheritdoc />
+    protected override bool AbandonsSagaOnPurgedTree => true;
+
+    /// <inheritdoc />
+    protected override Task<bool> IsTreePurgedAsync() =>
+        PurgedTreeRegistrationGuard.IsPurgedAsync(grainFactory, SourceTreeId);
+
+    /// <summary>
+    /// Ends a snapshot whose source tree was purged (issue #5464): there is no
+    /// source left to copy or unlock, so the saga is recorded as failed and the
+    /// coordinator stops rather than retrying against a tree that cannot return.
+    /// </summary>
+    protected override async Task ClearSagaStateForPurgedTreeAsync()
+    {
+        var prevInProgress = state.State.InProgress;
+        var prevComplete = state.State.Complete;
+        var prevShardIndices = state.State.ShardIndices;
+        var prevSourceShardMap = state.State.SourceShardMap;
+        var prevDrainCursors = state.State.DrainCursors;
+        var prevDrainedPositions = state.State.DrainedPositions;
+        var prevFailedTicks = state.State.FailedTicks;
+        var prevFailureReason = state.State.FailureReason;
+
+        state.State.InProgress = false;
+        state.State.Complete = false;
+        state.State.ShardIndices = null;
+        state.State.SourceShardMap = null;
+        state.State.DrainCursors = null;
+        state.State.DrainedPositions = null;
+        state.State.FailedTicks = 0;
+        state.State.FailureReason = $"Source tree '{SourceTreeId}' was purged while the snapshot was in progress.";
+        try
+        {
+            await WriteSnapshotStateAsync();
+        }
+        catch
+        {
+            state.State.InProgress = prevInProgress;
+            state.State.Complete = prevComplete;
+            state.State.ShardIndices = prevShardIndices;
+            state.State.SourceShardMap = prevSourceShardMap;
+            state.State.DrainCursors = prevDrainCursors;
+            state.State.DrainedPositions = prevDrainedPositions;
+            state.State.FailedTicks = prevFailedTicks;
+            state.State.FailureReason = prevFailureReason;
+            throw;
+        }
     }
 
     /// <summary>

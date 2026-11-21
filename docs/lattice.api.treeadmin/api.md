@@ -328,6 +328,7 @@ The following inventory includes directly declared public members and overloads,
 - `public const string LeafStateBytesKey`
 - `public const string TotalBytesKey`
 - `public const string PartialKey`
+- `public const string StaleKey`
 - `public const string SampledAtKey`
 - `public static IReadOnlyDictionary<string, string> ToResultMap(ClusterStorageUsageSummary summary)`
 - `public static bool TryReadSummary(IReadOnlyDictionary<string, string> result, out ClusterStorageUsageSummary? summary)`
@@ -810,6 +811,7 @@ The following inventory includes directly declared public members and overloads,
 - `public TreeSnapshotPhase? Phase { get; init; }`
 - `public int CopiedShardCount { get; init; }`
 - `public int? ShardCount { get; init; }`
+- `public string? FailureReason { get; init; }`
 
 ### `Orleans.Lattice.Api.TreeAdmin.TreeStatsReport`
 

@@ -77,7 +77,32 @@ public sealed class LatticeSchemaDeadLetterEntry
     [Id(4)]
     public LatticeSchemaDeadLetterSource Source { get; }
 
-    /// <summary>The UTC instant the item was dead-lettered.</summary>
+    /// <summary>
+    /// The UTC instant the item was dead-lettered. For a replicated item that
+    /// carries a source identity (<see cref="OriginClusterId"/> and
+    /// <see cref="SourceHlc"/>) this is the source write's wall-clock time, so a
+    /// re-delivery of the same source write maps to the same record.
+    /// </summary>
     [Id(5)]
     public DateTimeOffset TimestampUtc { get; }
+
+    /// <summary>
+    /// The cluster id of the region that originated the diverted replicated
+    /// write, or <c>null</c> when the item carried no source identity.
+    /// </summary>
+    /// <remarks>
+    /// When this and <see cref="SourceHlc"/> are both set, the default store keys
+    /// the record by the source identity, so a repeated delivery of the same
+    /// source write (a retry, a repair re-ship) overwrites one record instead of
+    /// filing another (issue #5714).
+    /// </remarks>
+    [Id(6)]
+    public string? OriginClusterId { get; init; }
+
+    /// <summary>
+    /// The source hybrid logical clock of the diverted replicated write, or
+    /// <c>null</c> when the item carried no source identity.
+    /// </summary>
+    [Id(7)]
+    public HybridLogicalClock? SourceHlc { get; init; }
 }
