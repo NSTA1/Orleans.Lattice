@@ -87,6 +87,25 @@ public sealed class ClusterRemeasureTests : ClusterTestContext
     }
 
     [Test]
+    public void A_re_measure_that_carried_last_known_figures_is_marked_stale()
+    {
+        var cut = StartRemeasure();
+        var id = Refreshes.Latest!;
+
+        Remeasured = true;
+        Refreshes.Succeed(id, new ClusterStorageUsageSummary { TreeCount = 12, TotalBytes = 4096, Deep = true, Stale = true, SampledAt = Sampled });
+        Tick();
+
+        cut.WaitUntil(() =>
+        {
+            Assert.That(cut.Markup, Does.Contain("Re-measured by a leaf walk"));
+            Assert.That(cut.Markup, Does.Contain(", stale"), "the refresh's stale flag reaches the suffix");
+            Assert.That(cut.Markup, Does.Not.Match(@"\s, stale"), "the suffix follows the instant with no whitespace before the comma");
+            Assert.That(cut.Markup, Does.Not.Contain(" ,"));
+        });
+    }
+
+    [Test]
     public void A_re_measure_can_be_stopped()
     {
         var cut = StartRemeasure();

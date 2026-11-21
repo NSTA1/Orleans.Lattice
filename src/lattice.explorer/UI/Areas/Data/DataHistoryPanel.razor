@@ -90,6 +90,10 @@
             @if (BoundNote is { } bound)
             {
                 <p class="lt-data-note">@bound</p>
+                @if (ReadFromView)
+                {
+                    <LtButton Variant="LtButtonVariant.Quiet" Disabled="@_loading" OnClick="ReloadAsync">Read again</LtButton>
+                }
             }
 
             @if (MetadataOnlyNote is { } metadataOnly)

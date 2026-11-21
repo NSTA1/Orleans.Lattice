@@ -65,8 +65,19 @@ public partial class DataHistoryPanel : IDisposable
             ? $"Older revisions were trimmed; history is available from {DataFormat.Time(_earliest)}."
             : TrimmedWithNoEarliestText,
         EntryHistoryBound.WalWindowFallback => WalWindowFallbackText,
+        EntryHistoryBound.BoundedByAge => ViewCatchingUpText,
         _ => null,
     };
+
+    /// <summary>Whether the history was read from a change-history view, which materialises asynchronously and can be re-read.</summary>
+    private bool ReadFromView => _bound == EntryHistoryBound.BoundedByAge;
+
+    /// <summary>
+    /// The history bound note when the revisions were read from a change-history view. The view
+    /// materialises asynchronously and the state API reports no lag signal, so the panel cannot
+    /// tell whether the view is behind its source; it says the timeline may be, and offers a re-read.
+    /// </summary>
+    internal const string ViewCatchingUpText = "This history is read from a change-history view, which is updated after each write; if the view is catching up, recent changes may not appear yet.";
 
     /// <summary>The As-of field's hint: how to choose a time, and what an empty field means.</summary>
     internal const string AtHint = "Pick a time, or type one as yyyy-MM-ddTHH:mm:ssZ; empty for the latest.";

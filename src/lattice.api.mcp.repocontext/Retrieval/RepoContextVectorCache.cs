@@ -54,7 +54,7 @@ internal sealed class RepoContextVectorCache
     /// </summary>
     /// <param name="repoId">The repository identifier. Must not be <see langword="null"/>.</param>
     /// <param name="space">The query's embedding space.</param>
-    /// <param name="candidates">The cached candidate set on a hit; <see langword="null"/> on a miss.</param>
+    /// <param name="candidates">The cached candidate set on a hit; an empty, non-null set on a miss.</param>
     /// <returns><see langword="true"/> on a fresh hit; otherwise <see langword="false"/>.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="repoId"/> is null.</exception>
     public bool TryGet(

@@ -30,6 +30,13 @@ public static class StorageUsageRefreshResults
     /// <summary>Result key: <c>true</c> when at least one tree reported a partial reading.</summary>
     public const string PartialKey = "partial";
 
+    /// <summary>
+    /// Result key: <c>true</c> when at least one tree carried last-known figures for a
+    /// surface it could not re-measure (<see cref="ClusterStorageUsageSummary.Stale"/>).
+    /// Optional on read: a result recorded before the key existed reads as not stale.
+    /// </summary>
+    public const string StaleKey = "stale";
+
     /// <summary>Result key: when the refresh was sampled, as a round-trip (<c>O</c>) UTC timestamp.</summary>
     public const string SampledAtKey = "sampledAt";
 
@@ -40,7 +47,7 @@ public static class StorageUsageRefreshResults
     public static IReadOnlyDictionary<string, string> ToResultMap(ClusterStorageUsageSummary summary)
     {
         ArgumentNullException.ThrowIfNull(summary);
-        return new Dictionary<string, string>(7, StringComparer.Ordinal)
+        return new Dictionary<string, string>(8, StringComparer.Ordinal)
         {
             [TreeCountKey] = summary.TreeCount.ToString(CultureInfo.InvariantCulture),
             [WalRetainedBytesKey] = summary.WalRetainedBytes.ToString(CultureInfo.InvariantCulture),
@@ -48,6 +55,7 @@ public static class StorageUsageRefreshResults
             [LeafStateBytesKey] = summary.LeafStateBytes.ToString(CultureInfo.InvariantCulture),
             [TotalBytesKey] = summary.TotalBytes.ToString(CultureInfo.InvariantCulture),
             [PartialKey] = summary.Partial ? "true" : "false",
+            [StaleKey] = summary.Stale ? "true" : "false",
             [SampledAtKey] = summary.SampledAt.UtcDateTime.ToString("O", CultureInfo.InvariantCulture),
         };
     }
@@ -79,6 +87,12 @@ public static class StorageUsageRefreshResults
             return false;
         }
 
+        var stale = false;
+        if (result.TryGetValue(StaleKey, out var staleText) && !bool.TryParse(staleText, out stale))
+        {
+            return false;
+        }
+
         summary = new ClusterStorageUsageSummary
         {
             TreeCount = treeCount,
@@ -87,6 +101,7 @@ public static class StorageUsageRefreshResults
             LeafStateBytes = leafState,
             TotalBytes = total,
             Partial = partial,
+            Stale = stale,
             Deep = true,
             SampledAt = sampledAt,
             Trees = ImmutableArray<TreeStorageUsageSnapshot>.Empty,

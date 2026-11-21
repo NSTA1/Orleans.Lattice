@@ -87,8 +87,12 @@ public sealed class RepoContextVectorCacheTests
 
         clock.UtcNow = DateTimeOffset.UnixEpoch.AddSeconds(31);
 
-        Assert.That(cache.TryGet(RepoId, Space, out _), Is.False,
-            "A set older than the TTL is stale and re-gathered.");
+        Assert.Multiple(() =>
+        {
+            Assert.That(cache.TryGet(RepoId, Space, out var candidates), Is.False,
+                "A set older than the TTL is stale and re-gathered.");
+            Assert.That(candidates, Is.Not.Null.And.Empty, "A stale miss yields an empty set, never null.");
+        });
     }
 
     [Test]
