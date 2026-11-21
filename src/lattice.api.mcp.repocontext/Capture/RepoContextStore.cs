@@ -1522,11 +1522,14 @@ internal sealed partial class RepoContextStore
     /// Orleans response timeout on the tree grain and, because both derive from
     /// it, the core's own stalled-scan and shard-activation timeouts. Neither is a
     /// property of this request, so retrying it unchanged repeats the same
-    /// failure while moving to the next tree makes progress.
+    /// failure while moving to the next tree makes progress. A transient fault
+    /// (<see cref="RepoContextResetFaults.IsTransient"/>) that outlasted the
+    /// sweep's own retry budget is treated the same way, so a reset reports the
+    /// tree as partial rather than aborting (#5182).
     /// </para>
     /// </summary>
     private static bool IsUndrainableTreeFault(Exception ex) =>
-        ex is ILatticeLeafUnavailable or TimeoutException;
+        ex is ILatticeLeafUnavailable or TimeoutException || RepoContextResetFaults.IsTransient(ex);
 
     /// <summary>
     /// Sweeps one code-index tree's <c>repo/{repoId}/</c> subtree for
@@ -1583,8 +1586,14 @@ internal sealed partial class RepoContextStore
         var tree = Tree(treeName);
         try
         {
-            return await tree
-                .DeleteRangeAsync(scanPrefix, end, DeleteStepSize, maxAttempts: null, cancellationToken)
+            // A retired-leaf refusal or a transient store lock is a property of
+            // concurrent maintenance, not of this request: the range delete resumes
+            // by key, so re-running it after a back-off is idempotent (#5182).
+            return await RepoContextResetFaults.RetryTransientAsync(
+                    ct => tree.DeleteRangeAsync(scanPrefix, end, DeleteStepSize, maxAttempts: null, ct),
+                    (delay, ct) => Task.Delay(delay, _timeProvider, ct),
+                    RepoContextResetFaults.MaxAttempts,
+                    cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (Exception unavailable) when (unavailable is ILatticeLeafUnavailable)
