@@ -504,6 +504,7 @@ A restore, revert, purge and recreate, or alias move re-stamps the source tree's
 - **A refusal re-resolves the binding.** A peer refuses a batch stamped with a lineage it did not drain (see [Snapshot bootstrap](snapshot-bootstrap.md#source-lineage-gate)). The ack reports `ReplicationAck.SourceLineageRefused` and the cursor holds. At the end of the tick the shipper resolves its binding again:
   - A stale binding rebinds, and never re-sends the old log.
   - A current, known binding means the peer drained another lineage, so the shipper takes the peer off the log, and the re-seed drains the current lineage.
+  - Every snapshot export durably records the WAL heads it opened at (its cut); recording is best-effort, and a failure only logs a warning. When a lineage move takes the peer off the log, the marker is lowered to just below the earliest export whose cut, together with every later export's, covers each head the log still retains, so the receiver's own bootstrap that moved the lineage settles the re-seed instead of a second re-seed being forced ([#5794](https://github.com/NSTA1/Orleans.Lattice/issues/5794)). The rewind then starts from those retained heads. No export qualifies while a silo predates the purge hold, or when the cuts cannot be read; the marker then stays at the current epoch and the re-seed waits for a new export.
   - An unknown binding only backs off until the next resolve.
 
 ### Doorbell

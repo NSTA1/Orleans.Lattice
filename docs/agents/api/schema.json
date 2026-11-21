@@ -512,7 +512,20 @@
         {
           "name": "TimestampUtc",
           "type": "DateTimeOffset",
-          "required": true
+          "required": true,
+          "notes": "The source write's wall-clock time when OriginClusterId and SourceHlc are both set; otherwise the receiver's clock."
+        },
+        {
+          "name": "OriginClusterId",
+          "type": "string?",
+          "required": false,
+          "notes": "Cluster id of the region that originated the diverted replicated write; null when the item carried no source identity. With SourceHlc set, the default store keys the record by this identity, so a re-delivery overwrites one record."
+        },
+        {
+          "name": "SourceHlc",
+          "type": "HybridLogicalClock?",
+          "required": false,
+          "notes": "Source hybrid logical clock of the diverted replicated write; null when the item carried no source identity."
         }
       ],
       "source": "src/lattice.schema/LatticeSchemaDeadLetterEntry.cs#LatticeSchemaDeadLetterEntry"

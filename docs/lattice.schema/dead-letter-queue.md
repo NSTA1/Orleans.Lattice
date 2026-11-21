@@ -19,9 +19,11 @@ copy), a typed-CRDT entry, an entry of a replicated atomic batch, or a row a
 receiver bootstrap drains from a peer's export - and is filed under the logical
 tree's id. A backup restore writes below the strict check and never produces an
 entry (see [strict-mode ingest](schema-enforcement.md#strict-mode-ingest)). With
-anti-entropy auto-remediation on (off by default), a diverted plain row is
-re-shipped every probe round and files another record each time
-([#5714](https://github.com/NSTA1/Orleans.Lattice/issues/5714)). A dead-lettered
+anti-entropy auto-remediation on (off by default), a diverted plain row stays a
+divergence and is re-shipped every probe round, but each re-delivery of the same
+source write rewrites its one record rather than filing another (see the source
+identity below; [#5714](https://github.com/NSTA1/Orleans.Lattice/issues/5714)).
+A dead-lettered
 entry of a replicated atomic batch is left out of that batch, and the receiver
 commits the batch's other entries. The entry's dead-letter record is an ordinary
 committed write to the `sys-schema-dlq` tree in its own right: it is not part of
@@ -46,15 +48,27 @@ length, a human-readable reason, the source, and a UTC timestamp. For an item th
 arrived already carrying a version envelope, the preview and the byte length cover
 the stored, enveloped bytes, while the reason describes the body it was judged by
 (see [composition with versioning](schema-enforcement.md#composition-with-versioning)).
+
+A replicated plain last-writer-wins row - a single entry, a merged batch, a repair
+re-ship, or a row a bootstrap drains - also records its source identity: the
+originating region's cluster id (`OriginClusterId`) and the source write's hybrid
+logical clock (`SourceHlc`). When both are set, the record's timestamp is the
+source write's wall-clock time and the default store keys the record by that
+identity, so every re-delivery of the same source write overwrites one record
+instead of filing another. Any other diversion - a typed-CRDT entry or an entry of a
+replicated atomic batch - leaves both fields `null`, is stamped by the receiver's
+clock, and gets a unique record per diversion.
+
 A refused item is diverted once: a refused full-state CRDT row (the bootstrap form)
 is not retried as a version conflict, and an entry of a replicated atomic batch
 whose apply a bootstrap hold mirrors onto a second copy is recorded once, and that one record is committed independently of the batch.
 A bootstrap import is judged per copy it stages into. A transient retry of the
 drain into the same copy records a refused row once. If the import's copy is
 discarded and the bootstrap is started again into a new copy, every row is applied
-and judged again in the new copy, so a refused row gains one more record per
-discarded copy. A record carries no source identity, so the two cannot be merged;
-an operator reading the queue may see the same key and reason more than once.
+and judged again in the new copy. A refused plain row carries its source identity,
+so the new copy rewrites its one record; a refused typed-CRDT row carries none, so
+it gains one more record per discarded copy, and an operator reading the queue may
+see the same key and reason more than once.
 The source is one of:
 
 | `LatticeSchemaDeadLetterSource` | Meaning |

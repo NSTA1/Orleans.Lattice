@@ -336,8 +336,14 @@ maintenance did (see
 [Projection input on a versioned source](#projection-input-on-a-versioned-source)).
 
 A rebuild runs inside the maintainer, which handles one maintenance call at a
-time, so a long rebuild delays the next drain, rebuild or delete until it
-finishes. Status reads do not wait for it: `GetLagAsync`, the active-tree lookup
+time, so a long rebuild delays the next drain or rebuild until it finishes. A
+delete does not wait for it: `DeleteAsync` first cancels any in-flight rebuild,
+reconcile, source-identity heal or keepalive drain and holds off new background
+drains for a short window, so the teardown is admitted promptly rather than
+queued behind the maintenance work. A cancelled rebuild leaves only an unswapped
+next generation, which the teardown deletes with the other backing trees; if the
+teardown itself fails, the hold is lifted and the view resumes normal
+maintenance. Status reads do not wait for it: `GetLagAsync`, the active-tree lookup
 behind every view read, and the tree-administration view status are answered
 while a drain or a rebuild is in progress, and report the state at the moment of
 the read. Until a view has rebuilt from a swapped source, its lag counts every
@@ -474,7 +480,15 @@ view releases its bound physical consumer and any legacy logical registration.
 
 The rebind is **event-driven**. The tree registry pushes the alias change to every
 view maintainer sourcing that tree the moment the swap commits, and the next drain
-re-resolves and heals. A missed push is caught by a coarse backstop
+re-resolves and heals. When the swap needs the view rebuilt from the new physical
+source, the heal re-projects it into the next generation in bounded slices -
+at most 1024 source keys per drain - rather than in one long maintainer turn,
+so the maintainer stays responsive while a large view heals. Readers keep being
+served the previous generation until the drain that projects the last key swaps
+the rebuilt generation in and publishes the new physical binding; a source
+within one slice still heals in a single drain. Heal progress is held in memory,
+so a deactivation mid-heal restarts the heal from the beginning. A `ShipView`
+producer, which rebuilds its tree in place, still heals in one call. A missed push is caught by a coarse backstop
 (`SourceIdentityBackstopInterval`, default 30 s) that re-resolves the source
 identity even with no notification. Because the steady-state binding is cached and
 re-resolved only on a push or the backstop, an idle view maintainer does not read

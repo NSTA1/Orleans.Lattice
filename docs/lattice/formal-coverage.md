@@ -510,7 +510,9 @@ gaps, states its full scope.
     dependencies and their low watermark, and an in-place re-bootstrap after
     the source reaped a delete, including the bootstrap drop floor, and
     concurrent mutual re-seeds through shadow copies that a source's cutover
-    aborts and re-drives.
+    aborts and re-drives, and the forced re-seed a receiver-initiated bootstrap
+    leaves, settled without a second re-seed by a covering export
+    (`ReplicationReceiverReseed`).
   - **Does not cover:** atomic-write sagas carried over replication (the
     cross-cluster area covers them), anti-entropy repair, and more than one WAL
     partition per cluster, except in the low-watermark companion
@@ -660,14 +662,15 @@ gaps, states its full scope.
     cutover whose captured source was superseded. Cross-region
     (`SchemaCrossRegion`): each receiver judges every replicated entry, a plain
     write included, and atomic batches by its own policy and catalog, on the
-    stream, anti-entropy repair and a re-seed import alike, and a refused batch entry is
-    dead-lettered durably while its siblings commit.
+    stream, anti-entropy repair and a re-seed import alike, a refused batch entry is
+    dead-lettered durably while its siblings commit, and a refused plain row
+    keeps exactly one dead-letter record however often it is re-delivered or
+    repaired.
   - **Does not cover:** writes during a remediation or migration build
     (quiescence is required), an ownership-guard refusal of the swap, the
     timing of policy propagation to other silos, and split or fold
     publication; local writes below the choke point (backup restore, tree
-    merge), which are never validated or stamped; a second dead-letter record
-    for a re-delivered refused row, and a repair or re-seed admitting a row
+    merge), which are never validated or stamped; a repair or re-seed admitting a row
     diverted for an unservable stamp once the receiver's catalog serves it; replication of any schema definition between regions; re-applying
     a diverted entry, which stays diverted after the version is registered;
     and the batched merges the merge-result observer (`ILatticeMergeObserver`)

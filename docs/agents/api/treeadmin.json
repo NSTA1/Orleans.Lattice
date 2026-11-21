@@ -1674,6 +1674,11 @@
           "name": "ShardCount",
           "type": "int?",
           "required": false
+        },
+        {
+          "name": "FailureReason",
+          "type": "string?",
+          "required": false
         }
       ],
       "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeSnapshotStatus.cs#TreeSnapshotStatus"

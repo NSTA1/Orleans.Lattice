@@ -172,7 +172,9 @@ Which legs run depends on the event:
   contract leg included) and every conformance shard. A nightly schedule adds
   `story-contoso-narrow`.
 - **A pull request labelled `journeys-full`** runs the full set, as a landing
-  pull request does.
+  pull request does. Adding any other label runs no leg: the planner is skipped,
+  and the run takes a concurrency group of its own, so it cannot cancel a run
+  already in progress for the pull request.
 - **Editing a member pull request's body** runs no leg. It runs the screenshot
   provenance check: every journey pull request carries a
   `## Journey screenshots` section, ordered and captioned, and the check
