@@ -347,6 +347,10 @@ internal sealed class LatticeViewFactory(
         }
 
         var maintainer = grainFactory.GetGrain<IViewMaintainerGrain>(viewName);
+
+        // Interleaved: cancel any in-flight rebuild or drain first so the
+        // non-reentrant decommission turn is not queued behind it (#5729).
+        await maintainer.CancelMaintenanceForDecommissionAsync();
         await maintainer.DecommissionAsync(cancellationToken);
 
         await RegistryGrain.UnregisterAsync(viewName);

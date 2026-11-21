@@ -184,6 +184,21 @@ internal interface IViewMaintainerGrain : IGrainWithStringKey
     Task WaitForSourceHeadAsync(TimeSpan timeout, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Prepares the maintainer for an imminent <see cref="DecommissionAsync"/>:
+    /// cancels any in-flight rebuild, reconcile, source-identity heal, or keepalive
+    /// drain, and holds off new background drains for a bounded window so the
+    /// decommission turn is admitted promptly instead of queueing behind a long
+    /// maintenance turn. Interleaves with the running turn, but touches only the
+    /// maintenance cancellation source and the hold deadline - never checkpoint,
+    /// staging, or tree state - so it cannot race a mutation. The hold lapses on
+    /// its own, so a decommission that is never sent leaves the view to resume
+    /// normal maintenance. Idempotent.
+    /// </summary>
+    /// <returns>A task that completes once the cancellation has been signalled.</returns>
+    [AlwaysInterleave]
+    Task CancelMaintenanceForDecommissionAsync();
+
+    /// <summary>
     /// Tears the view down: unregisters the keepalive reminder so the grain stops
     /// being kept alive, releases the source WAL cursor pin, deletes every backing
     /// view-tree generation through the standard tree-deletion machinery, and
