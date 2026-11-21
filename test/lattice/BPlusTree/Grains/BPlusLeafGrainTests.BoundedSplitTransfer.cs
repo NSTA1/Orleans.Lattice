@@ -245,30 +245,70 @@ public sealed partial class BPlusLeafGrainBoundedSplitTransferTests
             "planning the transfer must not materialise a single row");
     }
 
-    // A guard is only a guard if something fails when it is removed. Under
-    // today's code the refusal path below is unreachable from the grain: the
-    // frame is strictly ascending, so whenever block 0 is materialised its
-    // rows necessarily sort below the frame's median. Reverting the guard
-    // therefore reddened nothing, which by the perturbation discipline makes
-    // it a dead clause to be deleted rather than shipped.
-    //
-    // It is kept because the state it refuses is reachable at the cache's own
-    // surface, and specified here so it is enforced rather than assumed. If a
-    // later change ever lets a materialised row be dropped after its block
-    // hydrated, the ascending-frame proof stops holding and an unguarded
-    // bisect would return a pivot with nothing below it - migrating every
-    // entry and leaving an empty donor, the non-terminating shape
-    // IsLeafOverCapacity's Count > 1 conjunct exists to exclude.
+    // Issue #5607. The pivot used to be the frame's own median, which is the
+    // median of the leaf only while nothing has been written since the frame
+    // attached. A leaf reactivated from a 16-row snapshot that then took 32
+    // ascending writes split at the frame's 8th key and handed 40 of its 48
+    // rows to the sibling, leaving an 8-row donor. The pivot is now the median
+    // of the union of unhydrated frame rows and resident rows.
     [Test]
-    public async Task A_pivot_with_nothing_below_it_is_refused_rather_than_returned()
+    public async Task Rows_written_after_reactivation_move_the_pivot_to_the_median_of_the_whole_leaf()
+    {
+        var (grain, _, recorder, _) = await RehydratedDividableLeafAsync(
+            rowCount: 16, residentBudgetBytes: 1024L * 1024);
+        var cache = grain.CacheForTest;
+
+        for (var i = 16; i < 48; i++)
+        {
+            cache.StoreRow(
+                Key(i),
+                LwwValue<byte[]>.Create(
+                    Payload(i),
+                    new HybridLogicalClock { WallClockTicks = 100L + i, Counter = i }));
+        }
+
+        // A write hydrates the block it lands in, so the frame's single block
+        // is already resident here; what matters is that bisecting adds nothing.
+        var hydratedBeforeBisect = cache.HydratedRowCount;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cache.Count, Is.EqualTo(48));
+            Assert.That(cache.HasPendingHydration, Is.True, "the frame must still be attached");
+            Assert.That(
+                cache.TryGetBisectingKeyWithoutHydrating(out var pivot, out var reason),
+                Is.True);
+            Assert.That(reason, Is.EqualTo(LeafBisectRefusalReason.None));
+            Assert.That(
+                pivot,
+                Is.EqualTo(Key(24)),
+                "the cut must halve the whole leaf; the frame median Key(8) leaves an 8-row donor");
+            Assert.That(
+                cache.HydratedRowCount,
+                Is.EqualTo(hydratedBeforeBisect),
+                "placing the cut must not materialise a frame row");
+        });
+
+        var result = await InvokeSplit(grain);
+
+        Assert.That(result, Is.Not.Null, "the division must complete");
+        Assert.That(
+            recorder.AllTransferredKeys.OrderBy(k => k, StringComparer.Ordinal),
+            Is.EqualTo(Enumerable.Range(24, 24).Select(Key)),
+            "the sibling must receive exactly the upper half of the leaf");
+    }
+
+    // The same union rule when a hydrated block's rows are dropped: the
+    // emptied block contributes nothing, so the pivot is the median of what
+    // remains rather than a refusal. This used to be the construction of the
+    // NoKeySortsBelowPivot refusal; under the union walk that refusal is only
+    // reachable when the cache's own row accounting disagrees.
+    [Test]
+    public async Task Rows_removed_after_hydration_shift_the_pivot_to_the_median_of_what_remains()
     {
         var (grain, _, _, _) = await RehydratedDividableLeafAsync(rowCount: 2048);
         var cache = grain.CacheForTest;
 
-        // Materialise block 0, then drop exactly the rows it brought in. That
-        // leaves the frame reporting block 0 as hydrated while no materialised
-        // row sorts below the median - the one state in which the ascending
-        // frame no longer proves interiority.
         foreach (var _ in cache.EnumerateRange(Key(0), Key(1)))
         {
         }
@@ -292,14 +332,17 @@ public sealed partial class BPlusLeafGrainBoundedSplitTransferTests
         Assert.That(
             cache.HydratedRowCount,
             Is.Zero,
-            "the arm must leave no materialised row below the median, or it is not exercising "
-            + "the refusal path");
+            "the arm must leave no materialised row, or it is not exercising an emptied block");
 
-        Assert.That(
-            cache.TryGetBisectingKeyWithoutHydrating(out _),
-            Is.False,
-            "a bisecting key with nothing proven below it must be refused, so the caller falls "
-            + "back to the ordered view instead of dividing into an empty donor");
+        // 2016 rows remain, all of them unhydrated frame rows from index 32 on.
+        var remaining = 2048 - block0Keys.Count;
+        Assert.Multiple(() =>
+        {
+            Assert.That(cache.Count, Is.EqualTo(remaining));
+            Assert.That(cache.TryGetBisectingKeyWithoutHydrating(out var pivot), Is.True);
+            Assert.That(pivot, Is.EqualTo(Key(block0Keys.Count + (remaining / 2))));
+            Assert.That(cache.HydratedRowCount, Is.Zero, "placing the cut must not materialise a row");
+        });
     }
 
     // ---------------------------------------------------------------

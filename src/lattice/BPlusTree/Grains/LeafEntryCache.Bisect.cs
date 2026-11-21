@@ -33,12 +33,13 @@ internal sealed partial class LeafEntryCache
     /// behaviour.
     /// </para>
     /// <para>
-    /// The pivot is the frame's median row rather than the median of the union
-    /// of frame and materialised rows, so a leaf carrying writes taken since
-    /// it attached may divide slightly off-centre. That is a balance property,
-    /// not a correctness one - <c>SplitAsync</c> needs a pivot that leaves both
-    /// sides non-empty, not an exact median - and the alternative is to pay for
-    /// the whole leaf to place the cut.
+    /// The pivot is the median of the whole leaf: the union of the frame rows
+    /// still owned by the source and the rows resident in the dictionary,
+    /// including writes taken since the frame attached (issue #5607). Taking
+    /// the frame's own median instead divided a leaf that had grown past its
+    /// snapshot far off-centre, leaving an undersized donor. The union is
+    /// walked by key only - resident keys in order, frame rows counted per
+    /// unhydrated block - so placing the cut still decodes no payload.
     /// </para>
     /// </summary>
     /// <param name="key">Receives the bisecting key on success.</param>
@@ -89,68 +90,151 @@ internal sealed partial class LeafEntryCache
             return false;
         }
 
-        var rowCount = source.RowCount;
-        if (rowCount < 2)
+        var count = Count;
+        if (count < 2)
         {
             reason = LeafBisectRefusalReason.TooFewRows;
             return false;
         }
 
-        if (!source.TryReadRowKeyAt(rowCount / 2, out var candidate))
+        // Issue #5607: the pivot is the median of the whole leaf - the union of
+        // the frame rows still owned by the source and the rows resident in
+        // the dictionary - not the frame's own median. The two differ as soon
+        // as the leaf takes writes after attaching: a leaf reactivated from a
+        // 16-row snapshot that then took 32 ascending writes divided at the
+        // frame's 8th key and left an 8-row donor, so a leaf that should have
+        // halved instead shed almost all of itself and split again at once.
+        //
+        // The union is disjoint by construction. A write hydrates the block it
+        // lands in before storing (HydrateForKey), and eviction drops only
+        // clean blocks, so no resident key is also a row of an unhydrated
+        // block. Count is exactly the size of that union, which makes the
+        // ordinal count/2 >= 1 the median with at least one key sorting below
+        // it - the strictly interior pivot SplitAsync needs.
+        //
+        // The walk visits resident keys in order and, between consecutive
+        // ones, counts the unhydrated frame rows that sort before each by a
+        // lower-bound probe of the frame's ordinal index. It reads frame keys
+        // only, decodes no payload and materialises no block.
+        var target = count / 2;
+        var below = 0;
+        var frameCursor = 0;
+        string? found = null;
+        foreach (var resident in _rows.Keys)
         {
-            reason = LeafBisectRefusalReason.FrameKeyUnreadable;
-            return false;
+            var frameBound = LowerBound(source, resident);
+            var unhydrated = UnhydratedRowsIn(source, frameCursor, frameBound);
+            if (below + unhydrated > target)
+            {
+                if (!TryReadUnhydratedFrameKey(source, frameCursor, frameBound, target - below, out found))
+                {
+                    reason = LeafBisectRefusalReason.FrameKeyUnreadable;
+                    return false;
+                }
+
+                break;
+            }
+
+            below += unhydrated;
+            frameCursor = frameBound;
+            if (below == target)
+            {
+                found = resident;
+                break;
+            }
+
+            below++;
         }
 
-        // The frame is strictly ascending by key (enforced at TryCreate via
-        // LeafSnapshotCodec.IsAscendingByKey), and rowCount >= 2 puts the
-        // midpoint at index >= 1, so the candidate sorts strictly above the
-        // frame's first row. Establishing that some key really does sort below
-        // it then reduces to establishing that the frame's first row, or some
-        // materialised row below the candidate, is still present.
-        //
-        // Checked rather than assumed, and deliberately kept even though
-        // reverting it reddens nothing reached from the grain.
-        //
-        // Its unreachability from SplitAsync is INCIDENTAL, NOT STRUCTURAL. It
-        // holds only because the frame is strictly ascending, so a materialised
-        // block 0 necessarily sorts below the frame's median - remove that one
-        // property and the refusal path is live. Anyone re-running a
-        // perturbation analysis from the grain side will therefore find this
-        // clause "dead" and be tempted to delete it. It is not dead: this is a
-        // cache-surface operation, so the guard protects every caller it will
-        // ever have, not the single caller it has today, and the state it
-        // refuses is reachable directly at that surface - which is what
-        // A_pivot_with_nothing_below_it_is_refused_rather_than_returned
-        // constructs and pins by name.
-        //
-        // What it prevents is not a new invariant. An unguarded bisect could
-        // return a pivot with nothing below it, migrating every entry and
-        // leaving an empty donor - the non-terminating shape
-        // IsLeafOverCapacity's Count > 1 conjunct already exists to exclude.
-        // This enforces that same existing invariant at a second seam.
-        bool someKeySortsBelow;
-        if (!source.IsHydrated(0))
+        if (found is null)
         {
-            // The frame's first row is still owned by the source, so it is
-            // present in the projection and sorts below the candidate.
-            someKeySortsBelow = true;
-        }
-        else
-        {
-            someKeySortsBelow = TryGetFirstMaterialisedKey(out var firstMaterialised)
-                && string.CompareOrdinal(firstMaterialised, candidate) < 0;
+            var rowCount = source.RowCount;
+            var unhydrated = UnhydratedRowsIn(source, frameCursor, rowCount);
+            if (below + unhydrated <= target)
+            {
+                // The walk ran out of rows before reaching the median ordinal,
+                // so the cache's row accounting disagrees with the rows it
+                // holds. Returning any key here could leave an empty donor -
+                // the non-terminating shape IsLeafOverCapacity's Count > 1
+                // conjunct exists to exclude - so refuse and let the ordered
+                // view decide from the rows themselves.
+                reason = LeafBisectRefusalReason.NoKeySortsBelowPivot;
+                return false;
+            }
+
+            if (!TryReadUnhydratedFrameKey(source, frameCursor, rowCount, target - below, out found))
+            {
+                reason = LeafBisectRefusalReason.FrameKeyUnreadable;
+                return false;
+            }
         }
 
-        if (!someKeySortsBelow)
-        {
-            reason = LeafBisectRefusalReason.NoKeySortsBelowPivot;
-            return false;
-        }
-
-        key = candidate;
+        key = found;
         reason = LeafBisectRefusalReason.None;
         return true;
+    }
+
+    // The number of frame rows in [fromInclusive, toExclusive) that belong to a
+    // block not currently hydrated, and so are owned by the source rather than
+    // the resident dictionary. Whole blocks at a time; reads no key.
+    private static int UnhydratedRowsIn(LeafSnapshotHydrationSource source, int fromInclusive, int toExclusive)
+    {
+        if (fromInclusive >= toExclusive)
+        {
+            return 0;
+        }
+
+        var total = 0;
+        var lastBlock = LeafSnapshotHydrationSource.BlockOf(toExclusive - 1);
+        for (var block = LeafSnapshotHydrationSource.BlockOf(fromInclusive); block <= lastBlock; block++)
+        {
+            if (source.IsHydrated(block))
+            {
+                continue;
+            }
+
+            var start = Math.Max(fromInclusive, LeafSnapshotHydrationSource.BlockStart(block));
+            var end = Math.Min(toExclusive, source.BlockEndExclusive(block));
+            total += end - start;
+        }
+
+        return total;
+    }
+
+    // Reads the key of the nth (0-based) unhydrated frame row in
+    // [fromInclusive, toExclusive), skipping hydrated blocks whole. Decodes the
+    // one key it returns and no payload.
+    private static bool TryReadUnhydratedFrameKey(
+        LeafSnapshotHydrationSource source,
+        int fromInclusive,
+        int toExclusive,
+        int nth,
+        out string key)
+    {
+        if (fromInclusive < toExclusive)
+        {
+            var remaining = nth;
+            var lastBlock = LeafSnapshotHydrationSource.BlockOf(toExclusive - 1);
+            for (var block = LeafSnapshotHydrationSource.BlockOf(fromInclusive); block <= lastBlock; block++)
+            {
+                if (source.IsHydrated(block))
+                {
+                    continue;
+                }
+
+                var start = Math.Max(fromInclusive, LeafSnapshotHydrationSource.BlockStart(block));
+                var end = Math.Min(toExclusive, source.BlockEndExclusive(block));
+                if (remaining < end - start)
+                {
+                    return source.TryReadRowKeyAt(start + remaining, out key);
+                }
+
+                remaining -= end - start;
+            }
+        }
+
+        key = string.Empty;
+        return false;
     }
 
     /// <summary>
@@ -391,28 +475,5 @@ internal sealed partial class LeafEntryCache
         return _mergeModes is not null && _mergeModes.TryGetValue(key, out var mode)
             ? mode
             : null;
-    }
-
-    /// <summary>
-    /// The lowest key currently materialised into the backing dictionary, or
-    /// <see langword="false"/> when nothing is materialised. Reads the sorted
-    /// dictionary directly and never hydrates.
-    /// <para>
-    /// Deliberately does not drain deferred rows: a deferred row's key is
-    /// already present in the dictionary and only its bytes are absent, so a
-    /// key-only question is answerable without paying to re-serialise them.
-    /// </para>
-    /// </summary>
-    /// <param name="key">Receives the lowest materialised key on success.</param>
-    private bool TryGetFirstMaterialisedKey(out string key)
-    {
-        foreach (var candidate in _rows.Keys)
-        {
-            key = candidate;
-            return true;
-        }
-
-        key = string.Empty;
-        return false;
     }
 }
