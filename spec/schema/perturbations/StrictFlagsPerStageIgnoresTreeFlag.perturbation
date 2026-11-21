@@ -20,12 +20,12 @@ SUMMARY: enforcement dead-letters ingest on a tree whose policy is not strict
             return LatticeWriteDecision.Accept();
         }
 
-        var entry = BuildDeadLetterEntry(key, value, reason, SourceFor(operation));
+        var entry = BuildDeadLetterEntry(key, value, reason, SourceFor(operation), originClusterId, sourceHlc);
 --- REPLACE
         if (false)
         {
             return LatticeWriteDecision.Accept();
         }
 
-        var entry = BuildDeadLetterEntry(key, value, reason, SourceFor(operation));
+        var entry = BuildDeadLetterEntry(key, value, reason, SourceFor(operation), originClusterId, sourceHlc);
 --- END

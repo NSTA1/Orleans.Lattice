@@ -8,7 +8,7 @@ SUMMARY: anti-entropy repair stores the source row verbatim, bypassing strict in
 PERTURBS: Repair
 
 --- FIND
-    /\ IF dl[e] = 1 THEN UNCHANGED <<st, tag, dl>> ELSE Ingest(e, FALSE)
+    /\ IF dl[e] = 1 THEN Rediverted(e) ELSE Ingest(e, FALSE)
 --- REPLACE
 \* MUTATION: the repaired row is stored without being judged.
     /\ st' = [st EXCEPT ![e] = Landing(e)]
