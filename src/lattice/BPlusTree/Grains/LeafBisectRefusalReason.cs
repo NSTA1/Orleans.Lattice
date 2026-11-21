@@ -52,10 +52,13 @@ internal enum LeafBisectRefusalReason
     FrameKeyUnreadable = 3,
 
     /// <summary>
-    /// No key sorts below the candidate pivot, so returning it would migrate
+    /// The union walk of unhydrated frame rows and resident rows ended without
+    /// reaching the median ordinal, which means the cache's own row accounting
+    /// disagrees with the rows it holds. Returning a key here could migrate
     /// every entry and leave an empty donor. The frame is still attached with
     /// its rows, so the fallback materialises the whole remainder of the leaf
-    /// and detaches the frame - an expensive refusal.
+    /// and detaches the frame - an expensive refusal. Since issue #5607 it is
+    /// not reachable by removing hydrated rows.
     /// </summary>
     NoKeySortsBelowPivot = 4,
 }

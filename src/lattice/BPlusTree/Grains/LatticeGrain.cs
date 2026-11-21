@@ -2887,7 +2887,12 @@ internal sealed partial class LatticeGrain(
                         // resurface as an unobserved task exception and tear
                         // down the silo.
                         ObserveInBackground(single);
-                        throw CreateFanOutRefusal(envelope, singleWait, shardCount: 1);
+                        ReportAbandonedSingleShardSettlement(single, singleShardIdx, singleWait.Duration);
+                        throw CreateFanOutRefusal(
+                            envelope,
+                            singleWait,
+                            shardCount: 1,
+                            DescribeOutstandingSingleShard(singleShardIdx));
                     }
                 }
             }
@@ -2961,7 +2966,14 @@ internal sealed partial class LatticeGrain(
                         // re-fanning the whole batch into a tree that is already
                         // failing to settle. It lists the keys of every branch
                         // that had not confirmed (issue #5970).
-                        var timedOut = CreateFanOutRefusal(envelope, fanOutWait, shardBuckets.Count);
+                        //
+                        // (#5095) The refusal also names the shards whose
+                        // branches had not settled, and reports how each of
+                        // them eventually settles, so a stalled shard is
+                        // attributable rather than invisible.
+                        var outstanding = DescribeOutstandingFanOutShards(shardBuckets, tasks);
+                        var timedOut = CreateFanOutRefusal(envelope, fanOutWait, shardBuckets.Count, outstanding);
+                        ReportAbandonedFanOutSettlement(all, shardBuckets, tasks, budget);
                         throw AttributeFanOutRefusal(timedOut, shardBuckets, tasks, entries.Count, boundPhysicalTreeId)
                             ?? timedOut;
                     }
@@ -3061,10 +3073,18 @@ internal sealed partial class LatticeGrain(
     /// stage that moved instead of the stage that is merely largest.
     /// </para>
     /// </summary>
+    /// <param name="envelope">The write's envelope budget, if one applies.</param>
+    /// <param name="fanOutWait">The bound that fired.</param>
+    /// <param name="shardCount">The number of shard branches in the fan-out.</param>
+    /// <param name="outstanding">
+    /// A description of the shard branches that had not settled when the bound
+    /// fired, from <see cref="DescribeOutstandingFanOutShards"/> (#5095).
+    /// </param>
     private LatticeSaturatedException CreateFanOutRefusal(
         WriteEnvelopeBudget? envelope,
         FanOutWait fanOutWait,
-        int shardCount)
+        int shardCount,
+        string outstanding)
     {
         var source = fanOutWait.BoundByEnvelope && envelope is not null
             ? LatticeSaturationSource.SetManyEnvelope
@@ -3075,14 +3095,14 @@ internal sealed partial class LatticeGrain(
             ? $"Batch write to tree '{TreeId}' refused: the whole write did not complete within the "
                 + $"configured LatticeOptions.SetManyEnvelopeBudget ({envelope!.Budget}); the per-shard "
                 + $"fan-out across {shardCount} shard(s) was still outstanding with "
-                + $"{fanOutWait.Duration} of the envelope left for it. Stage breakdown: "
+                + $"{fanOutWait.Duration} of the envelope left for it ({outstanding}). Stage breakdown: "
                 + $"{envelope.Describe()}. No single stage need have breached the budget on its own - "
                 + "the stages sum against it. Already-committed shards are retained (a batch write is "
                 + "not atomic across shards). Retry after a backoff."
             : $"Batch write to tree '{TreeId}' refused: the per-shard fan-out across "
                 + $"{shardCount} shard(s) did not settle within the configured "
-                + $"LatticeOptions.SetManyFanOutBudget ({fanOutWait.Duration}); at least one branch is "
-                + "still outstanding. Already-committed shards are retained (a batch write "
+                + $"LatticeOptions.SetManyFanOutBudget ({fanOutWait.Duration}); {outstanding}. "
+                + "Already-committed shards are retained (a batch write "
                 + "is not atomic across shards). Retry after a backoff.";
 
         return new LatticeSaturatedException(message, TreeId, source);
