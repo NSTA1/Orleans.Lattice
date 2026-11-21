@@ -48,6 +48,45 @@ public sealed class StorageUsageRefreshResultsTests
     }
 
     [Test]
+    public void A_stale_refresh_round_trips_its_stale_flag()
+    {
+        var summary = new ClusterStorageUsageSummary { TreeCount = 1, Stale = true, SampledAt = DateTimeOffset.UnixEpoch };
+
+        var map = StorageUsageRefreshResults.ToResultMap(summary);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(map[StorageUsageRefreshResults.StaleKey], Is.EqualTo("true"));
+            Assert.That(StorageUsageRefreshResults.TryReadSummary(map, out var read), Is.True);
+            Assert.That(read!.Stale, Is.True);
+        });
+    }
+
+    [Test]
+    public void A_result_recorded_before_the_stale_key_reads_as_not_stale()
+    {
+        var map = new Dictionary<string, string>(StorageUsageRefreshResults.ToResultMap(new ClusterStorageUsageSummary { Stale = true }));
+        map.Remove(StorageUsageRefreshResults.StaleKey);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(StorageUsageRefreshResults.TryReadSummary(map, out var read), Is.True);
+            Assert.That(read!.Stale, Is.False);
+        });
+    }
+
+    [Test]
+    public void A_malformed_stale_flag_is_not_read()
+    {
+        var map = new Dictionary<string, string>(StorageUsageRefreshResults.ToResultMap(new ClusterStorageUsageSummary()))
+        {
+            [StorageUsageRefreshResults.StaleKey] = "maybe",
+        };
+
+        Assert.That(StorageUsageRefreshResults.TryReadSummary(map, out _), Is.False);
+    }
+
+    [Test]
     public void A_map_missing_a_total_is_not_read()
     {
         var map = new Dictionary<string, string>(StorageUsageRefreshResults.ToResultMap(new ClusterStorageUsageSummary()));
