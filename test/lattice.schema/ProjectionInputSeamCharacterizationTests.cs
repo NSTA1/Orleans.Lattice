@@ -260,7 +260,7 @@ public sealed class ProjectionInputSeamCharacterizationTests
             }
 
             var rows = new SortedDictionary<string, string>(StringComparer.Ordinal);
-            await foreach (var entry in Filter.EntriesAsync())
+            await foreach (var entry in Filter.ScanEntriesAsync())
             {
                 rows[entry.Key] = Encoding.UTF8.GetString(entry.Value);
             }

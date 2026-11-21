@@ -89,6 +89,7 @@ public sealed partial class InternalOriginGuardIntegrationTests
 
         Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(async () =>
         {
+            // raw-enumeration-ok: the origin guard on the raw grain stream is the subject
             await foreach (var _ in sys.KeysAsync())
             {
                 // The guard refuses before the first element is produced.
@@ -103,6 +104,7 @@ public sealed partial class InternalOriginGuardIntegrationTests
 
         Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(async () =>
         {
+            // raw-enumeration-ok: the origin guard on the raw grain stream is the subject
             await foreach (var _ in sys.EntriesAsync())
             {
                 // The guard refuses before the first element is produced.

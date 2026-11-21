@@ -127,7 +127,7 @@ public partial class AccessGateKeyFilterIntegrationTests
 
         var keys = await CollectKeysAsync(tree);
         var entries = new List<string>();
-        await foreach (var e in tree.EntriesAsync())
+        await foreach (var e in tree.ScanEntriesAsync())
         {
             entries.Add(e.Key);
         }

@@ -126,7 +126,7 @@ public class MultiPageScanOrderingIntegrationTests
     /// </summary>
     private static async IAsyncEnumerable<string> EntryKeysAsync(ILattice tree)
     {
-        await foreach (var kv in tree.EntriesAsync()) yield return kv.Key;
+        await foreach (var kv in tree.ScanEntriesAsync()) yield return kv.Key;
     }
 
     [Test]
@@ -209,7 +209,7 @@ public class MultiPageScanOrderingIntegrationTests
         Assert.That(await split.IsIdleAsync(), Is.True);
 
         var observed = new List<string>();
-        await foreach (var k in tree.KeysAsync()) observed.Add(k);
+        await foreach (var k in tree.ScanKeysAsync()) observed.Add(k);
 
         Assert.Multiple(() =>
         {

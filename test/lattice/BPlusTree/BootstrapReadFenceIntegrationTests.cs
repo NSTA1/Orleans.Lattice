@@ -78,6 +78,7 @@ public sealed class BootstrapReadFenceIntegrationTests
         await Probe("GetManyAsync", () => tree.GetManyAsync(["a", "b"]));
         await Probe("ExistsAsync", () => tree.ExistsAsync("a"));
         await Probe("CountAsync", () => tree.CountAsync());
+        // raw-enumeration-ok: the read fence on the raw KeysAsync entry point is the subject
         await Probe("KeysAsync", async () => { await foreach (var _ in tree.KeysAsync()) { } });
         await Probe("GetOrSetAsync", () => tree.GetOrSetAsync("c", Encoding.UTF8.GetBytes("3")));
 

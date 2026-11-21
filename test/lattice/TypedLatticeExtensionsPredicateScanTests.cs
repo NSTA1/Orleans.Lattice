@@ -101,6 +101,7 @@ public class TypedLatticeExtensionsPredicateScanTests
             Assert.That(
                 async () =>
                 {
+                    // raw-enumeration-ok: substitute-backed unit test of the typed predicate KeysAsync extension
                     await foreach (var _ in lattice.KeysAsync(
                         (Expression<Func<TestItem, bool>>)(i => i.Score > 5),
                         (ILatticeSerializer<TestItem>)null!))
@@ -192,6 +193,7 @@ public class TypedLatticeExtensionsPredicateScanTests
             Assert.That(
                 async () =>
                 {
+                    // raw-enumeration-ok: substitute-backed unit test of the typed predicate EntriesAsync extension
                     await foreach (var _ in lattice.EntriesAsync(
                         (Expression<Func<TestItem, bool>>)(i => i.Score > 5),
                         (ILatticeSerializer<TestItem>)null!))

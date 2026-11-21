@@ -168,9 +168,9 @@ public partial class TreeDeletionIntegrationTests
         Assert.That(await registry.ExistsAsync(treeName), Is.False, "precondition: the purge removed the row");
 
         var keys = new List<string>();
-        await foreach (var key in router.KeysAsync()) keys.Add(key);
+        await foreach (var key in router.ScanKeysAsync()) keys.Add(key);
         var entries = new List<KeyValuePair<string, byte[]>>();
-        await foreach (var entry in router.EntriesAsync(reverse: true)) entries.Add(entry);
+        await foreach (var entry in router.ScanEntriesAsync(reverse: true)) entries.Add(entry);
 
         Assert.Multiple(async () =>
         {
