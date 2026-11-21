@@ -1,0 +1,17 @@
+# Pairs with Converges. The log purges past what the receiver acknowledged,
+# so the shipper can never deliver the next write and the link never catches
+# up. Deadlock checking is off so the stuck state is judged as a liveness
+# failure rather than reported as a deadlock.
+MODULE: ConvergesPurgeIgnoresFloor
+TARGET: Converges
+CLASS: Temporal
+SUMMARY: the purge ignores the acknowledged floor, so shipping stalls behind the trim
+PERTURBS: Purge
+DEADLOCK: off
+
+--- FIND
+    /\ trim < Floor
+--- REPLACE
+    \* MUTATION: the purge is bounded only by the head.
+    /\ trim < head
+--- END

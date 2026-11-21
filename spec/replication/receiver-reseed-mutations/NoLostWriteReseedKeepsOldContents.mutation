@@ -1,0 +1,15 @@
+# Pairs with NoLostWrite. The re-seed completes without replacing the
+# receiver's contents, so the receiver keeps the bootstrap's shorter prefix
+# while the shipper resumes from its old cursor.
+MODULE: NoLostWriteReseedKeepsOldContents
+TARGET: NoLostWrite
+CLASS: Invariant
+SUMMARY: a re-seed does not install the fresh export
+PERTURBS: Reseed
+
+--- FIND
+    /\ recv' = Upto(head)
+--- REPLACE
+    \* MUTATION: the fresh export is not installed.
+    /\ recv' = recv
+--- END

@@ -1,0 +1,16 @@
+# Pairs with NoLostWrite. The covering check trusts the earliest export with a
+# cut without requiring every later export to have one, so the echo of a later
+# export taken off the purge hold settles the gap and the rewind skips writes
+# that export does not hold. It perturbs the covering-check definition, not
+# an action.
+MODULE: NoLostWriteCoveringRunNotContiguous
+TARGET: NoLostWrite
+CLASS: Invariant
+SUMMARY: the covering export run need not be contiguous, so an untrusted later bootstrap settles the gap
+
+--- FIND
+Covers(k) == \A j \in k..epoch : cut[j] # NoCut /\ trim <= cut[j]
+--- REPLACE
+\* MUTATION: only export k itself must carry a cut.
+Covers(k) == cut[k] # NoCut /\ trim <= cut[k]
+--- END
