@@ -30,8 +30,9 @@ namespace Orleans.Lattice.Storage.AzureTable;
 /// Offset column = <c>endOffsetInclusive</c>) plus a single
 /// <c>TAIL</c> row whose Offset column is the monotonic tail of the
 /// shard. <see cref="GetHighestOffsetAsync"/> point-reads the TAIL
-/// row; <see cref="ReadAsync"/> ascending-scans the manifest partition
-/// for overlapping batches and streams their entries.
+/// row; <see cref="ReadAsync"/> range-seeks the manifest partition from
+/// the lowest batch start that can overlap the wanted offset and streams
+/// the overlapping batches' entries.
 /// </para>
 /// <para>
 /// <b>Atomicity (phase 1).</b> Every entry-row write for a batch is
@@ -1806,11 +1807,10 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         // Each manifest row's RowKey suffix carries the batch's
         // startOffset; the Offset column carries endOffsetInclusive.
         // We need every batch where endOffsetInclusive >= firstWantedOffset.
-        // Manifest rows have a known D19 row-key layout so we can
-        // skip batches that end strictly before firstWantedOffset by
-        // filtering on Offset; the rest are yielded in order.
-        var manifestFilter =
-            $"PartitionKey eq '{Escape(manifestPartitionKey)}' and RowKey ge '{ManifestRowKeyPrefix}' and RowKey lt '{TailRowKey}' and Offset ge {firstWantedOffset.ToString(CultureInfo.InvariantCulture)}";
+        // The RowKey lower bound seeks past batches that cannot overlap,
+        // and the Offset term drops the few that end before the wanted
+        // offset; the rest are yielded in order.
+        var manifestFilter = BuildManifestReadFilter(manifestPartitionKey, firstWantedOffset);
 
         // Each batch's rows are bracketed by `lt 'F'`, the whole E-prefix space:
         // every row in a batch partition is an entry row (no HEAD sentinel in the
@@ -1871,8 +1871,7 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         var manifestPartitionKey = BuildManifestPartitionKey(treeId, shardIndex);
         var firstWantedOffset = ClampToTrimWatermark(manifestPartitionKey, Math.Max(0L, fromOffsetExclusive + 1L));
 
-        var manifestFilter =
-            $"PartitionKey eq '{Escape(manifestPartitionKey)}' and RowKey ge '{ManifestRowKeyPrefix}' and RowKey lt '{TailRowKey}' and Offset ge {firstWantedOffset.ToString(CultureInfo.InvariantCulture)}";
+        var manifestFilter = BuildManifestReadFilter(manifestPartitionKey, firstWantedOffset);
 
         // Accumulate the byte segments and offsets in parallel. For
         // uncompressed rows (the default) the segment wraps the row's
@@ -2465,6 +2464,28 @@ public sealed partial class AzureTableWalStorageProvider : IWalStorageProvider, 
         return string.Create(
             CultureInfo.InvariantCulture,
             $"{ManifestRowKeyPrefix}{startOffset:D19}");
+    }
+
+    /// <summary>
+    /// Builds the manifest query filter for a read that wants every batch
+    /// overlapping <paramref name="firstWantedOffset"/> or later. Offsets are
+    /// dense and every committed batch holds at most
+    /// <see cref="MaxEntriesPerBatch"/> entries, so a batch whose end reaches
+    /// <paramref name="firstWantedOffset"/> starts no lower than
+    /// <c>firstWantedOffset - MaxEntriesPerBatch + 1</c>. The filter therefore
+    /// lower-bounds <c>RowKey</c> at that batch start, which turns the read into
+    /// a range seek rather than a scan of the whole manifest prefix. The
+    /// <c>Offset ge</c> term still drops the batches in that window that end
+    /// before the wanted offset. Exposed internally for unit tests.
+    /// </summary>
+    /// <param name="manifestPartitionKey">The shard's manifest partition key.</param>
+    /// <param name="firstWantedOffset">The first offset the read must return.</param>
+    /// <returns>The OData filter selecting the overlapping manifest rows.</returns>
+    internal static string BuildManifestReadFilter(string manifestPartitionKey, long firstWantedOffset)
+    {
+        ArgumentNullException.ThrowIfNull(manifestPartitionKey);
+        var lowestOverlappingStart = Math.Max(0L, firstWantedOffset - MaxEntriesPerBatch + 1L);
+        return $"PartitionKey eq '{Escape(manifestPartitionKey)}' and RowKey ge '{BuildManifestRowKey(lowestOverlappingStart)}' and RowKey lt '{TailRowKey}' and Offset ge {firstWantedOffset.ToString(CultureInfo.InvariantCulture)}";
     }
 
     /// <summary>

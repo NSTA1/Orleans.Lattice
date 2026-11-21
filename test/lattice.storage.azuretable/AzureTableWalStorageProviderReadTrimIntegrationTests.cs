@@ -256,4 +256,32 @@ public class AzureTableWalStorageProviderReadTrimIntegrationTests
             await task.ConfigureAwait(false);
         });
     }
+
+    [TestCase(149L)]
+    [TestCase(136L)]
+    [TestCase(99L)]
+    public async Task ReadAsync_from_an_offset_returns_the_contiguous_tail_through_the_row_key_bounded_manifest_seek(
+        long fromOffsetExclusive)
+    {
+        // Issue #2155: the manifest read seeks by row key from the lowest batch
+        // start that can overlap the wanted offset. Batches span [0,99],
+        // [100,136], [137,236], [237,241], so these reads start mid-batch, on a
+        // batch's first offset, and just past a full-width batch; the real
+        // table service must evaluate the RowKey range the same way the
+        // in-memory fake does.
+        await using var sut = CreateProvider();
+        var next = 0L;
+        foreach (var size in new[] { 100, 37, 100, 5 })
+        {
+            var batch = Enumerable.Range(0, size).Select(i => Entry(next + i)).ToArray();
+            await sut.AppendBatchAsync(TreeId, Shard, batch, CancellationToken.None).ConfigureAwait(false);
+            next += size;
+        }
+
+        var collected = await ReadAllAsync(sut, fromOffsetExclusive, maxEntries: 1024).ConfigureAwait(false);
+
+        Assert.That(
+            collected.Select(e => e.Offset),
+            Is.EqualTo(Enumerable.Range((int)fromOffsetExclusive + 1, (int)(next - fromOffsetExclusive - 1)).Select(i => (long)i)));
+    }
 }
