@@ -84,6 +84,7 @@ class CoverageMatrixTests(unittest.TestCase):
             self.assertEqual(
                 any(item["package"] == coverage.UI_PACKAGE for item in leg["items"]), leg["ui"]
             )
+            self.assertIs(leg["ui"], leg["needsHosted"])
 
     def test_ci_rebalances_change_coverage_without_a_second_partition(self):
         with tempfile.TemporaryDirectory() as directory:
