@@ -178,6 +178,24 @@ public partial class ReplicationPeerStats
     }
 
     /// <summary>
+    /// Records the per-peer outbound entry backlog measured while the peer is
+    /// unreachable (issue #5587): the source log's tail minus the peer's
+    /// acknowledged watermark. Leaves <c>bytes_behind</c> at its last measured
+    /// value, since the unshipped bytes are not known without reading them.
+    /// </summary>
+    internal void RecordEntriesBehind(string tree, string peer, long entriesBehind)
+    {
+        ArgumentNullException.ThrowIfNull(tree);
+        ArgumentNullException.ThrowIfNull(peer);
+
+        var entry = state.GetOrAdd(new PeerKey(tree, peer, ReplicationContactDirection.Outbound), static _ => new PeerState());
+        lock (entry)
+        {
+            entry.EntriesBehind = entriesBehind;
+        }
+    }
+
+    /// <summary>
     /// Records whether the local sender has taken the peer off the log after a
     /// write-ahead-log trim lost records it never shipped (issue #4534), and
     /// since when; <see langword="null"/> clears it. Surfaces on the peer-status
