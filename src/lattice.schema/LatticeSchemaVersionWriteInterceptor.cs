@@ -110,13 +110,17 @@ internal sealed class LatticeSchemaVersionWriteInterceptor : ILatticeWriteInterc
     public ValueTask<LatticeWriteDecision> OnWriteAsync(
         in LatticeWriteRequest request,
         CancellationToken cancellationToken = default) =>
-        OnWriteCoreAsync(request.TreeId, request.Key, request.Value, request.Operation, cancellationToken);
+        OnWriteCoreAsync(
+            request.TreeId, request.Key, request.Value, request.Operation,
+            request.ReplicatedOriginClusterId, request.ReplicatedSourceHlc, cancellationToken);
 
     private async ValueTask<LatticeWriteDecision> OnWriteCoreAsync(
         string treeId,
         string key,
         byte[] value,
         LatticeOperation operation,
+        string? originClusterId,
+        HybridLogicalClock? sourceHlc,
         CancellationToken cancellationToken)
     {
         var config = await _provider.GetConfigAsync(treeId, cancellationToken).ConfigureAwait(false);
@@ -137,14 +141,14 @@ internal sealed class LatticeSchemaVersionWriteInterceptor : ILatticeWriteInterc
         // and never upcast at fold time.
         if (operation == LatticeOperation.CrdtApply)
         {
-            return await OnCrdtDeltaAsync(treeId, key, value, version, cancellationToken).ConfigureAwait(false);
+            return await OnCrdtDeltaAsync(treeId, key, value, version, originClusterId, sourceHlc, cancellationToken).ConfigureAwait(false);
         }
 
         // An already-stamped whole value is never re-stamped (idempotent re-writes and
         // any value that arrived carrying a tag are honoured as-is).
         if (LatticeSchemaEnvelope.IsEnveloped(value))
         {
-            return await OnEnvelopedAsync(treeId, key, value, version, cancellationToken).ConfigureAwait(false);
+            return await OnEnvelopedAsync(treeId, key, value, version, originClusterId, sourceHlc, cancellationToken).ConfigureAwait(false);
         }
 
         // A plain replicated value is stored verbatim, so regions converge byte for
@@ -165,6 +169,8 @@ internal sealed class LatticeSchemaVersionWriteInterceptor : ILatticeWriteInterc
         string key,
         byte[] delta,
         LatticeSchemaVersionConfig version,
+        string? originClusterId,
+        HybridLogicalClock? sourceHlc,
         CancellationToken cancellationToken)
     {
         // A raw (un-enveloped) delta - a fresh local apply authored against the
@@ -228,7 +234,7 @@ internal sealed class LatticeSchemaVersionWriteInterceptor : ILatticeWriteInterc
         var reason =
             $"Strict-ingest: CRDT delta at schema {schemaId} v{storedVersion} cannot be upcast to " +
             $"schema {version.SchemaId} v{version.TargetVersion}.";
-        var entry = BuildDeadLetterEntry(key, delta, reason);
+        var entry = BuildDeadLetterEntry(key, delta, reason, originClusterId, sourceHlc);
         await _deadLetters.AppendAsync(treeId, entry, cancellationToken).ConfigureAwait(false);
         return LatticeWriteDecision.DeadLetter(reason);
     }
@@ -238,6 +244,8 @@ internal sealed class LatticeSchemaVersionWriteInterceptor : ILatticeWriteInterc
         string key,
         byte[] value,
         LatticeSchemaVersionConfig version,
+        string? originClusterId,
+        HybridLogicalClock? sourceHlc,
         CancellationToken cancellationToken)
     {
         // Only strict-mode ingest re-validates a tagged item; a local re-write of
@@ -270,7 +278,7 @@ internal sealed class LatticeSchemaVersionWriteInterceptor : ILatticeWriteInterc
         var reason =
             $"Strict-ingest: value at schema {schemaId} v{storedVersion} cannot be upcast to " +
             $"schema {version.SchemaId} v{version.TargetVersion}.";
-        var entry = BuildDeadLetterEntry(key, value, reason);
+        var entry = BuildDeadLetterEntry(key, value, reason, originClusterId, sourceHlc);
         await _deadLetters.AppendAsync(treeId, entry, cancellationToken).ConfigureAwait(false);
         return LatticeWriteDecision.DeadLetter(reason);
     }
@@ -297,11 +305,9 @@ internal sealed class LatticeSchemaVersionWriteInterceptor : ILatticeWriteInterc
         return current is { StrictIngest: true } ? current : null;
     }
 
-    private LatticeSchemaDeadLetterEntry BuildDeadLetterEntry(string key, byte[] value, string reason)
-    {
-        var previewLength = Math.Min(value.Length, _previewMaxBytes);
-        var preview = previewLength == 0 ? Array.Empty<byte>() : value.AsSpan(0, previewLength).ToArray();
-        return new LatticeSchemaDeadLetterEntry(
-            key, preview, value.Length, reason, LatticeSchemaDeadLetterSource.Replication, _timeProvider.GetUtcNow());
-    }
+    private LatticeSchemaDeadLetterEntry BuildDeadLetterEntry(
+        string key, byte[] value, string reason, string? originClusterId, HybridLogicalClock? sourceHlc) =>
+        SchemaDeadLetterEntries.Build(
+            key, value, reason, LatticeSchemaDeadLetterSource.Replication, _previewMaxBytes, _timeProvider,
+            originClusterId, sourceHlc);
 }

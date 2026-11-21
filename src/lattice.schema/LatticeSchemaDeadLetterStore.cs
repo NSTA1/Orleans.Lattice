@@ -22,7 +22,13 @@ internal sealed class LatticeSchemaDeadLetterStore(IGrainFactory grainFactory) :
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         ArgumentNullException.ThrowIfNull(entry);
 
-        var unique = Guid.NewGuid().ToString("N")[..8];
+        // A replicated diversion that carries its source identity is keyed by it,
+        // so a retried or repair re-shipped delivery of the same source write
+        // overwrites its one record instead of filing another (#5714). Any other
+        // diversion gets a random suffix, as before.
+        var unique = entry is { OriginClusterId: { } origin, SourceHlc: { } sourceHlc }
+            ? SchemaDeadLetterKey.IdentitySuffix(origin, sourceHlc)
+            : Guid.NewGuid().ToString("N")[..SchemaDeadLetterKey.UniqueSuffixLength];
         var key = SchemaDeadLetterKey.Encode(treeId, entry.TimestampUtc, entry.Key, unique);
 
         // A diversion is judged while the diverted write's own context is ambient:

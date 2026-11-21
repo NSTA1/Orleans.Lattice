@@ -65,4 +65,20 @@ public readonly record struct LatticeWriteRequest
 
     /// <summary>The write's time-to-live, or <c>null</c> when the write does not expire.</summary>
     public TimeSpan? Ttl { get; init; }
+
+    /// <summary>
+    /// The cluster id of the region that originated a replicated write, or
+    /// <c>null</c> for a local write. Set together with
+    /// <see cref="ReplicatedSourceHlc"/> when a peer's plain replicated row is
+    /// judged, so an interceptor can identify a re-delivery of the same source
+    /// write (for example to divert it idempotently).
+    /// </summary>
+    public string? ReplicatedOriginClusterId { get; init; }
+
+    /// <summary>
+    /// The source hybrid logical clock of a replicated write, or <c>null</c> for
+    /// a local write. Together with <see cref="ReplicatedOriginClusterId"/> it
+    /// identifies the source write across re-deliveries.
+    /// </summary>
+    public HybridLogicalClock? ReplicatedSourceHlc { get; init; }
 }

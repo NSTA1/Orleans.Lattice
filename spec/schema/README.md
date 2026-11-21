@@ -128,5 +128,5 @@ dotnet test test/lattice/Orleans.Lattice.Tests.csproj --filter "TestCategory=Tlc
 | `SchemaComplianceScan` | 10 | 4 | 9 | 16 | 21 | 23,580 |
 | `SchemaStrictIngest` | 3 | 7 | 9 | 16 | 16 | 5,326 |
 | `SchemaRemediationCutover` | 8 | 9 | 20 | 25 | 34 | 115,966 |
-| `SchemaCrossRegion` | 4 | 9 | 10 | 21 | 19 | 47,924 |
+| `SchemaCrossRegion` | 4 | 9 | 10 | 22 | 19 | 47,924 |
 | `SchemaTenantScope` | 4 | 6 | 7 | 12 | 12 | 124,968 |
