@@ -100,6 +100,8 @@ public sealed class ClusterRemeasureTests : ClusterTestContext
         {
             Assert.That(cut.Markup, Does.Contain("Re-measured by a leaf walk"));
             Assert.That(cut.Markup, Does.Contain(", stale"), "the refresh's stale flag reaches the suffix");
+            Assert.That(cut.Markup, Does.Not.Match(@"\s, stale"), "the suffix follows the instant with no whitespace before the comma");
+            Assert.That(cut.Markup, Does.Not.Contain(" ,"));
         });
     }
 

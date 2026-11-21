@@ -37,7 +37,7 @@
             <LtDefinition Term="Retained WAL">@ClusterFormat.Bytes(figures.Wal)</LtDefinition>
             @if (_remeasuredAt is { } remeasured)
             {
-                <LtDefinition Term="Measured">Re-measured by a leaf walk at @ClusterFormat.Instant(remeasured)                @(usage.Partial ? ", partial" : string.Empty)@(usage.Stale || _remeasuredStale ? ", stale" : string.Empty)</LtDefinition>
+                <LtDefinition Term="Measured">Re-measured by a leaf walk at @ClusterFormat.Instant(remeasured)@(usage.Partial ? ", partial" : string.Empty)@(usage.Stale || _remeasuredStale ? ", stale" : string.Empty)</LtDefinition>
             }
             else
             {

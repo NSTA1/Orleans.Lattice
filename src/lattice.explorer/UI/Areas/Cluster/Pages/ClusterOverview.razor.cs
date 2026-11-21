@@ -33,7 +33,6 @@ public partial class ClusterOverview : IDisposable
     private string? _refreshId;
     private bool _startingRefresh;
     private DateTimeOffset? _remeasuredAt;
-
     private bool _remeasuredStale;
     private string? _refreshError;
 
