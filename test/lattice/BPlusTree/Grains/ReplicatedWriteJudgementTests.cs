@@ -1,6 +1,7 @@
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
 using Orleans.Lattice.Primitives;
+using Orleans.Lattice.Testing;
 using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Tests.BPlusTree.Grains;
@@ -217,6 +218,9 @@ public class ReplicatedWriteJudgementTests
     [Test]
     public void FilterAsync_allocates_nothing_per_row_when_a_strict_tree_accepts_every_row()
     {
+        // FilterAsync awaits per row; unoptimized builds heap-allocate each async state machine (#5991).
+        AllocationContract.RequireOptimizedBuild(typeof(ReplicatedWriteJudgement).Assembly, typeof(ReplicatedWriteJudgementTests).Assembly);
+
         var stage = new StrictStage();
         var growth = AllocationProbe.Growth(
             static size =>
@@ -240,6 +244,9 @@ public class ReplicatedWriteJudgementTests
     [Test]
     public void FilterAsync_allocates_one_list_when_a_row_is_diverted()
     {
+        // FilterAsync awaits per row; unoptimized builds heap-allocate each async state machine (#5991).
+        AllocationContract.RequireOptimizedBuild(typeof(ReplicatedWriteJudgement).Assembly, typeof(ReplicatedWriteJudgementTests).Assembly);
+
         var stage = new StrictStage();
         var growth = AllocationProbe.Growth(
             static size =>
