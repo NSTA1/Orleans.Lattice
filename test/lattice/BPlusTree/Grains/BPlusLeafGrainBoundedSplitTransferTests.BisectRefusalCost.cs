@@ -16,7 +16,10 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// earlier, by the named seam - and the fallback materialises nothing. A
 /// refusal taken with a frame still attached is the opposite: the fallback
 /// itself materialises the whole remainder of the leaf and detaches the frame.
-/// An earlier revision of the instrument's documentation had those two the
+/// Since issue #5607 the bisect walks the frame and resident rows together, so
+/// a frame-attached refusal is reachable only through an unreadable frame key
+/// or a row-accounting disagreement; the second arm pins that an emptied
+/// hydrated block no longer produces one. An earlier revision of the instrument's documentation had those two the
 /// wrong way round, sending operators to the split path to chase a cost paid on
 /// the read path. Both arms drive the real <c>SplitAsync</c>, so the refusal
 /// they observe is the one production records, and the materialisation they
@@ -113,16 +116,18 @@ public sealed partial class BPlusLeafGrainBoundedSplitTransferTests
     }
 
     [Test]
-    public async Task A_frame_attached_refusal_makes_the_fallback_materialise_the_whole_leaf()
+    public async Task A_frame_attached_leaf_with_an_emptied_block_divides_without_a_refusal()
     {
         const int rowCount = 2048;
         var treeId = UniqueTreeId();
         var (grain, _, recorder, _) = await RehydratedDividableLeafAsync(rowCount, treeId: treeId);
         var cache = grain.CacheForTest;
 
-        // The construction of A_pivot_with_nothing_below_it_is_refused_rather_than_returned:
-        // materialise block 0, then drop exactly the rows it brought in, so the
-        // frame stays attached while no key provably sorts below its median.
+        // Materialise block 0, then drop exactly the rows it brought in. Before
+        // issue #5607 this was the construction of the frame-attached
+        // NoKeySortsBelowPivot refusal, whose Cache.Keys fallback materialised
+        // the whole leaf. The pivot is now the median of the frame and resident
+        // rows together, so the emptied block simply contributes nothing.
         foreach (var _ in cache.EnumerateRange(Key(0), Key(1)))
         {
         }
@@ -142,40 +147,32 @@ public sealed partial class BPlusLeafGrainBoundedSplitTransferTests
         Assert.Multiple(() =>
         {
             Assert.That(block0Keys, Is.Not.Empty, "the arm must actually materialise block 0");
-            Assert.That(cache.HasPendingHydration, Is.True,
-                "the frame must still be attached, or this is not a frame-attached refusal");
+            Assert.That(cache.HasPendingHydration, Is.True, "the frame must still be attached");
             Assert.That(cache.LastDetachSeam, Is.EqualTo(LeafSnapshotDetachSeam.None));
             Assert.That(cache.HydratedRowCount, Is.Zero);
             Assert.That(
                 cache.TryGetBisectingKeyWithoutHydrating(out _, out var reason) ? LeafBisectRefusalReason.None : reason,
-                Is.EqualTo(LeafBisectRefusalReason.NoKeySortsBelowPivot),
-                "the arm must reach the frame-attached refusal the split will take");
+                Is.EqualTo(LeafBisectRefusalReason.None),
+                "the emptied block must not cost the leaf its bisect");
         });
 
-        var rowsBefore = cache.SnapshotRowsMaterialised;
         var refusals = new List<BisectRefusal>();
 
         using (ListenForBisectRefusals(treeId, refusals))
         {
             var result = await InvokeSplit(grain);
-            Assert.That(result, Is.Not.Null, "the division must complete through the fallback");
+            Assert.That(result, Is.Not.Null, "the division must complete");
         }
 
         Assert.Multiple(() =>
         {
+            Assert.That(refusals, Is.Empty, "the division must not record a refusal");
             Assert.That(
-                refusals,
-                Is.EqualTo(new[] { new BisectRefusal("no_key_sorts_below_pivot", "none") }),
-                "the division must record exactly one refusal, taken with the frame still attached");
-            Assert.That(
-                cache.SnapshotRowsMaterialised - rowsBefore,
-                Is.GreaterThanOrEqualTo(remainingFrameRows),
-                "a frame-attached refusal is the expensive one: the Cache.Keys fallback itself "
-                + "materialises every row the frame still owned");
-            Assert.That(cache.HasPendingHydration, Is.False,
-                "the fallback detaches the frame irreversibly");
-            Assert.That(cache.LastDetachSeam, Is.EqualTo(LeafSnapshotDetachSeam.KeysAccessor),
-                "the detach is attributed to the fallback's own ordered-view read");
+                recorder.AllTransferredKeys.Count(),
+                Is.EqualTo(remainingFrameRows / 2),
+                "the sibling must receive exactly the upper half of the rows that remain");
+            Assert.That(cache.LastDetachSeam, Is.Not.EqualTo(LeafSnapshotDetachSeam.KeysAccessor),
+                "no ordered-view fallback may have detached the frame");
             Assert.That(recorder.Batches, Is.Not.Empty, "rows must actually have moved to the sibling");
         });
     }

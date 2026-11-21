@@ -438,6 +438,59 @@ public partial class LatticeGrainTests
     }
 
     [Test]
+    public void SetManyAsync_fan_out_refusal_names_the_outstanding_shards()
+    {
+        // #5095: a refusal that said only "at least one branch is still
+        // outstanding" left the stalled shard unattributable - the operator saw
+        // a saturation count and nothing to chase. The refusal now names every
+        // shard whose branch had not settled, and only those: shard 0 committed
+        // and must not be blamed.
+        const string treeId = "saturation-setmany-fanout-names-shards";
+        var (grain, factory, registry) = CreateGrainWithRegistry(
+            treeId,
+            new LatticeOptions { SetManyFanOutBudget = TimeSpan.FromMilliseconds(250) },
+            shardCount: 2,
+            virtualShardCount: 2);
+        SetupCompactionGrain(factory, treeId);
+
+        var map = new ShardMap { Slots = [0, 1], Version = 1 };
+        registry.GetShardMapAsync(treeId).Returns(Task.FromResult<ShardMap?>(map));
+
+        var shard0 = Substitute.For<IShardRootGrain>();
+        var shard1 = Substitute.For<IShardRootGrain>();
+        factory.GetGrain<IShardRootGrain>($"{treeId}/0", Arg.Any<string>()).Returns(shard0);
+        factory.GetGrain<IShardRootGrain>($"{treeId}/1", Arg.Any<string>()).Returns(shard1);
+
+        shard0.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>())
+            .Returns(Task.CompletedTask);
+
+        var straggler = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        shard1.SetManyAsync(Arg.Any<List<KeyValuePair<string, byte[]>>>())
+            .Returns(_ => straggler.Task);
+
+        var batch = new List<KeyValuePair<string, byte[]>>
+        {
+            new(FindKeyForSlot(0, 2), [1]),
+            new(FindKeyForSlot(1, 2), [2]),
+        };
+
+        var thrown = Assert.ThrowsAsync<LatticeSaturatedException>(async () => await grain.SetManyAsync(batch));
+        Assert.That(thrown!.Message, Does.Contain("1 of 2 shard branch(es) still outstanding: shard(s) 1"),
+            "The refusal must name the shard whose branch had not settled, so a stalled shard "
+            + "is attributable rather than only counted.");
+
+        straggler.SetResult();
+    }
+
+    [Test]
+    public void DescribeOutstandingSingleShard_names_the_shard()
+    {
+        Assert.That(LatticeGrain.DescribeOutstandingSingleShard(7),
+            Is.EqualTo("1 of 1 shard branch(es) still outstanding: shard(s) 7"));
+    }
+
+    [Test]
     public async Task SetManyAsync_fan_out_budget_retains_already_committed_branches()
     {
         // The refusal rolls nothing back, and that is a deliberate contract
