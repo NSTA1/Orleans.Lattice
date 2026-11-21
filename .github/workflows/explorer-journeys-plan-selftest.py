@@ -754,6 +754,17 @@ class WiringTests(unittest.TestCase):
     def setUp(self):
         self.text = WORKFLOW.read_text(encoding="utf-8")
 
+    def test_a_label_other_than_journeys_full_skips_the_whole_graph(self):
+        # #5625: every `labeled` event started a run. The root job is gated so
+        # another label plans nothing and costs no runner, and every other job
+        # needs it, directly or through the planner.
+        gate = ("if: github.event_name != 'pull_request' || github.event.action != 'labeled'"
+                f" || github.event.label.name == '{planner.FULL_LABEL}'")
+        self.assertIn(gate, job(self.text, "plan"))
+        self.assertIn("needs: plan", job(self.text, "planner"))
+        for name in ("legs", "coverage-gate", "provenance", "contract-conformance"):
+            self.assertRegex(job(self.text, name), r"(?m)^    needs: .*\bplan(ner)?\b", name)
+
     def test_the_planner_job_runs_both_self_tests_before_planning(self):
         block = job(self.text, "planner")
         plan = block.index("explorer-journeys-plan.py plan")
@@ -868,7 +879,8 @@ class WiringTests(unittest.TestCase):
     def test_body_edits_and_labels_trigger_the_lane_in_their_own_concurrency_groups(self):
         self.assertIn("types: [opened, synchronize, reopened, edited, labeled]", self.text)
         self.assertIn("github.event.action == 'edited' && 'body' || github.event.action == 'labeled' && "
-                      "format('label-{0}', github.event.label.name) || 'code'", self.text)
+                      "(github.event.label.name == 'journeys-full' && 'label-journeys-full' || "
+                      "format('label-other-{0}', github.run_id)) || 'code'", self.text)
         self.assertIn("schedule:", self.text)
         self.assertRegex(self.text, r"(?m)^  workflow_dispatch:")
 
