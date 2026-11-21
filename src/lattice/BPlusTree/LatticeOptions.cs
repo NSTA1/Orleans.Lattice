@@ -2854,11 +2854,9 @@ public class LatticeOptions
     /// <c>GetEntryCountAsync</c> - contain no <c>await</c> at all, so they
     /// have no yield point to interleave at and their single <c>long</c> read
     /// cannot be torn regardless of what else is queued.
-    /// <c>GetResumeFloorAsync</c> does await, but its live count reads through the
-    /// storage provider and documents in its own body that its two reads
-    /// "do not need to be a consistent snapshot" - a diagnostic signal, not a
-    /// correctness invariant - and interleaving multi-entry appends already
-    /// race it today. Separately, a caller reading two of those values makes
+    /// <c>GetResumeFloorAsync</c> does await, but it reads only persisted
+    /// offsets through the storage provider, never the in-memory allocator, so
+    /// an interleaved append cannot change its answer. Separately, a caller reading two of those values makes
     /// two <i>separate</i> grain calls, and turn exclusivity never made
     /// separate calls atomic: the activation drains queued appends between
     /// them either way.

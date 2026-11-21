@@ -8,7 +8,7 @@ public partial class WalShardGrainTests
     [TestCase(9L, 4L, 4L)]
     [TestCase(9L, -1L, 10L)]
     [TestCase(9L, 12L, 10L)]
-    public async Task GetResumeFloorAsync_preserves_the_next_minus_live_calculation(long highest, long lowest, long expected)
+    public async Task GetResumeFloorAsync_derives_the_floor_from_persisted_offsets(long highest, long lowest, long expected)
     {
         var provider = Substitute.For<IWalStorageProvider>();
         provider.GetHighestOffsetAsync(TreeId, ShardIndex, Arg.Any<CancellationToken>()).Returns(highest);
@@ -31,7 +31,7 @@ public partial class WalShardGrainTests
     }
 
     [Test]
-    public async Task GetResumeFloorAsync_samples_allocator_before_the_provider_read()
+    public async Task GetResumeFloorAsync_ignores_an_allocation_made_during_the_provider_read()
     {
         var provider = Substitute.For<IWalStorageProvider>();
         provider.GetHighestOffsetAsync(TreeId, ShardIndex, Arg.Any<CancellationToken>()).Returns(9L);
@@ -45,8 +45,28 @@ public partial class WalShardGrainTests
         highest.SetResult(10L);
         await append;
 
-        Assert.That(await floor, Is.EqualTo(4L), "sampled next=10 minus the later live span=6, not lowest=5");
+        Assert.That(await floor, Is.EqualTo(5L), "the lowest persisted offset, independent of the allocator");
         Assert.That(await grain.GetNextSequenceAsync(CancellationToken.None), Is.EqualTo(11L));
+    }
+
+    [Test]
+    public async Task GetResumeFloorAsync_keeps_the_pre_append_cursor_resumable_while_an_append_is_in_flight()
+    {
+        // Issue #5205: the reservation advances the allocator before the
+        // provider stores the entry. The floor must not count that reserved,
+        // unpersisted offset as trimmed, or cursor 0 is reported expired.
+        var gated = new GatedWalStorageProvider(new InMemoryWalStorageProvider());
+        var grain = await CreateGrainAsync(gated);
+
+        var append = grain.AppendAsync(MakeEntry("a"), CancellationToken.None);
+        Assert.That(await grain.GetNextSequenceAsync(CancellationToken.None), Is.EqualTo(1L), "reservation is in flight");
+        Assert.That(append.IsCompleted, Is.False);
+
+        Assert.That(await grain.GetResumeFloorAsync(CancellationToken.None), Is.EqualTo(0L));
+
+        gated.Open();
+        Assert.That(await append, Is.EqualTo(0L));
+        Assert.That(await grain.GetResumeFloorAsync(CancellationToken.None), Is.EqualTo(0L));
     }
 
     [Test]

@@ -139,6 +139,20 @@ internal sealed partial class LatticeGrain
     /// invisible, on every leaf of that shard it touched - see
     /// <see cref="LatticeSnapshotCoordinate"/>.
     /// <para>
+    /// <b>The saturation shed is scoped to the cursor's current partition
+    /// (issue #3395).</b> When the silo registers a partition-scoped signal
+    /// (<see cref="IWalPartitionSaturationSignal"/>, #3348), the open reads the
+    /// verdict of the WAL partition that backs the cursor's starting position:
+    /// <c>startInclusive</c> for a forward cursor and <c>endExclusive</c> for a
+    /// reverse one, an unbounded side routing as the empty key. That is the
+    /// partition the commit-log writer would route a write at that key to
+    /// (<see cref="WalPartitionHash"/>). A saturated sibling partition
+    /// therefore no longer sheds an open whose own partition is idle. When only
+    /// the tree-wide signal is registered, the open falls back to the tree-wide
+    /// verdict, as before. This is the only saturation read on the cursor path;
+    /// once open, a cursor pages without consulting the signal.
+    /// </para>
+    /// <para>
     /// After the saturation shed below, the open runs these steps in order:
     /// </para>
     /// <list type="number">
@@ -212,9 +226,12 @@ internal sealed partial class LatticeGrain
         // gate. Gated by the default-on ShedSnapshotOpensWhenSaturated option.
         // The signal is silo-local and best-effort: on a non-hosted test
         // activation it is absent and the check is a no-op.
+        // (#3395) The verdict is the partition backing the cursor's starting
+        // position, when a partition-scoped signal exists; see the summary.
         if (Options.ShedSnapshotOpensWhenSaturated &&
             ResolveSaturationSignal() is { } saturationSignal &&
-            saturationSignal.GetCurrentState(TreeId) == WalSaturationState.Saturated)
+            await GetSnapshotOpenSaturationStateAsync(
+                saturationSignal, reverse ? endExclusive : startInclusive) == WalSaturationState.Saturated)
         {
             LatticeMetrics.RecordSaturationRefusal(TreeId, LatticeSaturationSource.SnapshotCursorOpen);
             throw new LatticeSaturatedException(
@@ -370,6 +387,29 @@ internal sealed partial class LatticeGrain
             Predicate = predicate,
         }, coordinate);
         return cursorId;
+    }
+
+    /// <summary>
+    /// (#3395) Resolves the saturation verdict a snapshot open is shed against.
+    /// With a partition-scoped signal, this is the verdict of the WAL partition
+    /// that <paramref name="positionKey"/> routes to under the tree's
+    /// registry-pinned partition count; an unbounded position (<see langword="null"/>)
+    /// routes as the empty key. Without one, it is the tree-wide verdict. The
+    /// partition count is served from the resolver's cache after the first read,
+    /// so the steady-state check completes synchronously and does not allocate.
+    /// </summary>
+    private async ValueTask<WalSaturationState> GetSnapshotOpenSaturationStateAsync(
+        IWalSaturationSignal saturationSignal,
+        string? positionKey)
+    {
+        if (saturationSignal is not IWalPartitionSaturationSignal partitionSignal)
+        {
+            return saturationSignal.GetCurrentState(TreeId);
+        }
+
+        var partitions = await optionsResolver.GetWalPartitionsAsync(TreeId);
+        var partition = WalPartitionHash.Compute(positionKey ?? string.Empty, Math.Max(1, partitions));
+        return partitionSignal.GetCurrentState(TreeId, partition);
     }
 
     /// <summary>

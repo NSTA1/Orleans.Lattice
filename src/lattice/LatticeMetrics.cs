@@ -4069,7 +4069,9 @@ public static class LatticeMetrics
     /// <summary>
     /// Count of WAL GC starvation drives abandoned at
     /// <see cref="LatticeOptions.StarvationDriveBudget"/> with their replay
-    /// permit forcibly released, tagged by tree (issue #3065).
+    /// permit forcibly released, tagged by tree (issue #3065) and by
+    /// <c>reason</c> (<see cref="StarvationDriveAbandonedBudget"/> or
+    /// <see cref="StarvationDriveAbandonedSliceReadDeadline"/>, issue #6015).
     /// <para>
     /// <b>This is the sole discriminator for the fault it reports, and that is a
     /// consequence of the fix rather than a design preference.</b> Before the
@@ -4111,7 +4113,7 @@ public static class LatticeMetrics
     /// </summary>
     public static readonly Counter<long> WalReplayStarvationDriveAbandonments =
         Meter.CreateCounter<long>("orleans.lattice.wal.replay.starvation_drive_abandonments",
-            description: "Count of WAL GC starvation drives abandoned at their configured budget with the replay permit forcibly released, tagged by tree. Zero-primed alongside the blocked-leaf 'attempted' arm, so an absent series means this build is not deployed rather than that no drive has been abandoned.");
+            description: "Count of WAL GC starvation drives abandoned at their configured budget with the replay permit forcibly released, tagged by tree and by reason ('budget' when the whole budget was spent, 'slice_read_deadline' when one slice read hit its per-read deadline). Zero-primed alongside the blocked-leaf 'attempted' arm, so an absent series means this build is not deployed rather than that no drive has been abandoned.");
 
     /// <summary>
     /// <see cref="WalReplayStarvationDriveAbandonments"/>'s <c>reason</c> for a

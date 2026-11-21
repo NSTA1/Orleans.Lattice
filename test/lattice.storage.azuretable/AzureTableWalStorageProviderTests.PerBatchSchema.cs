@@ -200,6 +200,32 @@ public partial class AzureTableWalStorageProviderTests
             Is.LessThan(0));
     }
 
+    [TestCase(0L, 0L)]
+    [TestCase(50L, 0L)]
+    [TestCase(99L, 0L)]
+    [TestCase(100L, 1L)]
+    [TestCase(1000L, 901L)]
+    public void BuildManifestReadFilter_bounds_the_row_key_at_the_lowest_overlapping_batch_start(
+        long firstWanted,
+        long expectedLowerStart)
+    {
+        var filter = AzureTableWalStorageProvider.BuildManifestReadFilter("_m_|t|0", firstWanted);
+
+        Assert.That(
+            filter,
+            Is.EqualTo(
+                $"PartitionKey eq '_m_|t|0' and RowKey ge '{AzureTableWalStorageProvider.BuildManifestRowKey(expectedLowerStart)}'"
+                + $" and RowKey lt '{AzureTableWalStorageProvider.TailRowKey}' and Offset ge {firstWanted}"));
+    }
+
+    [Test]
+    public void BuildManifestReadFilter_escapes_the_partition_key()
+    {
+        var filter = AzureTableWalStorageProvider.BuildManifestReadFilter("_m_|o'k|0", 5L);
+
+        Assert.That(filter, Does.StartWith("PartitionKey eq '_m_|o''k|0' and "));
+    }
+
     [Test]
     public void BuildManifestRowKey_throws_on_negative_start_offset()
     {

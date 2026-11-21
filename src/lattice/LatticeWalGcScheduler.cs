@@ -1175,6 +1175,14 @@ internal sealed class LatticeWalGcScheduler(
     /// blocked by. Bounded by the leaves the floor reports in one episode, and
     /// dropped with the observation when the episode ends.
     /// </param>
+    /// <param name="FloorUsable">
+    /// Whether this episode was last driven by the floor-holder repair arm,
+    /// which runs only while the tree's cursor floor reports usable (issue
+    /// #3613). It selects the episode's log texts: the blocked arm's warnings
+    /// state a blocked floor and unbounded retention, which are false on a
+    /// usable floor, so a repair episode logs its own wording instead. Updated on
+    /// every call, so an episode that changes arm reports the arm now driving it.
+    /// </param>
     private readonly record struct BlockedConsumerObservation(
         DateTimeOffset EpisodeStarted,
         DateTimeOffset? LastAnyAttempt,
@@ -1186,7 +1194,8 @@ internal sealed class LatticeWalGcScheduler(
         string? FirstBlocker = null,
         string? LatestBlocker = null,
         bool AnyTerminal = false,
-        HashSet<GrainId>? LatchedStaleLeaves = null);
+        HashSet<GrainId>? LatchedStaleLeaves = null,
+        bool FloorUsable = false);
 
     /// <summary>
     /// One blocking leaf's reactivation budget and rate-limiter state, carried
@@ -3147,7 +3156,8 @@ internal sealed class LatticeWalGcScheduler(
                         tenantTag,
                         stoppingToken,
                         preClassified: true,
-                        requireOffsetAdvance: repairableHolders.RequireOffsetAdvance)
+                        requireOffsetAdvance: repairableHolders.RequireOffsetAdvance,
+                        floorUsable: true)
                         .ConfigureAwait(false);
                 }
                 else
@@ -4122,6 +4132,12 @@ internal sealed class LatticeWalGcScheduler(
     /// </param>
     /// <param name="blockingConsumerIds">The consumers preventing this tree from being trimmed.</param>
     /// <param name="preClassified">Whether the blocking consumers were already classified before this call.</param>
+    /// <param name="floorUsable">
+    /// Whether the caller is the floor-holder repair arm, which runs only while
+    /// the tree's cursor floor reports usable (issue #3613). It selects that
+    /// arm's log texts in place of the blocked arm's, which state a blocked
+    /// floor and unbounded retention that a usable floor does not have.
+    /// </param>
     /// <param name="stoppingToken">The scheduler shutdown token.</param>
     /// <param name="tenantTag">The tenant metric tag.</param>
     /// <param name="treeId">The tree whose blocking consumers are being processed.</param>
@@ -4133,7 +4149,8 @@ internal sealed class LatticeWalGcScheduler(
         KeyValuePair<string, object?> tenantTag,
         CancellationToken stoppingToken,
         bool preClassified = false,
-        IReadOnlySet<string>? requireOffsetAdvance = null)
+        IReadOnlySet<string>? requireOffsetAdvance = null,
+        bool floorUsable = false)
     {
         var now = _time.GetUtcNow();
 
@@ -4144,7 +4161,13 @@ internal sealed class LatticeWalGcScheduler(
                 LastAnyAttempt: null,
                 AnyAbandoned: false,
                 Escalated: false,
-                Budgets: new Dictionary<string, ConsumerReactivationBudget>(StringComparer.Ordinal));
+                Budgets: new Dictionary<string, ConsumerReactivationBudget>(StringComparer.Ordinal),
+                FloorUsable: floorUsable);
+            _blockedConsumers[treeId] = observation;
+        }
+        else if (observation.FloorUsable != floorUsable)
+        {
+            observation = observation with { FloorUsable = floorUsable };
             _blockedConsumers[treeId] = observation;
         }
 
@@ -4240,10 +4263,20 @@ internal sealed class LatticeWalGcScheduler(
         // unclassified.
         if (warnConsumerId is not null)
         {
-            WarnFloorBlocked(
-                treeId,
-                warnConsumerId,
-                budgets.TryGetValue(warnConsumerId, out var warned) ? warned.PinState : null);
+            if (floorUsable)
+            {
+                // Issue #3613: the repair arm runs only on a usable floor, so
+                // the blocked arm's warning - a blocked floor and unbounded
+                // retention - would be false here.
+                await ReportFloorHolderRepairAsync(treeId, warnConsumerId).ConfigureAwait(false);
+            }
+            else
+            {
+                WarnFloorBlocked(
+                    treeId,
+                    warnConsumerId,
+                    budgets.TryGetValue(warnConsumerId, out var warned) ? warned.PinState : null);
+            }
         }
 
         // Drain orphaned pins in bulk before any reactivation machinery runs
@@ -4281,12 +4314,24 @@ internal sealed class LatticeWalGcScheduler(
             observation = observation with { Escalated = true };
             _blockedConsumers[treeId] = observation;
 
-            logger.LogWarning(
-                "WAL GC has not been able to attempt a reactivation on tree {Tree} for {Elapsed}, while its cursor floor stayed blocked and its WAL stayed retained; the consumers reported as blocking keep changing before any one of them has been blocking long enough to touch, so the per-leaf attempt budget cannot report this tree. Currently reported blocker is {Consumer}, and the floor has named {DistinctBlockers} blocking consumers since the episode began. Investigate why this tree has several leaves whose snapshot capture does not complete.",
+            if (floorUsable)
+            {
+                logger.LogWarning(
+                    "WAL GC has not been able to attempt a floor-holder repair on tree {Tree} for {Elapsed}. Its cursor floor reports usable, so the tree still reclaims, but the dormant pins holding its partition offset floors keep changing before any one of them has been holding long enough to touch, so the per-leaf attempt budget cannot report this tree. Currently driven holder is {Consumer}, and the repair arm has admitted {DistinctBlockers} floor-holding consumers since the episode began.",
                     treeId,
-                now - (observation.LastAnyAttempt ?? observation.EpisodeStarted),
-                blockingConsumerIds[0],
-                observation.DistinctBlockers);
+                    now - (observation.LastAnyAttempt ?? observation.EpisodeStarted),
+                    blockingConsumerIds[0],
+                    observation.DistinctBlockers);
+            }
+            else
+            {
+                logger.LogWarning(
+                    "WAL GC has not been able to attempt a reactivation on tree {Tree} for {Elapsed}, while its cursor floor stayed blocked and its WAL stayed retained; the consumers reported as blocking keep changing before any one of them has been blocking long enough to touch, so the per-leaf attempt budget cannot report this tree. Currently reported blocker is {Consumer}, and the floor has named {DistinctBlockers} blocking consumers since the episode began. Investigate why this tree has several leaves whose snapshot capture does not complete.",
+                    treeId,
+                    now - (observation.LastAnyAttempt ?? observation.EpisodeStarted),
+                    blockingConsumerIds[0],
+                    observation.DistinctBlockers);
+            }
         }
 
         List<string>? touching = null;
@@ -4377,12 +4422,20 @@ internal sealed class LatticeWalGcScheduler(
                     RecordBlockedLeafReactivation(
                         LatticeMetrics.BlockedLeafReactivationAbandoned, treeTag, tenantTag);
 
-                    logger.LogWarning(
-                        "WAL GC gave up reactivating consumer {Consumer} on tree {Tree} after {Attempts} attempts; it is still blocking the cursor floor, so the block is not clearable by activation alone and the WAL stays retained. The sweep will try again after {Backoff}. Investigate why the leaf's snapshot capture does not complete.",
-                        consumerId,
-                        treeId,
-                        budget.Attempts,
-                        RearmBackoff(budget.Cycles));
+                    if (floorUsable)
+                    {
+                        await ReportFloorHolderRepairAbandonedAsync(
+                            treeId, consumerId, budget, stoppingToken).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        logger.LogWarning(
+                            "WAL GC gave up reactivating consumer {Consumer} on tree {Tree} after {Attempts} attempts; it is still blocking the cursor floor, so the block is not clearable by activation alone and the WAL stays retained. The sweep will try again after {Backoff}. Investigate why the leaf's snapshot capture does not complete.",
+                            consumerId,
+                            treeId,
+                            budget.Attempts,
+                            RearmBackoff(budget.Cycles));
+                    }
 
                     continue;
                 }
@@ -4398,11 +4451,22 @@ internal sealed class LatticeWalGcScheduler(
                 RecordBlockedLeafReactivation(
                     LatticeMetrics.BlockedLeafReactivationRearmed, treeTag, tenantTag);
 
-                logger.LogInformation(
-                    "WAL GC restored the reactivation budget for consumer {Consumer} on tree {Tree} after a backoff (cycle {Cycle}); its cursor floor is still blocked, and the conditions that make a touch futile are transient, so the sweep tries again rather than staying stopped.",
-                    consumerId,
-                    treeId,
-                    budget.Cycles);
+                if (floorUsable)
+                {
+                    logger.LogInformation(
+                        "WAL GC restored the floor-holder repair budget for consumer {Consumer} on tree {Tree} after a backoff (cycle {Cycle}); the tree's cursor floor reports usable, but this dormant pin still holds its partition's offset floor, and the conditions that make a touch futile are transient, so the sweep tries again rather than staying stopped.",
+                        consumerId,
+                        treeId,
+                        budget.Cycles);
+                }
+                else
+                {
+                    logger.LogInformation(
+                        "WAL GC restored the reactivation budget for consumer {Consumer} on tree {Tree} after a backoff (cycle {Cycle}); its cursor floor is still blocked, and the conditions that make a touch futile are transient, so the sweep tries again rather than staying stopped.",
+                        consumerId,
+                        treeId,
+                        budget.Cycles);
+                }
 
                 // Fall through: the restored budget is spendable on this very
                 // pass, subject to the same block-age and cooldown gates as any
@@ -4870,6 +4934,76 @@ internal sealed class LatticeWalGcScheduler(
             DescribeBlockingPinRemedy(pinState));
 
     /// <summary>
+    /// Reports, once per repair episode, that the dormant floor-holder repair
+    /// arm is driving a consumer on a tree whose cursor floor is usable
+    /// (issue #3613).
+    /// </summary>
+    /// <remarks>
+    /// The repair arm's counterpart to <see cref="WarnFloorBlocked"/>. That
+    /// warning asserts a blocked floor and unbounded retention, both false on
+    /// this arm, so this names what is true instead: the floor is usable but a
+    /// dormant pin holds its partition's offset floor at a known offset. Reads
+    /// the pin offset once per episode, best-effort; an unreadable offset or
+    /// partition is reported as unknown rather than guessed.
+    /// </remarks>
+    private async Task ReportFloorHolderRepairAsync(string treeId, string consumerId)
+    {
+        var offset = await TryReadDurablePinOffsetAsync(treeId, consumerId).ConfigureAwait(false);
+        var partition = TryResolveLeafGrainId(treeId, consumerId, out _, out var resolved)
+            ? resolved.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : "unknown";
+
+        logger.LogInformation(
+            "WAL GC is repairing dormant floor holders on tree {Tree}; the floor is usable but pinned by consumer {Consumer} at offset {Offset} on partition {Partition}, so WAL below that offset is retained until the holder's leaf advances its pin. This is reported once per repair episode; the number of holders driven is reported when the episode ends.",
+            treeId,
+            consumerId,
+            offset is { } value ? value.ToString(System.Globalization.CultureInfo.InvariantCulture) : "unknown",
+            partition);
+    }
+
+    /// <summary>
+    /// Reports that the repair arm stopped driving a floor holder after its
+    /// attempt budget, naming whether the holder's partition still retains any
+    /// entries (issue #3613).
+    /// </summary>
+    /// <remarks>
+    /// Runs only when a budget is exhausted, so the one retained-sequence read
+    /// is off every hot path. An unreadable partition is reported as unknown.
+    /// </remarks>
+    private async Task ReportFloorHolderRepairAbandonedAsync(
+        string treeId, string consumerId, ConsumerReactivationBudget budget, CancellationToken stoppingToken)
+    {
+        var retains = "unknown";
+        var factory = grainFactory;
+        if (factory is not null && TryResolveLeafGrainId(treeId, consumerId, out _, out var partition))
+        {
+            try
+            {
+                var lowest = await factory.GetGrain<BPlusTree.Grains.IWalShardGrain>($"{treeId}/{partition}")
+                    .GetLowestRetainedSequenceAsync(stoppingToken)
+                    .ConfigureAwait(false);
+                retains = lowest >= 0 ? "retains entries" : "retains no entries";
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !stoppingToken.IsCancellationRequested)
+            {
+                logger.LogDebug(
+                    ex,
+                    "WAL GC could not read the retained range of the partition consumer {Consumer} pins on tree {Tree}; it is reported as unknown.",
+                    consumerId,
+                    treeId);
+            }
+        }
+
+        logger.LogWarning(
+            "WAL GC floor-holder repair of consumer {Consumer} on tree {Tree} did not advance after {Attempts} attempts. The tree's cursor floor reports usable, so this is not unbounded retention; the holder's partition {PartitionRetention}. The sweep will try again after {Backoff}.",
+            consumerId,
+            treeId,
+            budget.Attempts,
+            retains,
+            RearmBackoff(budget.Cycles));
+    }
+
+    /// <summary>
     /// The metric-tag spelling of a blocked pin's state - the
     /// <see cref="BlockingPinStateTag"/> arm's value - or <c>unclassified</c>
     /// when this path did not classify it (issue #5570).
@@ -4913,6 +5047,21 @@ internal sealed class LatticeWalGcScheduler(
     {
         if (observation.DistinctBlockers <= 1)
         {
+            return;
+        }
+
+        if (observation.FloorUsable)
+        {
+            // Issue #3613: the repair arm's episode is on a usable floor, so
+            // "is no longer blocked" would describe a block that never existed.
+            logger.LogInformation(
+                "WAL GC floor-holder repair episode ended on tree {Tree} after {Elapsed}. The repair arm drove {DistinctBlockers} dormant floor-holding consumers during the episode, first {FirstConsumer} and most recently {Consumer}; the tree's cursor floor was usable throughout. The count is of admissions, so a consumer that rotated out for over an hour and returned is counted twice - read it as how widely the holders churned, never as a leaf inventory.",
+                treeId,
+                _time.GetUtcNow() - observation.EpisodeStarted,
+                observation.DistinctBlockers,
+                observation.FirstBlocker,
+                observation.LatestBlocker);
+
             return;
         }
 
