@@ -130,6 +130,63 @@ internal sealed partial class ViewMaintainerGrain(
     internal IReadOnlyList<TimeSpan> KeepaliveRegistrationBackoff { get; set; }
         = ReminderServiceReadiness.DefaultRegistrationBackoff;
 
+    /// <summary>
+    /// How long <see cref="CancelMaintenanceForDecommissionAsync"/> holds off new
+    /// background drains so the decommission turn that follows it is admitted
+    /// promptly (#5729). Bounded so a decommission that is never sent cannot stall
+    /// the view: maintenance resumes once the hold lapses.
+    /// </summary>
+    internal static readonly TimeSpan DecommissionHoldWindow = TimeSpan.FromMinutes(1);
+
+    // Cancellation source for long maintenance work (rebuild, reconcile, a sliced
+    // source-identity heal step, background drains). Created lazily; the
+    // interleaving CancelMaintenanceForDecommissionAsync cancels and drops it so
+    // the next maintenance pass starts with a fresh one (#5729). Never disposed:
+    // it carries no timer, and a linked source may still hold its token.
+    private CancellationTokenSource? _maintenanceCts;
+
+    // Background drains (keepalive and timer) are skipped until this instant,
+    // read through _sourceIdentityClock so a test can drive it deterministically.
+    private DateTime _decommissionHoldUntilUtc;
+
+    // Bumped by anything that must invalidate an in-progress sliced heal (#5546):
+    // an explicit rebuild or reconcile, a decommission, or its cancellation.
+    private long _healEpoch;
+
+    private CancellationToken MaintenanceToken => (_maintenanceCts ??= new CancellationTokenSource()).Token;
+
+    private bool IsDecommissionHoldActive =>
+        _sourceIdentityClock.GetUtcNow().UtcDateTime < _decommissionHoldUntilUtc;
+
+    // Timer-tick drain token: the timer's own token linked with the maintenance
+    // token, cached while both are unchanged so a background tick does not
+    // allocate a linked source every coalesce window.
+    private CancellationTokenSource? _timerLinkedCts;
+    private CancellationTokenSource? _timerLinkedMaintenance;
+    private CancellationToken _timerLinkedTimerToken;
+
+    private CancellationToken TimerDrainToken(CancellationToken timerToken)
+    {
+        var maintenance = _maintenanceCts ??= new CancellationTokenSource();
+        if (!timerToken.CanBeCanceled)
+        {
+            return maintenance.Token;
+        }
+
+        if (_timerLinkedCts is null
+            || !ReferenceEquals(_timerLinkedMaintenance, maintenance)
+            || _timerLinkedTimerToken != timerToken)
+        {
+            // Timer ticks do not overlap, so no drain still holds the old token.
+            _timerLinkedCts?.Dispose();
+            _timerLinkedCts = CancellationTokenSource.CreateLinkedTokenSource(timerToken, maintenance.Token);
+            _timerLinkedMaintenance = maintenance;
+            _timerLinkedTimerToken = timerToken;
+        }
+
+        return _timerLinkedCts.Token;
+    }
+
     /// <inheritdoc />
     IGrainContext IGrainBase.GrainContext => context;
 
@@ -994,6 +1051,15 @@ internal sealed partial class ViewMaintainerGrain(
     public async Task RebuildAsync(CancellationToken cancellationToken = default)
     {
         await GuardJointMaintenanceAdmissionAsync(cancellationToken);
+
+        // An imminent decommission cancels the rebuild (#5729); a cancelled
+        // derive-locally rebuild leaves only an unswapped shadow generation, which
+        // the decommission deletes. Any sliced source-swap heal is superseded.
+        using var maintenanceLink = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, MaintenanceToken);
+        cancellationToken = maintenanceLink.Token;
+        _healEpoch++;
+        _shadowHeal = null;
+
         using var viewWriteScope = ViewWriteContext.BeginScope();
         await ReleaseUncommittedJointOwnershipAsync();
         if (HasJointOwnership)
@@ -1256,6 +1322,15 @@ internal sealed partial class ViewMaintainerGrain(
     public async Task RunKeepaliveTickAsync()
     {
         using var viewWriteScope = ViewWriteContext.BeginScope();
+
+        // A decommission is imminent (#5729): do not start a drain that the
+        // decommission turn would have to queue behind.
+        if (IsDecommissionHoldActive)
+        {
+            return;
+        }
+
+        var maintenanceToken = MaintenanceToken;
         try
         {
             // A reminder can wake a cold-reactivated grain that never ran
@@ -1271,7 +1346,7 @@ internal sealed partial class ViewMaintainerGrain(
             // a fresh producer would stay suppressed until restart.
             if (!_activated || _shipViewSuppressed)
             {
-                await EnsureActiveAsync(CancellationToken.None);
+                await EnsureActiveAsync(maintenanceToken);
             }
             else
             {
@@ -1280,13 +1355,32 @@ internal sealed partial class ViewMaintainerGrain(
                     StartTimer();
                 }
 
-                await DrainAsync(CancellationToken.None);
+                await DrainAsync(maintenanceToken);
             }
+        }
+        catch (OperationCanceledException) when (maintenanceToken.IsCancellationRequested)
+        {
+            logger.LogDebug("View '{ViewName}' keepalive drain cancelled for decommission.", ViewName);
         }
         catch (Exception ex)
         {
             logger.LogWarning(ex, "View '{ViewName}' drain on keepalive tick failed; will retry.", ViewName);
         }
+    }
+
+    /// <inheritdoc />
+    public Task CancelMaintenanceForDecommissionAsync()
+    {
+        // Interleaved ([AlwaysInterleave]): touches only the hold deadline, the
+        // heal epoch, and the maintenance cancellation source - never checkpoint,
+        // staging, or tree state - so it cannot race the turn it interrupts.
+        _decommissionHoldUntilUtc = _sourceIdentityClock.GetUtcNow().UtcDateTime + DecommissionHoldWindow;
+        _healEpoch++;
+        _shadowHeal = null;
+        var cts = _maintenanceCts;
+        _maintenanceCts = null;
+        cts?.Cancel();
+        return Task.CompletedTask;
     }
 
     /// <inheritdoc />
@@ -1428,8 +1522,13 @@ internal sealed partial class ViewMaintainerGrain(
             // an unbuilt view behind a satisfied equality check.
             if (!string.Equals(physical, logical, StringComparison.Ordinal))
             {
-                await RebuildAsync(cancellationToken);
-                MarkConverged();
+                // Sliced (#5546): each drain advances one bounded step, and the
+                // gate stays open until the swap completes.
+                if (await AdvanceSourceHealAsync(registration, physical, cancellationToken))
+                {
+                    MarkConverged();
+                }
+
                 return true;
             }
 
@@ -1450,9 +1549,12 @@ internal sealed partial class ViewMaintainerGrain(
 
         // Retain the old binding and pin until the captured new generation and
         // its source-specific offsets are durably published.
-        logger.LogWarning(
-            "View '{ViewName}' source '{Source}' physical identity changed from '{OldPhysical}' to '{NewPhysical}'; rebuilding before retiring the old WAL pin.",
-            ViewName, logical, bound, physical);
+        if (_shadowHeal is null)
+        {
+            logger.LogWarning(
+                "View '{ViewName}' source '{Source}' physical identity changed from '{OldPhysical}' to '{NewPhysical}'; rebuilding before retiring the old WAL pin.",
+                ViewName, logical, bound, physical);
+        }
 
         // Rebuild from the new physical source BEFORE persisting the advanced
         // binding. The rebuild is the step that can fail (a transient source-scan
@@ -1462,10 +1564,13 @@ internal sealed partial class ViewMaintainerGrain(
         // check above would then short-circuit every subsequent drain so the view
         // would never re-heal. Rebuilding first and rebinding only on success leaves
         // a failed rebuild's old binding intact so the next drain retries the heal.
-        await RebuildAsync(cancellationToken);
+        // The heal is sliced across drains (#5546) so the grain stays responsive;
+        // the swap at its final step owns tuple publication and old-log retirement.
+        if (await AdvanceSourceHealAsync(registration, physical, cancellationToken))
+        {
+            MarkConverged();
+        }
 
-        // The rebuild owns both tuple publication and old-log retirement.
-        MarkConverged();
         return true;
     }
 
@@ -1696,9 +1801,23 @@ internal sealed partial class ViewMaintainerGrain(
             return;
         }
 
+        if (IsDecommissionHoldActive)
+        {
+            return;
+        }
+
+        // Link the timer's token with the maintenance token so an imminent
+        // decommission can interrupt the pass (#5729). The linked source is cached
+        // across ticks, so a steady-state tick allocates nothing.
+        var maintenanceToken = MaintenanceToken;
         try
         {
-            await DrainAsync(cancellationToken);
+            await DrainAsync(TimerDrainToken(cancellationToken));
+        }
+        catch (OperationCanceledException) when (maintenanceToken.IsCancellationRequested)
+        {
+            logger.LogDebug("View '{ViewName}' background drain cancelled for decommission.", ViewName);
+            return;
         }
         catch (Exception ex)
         {

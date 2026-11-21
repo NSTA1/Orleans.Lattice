@@ -17,6 +17,26 @@ internal sealed partial class ViewMaintainerGrain
     /// <inheritdoc />
     public async Task DecommissionAsync(CancellationToken cancellationToken = default)
     {
+        // Any in-progress sliced source-swap heal is abandoned: its shadow
+        // generation is deleted below with the rest of the backing trees.
+        _healEpoch++;
+        _shadowHeal = null;
+        try
+        {
+            await DecommissionCoreAsync(cancellationToken);
+        }
+        catch
+        {
+            // A refused or failed decommission leaves the view live, so lift the
+            // maintenance hold CancelMaintenanceForDecommissionAsync placed (#5729)
+            // rather than leaving the view un-maintained for the hold window.
+            _decommissionHoldUntilUtc = default;
+            throw;
+        }
+    }
+
+    private async Task DecommissionCoreAsync(CancellationToken cancellationToken)
+    {
         await GuardJointMaintenanceAdmissionAsync(cancellationToken);
         await AcknowledgeRetiredJointRepairsAsync();
         await ReleaseUncommittedJointOwnershipAsync();
