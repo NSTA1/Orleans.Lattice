@@ -152,8 +152,28 @@ JOURNEY_FOLDER = re.compile(r"^[A-Za-z][A-Za-z0-9]*$")
 # The harness leg carries the east-region and Fabrikam estate fixtures (#5362). A contract
 # leg establishes up to its whole storyline on one estate, as a conformance shard does.
 TIMEOUTS = {"harness": 60, "isolated": 60, "contract": 60, "story": 150}
-# Each leg's `estimate` is its timeout. runner-overflow.py reads it only to send the
-# longest legs to the self-hosted pool first, so an upper bound orders them as well.
+# Each leg's `estimate` is its measured job wall time in minutes, from ESTIMATES, falling
+# back to its timeout. runner-overflow.py reads it only to send the longest legs to the
+# self-hosted pool first. When every leg carried its timeout as its estimate the order was
+# a tie broken by plan order, so the overflow took harness and A1-A5 (4-5 minutes each)
+# and left C3 and U4 on hosted runners. The figures are rounded job durations of the
+# explorer-journeys full-leg runs around the 10.4.0 release; a leg not listed
+# takes its timeout, so a new leg sorts as long until it is measured.
+ESTIMATES = {
+    "story-contoso": 55, "story-contoso-narrow": 55,
+    "contract-c4": 25, "contract-c3": 23, "isolated-u4": 18, "harness": 14,
+    "isolated-a12": 12, "contract-c1": 8, "isolated-u1": 8, "isolated-a10": 7,
+    "isolated-a6": 6, "isolated-a7": 6, "isolated-a8": 6, "isolated-a9": 6,
+    "isolated-a11": 6, "isolated-u5": 6, "isolated-u6": 6,
+    "isolated-a1": 5, "isolated-a2": 5, "isolated-a3": 5, "isolated-a4": 5,
+    "isolated-a5": 5, "isolated-u3": 5, "contract-c2": 5, "contract-u2": 5,
+}
+
+
+def estimate(name, kind):
+    """A leg's routing estimate: its measured minutes, else its timeout."""
+    return ESTIMATES.get(name, TIMEOUTS[kind])
+
 # Each leg's `hang` is its per-test hang budget in minutes (dotnet test
 # --blame-hang-timeout). The blame collector times a whole test, not its silence. A contract
 # case establishes every chapter before its own (C3 consumes the whole Contoso storyline), and
@@ -425,7 +445,7 @@ def isolated_leg(folder, jid, storyline):
         "mode": "isolated",
         "viewport": "",
         "timeout": TIMEOUTS["isolated"],
-        "estimate": TIMEOUTS["isolated"],
+        "estimate": estimate("isolated-" + jid, "isolated"),
         "hang": HANGS["isolated"],
         # The trailing dot keeps Journeys.A1 from selecting A10, A11 and A12.
         "filter": f"FullyQualifiedName~{NAMESPACE}.Journeys.{folder}.|FullyQualifiedName~{PENDING_GATE}",
@@ -444,7 +464,7 @@ def contract_leg(chapter, storyline, shard):
         "mode": "isolated",
         "viewport": "",
         "timeout": TIMEOUTS["contract"],
-        "estimate": TIMEOUTS["contract"],
+        "estimate": estimate("contract-" + chapter.lower(), "contract"),
         "hang": HANGS["contract"],
         "needsPool": chapter.upper() in NEEDS_POOL,
         # The leading underscore keeps _C1_ from selecting a C10 case.
@@ -465,7 +485,7 @@ def story_leg(storyline, fixture, narrow=False):
         "mode": "story",
         "viewport": "narrow" if narrow else "",
         "timeout": TIMEOUTS["story"],
-        "estimate": TIMEOUTS["story"],
+        "estimate": estimate(name, "story"),
         "hang": HANGS["story"],
         "filter": f"FullyQualifiedName~{NAMESPACE}.Story.{fixture}|FullyQualifiedName~{PENDING_GATE}",
         "expect": f"{NAMESPACE}.Story.{fixture}",
@@ -482,7 +502,7 @@ def harness_leg():
         "mode": "isolated",
         "viewport": "",
         "timeout": TIMEOUTS["harness"],
-        "estimate": TIMEOUTS["harness"],
+        "estimate": estimate("harness", "harness"),
         "hang": HANGS["harness"],
         "filter": HARNESS_FILTER,
         "expect": NAMESPACE + ".",

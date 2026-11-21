@@ -1,8 +1,10 @@
-# Refreshed measured rows from CI run 37589416238 (2026-10-07).
-# Passed, full-scope items >= 0.1 minutes replace their previous estimates;
-# other rows retain their earlier provenance below. The formal-tlc*
-# deterministic rows were re-measured for #5166 from two receipt-free
-# exhaustive runs; see the lattice section below.
+# Refreshed for the 10.4.0 release from measured CI runs (2026-11-21).
+# The formal-tlc* deterministic rows are the mean of four receipt-free
+# exhaustive runs (see the lattice section below). Every other row with a
+# passing sample is the median of its items in the ci.yml pull-request runs
+# 44431741990 to 44816207039 (2026-11-19 to 2026-11-20, 19 runs with
+# leg-results) and the 10.4.0 release-line push run 44825250867; rows without
+# a passing sample in that window keep their earlier provenance below.
 
 # Per-work-item duration estimates, in minutes, used only to bin-pack the
 # matrix. Format: package<TAB>shard<TAB>tier<TAB>minutes, with `-` for the
@@ -82,115 +84,74 @@
 # -- lattice, sharded --------------------------------------------------------
 #
 # The formal-tlc* deterministic rows are not medians. Each is the mean of
-# two measured item durations (leg-results `duration`, the time the item took
-# on its leg), rounded up to hundredths of a minute, re-measured for #5166
-# after controls became shared by content (#5152) and base-served (#5161):
-# - ci.yml bucket push run 40909619830 (head 9418a498d), receipt-free, so
-#   every TLC module ran exhaustively on the ten-leg plan;
-# - coverage.yml run 40923724192 (head 0e4aa6b2a), the nightly-equivalent
-#   dispatch whose eight exhaustive TLC legs run uninstrumented.
-# Both runs passed every TLC case. The two samples agree within about 5% on
-# most shards, but a single case can vary 1.5x between runs on identical
-# inputs: the dedicated TwoPartitions item took 35.22 and 52.78 minutes, and
-# scheduling-workload-b 12.11 and 20.64. The mean prices that noise, it does
-# not remove it. formal-tlc-bplus-cascade replaces three shards (#5166); its
-# row is the sum of their measured items, an upper bound once the base serves
-# the mutation controls. Estimates are planning inputs, not runtime
-# guarantees, and they decide only how work is distributed, never what runs.
-lattice	formal-tlc	deterministic	17.36
-lattice	formal-tlc-materialised-views	deterministic	4.01
+# four measured item durations (leg-results `duration`, the time the item took
+# on its leg), rounded up to hundredths of a minute, from four receipt-free
+# exhaustive runs in which every TLC module ran and passed:
+# - coverage.yml nightly runs 44271784821 (head 057b0d2c4), 44470524198
+#   (head 2906eb64e) and 44737600776 (head 2506cbd44), whose eight exhaustive
+#   TLC legs run uninstrumented;
+# - ci.yml run 44825250867 (head 94d9a3f94), the second push to release/10.4,
+#   which ran every TLC module on the ten-leg plan.
+# A single case can still vary 1.5x between runs on identical inputs (the
+# dedicated TwoPartitions item took 88.75 to 117.54 minutes across these four); the
+# mean prices that noise, it does not remove it. Estimates are planning
+# inputs, not runtime guarantees, and they decide only how work is
+# distributed, never what runs.
+lattice	formal-tlc	deterministic	15.90
+lattice	formal-tlc-materialised-views	deterministic	3.70
 lattice	formal-tlc-view-fence	deterministic	0.20
-lattice	formal-tlc-view-horizon	deterministic	0.70
-lattice	formal-tlc-view-aggregation	deterministic	0.58
-lattice	formal-tlc-view-rebind	deterministic	0.51
-lattice	formal-tlc-view-ready-closure	deterministic	0.65
-lattice	formal-tlc-view-source-admission	deterministic	0.91
-lattice	formal-tlc-view-resolved-identity	deterministic	0.30
-lattice	formal-tlc-view-joint-repair	deterministic	0.63
-# formal-tlc-view-numeric (#5232): one sample, its 23 cases on leg 6 of
-# receipt-free ci.yml run 41064780376 (head ff6cc0c64).
-lattice	formal-tlc-view-numeric	deterministic	1.43
-# formal-tlc-schema-view (#5233): its 26 cases took 1.3 minutes locally at
-# LATTICE_TLC_CONCURRENCY=2; doubled until measured on its member PR's CI leg.
-lattice	formal-tlc-schema-view	deterministic	2.60
-lattice	formal-tlc-tree-lifecycle	deterministic	0.65
-lattice	formal-tlc-anti-entropy	deterministic	3.56
-lattice	formal-tlc-anti-entropy-2	deterministic	5.10
-lattice	formal-tlc-anti-entropy-3	deterministic	2.66
-lattice	formal-tlc-aliasing	deterministic	0.45
-lattice	formal-tlc-split-gate	deterministic	1.46
-lattice	formal-tlc-bplus-cascade	deterministic	1.47
-lattice	formal-tlc-scheduling-replay-two-partitions	deterministic	44.00
-lattice	formal-tlc-scheduling	deterministic	31.05
-lattice	formal-tlc-scheduling-workload-b	deterministic	16.38
-lattice	formal-tlc-scheduling-shipping	deterministic	4.29
-lattice	formal-tlc-scheduling-shipping-variants	deterministic	19.76
-lattice	formal-tlc-shard-ownership	deterministic	5.40
-lattice	formal-tlc-convergence	deterministic	4.77
-# formal-tlc-replication-wal, -wal-durability and -wal-durability-cross-silo:
-# measured in receipt-free ci.yml run 42036414949 (51, 48 and 6 cases); run
-# 42077562961 measured 3.01, 15.69 and 2.26 against them.
-lattice	formal-tlc-replication-wal	deterministic	2.97
-lattice	formal-tlc-wal-durability	deterministic	21.05
-lattice	formal-tlc-wal-durability-cross-silo	deterministic	2.63
-# The live-advance shards (epic #5605, member 6c): one per module, measured
-# locally on four CPUs (process affinity) at the default two TLC slots, Java
-# 17; dotnet test wall-clock including its start. Estimates until measured on CI.
-lattice	formal-tlc-wal-append-epoch	deterministic	1.05
-# formal-tlc-wal-handoff-fence and -wal-live-advance-composite: measured on
-# #5862's receipt-free CI run 42092568172 (55 and 37 cases).
-lattice	formal-tlc-wal-handoff-fence	deterministic	4.62
-lattice	formal-tlc-wal-routing-floor	deterministic	0.59
-lattice	formal-tlc-wal-bulk-switch	deterministic	1.96
-# formal-tlc-wal-live-advance-core and its splits (#5837): the module's single
-# shard took 58.7 and 70.6 minutes in receipt-free ci.yml runs 42036414949 and
-# 42057765601 (43.2 in 42077562961), the cold run's critical path, so its
-# variants and claimless cases moved to shards of their own. Each row is that
-# group's finish time or its share of its former shard's item-minutes in
-# 42036414949 (core, eager, lazy) or 42077562961 (free, free-snapshot,
-# free-link, free-variants, free-split-variants), where the former -free shard
-# took 57.8 minutes; free-read-position is measured as is in 42077562961. The
-# test-shards.json notes give each derivation. Re-measured on #5860's CI run
-# 42188828140 (head 67b03e68a): core 45.54 (its 51 cases sum to about 31; the
-# rest is waiting for a TLC slot in a ten-item pooled leg), free-variants
-# 38.89, free-read-position 36.86, free-split-variants 35.57 and free 28.24.
-lattice	formal-tlc-wal-live-advance-core	deterministic	45.00
-lattice	formal-tlc-wal-live-advance-core-eager-variants	deterministic	15.00
-lattice	formal-tlc-wal-live-advance-core-lazy-variants	deterministic	16.00
-lattice	formal-tlc-wal-live-advance-core-free	deterministic	28.00
-lattice	formal-tlc-wal-live-advance-core-free-snapshot	deterministic	20.00
-lattice	formal-tlc-wal-live-advance-core-free-link	deterministic	17.00
-lattice	formal-tlc-wal-live-advance-core-free-read-position	deterministic	37.00
-lattice	formal-tlc-wal-live-advance-core-free-variants	deterministic	39.00
-lattice	formal-tlc-wal-live-advance-core-free-split-variants	deterministic	36.00
-lattice	formal-tlc-wal-live-advance-composite	deterministic	1.00
-lattice	formal-tlc-rebootstrap	deterministic	15.68
-lattice	formal-tlc-atomic	deterministic	14.93
-lattice	formal-tlc-atomic-variants-1	deterministic	9.45
-lattice	formal-tlc-atomic-variants-2	deterministic	8.65
-lattice	formal-tlc-atomic-variants-3	deterministic	8.39
-lattice	formal-tlc-atomic-variants-4	deterministic	8.88
-lattice	formal-tlc-atomic-variants-5	deterministic	9.43
-lattice	formal-tlc-atomic-variants-6	deterministic	8.97
-lattice	formal-tlc-backup	deterministic	3.94
-# formal-tlc-backup-retention (#5352): BackupRetention's base took 6 m 52 s
-# locally on four workers, its variant 75 s and its mutants under 5 minutes in
-# all; estimated until its first CI measurement.
-lattice	formal-tlc-backup-retention	deterministic	12.00
-# formal-tlc-schema is one measured item: every Schema* module's base,
-# variants and mutations. Earlier figures: 30 cases 2.34 min (ci.yml run
-# 41065598921, #5226); 48 cases 1 m 54 s of dotnet test (run 41087582284,
-# #5227); 68 cases 6.64 min (run 41088681728, #5229). With SchemaStrictIngest
-# (#5228) and SchemaRemediationCutover (#5230) all 133 cases ran (the shared
-# spec/schema fingerprint changed, so no receipt applied) in 9.76 minutes
-# (dotnet test 9 m 42 s) in the member pull request ci.yml run 41134925542
-# (head 7b8e1edf5, job 124337189421, leg 3); the row takes that figure. TRX
-# case-seconds per module in that run (upper bounds, slot waits included;
-# 2234 case-s in 582 s wall): SchemaDurableOperation 763,
-# SchemaRemediationCutover 630, SchemaStageOrdering 226, SchemaVersionFamily 212,
-# SchemaPolicyConfig 201, SchemaStrictIngest 118, SchemaComplianceScan 84.
-lattice	formal-tlc-schema	deterministic	9.76
-lattice	formal-tlc-smoke	deterministic	0.27
+lattice	formal-tlc-view-horizon	deterministic	0.59
+lattice	formal-tlc-view-aggregation	deterministic	0.49
+lattice	formal-tlc-view-rebind	deterministic	0.41
+lattice	formal-tlc-view-ready-closure	deterministic	0.62
+lattice	formal-tlc-view-source-admission	deterministic	0.76
+lattice	formal-tlc-view-resolved-identity	deterministic	0.27
+lattice	formal-tlc-view-joint-repair	deterministic	0.48
+lattice	formal-tlc-view-numeric	deterministic	1.15
+lattice	formal-tlc-schema-view	deterministic	1.77
+lattice	formal-tlc-tree-lifecycle	deterministic	0.55
+lattice	formal-tlc-anti-entropy	deterministic	2.48
+lattice	formal-tlc-anti-entropy-2	deterministic	4.61
+lattice	formal-tlc-anti-entropy-3	deterministic	2.62
+lattice	formal-tlc-aliasing	deterministic	0.48
+lattice	formal-tlc-split-gate	deterministic	1.34
+lattice	formal-tlc-bplus-cascade	deterministic	0.58
+lattice	formal-tlc-scheduling-replay-two-partitions	deterministic	105.14
+lattice	formal-tlc-scheduling	deterministic	48.03
+lattice	formal-tlc-scheduling-workload-b	deterministic	33.07
+lattice	formal-tlc-scheduling-shipping	deterministic	3.99
+lattice	formal-tlc-scheduling-shipping-variants	deterministic	14.47
+lattice	formal-tlc-shard-ownership	deterministic	4.53
+lattice	formal-tlc-convergence	deterministic	5.24
+lattice	formal-tlc-replication-wal	deterministic	5.91
+lattice	formal-tlc-wal-durability	deterministic	16.27
+lattice	formal-tlc-wal-durability-cross-silo	deterministic	2.51
+lattice	formal-tlc-wal-append-epoch	deterministic	0.52
+lattice	formal-tlc-wal-handoff-fence	deterministic	3.21
+lattice	formal-tlc-wal-routing-floor	deterministic	0.31
+lattice	formal-tlc-wal-bulk-switch	deterministic	1.00
+lattice	formal-tlc-wal-live-advance-core	deterministic	40.65
+lattice	formal-tlc-wal-live-advance-core-eager-variants	deterministic	17.30
+lattice	formal-tlc-wal-live-advance-core-lazy-variants	deterministic	17.18
+lattice	formal-tlc-wal-live-advance-core-free	deterministic	17.02
+lattice	formal-tlc-wal-live-advance-core-free-snapshot	deterministic	15.50
+lattice	formal-tlc-wal-live-advance-core-free-link	deterministic	15.81
+lattice	formal-tlc-wal-live-advance-core-free-read-position	deterministic	22.28
+lattice	formal-tlc-wal-live-advance-core-free-variants	deterministic	28.53
+lattice	formal-tlc-wal-live-advance-core-free-split-variants	deterministic	27.17
+lattice	formal-tlc-wal-live-advance-composite	deterministic	0.82
+lattice	formal-tlc-rebootstrap	deterministic	20.55
+lattice	formal-tlc-atomic	deterministic	12.60
+lattice	formal-tlc-atomic-variants-1	deterministic	7.29
+lattice	formal-tlc-atomic-variants-2	deterministic	7.97
+lattice	formal-tlc-atomic-variants-3	deterministic	7.55
+lattice	formal-tlc-atomic-variants-4	deterministic	7.21
+lattice	formal-tlc-atomic-variants-5	deterministic	7.66
+lattice	formal-tlc-atomic-variants-6	deterministic	7.64
+lattice	formal-tlc-backup	deterministic	3.14
+lattice	formal-tlc-backup-retention	deterministic	13.02
+lattice	formal-tlc-schema	deterministic	10.05
+lattice	formal-tlc-smoke	deterministic	0.25
 # lattice/rest (deterministic) uses complete passing item TRX from green run
 # 40648174016 (head c04710f914ed1628af05916aaf5f5272caa6d102); elapsed TRX
 # time excludes some process overhead, and the price rounds up once to
@@ -198,32 +159,35 @@ lattice	formal-tlc-smoke	deterministic	0.27
 # orphan-slot flake (#5112); its lattice/rest item from that failed leg is
 # excluded. The earlier replacement came from green run 40588531777 (head
 # aa3fe4b6f24cf340c2a5cc5b6416e0c145c8b570), now superseded.
-lattice	bplustree	deterministic	7.9
-lattice	rest	deterministic	5.41
-lattice	bplustree	chaos	5.5
-lattice	bplustree-grains	deterministic	5.0
-lattice	bplustree-chaos	chaos	3.0
-lattice	bplustree-chaos-predicate	chaos	5.5
-lattice	bplustree-publicapi	deterministic	1.5
-lattice	crdt-views-wal	deterministic	1.1
-lattice	bplustree	coyote	0.7
-lattice	crdt-views-wal	chaos	0.2
-lattice	bplustree-state	deterministic	0.1
+lattice	bplustree	deterministic	17.72
+# The lattice/rest (deterministic) row below is now the 10.4.0 refresh's
+# median (21 passing items, see the file header); the TRX history above
+# records the figures it replaces.
+lattice	rest	deterministic	6.94
+lattice	bplustree	chaos	5.07
+lattice	bplustree-grains	deterministic	6.04
+lattice	bplustree-chaos	chaos	3.5
+lattice	bplustree-chaos-predicate	chaos	2.63
+lattice	bplustree-publicapi	deterministic	1.66
+lattice	crdt-views-wal	deterministic	3.17
+lattice	bplustree	coyote	0.84
+lattice	crdt-views-wal	chaos	0.37
+lattice	bplustree-state	deterministic	0.15
 lattice	primitives	deterministic	0.1
 lattice	bplustree-chaos	coyote	0.0
 lattice	bplustree-chaos	deterministic	0.0
 lattice	bplustree-chaos-predicate	coyote	0.0
 lattice	bplustree-chaos-predicate	deterministic	0.0
 lattice	bplustree-grains	chaos	0.0
-lattice	bplustree-grains	coyote	0.0
+lattice	bplustree-grains	coyote	0.2
 lattice	bplustree-publicapi	chaos	0.0
 lattice	bplustree-publicapi	coyote	0.0
 lattice	bplustree-state	chaos	0.0
 lattice	bplustree-state	coyote	0.0
-lattice	crdt-views-wal	coyote	0.0
+lattice	crdt-views-wal	coyote	0.07
 lattice	primitives	chaos	0.0
 lattice	primitives	coyote	0.0
-lattice	rest	chaos	0.1
+lattice	rest	chaos	0.16
 lattice	rest	coyote	0.0
 # Every category-routed formal-tlc-* shard runs only the deterministic tier
 # (TlcCiShardTests), so it has no chaos or coyote row. The formal-tlc
@@ -232,56 +196,68 @@ lattice	formal-tlc	chaos	0.0
 lattice	formal-tlc	coyote	0.0
 
 # -- lattice.api.mcp.repocontext, sharded (untiered: see crossTiers) ----------
-lattice.api.mcp.repocontext	capture	all	3.3
-lattice.api.mcp.repocontext	retrieval	all	2.1
-lattice.api.mcp.repocontext	rest	all	2.1
-lattice.api.mcp.repocontext	host	all	1.9
+lattice.api.mcp.repocontext	capture	all	3.94
+lattice.api.mcp.repocontext	retrieval	all	4.32
+lattice.api.mcp.repocontext	rest	all	3.25
+lattice.api.mcp.repocontext	host	all	3.24
 
 # -- other packages, unsharded -----------------------------------------------
-lattice.dashboards	-	all	3.3
-lattice.replication	-	all	14.5
-lattice.backup	-	all	4.0
-lattice.storage.azuretable	-	all	0.7
-lattice.api.state	-	all	1.2
-lattice.api.backup	-	all	1.0
-lattice.api.state.grpc	-	all	1.1
-lattice.auth	-	all	0.7
-lattice.vector	-	all	0.6
-lattice.integration	-	all	0.4
-lattice.tenancy	-	all	1.0
-lattice.api.backup.grpc	-	all	0.5
-lattice.explorer	-	all	2.1
-lattice.grainindex	-	all	0.5
-lattice.replication.grpc	-	all	0.3
-lattice.api.auth	-	all	0.1
-lattice.api.data	-	all	0.2
-lattice.api.data.grpc	-	all	0.2
-lattice.api.mcp	-	all	0.3
-lattice.api.tenantadmin.grpc	-	all	0.6
-lattice.membership	-	all	0.2
-lattice.membership.oidc	-	all	0.2
-lattice.schema	-	all	0.4
-lattice.api.abstractions	-	all	0.1
-lattice.api.auth.grpc	-	all	0.1
-lattice.api.mcp.repocontext.replication	-	all	0.1
-lattice.api.mcp.telemetry	-	all	0.1
-lattice.api.mcp.telemetry.azure	-	all	0.1
+lattice.dashboards	-	all	6.29
+# lattice.replication and lattice.backup are sharded (crossTiers: false);
+# their measured package medians (41.25 and 16.14 in the window above,
+# 41.43 and 26.59 in the release run) are split by each shard's share of
+# the release run's TRX test time.
+lattice.replication	chaos	all	6.5
+lattice.replication	cross	all	6.3
+lattice.replication	reaped-bootstrap	all	9.6
+lattice.replication	materialised	all	5.7
+lattice.replication	rest	all	13.3
+lattice.backup	chaos	all	2.4
+lattice.backup	lattice	all	7.2
+lattice.backup	rest	all	6.5
+lattice.storage.azuretable	-	all	1.92
+lattice.api.state	-	all	2.05
+lattice.api.backup	-	all	1.61
+lattice.api.state.grpc	-	all	1.12
+lattice.auth	-	all	1.78
+lattice.vector	-	all	0.62
+lattice.integration	-	all	0.61
+lattice.tenancy	-	all	1.75
+lattice.api.backup.grpc	-	all	0.25
+lattice.explorer	-	all	5.41
+lattice.grainindex	-	all	0.52
+lattice.replication.grpc	-	all	0.64
+lattice.api.auth	-	all	0.28
+lattice.api.data	-	all	0.34
+lattice.api.data.grpc	-	all	0.56
+lattice.api.mcp	-	all	0.27
+lattice.api.tenantadmin.grpc	-	all	0.58
+lattice.membership	-	all	0.83
+lattice.membership.oidc	-	all	0.1
+lattice.schema	-	all	1.98
+lattice.api.abstractions	-	all	0.15
+lattice.api.auth.grpc	-	all	0.2
+lattice.api.mcp.repocontext.replication	-	all	0.05
+lattice.api.mcp.telemetry	-	all	0.08
+lattice.api.mcp.telemetry.azure	-	all	0.06
 lattice.api.replication.grpc	-	all	0.1
-lattice.api.schema.grpc	-	all	0.1
-lattice.api.telemetry	-	all	0.1
-lattice.api.telemetry.grpc	-	all	0.1
-lattice.api.tenantadmin	-	all	0.5
-lattice.api.treeadmin.grpc	-	all	0.1
-lattice.backup.azureblob	-	all	0.1
-lattice.caching.azureblob	-	all	0.1
-lattice.explorer.entra.web	-	all	0.1
-lattice.membership.entra	-	all	0.1
-lattice.scaling	-	all	0.1
-lattice.storage.file	-	all	0.1
-lattice.api.replication	-	all	0.1
-lattice.api.schema	-	all	0.0
+lattice.api.schema.grpc	-	all	0.17
+lattice.api.telemetry	-	all	0.09
+lattice.api.telemetry.grpc	-	all	0.12
+lattice.api.tenantadmin	-	all	1.36
+lattice.api.treeadmin.grpc	-	all	0.27
+lattice.backup.azureblob	-	all	0.12
+lattice.caching.azureblob	-	all	0.07
+lattice.explorer.entra.web	-	all	0.07
+lattice.membership.entra	-	all	0.05
+lattice.scaling	-	all	0.09
+lattice.storage.file	-	all	0.11
+lattice.api.replication	-	all	0.16
+lattice.api.schema	-	all	0.2
 lattice.api.treeadmin	-	all	0.3
-lattice.explorer.entra	-	all	0.0
-lattice.membership.entra.graph	-	all	0.0
-lattice.api.apps	-	all	0.1
-lattice.apps	-	all	0.2
+lattice.explorer.entra	-	all	0.06
+lattice.membership.entra.graph	-	all	0.04
+lattice.api.apps	-	all	0.36
+lattice.apps	-	all	0.71
+lattice.api.apps.grpc	-	all	0.09
+lattice.api.mcp.apps	-	all	0.07

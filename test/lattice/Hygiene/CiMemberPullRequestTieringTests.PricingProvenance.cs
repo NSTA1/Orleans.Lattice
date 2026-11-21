@@ -5,11 +5,19 @@ namespace Orleans.Lattice.Tests.Hygiene;
 
 public sealed partial class CiMemberPullRequestTieringTests
 {
-    /// <summary>The receipt-free bucket push run the TLC prices were re-measured from (#5166).</summary>
-    private const string PushPricingRun = "40909619830";
+    /// <summary>The receipt-free 10.4.0 release-line push run that supplies one TLC price sample.</summary>
+    private const string ReleasePricingRun = "44825250867";
 
-    /// <summary>The nightly-equivalent Coverage run that supplies the second TLC price sample (#5166).</summary>
-    private const string CoveragePricingRun = "40923724192";
+    /// <summary>The head of <see cref="ReleasePricingRun"/>.</summary>
+    private const string ReleasePricingHead = "94d9a3f94";
+
+    /// <summary>The nightly Coverage runs, with their heads, that supply the other three TLC price samples.</summary>
+    private static readonly (string Run, string Head)[] CoveragePricingRuns =
+    [
+        ("44271784821", "057b0d2c4"),
+        ("44470524198", "2906eb64e"),
+        ("44737600776", "2506cbd44"),
+    ];
 
     [TestCase("docs/lattice/verified-scheduling.md", "CI routing does not compose those certificates.")]
     [TestCase("spec/scheduling/README.md", "CI does not compose these certificates.")]
@@ -24,10 +32,14 @@ public sealed partial class CiMemberPullRequestTieringTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(pricing, Does.Contain(PushPricingRun).And.Contain("9418a498d"), path);
-            Assert.That(pricing, Does.Contain(CoveragePricingRun).And.Contain("0e4aa6b2a"), path);
-            Assert.That(pricing, Does.Contain("44.00").And.Contain("31.05").And.Contain("16.38")
-                .And.Contain("4.29").And.Contain("19.76"), path);
+            Assert.That(pricing, Does.Contain(ReleasePricingRun).And.Contain(ReleasePricingHead), path);
+            foreach (var (run, head) in CoveragePricingRuns)
+            {
+                Assert.That(pricing, Does.Contain(run).And.Contain(head), path);
+            }
+
+            Assert.That(pricing, Does.Contain("105.14").And.Contain("48.03").And.Contain("33.07")
+                .And.Contain("3.99").And.Contain("14.47"), path);
             Assert.That(pricing, Does.Contain("planning inputs").And.Contain("runtime guarantees"), path);
             Assert.That(pricing, Does.Not.Contain("LPT reconstruction"),
                 path + " must not describe the retired reconstructed scheduling prices");
@@ -46,18 +58,23 @@ public sealed partial class CiMemberPullRequestTieringTests
         Assert.Multiple(() =>
         {
             Assert.That(shards["formal-tlc-scheduling"], Does.Contain("106-case group")
-                .And.Contain("123577568364").And.Contain("123623834850").And.Contain("31.05"));
+                .And.Contain("136598167648").And.Contain("48.03"));
             Assert.That(shards["formal-tlc-scheduling-workload-b"], Does.Contain("93-case group")
-                .And.Contain("123577568215").And.Contain("123623834772").And.Contain("16.38"));
+                .And.Contain("136598167781").And.Contain("33.07"));
             Assert.That(shards["formal-tlc-scheduling-replay-two-partitions"], Does.Contain("dedicated")
-                .And.Contain("123577568395").And.Contain("123623834893").And.Contain("44.00"));
-            Assert.That(shards["formal-tlc-scheduling-shipping"], Does.Contain("123577568186")
-                .And.Contain("4.29"));
-            Assert.That(shards["formal-tlc-scheduling-shipping-variants"], Does.Contain("123623834836")
-                .And.Contain("19.76"));
+                .And.Contain("136598167701").And.Contain("105.14"));
+            Assert.That(shards["formal-tlc-scheduling-shipping"], Does.Contain("136598167648")
+                .And.Contain("3.99"));
+            Assert.That(shards["formal-tlc-scheduling-shipping-variants"], Does.Contain("136598167725")
+                .And.Contain("14.47"));
             foreach (var (shard, note) in shards)
             {
-                Assert.That(note, Does.Contain(PushPricingRun).And.Contain(CoveragePricingRun), shard);
+                Assert.That(note, Does.Contain(ReleasePricingRun).And.Contain(ReleasePricingHead), shard);
+                foreach (var (run, head) in CoveragePricingRuns)
+                {
+                    Assert.That(note, Does.Contain(run).And.Contain(head), shard);
+                }
+
                 Assert.That(note, Does.Not.Contain("LPT"), shard + " must not cite the retired reconstruction");
             }
         });
@@ -73,9 +90,13 @@ public sealed partial class CiMemberPullRequestTieringTests
         {
             Assert.That(text, Does.Contain("original median refresh").And.Contain("later refreshes below have their own provenance"));
             Assert.That(text, Does.Not.Contain("Every row is MEASURED, with no estimated or apportioned figure anywhere"));
-            Assert.That(text, Does.Contain("mean of two measured item durations"));
-            Assert.That(text, Does.Contain(PushPricingRun).And.Contain("9418a498d"));
-            Assert.That(text, Does.Contain(CoveragePricingRun).And.Contain("0e4aa6b2a"));
+            Assert.That(text, Does.Contain("mean of four measured item durations"));
+            Assert.That(text, Does.Contain(ReleasePricingRun).And.Contain(ReleasePricingHead));
+            foreach (var (run, head) in CoveragePricingRuns)
+            {
+                Assert.That(text, Does.Contain(run).And.Contain(head));
+            }
+
             Assert.That(text, Does.Contain("planning inputs, not runtime guarantees"));
             Assert.That(text, Does.Not.Contain("LPT reconstruction"));
             Assert.That(text, Does.Contain("40576287689").And.Contain("6a008512"));

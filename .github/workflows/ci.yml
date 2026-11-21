@@ -1555,12 +1555,14 @@ jobs:
             echo "not that any package's tests were executed."
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # Turn the selected packages into parallel legs. Two packages are big
+      # Turn the selected packages into parallel legs. Four packages are big
       # enough that a package-level fan-out alone would leave them as single
-      # long poles, so both are sharded by namespace via test-shards.json:
-      # `test/lattice` (about half of all test time) and
+      # long poles, so they are sharded by namespace via test-shards.json:
+      # `test/lattice` (about half of all test time),
       # `test/lattice.api.mcp.repocontext` (a 10.7-minute suite that was the
-      # makespan floor of the whole matrix until it was split).
+      # makespan floor of the whole matrix until it was split), and
+      # `test/lattice.replication` and `test/lattice.backup` (about 41 and
+      # 16-27 minutes as single items at 10.4.0, the matrix's longest poles).
       # The shard set is an ordered first-match-wins partition with a trailing
       # complement, so every test is claimed exactly once and none is dropped.
       # TIERED GATING FOR MEMBER PULL REQUESTS. A pull request whose base is an

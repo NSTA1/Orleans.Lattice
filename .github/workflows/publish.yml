@@ -340,8 +340,9 @@ jobs:
       # `Plan the test matrix` step, given a selection of exactly one package.
       # `test/lattice` therefore fans out across the shards in test-shards.json,
       # each crossed with the deterministic / coyote / chaos tiers, and is
-      # bin-packed onto up to ten legs, and `test/lattice.api.mcp.repocontext`
-      # across its untiered shards; every unsharded package plans a single leg
+      # bin-packed onto up to ten legs, and `test/lattice.api.mcp.repocontext`,
+      # `test/lattice.replication` and `test/lattice.backup` across their
+      # untiered shards; every unsharded package plans a single leg
       # that runs its test project whole. A package with no test project (the
       # explorer's hosting libraries, which share one test project) plans no
       # legs at all, and the `test` job is skipped.
