@@ -50,7 +50,7 @@ public sealed class RepoContextTtlIntegrationTests
         var afterGet = await tree.GetAsync(key);
         var afterExists = await tree.ExistsAsync(key);
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync().WithCancellation(TestContext.CurrentContext.CancellationToken))
+        await foreach (var k in tree.ScanKeysAsync(cancellationToken: TestContext.CurrentContext.CancellationToken))
         {
             keys.Add(k);
         }

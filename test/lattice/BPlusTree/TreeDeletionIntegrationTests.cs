@@ -87,6 +87,7 @@ public partial class TreeDeletionIntegrationTests
 
         Assert.ThrowsAsync<InvalidOperationException>(async () =>
         {
+            // raw-enumeration-ok: the deleted-tree rejection of the raw stream is the subject
             await foreach (var _ in router.KeysAsync()) { }
         });
     }

@@ -204,6 +204,7 @@ public sealed class CoordinatedRestoreNoTornReadChaosTests
             try
             {
                 buffer.Clear();
+                // raw-enumeration-ok: chaos fixture; the torn-read probe needs the single raw stream
                 await foreach (var entry in source.EntriesAsync())
                 {
                     buffer.Add(entry);

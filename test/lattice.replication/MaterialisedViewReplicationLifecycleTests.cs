@@ -45,7 +45,7 @@ public class MaterialisedViewReplicationLifecycleTests
     {
         var tree = await _fixture.ActiveViewTreeAsync(viewName);
         var count = 0;
-        await foreach (var _ in tree.KeysAsync())
+        await foreach (var _ in tree.ScanKeysAsync())
         {
             count++;
         }

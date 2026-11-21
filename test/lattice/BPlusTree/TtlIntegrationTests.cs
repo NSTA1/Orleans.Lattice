@@ -45,7 +45,7 @@ public class TtlIntegrationTests
         await Task.Delay(TimeSpan.FromMilliseconds(500));
 
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync()) keys.Add(k);
+        await foreach (var k in tree.ScanKeysAsync()) keys.Add(k);
 
         Assert.That(keys, Is.EqualTo(new[] { "a", "c", "e" }),
             "KeysAsync must skip entries whose TTL has elapsed.");

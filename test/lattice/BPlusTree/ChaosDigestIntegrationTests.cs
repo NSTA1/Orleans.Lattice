@@ -94,6 +94,7 @@ public class ChaosDigestIntegrationTests
                 {
                     try
                     {
+                        // raw-enumeration-ok: chaos fixture; raw-stream aborts are counted by the test
                         await foreach (var _ in tree.KeysAsync(cancellationToken: cts.Token))
                         {
                         }
