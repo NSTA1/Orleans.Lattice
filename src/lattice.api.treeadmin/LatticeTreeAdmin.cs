@@ -2222,6 +2222,7 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
             Phase = running ? ToSnapshotPhase(progress.Phase) : null,
             CopiedShardCount = running ? progress.CopiedShardCount : 0,
             ShardCount = running && progress.ShardCount > 0 ? progress.ShardCount : null,
+            FailureReason = running ? null : progress.FailureReason,
         };
     }
 

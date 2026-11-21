@@ -64,4 +64,13 @@ public sealed record TreeSnapshotStatus
     /// <see cref="Phase"/> without a percentage.
     /// </summary>
     [Id(6)] public int? ShardCount { get; init; }
+
+    /// <summary>
+    /// Why the last snapshot of the source tree ended without completing, or
+    /// <see langword="null"/> when it completed, is still running, or the status
+    /// comes from a build that does not report it. A snapshot that kept failing is
+    /// stopped with its source unlocked and its destination left registered but
+    /// incomplete, for the operator to delete.
+    /// </summary>
+    [Id(7)] public string? FailureReason { get; init; }
 }
