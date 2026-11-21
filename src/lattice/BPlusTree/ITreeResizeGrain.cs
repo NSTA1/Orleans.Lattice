@@ -22,6 +22,9 @@ internal interface ITreeResizeGrain : IGrainWithStringKey
     /// <summary>
     /// Starts an online copy for a receiver bootstrap and holds it before the
     /// alias swap. Repeating the same operation id returns the same destination.
+    /// The copy holds no alias reservation while it is filled and held, so a
+    /// schema remediation or other alias operation is not blocked by it; the
+    /// reservation is taken at cutover by <see cref="CompleteBootstrapCopyAsync"/>.
     /// </summary>
     Task<string> BeginBootstrapCopyAsync(string operationId);
 
@@ -41,7 +44,11 @@ internal interface ITreeResizeGrain : IGrainWithStringKey
 
     /// <summary>
     /// Releases the bootstrap hold and performs the alias cutover. Idempotent
-    /// for the same operation id.
+    /// for the same operation id. Takes the tree's alias reservation first and
+    /// throws <see cref="LatticeAliasOperationInProgressException"/>, leaving the
+    /// copy held so the call can be retried, while another alias operation holds
+    /// it. Throws <see cref="InvalidOperationException"/> when the alias was
+    /// moved during the copy, because the copy no longer reflects the live tree.
     /// </summary>
     Task CompleteBootstrapCopyAsync(string operationId);
 

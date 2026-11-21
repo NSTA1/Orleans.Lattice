@@ -235,7 +235,8 @@ internal sealed class TreeResizeGrain(
             throw new InvalidOperationException(
                 $"An undo of the resize of tree '{TreeId}' (operation '{state.State.OperationId}') is still unwinding.");
 
-        await ReserveAliasAsync();
+        // No alias reservation is taken here (#5832): the copy reserves the alias
+        // only at cutover, in CompleteBootstrapCopyAsync.
         try
         {
             var resolved = await optionsResolver.ResolveAsync(TreeId);
@@ -328,6 +329,12 @@ internal sealed class TreeResizeGrain(
 
         if (state.State.HoldForBootstrap)
         {
+            // The copy held no alias reservation while it was filled and held
+            // (#5832), so it takes it now, before the cutover is persisted. A
+            // refusal (LatticeAliasOperationInProgressException) leaves the copy
+            // in BootstrapHold for the caller to retry once the holder finishes.
+            await ReserveBootstrapCutoverAliasAsync(operationId);
+
             var prevHold = state.State.HoldForBootstrap;
             var prevPhase = state.State.Phase;
             var prevBootstrapCopyCutover = state.State.BootstrapCopyCutover;
@@ -675,7 +682,7 @@ internal sealed class TreeResizeGrain(
             await ReleaseAliasAsync();
             return;
         }
-        await ReserveAliasAsync();
+        if (!AwaitingBootstrapCutover) await ReserveAliasAsync();
 
         if (UndoPending)
         {
@@ -1364,7 +1371,7 @@ internal sealed class TreeResizeGrain(
                 return;
             }
 
-            await ReserveAliasAsync();
+            if (!AwaitingBootstrapCutover) await ReserveAliasAsync();
             switch (state.State.Phase)
             {
                 case ResizePhase.Snapshot:
@@ -1789,6 +1796,56 @@ internal sealed class TreeResizeGrain(
         // releases it (issue #4527).
         await ReleaseAliasAsync();
         await CompleteCoordinatorAsync();
+    }
+
+    /// <summary>
+    /// Whether this is a receiver bootstrap copy that has not yet been cut over:
+    /// it is being filled (<see cref="ResizePhase.Snapshot"/>) or held for the
+    /// bootstrap's drain (<see cref="ResizePhase.BootstrapHold"/>). Such a copy
+    /// does not hold the tree's alias reservation (#5832): the drain can take
+    /// minutes, and holding the reservation for all of it refused every schema
+    /// remediation, set-alias, and restore on the tree for that long. The
+    /// reservation is taken at cutover instead
+    /// (<see cref="ReserveBootstrapCutoverAliasAsync"/>).
+    /// </summary>
+    private bool AwaitingBootstrapCutover =>
+        state.State.InProgress
+        && state.State.HoldForBootstrap
+        && state.State.Phase is ResizePhase.Snapshot or ResizePhase.BootstrapHold;
+
+    /// <summary>
+    /// Takes the alias reservation for a bootstrap copy's cutover and confirms that
+    /// no alias change superseded the copy while it held no reservation: the logical
+    /// tree must still resolve to the physical tree the copy was taken from. A
+    /// refused reservation is released (a no-op on the deletion grain) and rethrown,
+    /// so the copy stays held and retryable. A superseded copy cannot be cut over,
+    /// because writes made through the newer alias never reached it, so that is
+    /// refused with <see cref="InvalidOperationException"/> and the caller discards
+    /// the copy.
+    /// </summary>
+    private async Task ReserveBootstrapCutoverAliasAsync(string operationId)
+    {
+        try
+        {
+            await ReserveAliasAsync();
+        }
+        catch
+        {
+            await ReleaseAliasAsync();
+            throw;
+        }
+
+        var source = state.State.OldPhysicalTreeId;
+        var current = await grainFactory.GetLatticeRegistry().ResolveAsync(TreeId);
+        if (source is not null
+            && !string.Equals(current, source, StringComparison.Ordinal)
+            && !string.Equals(current, state.State.SnapshotTreeId, StringComparison.Ordinal))
+        {
+            await ReleaseAliasAsync();
+            throw new InvalidOperationException(
+                $"Bootstrap copy operation '{operationId}' for tree '{TreeId}' was taken from physical tree "
+                + $"'{source}', but the tree now resolves to '{current}'; another alias change superseded the copy.");
+        }
     }
 
     private async Task ReserveAliasAsync()
