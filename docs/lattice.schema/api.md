@@ -194,6 +194,8 @@ The following inventory includes directly declared public members and overloads,
 - `public string Reason { get; }`
 - `public LatticeSchemaDeadLetterSource Source { get; }`
 - `public DateTimeOffset TimestampUtc { get; }`
+- `public string? OriginClusterId { get; init; }`
+- `public HybridLogicalClock? SourceHlc { get; init; }`
 
 ### `Orleans.Lattice.Schema.LatticeSchemaDeadLetterSource`
 

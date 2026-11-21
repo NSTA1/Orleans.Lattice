@@ -166,6 +166,17 @@ reached - `LockSource` (offline) or `BeginForwarding` (online) before the copy,
 then `Copy`, and `UnlockSource` while an offline copy returns a shard to
 service - and how many of the shards it covers have been copied.
 
+A snapshot does not retry forever. A standalone snapshot whose step keeps failing
+is failed after 10 consecutive failed attempts: it unlocks the source (an offline
+snapshot returns every source shard to service, an online one stops forwarding
+writes), best effort, and stops. A snapshot whose source tree is purged while it
+runs ends the same way, as there is nothing left to copy. The destination tree
+stays registered with whatever was copied so far; it is incomplete, and is yours
+to delete. The snapshot status then reports why in `FailureReason`, which is
+`null` when the last snapshot completed or is still running, and is cleared when
+the next snapshot starts. A snapshot driven by a resize is not failed this way:
+the resize owns it.
+
 ## Sizing Overrides
 
 Only the shard count - with the shard map and split allocation mark that

@@ -137,7 +137,7 @@ Each tree is measured with its cache bypassed, through the same per-tree aggrega
 
 ### Results
 
-The operation records no result reference. Its `Result` map holds the cluster totals only, under the `StorageUsageRefreshResults` keys `treeCount`, `walRetainedBytes`, `snapshotBytes`, `leafStateBytes`, `totalBytes`, `partial` and `sampledAt`, so it stays small however many trees the cluster holds. `StorageUsageRefreshResults.TryReadSummary` rebuilds them as a `ClusterStorageUsageSummary` with `Deep` set and no per-tree rows. The map records no stale flag, so the rebuilt summary always reports `Stale` as `false`; the cheap read reports it per tree and for the cluster. Read the refreshed per-tree figures afterwards with the cheap `GetStorageUsageAsync(deep: false)`, which serves what the refresh just measured.
+The operation records no result reference. Its `Result` map holds the cluster totals only, under the `StorageUsageRefreshResults` keys `treeCount`, `walRetainedBytes`, `snapshotBytes`, `leafStateBytes`, `totalBytes`, `partial`, `stale` and `sampledAt`, so it stays small however many trees the cluster holds. `StorageUsageRefreshResults.TryReadSummary` rebuilds them as a `ClusterStorageUsageSummary` with `Deep` set and no per-tree rows. `stale` is `true` when at least one tree carried its last-known figures for a surface the refresh could not re-measure, so the rebuilt summary's `Stale` matches the cluster-level flag the cheap read reports; a result recorded before the key existed reads as not stale, and the cheap read still reports `Stale` per tree. Read the refreshed per-tree figures afterwards with the cheap `GetStorageUsageAsync(deep: false)`, which serves what the refresh just measured.
 
 ### Example
 

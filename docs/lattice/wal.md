@@ -221,7 +221,7 @@ replication change feed. Its operations, described by behaviour:
 | Readable head | Returns the head a reader may resume from: one past the highest offset a read would expose. Lower than the next offset while a flush is in flight, while an abandoned flush may still land, or while a trailing hole sits above every stored entry (issue #4621). |
 | Trim watermark | Returns the partition's trim watermark when a reader may trust it, otherwise `null`. See [Abandoned flushes, holes and the trim watermark](#abandoned-flushes-holes-and-the-trim-watermark). |
 | Trim-watermark refresh | Returns the trim watermark under the same trust rule, re-derived from storage through `IWalStorageProvider.RefreshTrimWatermarkAsync`, so a value the provider cached above the stored trim point stops hiding entries from reads (issue #6036). |
-| Resume floor | Returns the next offset minus the number of live entries currently persisted, where the live count runs from the lowest still-stored offset to the highest assigned one, inclusive. Rises by the trimmed prefix length once `IWalStorageProvider.TrimAsync` runs (driven by `ILatticeWalGc`), so it reflects the persisted footprint rather than a monotonically-growing offset counter; the state API's change observation reads it to refuse a resume point the GC has already trimmed. |
+| Resume floor | Returns the lowest offset the storage provider still persists or, when it persists none, one past its highest persisted offset (zero for a partition that has never stored an entry). It is derived from persisted offsets only, never from the in-memory offset allocator, so an append whose offset is reserved but not yet stored cannot make a still-valid cursor look trimmed ([#5205](https://github.com/NSTA1/Orleans.Lattice/issues/5205)). Rises to the first still-stored offset once `IWalStorageProvider.TrimAsync` runs (driven by `ILatticeWalGc`), so it reflects the persisted footprint; the state API's change observation reads it to refuse a resume point the GC has already trimmed. |
 | Entry count | **Obsolete** trim-unaware diagnostic retained for one minor version. Returns the next offset to be assigned. Use the resume floor for the trim-aware footprint. |
 
 The grain also serves the replication shipper's bytes-shaped page read (the
@@ -1293,6 +1293,14 @@ floor, can advance. The sweep's drives share the per-silo WAL replay permits
 with leaf activations; see
 [Starvation-drive admission](projection-rebuild.md#starvation-drive-admission)
 for how a pass sizes its fan-out to that share and what a refused drive costs.
+The two cases log differently
+([#3613](https://github.com/NSTA1/Orleans.Lattice/issues/3613)). A blocked
+floor's warnings say the cursor floor is blocked and the WAL stays retained. A
+repair of a dormant pin holding a usable floor logs once per episode, naming the
+holding consumer, its partition and offset; its give-up warning states that the
+floor reports usable, so the tree is not retaining without bound, and its
+episode-end message counts the holders it drove instead of reporting a block
+that cleared.
 A deleted tree is the exception: before a pass touches leaves to heal its
 floor, the scheduler reads the tree's deletion state, and it never reactivates
 a deleted tree's leaves. It retires any pin still held against a discarded
