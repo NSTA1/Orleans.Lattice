@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Options;
 using NSubstitute;
+using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.Primitives;
 using Orleans.Lattice.Replication;
 using Orleans.Lattice.Replication.Grains;
@@ -30,6 +31,12 @@ public class LatticeSnapshotProviderUnitTests
 
         factory.GetGrain<ILattice>(Arg.Any<string>()).Returns(lattice);
         factory.GetGrain<IReplicationHighWaterMarkGrain>(Arg.Any<string>()).Returns(hwm);
+
+        // An unregistered tree resolves to its own name, as the real registry
+        // does; the export pins that id and re-checks it per pass (#5548).
+        var registry = Substitute.For<ILatticeRegistry>();
+        registry.ResolveAsync(Arg.Any<string>()).Returns(ci => Task.FromResult(ci.ArgAt<string>(0)));
+        factory.GetGrain<ILatticeRegistry>(Arg.Any<string>()).Returns(registry);
 
         // Default: empty entry stream so frontier-only tests don't need
         // to wire EntriesAsync each time.
