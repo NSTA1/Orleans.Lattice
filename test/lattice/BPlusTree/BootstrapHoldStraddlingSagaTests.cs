@@ -138,7 +138,7 @@ public sealed class BootstrapHoldStraddlingSagaTests
         }
 
         var scanned = new List<string>();
-        await foreach (var key in tree.KeysAsync())
+        await foreach (var key in tree.ScanKeysAsync())
         {
             scanned.Add(key);
         }

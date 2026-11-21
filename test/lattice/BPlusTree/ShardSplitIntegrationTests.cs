@@ -135,6 +135,7 @@ public class ShardSplitIntegrationTests
                 {
                     try
                     {
+                        // raw-enumeration-ok: raw-stream consistency during a split is the subject; aborts are counted
                         await foreach (var key in tree.KeysAsync())
                         {
                             if (cts.IsCancellationRequested) break;
@@ -161,6 +162,7 @@ public class ShardSplitIntegrationTests
                 {
                     try
                     {
+                        // raw-enumeration-ok: raw-stream consistency during a split is the subject; aborts are counted
                         await foreach (var kv in tree.EntriesAsync())
                         {
                             if (cts.IsCancellationRequested) break;
@@ -232,7 +234,7 @@ public class ShardSplitIntegrationTests
         }
 
         var postSplitKeys = new HashSet<string>();
-        await foreach (var key in tree.KeysAsync())
+        await foreach (var key in tree.ScanKeysAsync())
         {
             postSplitKeys.Add(key);
         }

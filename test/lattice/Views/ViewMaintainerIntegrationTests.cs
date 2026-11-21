@@ -162,13 +162,13 @@ public partial class ViewMaintainerIntegrationTests
         await view.WaitForSourceHeadAsync(Barrier);
 
         var keys = new List<string>();
-        await foreach (var k in view.KeysAsync("ce-", "ce-\uffff"))
+        await foreach (var k in view.ScanKeysAsync("ce-", "ce-\uffff"))
         {
             keys.Add(k);
         }
 
         var entries = new List<KeyValuePair<string, byte[]>>();
-        await foreach (var e in view.EntriesAsync("ce-", "ce-\uffff"))
+        await foreach (var e in view.ScanEntriesAsync("ce-", "ce-\uffff"))
         {
             entries.Add(e);
         }

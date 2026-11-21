@@ -54,7 +54,7 @@ public class MaterialisedViewPublicApiContractTests
         });
 
         var keys = new List<string>();
-        await foreach (var key in view.KeysAsync())
+        await foreach (var key in view.ScanKeysAsync())
         {
             keys.Add(key);
         }
@@ -354,10 +354,12 @@ public class MaterialisedViewPublicApiContractTests
             Assert.ThrowsAsync<InvalidOperationException>(() => viewTree.CountPerShardAsync(), "CountPerShardAsync against a view tree must be rejected");
             Assert.ThrowsAsync<InvalidOperationException>(async () =>
             {
+                // raw-enumeration-ok: the raw view-tree stream contract is the subject
                 await foreach (var _ in viewTree.KeysAsync()) { }
             }, "KeysAsync against a view tree must be rejected");
             Assert.ThrowsAsync<InvalidOperationException>(async () =>
             {
+                // raw-enumeration-ok: the raw view-tree stream contract is the subject
                 await foreach (var _ in viewTree.EntriesAsync()) { }
             }, "EntriesAsync against a view tree must be rejected");
             await Task.CompletedTask;

@@ -33,7 +33,7 @@ public class EntriesDefaultClusterTests
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("entries-empty");
         var entries = new List<KeyValuePair<string, byte[]>>();
-        await foreach (var e in tree.EntriesAsync())
+        await foreach (var e in tree.ScanEntriesAsync())
             entries.Add(e);
 
         Assert.That(entries, Is.Empty);
@@ -48,7 +48,7 @@ public class EntriesDefaultClusterTests
             await tree.SetAsync(k, Encoding.UTF8.GetBytes(k));
 
         var entries = new List<KeyValuePair<string, byte[]>>();
-        await foreach (var e in tree.EntriesAsync())
+        await foreach (var e in tree.ScanEntriesAsync())
             entries.Add(e);
 
         var keys = entries.Select(e => e.Key).ToList();
@@ -68,7 +68,7 @@ public class EntriesDefaultClusterTests
             await tree.SetAsync(k, Encoding.UTF8.GetBytes(k));
 
         var entries = new List<KeyValuePair<string, byte[]>>();
-        await foreach (var e in tree.EntriesAsync(reverse: true))
+        await foreach (var e in tree.ScanEntriesAsync(reverse: true))
             entries.Add(e);
 
         Assert.That(entries.Select(e => e.Key).ToList(), Is.EqualTo(
@@ -84,7 +84,7 @@ public class EntriesDefaultClusterTests
             await tree.SetAsync(k, Encoding.UTF8.GetBytes(k));
 
         var entries = new List<KeyValuePair<string, byte[]>>();
-        await foreach (var e in tree.EntriesAsync(startInclusive: "b", endExclusive: "e"))
+        await foreach (var e in tree.ScanEntriesAsync(startInclusive: "b", endExclusive: "e"))
             entries.Add(e);
 
         Assert.That(entries.Select(e => e.Key).ToList(), Is.EqualTo(new[] { "b", "c", "d" }));
@@ -100,7 +100,7 @@ public class EntriesDefaultClusterTests
         await tree.DeleteAsync("b");
 
         var entries = new List<KeyValuePair<string, byte[]>>();
-        await foreach (var e in tree.EntriesAsync())
+        await foreach (var e in tree.ScanEntriesAsync())
             entries.Add(e);
 
         Assert.That(entries.Select(e => e.Key).ToList(), Is.EqualTo(new[] { "a", "c" }));
@@ -142,7 +142,7 @@ public class EntriesSmallLeafClusterTests
             await tree.SetAsync(k, Encoding.UTF8.GetBytes(k));
 
         var entries = new List<KeyValuePair<string, byte[]>>();
-        await foreach (var e in tree.EntriesAsync())
+        await foreach (var e in tree.ScanEntriesAsync())
             entries.Add(e);
 
         expected.Sort(StringComparer.Ordinal);
@@ -162,7 +162,7 @@ public class EntriesSmallLeafClusterTests
             await tree.SetAsync(k, Encoding.UTF8.GetBytes(k));
 
         var entries = new List<KeyValuePair<string, byte[]>>();
-        await foreach (var e in tree.EntriesAsync(reverse: true))
+        await foreach (var e in tree.ScanEntriesAsync(reverse: true))
             entries.Add(e);
 
         items.Sort(StringComparer.Ordinal);
@@ -179,7 +179,7 @@ public class EntriesSmallLeafClusterTests
             await tree.SetAsync(k, Encoding.UTF8.GetBytes(k));
 
         var entries = new List<KeyValuePair<string, byte[]>>();
-        await foreach (var e in tree.EntriesAsync(startInclusive: "e-005", endExclusive: "e-015"))
+        await foreach (var e in tree.ScanEntriesAsync(startInclusive: "e-005", endExclusive: "e-015"))
             entries.Add(e);
 
         var expected = items.Where(k =>
@@ -228,7 +228,7 @@ public class EntriesPrefetchTests
             await tree.SetAsync(k, Encoding.UTF8.GetBytes(k));
 
         var entries = new List<KeyValuePair<string, byte[]>>();
-        await foreach (var e in tree.EntriesAsync(prefetch: true))
+        await foreach (var e in tree.ScanEntriesAsync(prefetch: true))
             entries.Add(e);
 
         keys.Sort(StringComparer.Ordinal);
@@ -250,7 +250,7 @@ public class EntriesPrefetchTests
             await tree.SetAsync(k, Encoding.UTF8.GetBytes(k));
 
         var entries = new List<KeyValuePair<string, byte[]>>();
-        await foreach (var e in tree.EntriesAsync(reverse: true, prefetch: true))
+        await foreach (var e in tree.ScanEntriesAsync(reverse: true, prefetch: true))
             entries.Add(e);
 
         keys.Sort(StringComparer.Ordinal);
@@ -267,7 +267,7 @@ public class EntriesPrefetchTests
             await tree.SetAsync($"epfg-{i:D4}", Encoding.UTF8.GetBytes($"v-{i}"));
 
         var entries = new List<KeyValuePair<string, byte[]>>();
-        await foreach (var e in tree.EntriesAsync(startInclusive: "epfg-0010", endExclusive: "epfg-0030", prefetch: true))
+        await foreach (var e in tree.ScanEntriesAsync(startInclusive: "epfg-0010", endExclusive: "epfg-0030", prefetch: true))
             entries.Add(e);
 
         var expected = Enumerable.Range(10, 20)
@@ -291,7 +291,7 @@ public class EntriesPrefetchTests
             await tree.SetAsync(k, Encoding.UTF8.GetBytes(k));
 
         var entries = new List<KeyValuePair<string, byte[]>>();
-        await foreach (var e in tree.EntriesAsync(prefetch: true))
+        await foreach (var e in tree.ScanEntriesAsync(prefetch: true))
             entries.Add(e);
 
         keys.Sort(StringComparer.Ordinal);
@@ -313,7 +313,7 @@ public class EntriesPrefetchTests
             await tree.SetAsync(k, Encoding.UTF8.GetBytes(k));
 
         var entries = new List<KeyValuePair<string, byte[]>>();
-        await foreach (var e in tree.EntriesAsync(prefetch: false))
+        await foreach (var e in tree.ScanEntriesAsync(prefetch: false))
             entries.Add(e);
 
         keys.Sort(StringComparer.Ordinal);
@@ -325,7 +325,7 @@ public class EntriesPrefetchTests
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("epf-empty");
         var entries = new List<KeyValuePair<string, byte[]>>();
-        await foreach (var e in tree.EntriesAsync(prefetch: true))
+        await foreach (var e in tree.ScanEntriesAsync(prefetch: true))
             entries.Add(e);
 
         Assert.That(entries, Is.Empty);
@@ -340,7 +340,7 @@ public class EntriesPrefetchTests
             await tree.SetAsync($"eprr-{i:D4}", Encoding.UTF8.GetBytes($"v-{i}"));
 
         var entries = new List<KeyValuePair<string, byte[]>>();
-        await foreach (var e in tree.EntriesAsync(
+        await foreach (var e in tree.ScanEntriesAsync(
             startInclusive: "eprr-0010", endExclusive: "eprr-0030",
             reverse: true, prefetch: true))
             entries.Add(e);
@@ -366,11 +366,11 @@ public class EntriesPrefetchTests
             await tree.SetAsync(k, Encoding.UTF8.GetBytes(k));
 
         var withoutPrefetch = new List<KeyValuePair<string, byte[]>>();
-        await foreach (var e in tree.EntriesAsync(prefetch: false))
+        await foreach (var e in tree.ScanEntriesAsync(prefetch: false))
             withoutPrefetch.Add(e);
 
         var withPrefetch = new List<KeyValuePair<string, byte[]>>();
-        await foreach (var e in tree.EntriesAsync(prefetch: true))
+        await foreach (var e in tree.ScanEntriesAsync(prefetch: true))
             withPrefetch.Add(e);
 
         Assert.That(withPrefetch.Select(e => e.Key).ToList(),

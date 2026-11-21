@@ -15,7 +15,7 @@ internal static class AuditTrailReader
         var keys = new List<string>();
         try
         {
-            await foreach (var key in auditTree.KeysAsync())
+            await foreach (var key in auditTree.ScanKeysAsync())
             {
                 keys.Add(key);
             }

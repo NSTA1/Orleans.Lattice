@@ -227,7 +227,7 @@ public partial class ReshardIntegrationTests
 
         Assert.That(await tree.CountAsync(), Is.EqualTo(expected.Count), $"count {when}");
         var scanned = new List<string>();
-        await foreach (var key in tree.KeysAsync()) scanned.Add(key);
+        await foreach (var key in tree.ScanKeysAsync()) scanned.Add(key);
         Assert.That(scanned, Is.EquivalentTo(expected.Keys), $"scan {when}");
     }
 

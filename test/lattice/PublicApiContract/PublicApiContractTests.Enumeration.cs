@@ -12,6 +12,7 @@ public partial class PublicApiContractTests
         await tree.SetManyAsync([Kvp("c", "3"), Kvp("a", "1"), Kvp("b", "2")]);
 
         var keys = new List<string>();
+        // raw-enumeration-ok: the public ILattice enumeration contract is the subject
         await foreach (var k in tree.KeysAsync())
         {
             keys.Add(k);
@@ -27,6 +28,7 @@ public partial class PublicApiContractTests
         await tree.SetManyAsync([Kvp("a", "1"), Kvp("b", "2"), Kvp("c", "3")]);
 
         var keys = new List<string>();
+        // raw-enumeration-ok: the public ILattice enumeration contract is the subject
         await foreach (var k in tree.KeysAsync(reverse: true))
         {
             keys.Add(k);
@@ -43,6 +45,7 @@ public partial class PublicApiContractTests
             [Kvp("a", "1"), Kvp("b", "2"), Kvp("c", "3"), Kvp("d", "4")]);
 
         var keys = new List<string>();
+        // raw-enumeration-ok: the public ILattice enumeration contract is the subject
         await foreach (var k in tree.KeysAsync(startInclusive: "b", endExclusive: "d"))
         {
             keys.Add(k);
@@ -59,6 +62,7 @@ public partial class PublicApiContractTests
         await tree.DeleteAsync("b");
 
         var keys = new List<string>();
+        // raw-enumeration-ok: the public ILattice enumeration contract is the subject
         await foreach (var k in tree.KeysAsync())
         {
             keys.Add(k);
@@ -72,6 +76,7 @@ public partial class PublicApiContractTests
     {
         var tree = Tree("pac-enum-keys-empty");
         var keys = new List<string>();
+        // raw-enumeration-ok: the public ILattice enumeration contract is the subject
         await foreach (var k in tree.KeysAsync())
         {
             keys.Add(k);
@@ -88,6 +93,7 @@ public partial class PublicApiContractTests
         await tree.SetManyAsync([Kvp("a", "1"), Kvp("b", "2"), Kvp("c", "3")]);
 
         var entries = new List<KeyValuePair<string, string>>();
+        // raw-enumeration-ok: the public ILattice enumeration contract is the subject
         await foreach (var e in tree.EntriesAsync())
         {
             entries.Add(new(e.Key, Str(e.Value)));
@@ -104,6 +110,7 @@ public partial class PublicApiContractTests
         await tree.SetManyAsync([Kvp("a", "1"), Kvp("b", "2"), Kvp("c", "3")]);
 
         var keys = new List<string>();
+        // raw-enumeration-ok: the public ILattice enumeration contract is the subject
         await foreach (var e in tree.EntriesAsync(reverse: true))
         {
             keys.Add(e.Key);
@@ -120,6 +127,7 @@ public partial class PublicApiContractTests
             [Kvp("a", "1"), Kvp("b", "2"), Kvp("c", "3"), Kvp("d", "4")]);
 
         var keys = new List<string>();
+        // raw-enumeration-ok: the public ILattice enumeration contract is the subject
         await foreach (var e in tree.EntriesAsync(startInclusive: "b", endExclusive: "d"))
         {
             keys.Add(e.Key);

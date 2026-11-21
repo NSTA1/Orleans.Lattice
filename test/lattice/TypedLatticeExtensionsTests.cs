@@ -494,6 +494,7 @@ public class TypedLatticeExtensionsTests
             .Returns(entries.ToAsyncEnumerable());
 
         var result = new List<KeyValuePair<string, TestItem>>();
+        // raw-enumeration-ok: substitute-backed unit test of the typed EntriesAsync extension
         await foreach (var e in lattice.EntriesAsync(Serializer))
             result.Add(e);
 
@@ -551,6 +552,7 @@ public class TypedLatticeExtensionsTests
             .Returns(entries.ToAsyncEnumerable());
 
         var result = new List<KeyValuePair<string, TestItem>>();
+        // raw-enumeration-ok: substitute-backed unit test of the typed EntriesAsync extension
         await foreach (var e in lattice.EntriesAsync(Serializer, startInclusive: "k1", endExclusive: "k3", reverse: true))
             result.Add(e);
 
@@ -572,6 +574,7 @@ public class TypedLatticeExtensionsTests
             .Returns(entries.ToAsyncEnumerable());
 
         var result = new List<KeyValuePair<string, TestItem>>();
+        // raw-enumeration-ok: substitute-backed unit test of the typed EntriesAsync extension
         await foreach (var e in lattice.EntriesAsync(Serializer, prefetch: true))
             result.Add(e);
 

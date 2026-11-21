@@ -240,6 +240,7 @@ public sealed class LatticeCursorEnforcementIntegrationTests
         {
             Assert.That(async () =>
             {
+                // raw-enumeration-ok: enforcement on the raw KeysAsync stream is the subject
                 await foreach (var key in _fixture.Lattice(tree).KeysAsync())
                 {
                     observed.Add(key);

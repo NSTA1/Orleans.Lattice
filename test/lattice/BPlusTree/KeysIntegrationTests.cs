@@ -34,7 +34,7 @@ public class KeysDefaultClusterTests
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("keys-empty");
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync())
+        await foreach (var k in tree.ScanKeysAsync())
             keys.Add(k);
 
         Assert.That(keys, Is.Empty);
@@ -49,7 +49,7 @@ public class KeysDefaultClusterTests
             await tree.SetAsync(k, Encoding.UTF8.GetBytes(k));
 
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync())
+        await foreach (var k in tree.ScanKeysAsync())
             keys.Add(k);
 
         Assert.That(keys, Is.EqualTo(expected.OrderBy(k => k, StringComparer.Ordinal).ToList()));
@@ -64,7 +64,7 @@ public class KeysDefaultClusterTests
             await tree.SetAsync(k, Encoding.UTF8.GetBytes(k));
 
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync(reverse: true))
+        await foreach (var k in tree.ScanKeysAsync(reverse: true))
             keys.Add(k);
 
         Assert.That(keys, Is.EqualTo(
@@ -80,7 +80,7 @@ public class KeysDefaultClusterTests
             await tree.SetAsync(k, Encoding.UTF8.GetBytes(k));
 
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync(startInclusive: "b", endExclusive: "e"))
+        await foreach (var k in tree.ScanKeysAsync(startInclusive: "b", endExclusive: "e"))
             keys.Add(k);
 
         Assert.That(keys, Is.EqualTo(new[] { "b", "c", "d" }));
@@ -95,7 +95,7 @@ public class KeysDefaultClusterTests
             await tree.SetAsync(k, Encoding.UTF8.GetBytes(k));
 
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync(startInclusive: "b", endExclusive: "e", reverse: true))
+        await foreach (var k in tree.ScanKeysAsync(startInclusive: "b", endExclusive: "e", reverse: true))
             keys.Add(k);
 
         Assert.That(keys, Is.EqualTo(new[] { "d", "c", "b" }));
@@ -110,7 +110,7 @@ public class KeysDefaultClusterTests
         await tree.DeleteAsync("remove");
 
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync())
+        await foreach (var k in tree.ScanKeysAsync())
             keys.Add(k);
 
         Assert.That(keys, Is.EqualTo(new[] { "keep" }));
@@ -156,7 +156,7 @@ public class KeysSingleShardSplitTests
             await tree.SetAsync(k, Encoding.UTF8.GetBytes(k));
 
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync())
+        await foreach (var k in tree.ScanKeysAsync())
             keys.Add(k);
 
         expected.Sort(StringComparer.Ordinal);
@@ -172,7 +172,7 @@ public class KeysSingleShardSplitTests
             await tree.SetAsync($"k-{i:D4}", Encoding.UTF8.GetBytes($"v-{i}"));
 
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync(startInclusive: "k-0005", endExclusive: "k-0015"))
+        await foreach (var k in tree.ScanKeysAsync(startInclusive: "k-0005", endExclusive: "k-0015"))
             keys.Add(k);
 
         var expected = Enumerable.Range(5, 10)
@@ -192,7 +192,7 @@ public class KeysSingleShardSplitTests
             await tree.SetAsync($"k-{i:D4}", Encoding.UTF8.GetBytes($"v-{i}"));
 
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync(reverse: true))
+        await foreach (var k in tree.ScanKeysAsync(reverse: true))
             keys.Add(k);
 
         var expected = Enumerable.Range(0, 20)
@@ -212,7 +212,7 @@ public class KeysSingleShardSplitTests
             await tree.SetAsync($"k-{i:D4}", Encoding.UTF8.GetBytes($"v-{i}"));
 
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync(startInclusive: "k-0005", endExclusive: "k-0015", reverse: true))
+        await foreach (var k in tree.ScanKeysAsync(startInclusive: "k-0005", endExclusive: "k-0015", reverse: true))
             keys.Add(k);
 
         var expected = Enumerable.Range(5, 10)
@@ -232,11 +232,11 @@ public class KeysSingleShardSplitTests
             await tree.SetAsync($"m-{i:D4}", Encoding.UTF8.GetBytes($"v-{i}"));
 
         var forward = new List<string>();
-        await foreach (var k in tree.KeysAsync())
+        await foreach (var k in tree.ScanKeysAsync())
             forward.Add(k);
 
         var reverse = new List<string>();
-        await foreach (var k in tree.KeysAsync(reverse: true))
+        await foreach (var k in tree.ScanKeysAsync(reverse: true))
             reverse.Add(k);
 
         forward.Reverse();
@@ -282,7 +282,7 @@ public class KeysFourShardTests
             await tree.SetAsync(k, Encoding.UTF8.GetBytes(k));
 
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync())
+        await foreach (var k in tree.ScanKeysAsync())
             keys.Add(k);
 
         expected.Sort(StringComparer.Ordinal);
@@ -298,7 +298,7 @@ public class KeysFourShardTests
             await tree.SetAsync($"item-{i:D4}", Encoding.UTF8.GetBytes($"v-{i}"));
 
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync(startInclusive: "item-0010", endExclusive: "item-0030"))
+        await foreach (var k in tree.ScanKeysAsync(startInclusive: "item-0010", endExclusive: "item-0030"))
             keys.Add(k);
 
         var expected = Enumerable.Range(10, 20)
@@ -318,7 +318,7 @@ public class KeysFourShardTests
             await tree.SetAsync($"item-{i:D4}", Encoding.UTF8.GetBytes($"v-{i}"));
 
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync(reverse: true))
+        await foreach (var k in tree.ScanKeysAsync(reverse: true))
             keys.Add(k);
 
         var expected = Enumerable.Range(0, 50)
@@ -344,7 +344,7 @@ public class KeysFourShardTests
             await tree.SetAsync(k, Encoding.UTF8.GetBytes(k));
 
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync())
+        await foreach (var k in tree.ScanKeysAsync())
             keys.Add(k);
 
         expected.Sort(StringComparer.Ordinal);
@@ -364,7 +364,7 @@ public class KeysFourShardTests
             await tree.SetAsync(k, Encoding.UTF8.GetBytes(k));
 
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync(reverse: true))
+        await foreach (var k in tree.ScanKeysAsync(reverse: true))
             keys.Add(k);
 
         expected.Sort(StringComparer.Ordinal);
@@ -381,7 +381,7 @@ public class KeysFourShardTests
             await tree.SetAsync($"rr-{i:D4}", Encoding.UTF8.GetBytes($"v-{i}"));
 
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync(startInclusive: "rr-0010", endExclusive: "rr-0030", reverse: true))
+        await foreach (var k in tree.ScanKeysAsync(startInclusive: "rr-0010", endExclusive: "rr-0030", reverse: true))
             keys.Add(k);
 
         var expected = Enumerable.Range(10, 20)
@@ -431,7 +431,7 @@ public class KeysPrefetchTests
             await tree.SetAsync(k, Encoding.UTF8.GetBytes(k));
 
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync(prefetch: true))
+        await foreach (var k in tree.ScanKeysAsync(prefetch: true))
             keys.Add(k);
 
         expected.Sort(StringComparer.Ordinal);
@@ -451,7 +451,7 @@ public class KeysPrefetchTests
             await tree.SetAsync(k, Encoding.UTF8.GetBytes(k));
 
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync(reverse: true, prefetch: true))
+        await foreach (var k in tree.ScanKeysAsync(reverse: true, prefetch: true))
             keys.Add(k);
 
         expected.Sort(StringComparer.Ordinal);
@@ -468,7 +468,7 @@ public class KeysPrefetchTests
             await tree.SetAsync($"pfg-{i:D4}", Encoding.UTF8.GetBytes($"v-{i}"));
 
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync(startInclusive: "pfg-0010", endExclusive: "pfg-0030", prefetch: true))
+        await foreach (var k in tree.ScanKeysAsync(startInclusive: "pfg-0010", endExclusive: "pfg-0030", prefetch: true))
             keys.Add(k);
 
         var expected = Enumerable.Range(10, 20)
@@ -492,7 +492,7 @@ public class KeysPrefetchTests
             await tree.SetAsync(k, Encoding.UTF8.GetBytes(k));
 
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync(prefetch: true))
+        await foreach (var k in tree.ScanKeysAsync(prefetch: true))
             keys.Add(k);
 
         expected.Sort(StringComparer.Ordinal);
@@ -514,7 +514,7 @@ public class KeysPrefetchTests
             await tree.SetAsync(k, Encoding.UTF8.GetBytes(k));
 
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync(prefetch: false))
+        await foreach (var k in tree.ScanKeysAsync(prefetch: false))
             keys.Add(k);
 
         expected.Sort(StringComparer.Ordinal);
@@ -526,7 +526,7 @@ public class KeysPrefetchTests
     {
         var tree = _cluster.GrainFactory.GetGrain<ILattice>("pf-empty");
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync(prefetch: true))
+        await foreach (var k in tree.ScanKeysAsync(prefetch: true))
             keys.Add(k);
 
         Assert.That(keys, Is.Empty);
@@ -541,7 +541,7 @@ public class KeysPrefetchTests
             await tree.SetAsync($"prr-{i:D4}", Encoding.UTF8.GetBytes($"v-{i}"));
 
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync(
+        await foreach (var k in tree.ScanKeysAsync(
             startInclusive: "prr-0010", endExclusive: "prr-0030",
             reverse: true, prefetch: true))
             keys.Add(k);

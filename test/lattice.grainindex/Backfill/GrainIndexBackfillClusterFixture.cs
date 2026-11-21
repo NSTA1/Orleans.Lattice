@@ -192,7 +192,7 @@ public sealed class GrainIndexBackfillClusterFixture
         using (LatticeSystemOrigin.Enter())
         {
             var tree = Cluster.GrainFactory.GetGrain<ILattice>(GrainIndexTreeNames.ForIndex(IndexName));
-            await foreach (var _ in tree.KeysAsync("\u0000", "\uFFFF"))
+            await foreach (var _ in tree.ScanKeysAsync("\u0000", "\uFFFF"))
                 count++;
         }
 

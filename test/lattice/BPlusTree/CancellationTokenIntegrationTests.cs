@@ -132,6 +132,7 @@ public class CancellationTokenIntegrationTests
         var tree = NewTree();
         Assert.ThrowsAsync<OperationCanceledException>(async () =>
         {
+            // raw-enumeration-ok: cancellation of the raw KeysAsync stream is the subject
             await foreach (var _ in tree.KeysAsync(cancellationToken: Cancelled()))
             { /* should never reach */ }
         });
@@ -143,6 +144,7 @@ public class CancellationTokenIntegrationTests
         var tree = NewTree();
         Assert.ThrowsAsync<OperationCanceledException>(async () =>
         {
+            // raw-enumeration-ok: cancellation of the raw EntriesAsync stream is the subject
             await foreach (var _ in tree.EntriesAsync(cancellationToken: Cancelled()))
             { /* should never reach */ }
         });
@@ -160,6 +162,7 @@ public class CancellationTokenIntegrationTests
 
         Assert.ThrowsAsync<OperationCanceledException>(async () =>
         {
+            // raw-enumeration-ok: mid-scan cancellation of the raw stream is the subject
             await foreach (var _ in tree.KeysAsync(cancellationToken: cts.Token))
             {
                 observed++;
@@ -208,7 +211,7 @@ public class CancellationTokenIntegrationTests
         Assert.That(await tree.GetAsync("a", CancellationToken.None), Is.EqualTo(Bytes("A")));
 
         var keys = new List<string>();
-        await foreach (var k in tree.KeysAsync(cancellationToken: CancellationToken.None))
+        await foreach (var k in tree.ScanKeysAsync(cancellationToken: CancellationToken.None))
             keys.Add(k);
         Assert.That(keys, Is.EquivalentTo(new[] { "a", "b" }));
     }
