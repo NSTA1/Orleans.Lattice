@@ -1,0 +1,14 @@
+# Pairs with NoLostWrite. Settling the gap resumes at the head instead of
+# rewinding to the retained point, skipping writes the receiver never got.
+MODULE: NoLostWriteSettleSkipsRewind
+TARGET: NoLostWrite
+CLASS: Invariant
+SUMMARY: a settled gap resumes at the head without rewinding
+PERTURBS: Settle
+
+--- FIND
+    /\ cursor' = retainFrom
+--- REPLACE
+    \* MUTATION: the settle does not rewind.
+    /\ cursor' = head
+--- END

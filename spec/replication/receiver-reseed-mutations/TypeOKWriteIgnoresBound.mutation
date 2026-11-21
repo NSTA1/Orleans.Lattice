@@ -1,0 +1,16 @@
+# Pairs with TypeOK. The sender's log accepts a write when it is already full,
+# so the head runs past the bounded write domain.
+MODULE: TypeOKWriteIgnoresBound
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: a write is accepted at the bound, so the head leaves its domain
+PERTURBS: Write
+
+--- FIND
+    /\ head < MaxWrites
+    /\ head' = head + 1
+--- REPLACE
+    \* MUTATION: the write guard admits a write at the bound.
+    /\ head <= MaxWrites
+    /\ head' = head + 1
+--- END

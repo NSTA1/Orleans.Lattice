@@ -1619,6 +1619,45 @@ public partial class ReplicationShipperGrainTests
     }
 
     [Test]
+    public async Task PumpOnceAsync_measures_entries_behind_from_log_tail_during_peer_outage()
+    {
+        var (grain, feed, transport, stats) = CreateWithStats();
+        transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
+            .Returns(new ReplicationAck { Accepted = true, HighestAppliedHlc = HybridLogicalClock.Zero });
+        feed.Append(MakeEntry("k1", ticks: 1));
+        await grain.PumpForTestingAsync(CancellationToken.None);
+        Assert.That(stats.Snapshot().Single().EntriesBehind, Is.Zero);
+
+        // The peer goes away while the source log keeps growing: the figure
+        // must follow the tail, not stay at the last ack's zero (#5587).
+        transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
+            .Returns<ReplicationAck>(_ => throw new InvalidOperationException("transport-down"));
+        feed.Append(MakeEntry("k2", ticks: 2));
+        feed.Append(MakeEntry("k3", ticks: 3));
+        await grain.PumpForTestingAsync(CancellationToken.None);
+        Assert.That(stats.Snapshot().Single().EntriesBehind, Is.EqualTo(2L));
+
+        feed.Append(MakeEntry("k4", ticks: 4));
+        grain.ResetBackoffForTesting();
+        await grain.PumpForTestingAsync(CancellationToken.None);
+        Assert.That(stats.Snapshot().Single().EntriesBehind, Is.EqualTo(3L));
+    }
+
+    [Test]
+    public async Task PumpOnceAsync_measures_entries_behind_from_log_tail_on_ack_rejected()
+    {
+        var (grain, feed, transport, stats) = CreateWithStats();
+        transport.SendAsync(Arg.Any<ReplicationBatch>(), Arg.Any<CancellationToken>())
+            .Returns(new ReplicationAck { Accepted = false, HighestAppliedHlc = HybridLogicalClock.Zero });
+        feed.Append(MakeEntry("k1", ticks: 1));
+        feed.Append(MakeEntry("k2", ticks: 2));
+
+        await grain.PumpForTestingAsync(CancellationToken.None);
+
+        Assert.That(stats.Snapshot().Single().EntriesBehind, Is.EqualTo(2L));
+    }
+
+    [Test]
     public async Task PumpOnceAsync_records_peer_error_on_ack_rejected()
     {
         var (grain, feed, transport, stats) = CreateWithStats();

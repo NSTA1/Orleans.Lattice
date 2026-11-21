@@ -707,8 +707,9 @@ internal sealed class RestoreParticipant(
     /// <summary>
     /// Builds the shadow, waiting behind another alias operation that holds the target
     /// tree's reservation (#5791). <see cref="LatticeAliasOperationInProgressException"/>
-    /// is a transient refusal - the holder releases the reservation when it completes,
-    /// as a replication re-seed's bootstrap copy does at cutover - so it is retried on
+    /// is a transient refusal - the holder releases the reservation when it completes;
+    /// a replication re-seed's bootstrap copy holds it only for its short cutover (#5832) -
+    /// so it is retried on
     /// <see cref="AliasWaitBackoff"/> until the next wait would pass
     /// <see cref="AliasWaitCeiling"/>, and only then surfaces as a build failure, which
     /// aborts at once rather than spending the build-attempt budget on further waits. A

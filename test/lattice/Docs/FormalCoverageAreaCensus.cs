@@ -71,7 +71,7 @@ internal static class FormalCoverageAreaCensus
             ],
             ["Cross-cluster atomic visibility"] = ["AtomicCommitCrossCluster"],
             ["Replication convergence"] =
-                ["Replication", "ReplicationCausalDelivery", "ReplicationLowWatermark", "ReplicationReBootstrap"],
+                ["Replication", "ReplicationCausalDelivery", "ReplicationLowWatermark", "ReplicationReBootstrap", "ReplicationReceiverReseed"],
             ["Backup and restore"] =
                 ["BackupCapture", "BackupCutover", "BackupIdClaim", "BackupIncremental", "BackupProvenance", "BackupRestore", "BackupRetention"],
             ["B+ tree topology"] =

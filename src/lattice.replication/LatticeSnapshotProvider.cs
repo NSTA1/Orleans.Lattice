@@ -1,4 +1,6 @@
 using System.Runtime.CompilerServices;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
@@ -110,8 +112,10 @@ namespace Orleans.Lattice.Replication;
 internal sealed class LatticeSnapshotProvider(
     IGrainFactory grainFactory,
     IWalCursorRegistry cursors,
-    IOptionsMonitor<LatticeReplicationOptions> options) : ISnapshotProvider
+    IOptionsMonitor<LatticeReplicationOptions> options,
+    ILogger<LatticeSnapshotProvider>? logger = null) : ISnapshotProvider
 {
+    private readonly ILogger _logger = (ILogger?)logger ?? NullLogger.Instance;
     private readonly IGrainFactory _grainFactory = grainFactory ?? throw new ArgumentNullException(nameof(grainFactory));
     private readonly IWalCursorRegistry _cursors = cursors ?? throw new ArgumentNullException(nameof(cursors));
     private readonly IOptionsMonitor<LatticeReplicationOptions> _options = options ?? throw new ArgumentNullException(nameof(options));
@@ -200,7 +204,7 @@ internal sealed class LatticeSnapshotProvider(
             var effectiveCancellationToken = linked?.Token ?? cancellationToken;
             try
             {
-                await foreach (var entry in EnumerateAsync(treeName, asOfHlc, effectiveCancellationToken)
+                await foreach (var entry in EnumerateAsync(treeName, asOfHlc, epoch, effectiveCancellationToken)
                     .ConfigureAwait(false))
                 {
                     yield return entry;
@@ -426,6 +430,7 @@ internal sealed class LatticeSnapshotProvider(
     private async IAsyncEnumerable<SnapshotEntry> EnumerateAsync(
         string treeName,
         HybridLogicalClock asOfHlc,
+        long exportEpoch,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         // Issue #4685: hold the tree's saga decisions from before snap0 until the
@@ -438,7 +443,7 @@ internal sealed class LatticeSnapshotProvider(
         await purgeHold.AddAsync(holdKey, Array.Empty<long>()).ConfigureAwait(false);
         try
         {
-            await foreach (var entry in EnumerateHeldAsync(treeName, asOfHlc, physicalTreeId, cancellationToken)
+            await foreach (var entry in EnumerateHeldAsync(treeName, asOfHlc, physicalTreeId, exportEpoch, cancellationToken)
                 .ConfigureAwait(false))
             {
                 yield return entry;
@@ -454,6 +459,7 @@ internal sealed class LatticeSnapshotProvider(
         string treeName,
         HybridLogicalClock asOfHlc,
         string physicalTreeId,
+        long exportEpoch,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         // Read the rows from the physical copy the export stamps, never through
@@ -472,6 +478,11 @@ internal sealed class LatticeSnapshotProvider(
         // See EnumerateCompletionAsync.
         var partitions = Math.Max(1, _options.Get(treeName).ReplogPartitions);
         var openHeads = await ReadHeadsAsync(physicalTreeId, partitions, readable: true, cancellationToken).ConfigureAwait(false);
+
+        // Issue #5794: record where this export opened, under its purge hold
+        // and before snap0, so a shipper whose peer's lineage moved can tell
+        // this export still covers what the log no longer retains.
+        await RecordExportCutAsync(treeName, exportEpoch, physicalTreeId, openHeads).ConfigureAwait(false);
 
         // Freeze a tree-wide view of saga decisions for the duration of
         // this export. The TxRegistry is the single tree-wide
@@ -909,6 +920,35 @@ internal sealed class LatticeSnapshotProvider(
                     $"WAL partition {partition} of tree '{treeName}' was trimmed past the export's opening head {from} "
                     + $"(lowest retained {lowest}) before the export read the sagas that decided during it. Retry the export.");
             }
+        }
+    }
+
+    /// <summary>
+    /// Records the export's cut (issue #5794). Best-effort: without the record a
+    /// shipper keeps its conservative marker, so a failure only costs a re-seed.
+    /// </summary>
+    private async Task RecordExportCutAsync(string treeName, long exportEpoch, string physicalTreeId, long[] openHeads)
+    {
+        try
+        {
+            await _grainFactory
+                .GetGrain<IReplicationExportEpochGrain>(treeName)
+                .RecordCutAsync(new ReplicationExportCut
+                {
+                    Epoch = exportEpoch,
+                    WalTreeId = physicalTreeId,
+                    OpenHeads = openHeads,
+                })
+                .ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _logger.LogWarning(
+                ex,
+                "Recording the open heads of export {Epoch} of tree {TreeName} failed; a peer whose lineage moves may be "
+                + "re-seeded again.",
+                exportEpoch,
+                treeName);
         }
     }
 

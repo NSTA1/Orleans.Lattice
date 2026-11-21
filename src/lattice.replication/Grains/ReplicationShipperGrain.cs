@@ -984,6 +984,9 @@ internal sealed partial class ReplicationShipperGrain(
             // saga records it exists to re-ship (#4534).
             await MaybeClearReseedAsync();
             await RefreshSourceFrontierAsync(options);
+            // A failed round-trip recorded no ack, so measure the backlog
+            // directly rather than leave the last ack's figure frozen (#5587).
+            await RefreshOutageBacklogAsync();
         }
     }
 
@@ -4326,6 +4329,7 @@ internal sealed partial class ReplicationShipperGrain(
             || string.Equals(reason, "ack-rejected", StringComparison.Ordinal))
         {
             _peerStats.RecordError(_treeName, _peerClusterId);
+            _outageBacklogDue = true;
         }
 
         if (exception is not null)

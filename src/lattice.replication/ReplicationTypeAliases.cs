@@ -316,6 +316,9 @@ public static class ReplicationTypeAliases
     internal const string IReplicationExportEpochGrain = "olr.xg";
     internal const string ReplicationExportEpochState = "olr.xs";
 
+    // The WAL heads a full export opened at (#5794).
+    internal const string ReplicationExportCut = "olr.xc";
+
     // Receiver per-origin causal frontier (#4586): the origin's shipped low
     // watermark, and the writes held here without being applied.
     internal const string IReplicationOriginFrontierGrain = "olr.og";

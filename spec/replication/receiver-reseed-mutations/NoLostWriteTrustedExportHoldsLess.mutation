@@ -1,0 +1,15 @@
+# Pairs with NoLostWrite. An export records the head it opened at as its cut
+# but holds a shorter prefix, so the cut overstates what it contains and a
+# rewind to the retained floor after a covered settle leaves a hole.
+MODULE: NoLostWriteTrustedExportHoldsLess
+TARGET: NoLostWrite
+CLASS: Invariant
+SUMMARY: a trusted export holds less than the cut it records, so a covered settle loses writes
+PERTURBS: Export
+
+--- FIND
+          /\ t => s = head
+--- REPLACE
+          \* MUTATION: a trusted export may hold less than its cut.
+          /\ t => s <= head
+--- END
