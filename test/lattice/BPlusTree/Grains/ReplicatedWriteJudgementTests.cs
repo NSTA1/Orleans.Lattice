@@ -16,6 +16,7 @@ public class ReplicatedWriteJudgementTests
 {
     private const string Tree = "orders";
     private const string RefusedKey = "refused";
+    private static readonly HybridLogicalClock Hlc = new() { WallClockTicks = 1_000, Counter = 3 };
 
     private static ApplyMergeItem Row(string key, byte[]? value = null, bool tombstone = false, long expiresAtTicks = 0) => new()
     {
@@ -42,6 +43,10 @@ public class ReplicatedWriteJudgementTests
 
         public string? LastTree { get; private set; }
 
+        public string? LastOrigin { get; private set; }
+
+        public HybridLogicalClock? LastSourceHlc { get; private set; }
+
         public bool InterceptsSystemOrigin => true;
 
         public ValueTask<bool> JudgesReplicatedWritesAsync(string treeId, CancellationToken cancellationToken = default) =>
@@ -52,6 +57,8 @@ public class ReplicatedWriteJudgementTests
             Calls++;
             LastOperation = request.Operation;
             LastTree = request.TreeId;
+            LastOrigin = request.ReplicatedOriginClusterId;
+            LastSourceHlc = request.ReplicatedSourceHlc;
             if (decision is { } fixedDecision)
             {
                 return new ValueTask<LatticeWriteDecision>(fixedDecision);
@@ -124,11 +131,13 @@ public class ReplicatedWriteJudgementTests
 
         Assert.Multiple(async () =>
         {
-            Assert.That(await ReplicatedWriteJudgement.AdmitsAsync(accepted, Tree, "k", [1], null, CancellationToken.None), Is.True);
-            Assert.That(await ReplicatedWriteJudgement.AdmitsAsync(transformed, Tree, "k", [1], null, CancellationToken.None), Is.True);
-            Assert.That(await ReplicatedWriteJudgement.AdmitsAsync(diverted, Tree, "k", [1], null, CancellationToken.None), Is.False);
+            Assert.That(await ReplicatedWriteJudgement.AdmitsAsync(accepted, Tree, "k", [1], null, "peer", Hlc, CancellationToken.None), Is.True);
+            Assert.That(await ReplicatedWriteJudgement.AdmitsAsync(transformed, Tree, "k", [1], null, "peer", Hlc, CancellationToken.None), Is.True);
+            Assert.That(await ReplicatedWriteJudgement.AdmitsAsync(diverted, Tree, "k", [1], null, "peer", Hlc, CancellationToken.None), Is.False);
             Assert.That(accepted.LastOperation, Is.EqualTo(LatticeOperation.Write | LatticeOperation.Replication));
             Assert.That(accepted.LastTree, Is.EqualTo(Tree));
+            Assert.That(accepted.LastOrigin, Is.EqualTo("peer"));
+            Assert.That(accepted.LastSourceHlc, Is.EqualTo(Hlc));
         });
     }
 
@@ -138,7 +147,7 @@ public class ReplicatedWriteJudgementTests
         var rejecting = new StrictStage(LatticeWriteDecision.Reject("no"));
 
         Assert.That(
-            async () => await ReplicatedWriteJudgement.AdmitsAsync(rejecting, Tree, "k", [1], null, CancellationToken.None),
+            async () => await ReplicatedWriteJudgement.AdmitsAsync(rejecting, Tree, "k", [1], null, "peer", Hlc, CancellationToken.None),
             Throws.TypeOf<LatticeWriteRejectedException>());
     }
 

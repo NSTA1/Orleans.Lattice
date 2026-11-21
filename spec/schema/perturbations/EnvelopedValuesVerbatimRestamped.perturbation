@@ -6,7 +6,7 @@ DETECTORS: LatticeSchemaVersionWriteInterceptorTests.OnWriteAsync_already_envelo
 SUMMARY: an already-enveloped value is stamped again
 
 --- FIND
-            return await OnEnvelopedAsync(treeId, key, value, version, cancellationToken).ConfigureAwait(false);
+            return await OnEnvelopedAsync(treeId, key, value, version, originClusterId, sourceHlc, cancellationToken).ConfigureAwait(false);
 --- REPLACE
             return LatticeWriteDecision.AcceptTransformed(LatticeSchemaEnvelope.Encode(version.SchemaId, version.TargetVersion, value));
 --- END

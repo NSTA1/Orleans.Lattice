@@ -202,9 +202,28 @@ public sealed class StrictIngestPlainReplicatedWriteIntegrationTests
     }
 
     [Test]
-    public void Repair_over_a_dead_lettered_divergence_does_not_re_ship_forever()
+    public async Task Repeated_re_delivery_of_a_dead_lettered_row_files_one_dead_letter()
     {
-        Assert.Ignore("#5714: a dead-lettered row is a standing digest divergence, so auto-remediation re-ships it every round and each re-delivery files another dead letter.");
+        // #5714: a dead-lettered row stays a digest divergence, so a repair round
+        // re-ships it. Each re-delivery of the same source write - single entry or
+        // merged batch - must overwrite its one dead letter, not file another.
+        var tree = await StrictTreeAsync("spw-redeliver");
+
+        await _receiver.ApplyAsync(PlainSet(tree, "k", Pending, 1_000));
+        for (var round = 0; round < 3; round++)
+        {
+            await _applier.ApplyBatchAsync([PlainSet(tree, "k", Pending, 1_000)]);
+            await _receiver.ApplyAsync(PlainSet(tree, "k", Pending, 1_000));
+        }
+
+        await _applier.ApplyBatchAsync([PlainSet(tree, "k", Pending, 2_000)]);
+
+        Assert.Multiple(async () =>
+        {
+            Assert.That(await StoredAsync(tree, "k"), Is.Null, "a refused row is never stored");
+            Assert.That(await DeadLettersAsync(tree, "k"), Is.EqualTo(2),
+                "one dead letter per distinct source write, however often each is re-delivered");
+        });
     }
 
     private sealed class SiloConfigurator : ISiloConfigurator

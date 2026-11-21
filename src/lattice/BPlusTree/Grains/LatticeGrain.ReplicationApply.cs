@@ -165,7 +165,8 @@ internal sealed partial class LatticeGrain
             // tree's strict policy too, and stored verbatim when admitted.
             var ttl = ReplicatedWriteJudgement.RemainingTtl(expiresAtTicks, DateTimeOffset.UtcNow.UtcTicks);
             if ((ttl is null || ttl > TimeSpan.Zero)
-                && !await ReplicatedWriteJudgement.AdmitsAsync(WriteInterceptor, TreeId, key, value, ttl, CancellationToken.None))
+                && !await ReplicatedWriteJudgement.AdmitsAsync(
+                    WriteInterceptor, TreeId, key, value, ttl, originClusterId, sourceHlc, CancellationToken.None))
             {
                 return;
             }

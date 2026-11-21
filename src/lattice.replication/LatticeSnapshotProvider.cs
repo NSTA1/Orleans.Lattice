@@ -535,7 +535,7 @@ internal sealed class LatticeSnapshotProvider(
         // can tell which cross-tree barriers the import settles (#4683).
         var crossTreeNames = new CrossTreeNames(_grainFactory, treeName);
         await foreach (var prepared in EnumeratePreparedAsync(
-                treeName, snap0, recordedResolved, preparedSagas, asOfHlc, cancellationToken)
+                treeName, physicalTreeId, snap0, recordedResolved, preparedSagas, asOfHlc, cancellationToken)
             .ConfigureAwait(false))
         {
             yield return await crossTreeNames.NameAsync(prepared).ConfigureAwait(false);
@@ -627,7 +627,12 @@ internal sealed class LatticeSnapshotProvider(
         // HLC under last-writer-wins on the receiver. A tombstone the source
         // has already reaped (CompactTombstonesAsync, past
         // TombstoneGracePeriod) cannot ship and remains a residual (#4537).
-        await foreach (var tombstone in EnumerateTombstonesAsync(treeName, asOfHlc, cancellationToken)
+        if (BeforeTombstonePassForTesting is { } beforeTombstones)
+        {
+            await beforeTombstones().ConfigureAwait(false);
+        }
+
+        await foreach (var tombstone in EnumerateTombstonesAsync(treeName, physicalTreeId, asOfHlc, cancellationToken)
             .ConfigureAwait(false))
         {
             yield return tombstone;
@@ -1051,6 +1056,37 @@ internal sealed class LatticeSnapshotProvider(
     internal Func<string, Task>? BeforeCommittedEntryForTesting { get; set; }
 
     /// <summary>
+    /// Test seam: runs after the committed-projection pass and before the
+    /// tombstone pass, so a test can move the tree's alias between them (#5548).
+    /// </summary>
+    internal Func<Task>? BeforeTombstonePassForTesting { get; set; }
+
+    /// <summary>
+    /// Reads the shard map of the physical copy the export pinned when it
+    /// opened (issue #5548). One registry read serves both the check and the
+    /// map. When the alias has since moved to another copy, the entry's map
+    /// describes that copy, and reading through it would mix two copies in one
+    /// export, so the read raises the same <see cref="StaleTreeRoutingException"/>
+    /// a fenced copy raises; the export surface turns it into the transient
+    /// <see cref="LatticeSnapshotExportDeferredException"/> and the receiver
+    /// retries with a fresh export of the current copy.
+    /// </summary>
+    private async Task<ShardMap> ReadPinnedShardMapAsync(string treeName, string physicalTreeId)
+    {
+        var entry = await _grainFactory.GetLatticeRegistry().GetEntryAsync(treeName).ConfigureAwait(false);
+        var current = entry?.PhysicalTreeId ?? treeName;
+        if (!string.Equals(current, physicalTreeId, StringComparison.Ordinal))
+        {
+            throw new StaleTreeRoutingException(treeName, physicalTreeId, current);
+        }
+
+        return entry?.ShardMap
+            ?? ShardMap.GetOrCreateDefaultShared(
+                LatticeConstants.DefaultVirtualShardCount,
+                LatticeConstants.DefaultShardCount);
+    }
+
+    /// <summary>
     /// Walks every shard's leaf chain on the source tree and emits a
     /// committed tombstone row (<see cref="SnapshotEntry.IsTombstone"/> set,
     /// <see cref="SnapshotEntry.IsPrepared"/> clear) for every key a leaf
@@ -1060,15 +1096,11 @@ internal sealed class LatticeSnapshotProvider(
     /// </summary>
     private async IAsyncEnumerable<SnapshotEntry> EnumerateTombstonesAsync(
         string treeName,
+        string physicalTreeId,
         HybridLogicalClock asOfHlc,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var entry = await _grainFactory.GetLatticeRegistry().GetEntryAsync(treeName).ConfigureAwait(false);
-        var physicalTreeId = entry?.PhysicalTreeId ?? treeName;
-        var shardMap = entry?.ShardMap
-            ?? ShardMap.GetOrCreateDefaultShared(
-                LatticeConstants.DefaultVirtualShardCount,
-                LatticeConstants.DefaultShardCount);
+        var shardMap = await ReadPinnedShardMapAsync(treeName, physicalTreeId).ConfigureAwait(false);
 
         var hasUpperBound = asOfHlc != HybridLogicalClock.Zero;
 
@@ -1146,16 +1178,13 @@ internal sealed class LatticeSnapshotProvider(
     /// </summary>
     private async IAsyncEnumerable<SnapshotEntry> EnumeratePreparedAsync(
         string treeName,
+        string physicalTreeId,
         Dictionary<Guid, TxStatus> snap0,
         HashSet<Guid> recordedResolved,
         HashSet<Guid> preparedSagas,
         HybridLogicalClock asOfHlc,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        // One registry read serves both the routed copy and its shard map.
-        var entry = await _grainFactory.GetLatticeRegistry().GetEntryAsync(treeName).ConfigureAwait(false);
-        var physicalTreeId = entry?.PhysicalTreeId ?? treeName;
-
         // The registry's shard map is the producer-side authority on
         // virtual-slot / physical-shard layout. A tree that has been
         // written to always has a persisted map; the null fallback to
@@ -1164,10 +1193,7 @@ internal sealed class LatticeSnapshotProvider(
         // covers a tree that exists in the registry but has not yet
         // had its map materialised (an empty pending-prepare scan in
         // that case is a no-op anyway).
-        var shardMap = entry?.ShardMap
-            ?? ShardMap.GetOrCreateDefaultShared(
-                LatticeConstants.DefaultVirtualShardCount,
-                LatticeConstants.DefaultShardCount);
+        var shardMap = await ReadPinnedShardMapAsync(treeName, physicalTreeId).ConfigureAwait(false);
         var virtualShardCount = shardMap.VirtualShardCount;
 
         // Slot range covering every virtual slot. The leaf-side

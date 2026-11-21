@@ -6,7 +6,7 @@ DETECTORS: SchemaStrictIngestDeadLetterTests.Repeated_diversions_of_one_key_at_o
 SUMMARY: two records for one key at one instant share a storage key
 
 --- FIND
-        var unique = Guid.NewGuid().ToString("N")[..8];
+            : Guid.NewGuid().ToString("N")[..SchemaDeadLetterKey.UniqueSuffixLength];
 --- REPLACE
-        var unique = "00000000";
+            : "00000000";
 --- END

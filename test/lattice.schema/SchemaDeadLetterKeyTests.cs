@@ -29,6 +29,35 @@ public class SchemaDeadLetterKeyTests
     }
 
     [Test]
+    public void IdentitySuffix_is_stable_per_source_write_and_distinct_across_writes()
+    {
+        var hlc = new HybridLogicalClock { WallClockTicks = 1_000, Counter = 2 };
+        var suffix = SchemaDeadLetterKey.IdentitySuffix("peer", hlc);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(suffix, Has.Length.EqualTo(SchemaDeadLetterKey.UniqueSuffixLength));
+            Assert.That(suffix, Does.Match("^[0-9a-f]{8}$"));
+            Assert.That(SchemaDeadLetterKey.IdentitySuffix("peer", hlc), Is.EqualTo(suffix));
+            Assert.That(SchemaDeadLetterKey.IdentitySuffix("other", hlc), Is.Not.EqualTo(suffix));
+            Assert.That(SchemaDeadLetterKey.IdentitySuffix("peer", hlc with { Counter = 3 }), Is.Not.EqualTo(suffix));
+            Assert.That(SchemaDeadLetterKey.IdentitySuffix("peer", hlc with { WallClockTicks = 1_001 }), Is.Not.EqualTo(suffix));
+        });
+    }
+
+    [Test]
+    public void IdentityTimestamp_is_the_source_wall_clock_clamped_into_range()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(SchemaDeadLetterKey.IdentityTimestamp(new HybridLogicalClock { WallClockTicks = 1_000 }).UtcTicks, Is.EqualTo(1_000));
+            Assert.That(SchemaDeadLetterKey.IdentityTimestamp(new HybridLogicalClock { WallClockTicks = -5 }).UtcTicks, Is.Zero);
+            Assert.That(SchemaDeadLetterKey.IdentityTimestamp(new HybridLogicalClock { WallClockTicks = long.MaxValue }),
+                Is.EqualTo(DateTimeOffset.MaxValue));
+        });
+    }
+
+    [Test]
     public void PrefixStart_is_tree_id_plus_separator()
     {
         Assert.That(SchemaDeadLetterKey.PrefixStart("orders"), Is.EqualTo($"orders{Sep}"));

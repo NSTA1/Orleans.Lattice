@@ -18,6 +18,10 @@ namespace Orleans.Lattice.BPlusTree;
 /// Zero when no snapshot is in flight.
 /// </param>
 /// <param name="ShardCount">The shards the snapshot copies, or zero when no snapshot is in flight.</param>
+/// <param name="FailureReason">
+/// Why the most recent snapshot failed terminally, or <see langword="null"/> when it
+/// completed, was aborted, or is still in flight (issue #5464).
+/// </param>
 [GenerateSerializer]
 [Alias(TypeAliases.SnapshotProgress)]
 [Immutable]
@@ -27,4 +31,5 @@ internal readonly record struct SnapshotProgress(
     [property: Id(2)] string? OperationId,
     [property: Id(3)] SnapshotPhase Phase,
     [property: Id(4)] int CopiedShardCount,
-    [property: Id(5)] int ShardCount);
+    [property: Id(5)] int ShardCount,
+    [property: Id(6)] string? FailureReason = null);

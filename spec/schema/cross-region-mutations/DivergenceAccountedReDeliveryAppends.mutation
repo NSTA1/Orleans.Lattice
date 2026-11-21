@@ -1,0 +1,15 @@
+# A re-judged row whose identity the receiver already dead-lettered files a
+# fresh record instead of rewriting the one keyed by its source identity, so
+# every anti-entropy re-ship of a standing divergence grows the dead-letter
+# queue (#5714).
+MODULE: DivergenceAccountedReDeliveryAppends
+TARGET: DivergenceAccounted
+CLASS: Invariant
+SUMMARY: a repaired dead-lettered row appends another dead-letter record
+PERTURBS: Repair
+
+--- FIND
+    /\ IF dl[e] = 1 THEN Rediverted(e) ELSE Ingest(e, FALSE)
+--- REPLACE
+    /\ IF dl[e] = 1 THEN (dl' = [dl EXCEPT ![e] = @ + 1] /\ UNCHANGED <<st, tag>>) ELSE Ingest(e, FALSE)
+--- END

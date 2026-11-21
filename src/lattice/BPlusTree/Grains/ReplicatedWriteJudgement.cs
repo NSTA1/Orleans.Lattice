@@ -42,7 +42,10 @@ internal static class ReplicatedWriteJudgement
     /// <summary>
     /// Judges one plain replicated value. Returns <c>false</c> when the
     /// interceptor diverted it, <c>true</c> when it is to be stored verbatim, and
-    /// throws <see cref="LatticeWriteRejectedException"/> on a rejection.
+    /// throws <see cref="LatticeWriteRejectedException"/> on a rejection. The
+    /// source identity (<paramref name="originClusterId"/>,
+    /// <paramref name="sourceHlc"/>) travels on the request so a re-delivery of
+    /// the same source write is diverted idempotently (issue #5714).
     /// </summary>
     public static async ValueTask<bool> AdmitsAsync(
         ILatticeWriteInterceptor interceptor,
@@ -50,9 +53,15 @@ internal static class ReplicatedWriteJudgement
         string key,
         byte[] value,
         TimeSpan? ttl,
+        string originClusterId,
+        HybridLogicalClock sourceHlc,
         CancellationToken cancellationToken)
     {
-        var request = new LatticeWriteRequest(treeId, key, value, Operation, ttl);
+        var request = new LatticeWriteRequest(treeId, key, value, Operation, ttl)
+        {
+            ReplicatedOriginClusterId = originClusterId,
+            ReplicatedSourceHlc = sourceHlc,
+        };
         var decision = await interceptor.OnWriteAsync(in request, cancellationToken);
         return decision.Kind switch
         {
@@ -88,7 +97,8 @@ internal static class ReplicatedWriteJudgement
             var item = items[i];
             var ttl = RemainingTtl(item.ExpiresAtTicks, nowTicks);
             var judged = !item.IsTombstone && item.Value is not null && (ttl is null || ttl > TimeSpan.Zero);
-            if (!judged || await AdmitsAsync(interceptor, treeId, item.Key, item.Value!, ttl, cancellationToken))
+            if (!judged || await AdmitsAsync(
+                interceptor, treeId, item.Key, item.Value!, ttl, item.OriginClusterId, item.SourceHlc, cancellationToken))
             {
                 kept?.Add(item);
                 continue;
