@@ -82,8 +82,12 @@ internal sealed partial class ReplicationShipperGrain
     /// Takes the replay hold, then records the re-seed marker at the tree's
     /// current export epoch and the per-partition point the rewind must still
     /// find retained, in state, without writing it. Returns the epoch.
+    /// When <paramref name="acceptCoveringExport"/> is set (a move of the
+    /// peer's lineage, issue #5794), the marker is lowered to just below the
+    /// earliest export that still covers the log's retained heads, so the
+    /// bootstrap that moved the lineage settles the re-seed it forced.
     /// </summary>
-    private async Task<long> TakePeerOffLogStateAsync()
+    private async Task<long> TakePeerOffLogStateAsync(bool acceptCoveringExport = false)
     {
         // The replay hold first: every export the re-seed can complete from is
         // taken after the epoch read below, so no saga in flight at it loses its
@@ -100,6 +104,20 @@ internal sealed partial class ReplicationShipperGrain
         {
             var cursor = state.State.PartitionCursors.TryGetValue(p, out var c) ? Math.Max(0, c) : 0;
             retain[p] = Math.Max(cursor, heads[p]);
+        }
+
+        if (acceptCoveringExport)
+        {
+            var covering = await CoveringMarkerAsync(epoch, heads);
+            if (covering < epoch)
+            {
+                // The rewind must start at or below the covering export's
+                // opening heads, so retain from the heads that export covers
+                // rather than from a cursor above them; a trim past them fails
+                // the clear-time check and falls back to a fresh export.
+                epoch = covering;
+                retain = heads;
+            }
         }
 
         state.State.ReseedRetainFrom = retain;
@@ -166,6 +184,35 @@ internal sealed partial class ReplicationShipperGrain
             + "an older registry purged, so the peer must be re-seeded from a snapshot export after epoch {Epoch}.",
             LogContext, state.State.ReseedRequiredEpoch);
         return true;
+    }
+
+    /// <summary>
+    /// The re-seed marker a lineage move needs (issue #5794): one below the
+    /// earliest export, contiguous up to <paramref name="current"/> on this
+    /// physical log, that opened at or above every retained head in
+    /// <paramref name="heads"/>, or <paramref name="current"/> when none does.
+    /// Such an export opened under its purge hold before its decision snapshot,
+    /// so the rewind to the retained heads re-ships everything it may lack.
+    /// While a silo predates the purge hold no export can be trusted that way.
+    /// </summary>
+    private async Task<long> CoveringMarkerAsync(long current, long[] heads)
+    {
+        if (current <= 0 || heads.Length == 0 || !AllSilosHonourPurgeHolds())
+        {
+            return current;
+        }
+
+        try
+        {
+            var earliest = await _grainFactory.GetGrain<IReplicationExportEpochGrain>(_treeName)
+                .GetEarliestCoveringEpochAsync(_walTreeId, heads);
+            return earliest is { } k && k >= 1 && k <= current ? k - 1 : current;
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            Logger.LogWarning(ex, "{Context}: reading the export cuts failed; the re-seed waits for a new export.", LogContext);
+            return current;
+        }
     }
 
     /// <summary>Each partition's lowest retained sequence (its next sequence when empty).</summary>

@@ -534,13 +534,15 @@ internal sealed partial class ReplicationShipperGrain
     /// <summary>
     /// Takes the peer off the log, or - when it already is - raises the marker to
     /// the tree's current export epoch, so an export taken before this point
-    /// cannot satisfy the re-seed.
+    /// cannot satisfy the re-seed. An export whose opening cut covers every
+    /// retained entry, such as the receiver's own bootstrap that moved the
+    /// lineage, still can (#5794).
     /// </summary>
     private async Task RemarkReseedRequiredAsync()
     {
         if (!ReseedRequired)
         {
-            var marked = await TakePeerOffLogStateAsync();
+            var marked = await TakePeerOffLogStateAsync(acceptCoveringExport: true);
             _terminalHolds.Clear();
             _prepareTallies.Clear();
             _prepareTallyOrder.Clear();
@@ -556,7 +558,13 @@ internal sealed partial class ReplicationShipperGrain
         var epoch = await _grainFactory.GetGrain<IReplicationExportEpochGrain>(_treeName).GetAsync();
         if (state.State.ReseedRequiredEpoch is { } marker && epoch > marker)
         {
-            state.State.ReseedRequiredEpoch = epoch;
+            // A bootstrap the peer already ran from an export covering every
+            // retained entry settles the lineage move too (#5794); raise only.
+            var target = await CoveringMarkerAsync(epoch, await ReadRetainedHeadsAsync());
+            if (target > marker)
+            {
+                state.State.ReseedRequiredEpoch = target;
+            }
         }
 
         await state.WriteStateAsync();

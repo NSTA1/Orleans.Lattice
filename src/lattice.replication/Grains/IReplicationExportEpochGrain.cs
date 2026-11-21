@@ -16,4 +16,22 @@ internal interface IReplicationExportEpochGrain : IGrainWithStringKey
 
     /// <summary>Durably advances the epoch and returns the new value.</summary>
     Task<long> AdvanceAsync();
+
+    /// <summary>
+    /// Durably records the write-ahead log heads the export numbered
+    /// <see cref="ReplicationExportCut.Epoch"/> opened at (issue #5794). Only
+    /// the most recent cuts are kept.
+    /// </summary>
+    Task RecordCutAsync(ReplicationExportCut cut);
+
+    /// <summary>
+    /// Returns the lowest epoch <c>k</c> such that every export from <c>k</c>
+    /// to the current epoch recorded a cut on <paramref name="walTreeId"/>
+    /// with one head per entry of <paramref name="retainedHeads"/>, each at or
+    /// above the matching retained head: an export numbered <c>k</c> or later
+    /// then opened while the log still retained every record from the given
+    /// heads on. Returns <see langword="null"/> when no export qualifies (issue
+    /// #5794).
+    /// </summary>
+    Task<long?> GetEarliestCoveringEpochAsync(string walTreeId, long[] retainedHeads);
 }
