@@ -9,7 +9,7 @@ public partial class BPlusLeafGrainTests
     [TestCase(false)]
     [TestCase(true)]
     [NonParallelizable]
-    public async Task Coverage_stall_timer_only_drives_unscanned_partitions_that_hold_live_rows(bool laggingPartitionHasRows)
+    public async Task Coverage_stall_timer_drives_an_unscanned_checkpointed_partition_whether_or_not_it_holds_rows(bool laggingPartitionHasRows)
     {
         BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
         var wal = new GrowingWal();
@@ -40,8 +40,11 @@ public partial class BPlusLeafGrainTests
                     await grain.OnCoverageLagTimerTickAsync(CancellationToken.None);
             }
             Assert.That(reasons, Is.Not.Empty, "the real timer must run");
-            Assert.That(reasons.Contains(TimerDriveRefusedReason), Is.EqualTo(laggingPartitionHasRows),
-                "partition zero lags but must not justify a permit until it holds live rows");
+            // Issue #6145: a checkpointed partition the leaf holds no rows in still
+            // reports drain lag while siblings append, so it must be driven too.
+            Assert.That(reasons, Does.Contain(TimerDriveRefusedReason),
+                "partition zero lags behind its claimed checkpoint and must justify a permit "
+                + "whether or not it holds live rows");
             var laggingKey = keys.First(key => WalPartitionHash.Compute(key, 2) == 0);
             if (laggingPartitionHasRows)
                 grain.EntriesForTest.Remove(laggingKey);
@@ -53,8 +56,8 @@ public partial class BPlusLeafGrainTests
                 for (var tick = 0; tick < 32; tick++)
                     await grain.OnCoverageLagTimerTickAsync(CancellationToken.None);
             }
-            Assert.That(reasons.Contains(TimerDriveRefusedReason), Is.EqualTo(!laggingPartitionHasRows),
-                "the cached partition buffer must reflect rows added or removed between ticks");
+            Assert.That(reasons, Does.Contain(TimerDriveRefusedReason),
+                "adding or removing rows between ticks must not withdraw a lagging partition's drive");
         }
         finally
         {

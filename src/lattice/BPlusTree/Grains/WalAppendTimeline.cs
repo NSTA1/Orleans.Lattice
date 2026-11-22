@@ -11,6 +11,21 @@ internal sealed class WalAppendTimeline
     private readonly SortedDictionary<long, long> _appendedAt = new();
     private long _head = -1;
 
+    /// <summary>
+    /// The highest offset acknowledged by an append on this process, or -1. A lower
+    /// bound on the partition's last offset: remote and pre-restart appends are absent.
+    /// </summary>
+    internal long Head
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _head;
+            }
+        }
+    }
+
     internal void Record(long offset, long utcTicks)
     {
         lock (_gate)

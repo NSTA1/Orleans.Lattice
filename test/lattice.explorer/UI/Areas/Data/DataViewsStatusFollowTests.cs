@@ -59,6 +59,24 @@ public sealed class DataViewsStatusFollowTests : DataTestContext
         Admin.DidNotReceive().GetViewStatusAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
+    [Test]
+    public void A_view_that_is_behind_shows_the_age_of_its_oldest_unapplied_change()
+    {
+        Seed(totalsLag: 0);
+        Admin.GetViewStatusAsync("totals", Arg.Any<CancellationToken>())
+            .Returns(new TreeViewStatus
+            {
+                ViewName = "totals",
+                SourceTreeId = "orders",
+                ApplyLag = 12,
+                ApplyLagAge = TimeSpan.FromSeconds(95),
+            });
+
+        var cut = RenderAt("data/orders?tab=views");
+
+        cut.WaitUntil(() => Assert.That(Rows(cut)[1].TextContent, Does.Contain("12 behind, oldest 1 min 35 s")));
+    }
+
     private void Seed(long totalsLag)
     {
         Client.WithTree("orders");

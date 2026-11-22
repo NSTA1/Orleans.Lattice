@@ -976,6 +976,7 @@ The following inventory includes directly declared public members and overloads,
 - `public string ActiveTreeId { get; init; }`
 - `public string? ProviderKey { get; init; }`
 - `public string? ProjectionVersion { get; init; }`
+- `public TimeSpan? ApplyLagAge { get; init; }`
 
 ### `Orleans.Lattice.Api.TreeAdmin.TreeWalFloorHolder`
 

@@ -72,9 +72,8 @@ public partial class BPlusLeafGrainTests
 
         await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
 
-        // The row is what makes this the losing population. Without it the leaf
-        // has nothing at stake and must NOT be charged a replay, which the
-        // empty-leaf fixture below asserts directly.
+        // The row makes this the losing population; the empty-leaf fixtures
+        // below cover the #6145 drain-lag population.
         SeedRow(grain);
 
         // One persist, then never again. This is the frozen state: a real,
@@ -173,32 +172,71 @@ public partial class BPlusLeafGrainTests
     }
 
     /// <summary>
-    /// The second control. An EMPTY leaf whose checkpoint is equally frozen must
-    /// not be driven either.
-    /// <para>
-    /// A frozen checkpoint is only a fault when there are rows whose durability
-    /// depends on it advancing. A genuinely empty leaf has nothing to lose, and
-    /// charging it a WAL replay on a fixed cadence would convert a silent stall
-    /// into estate-wide replay load - the cost the older predicate's live-data
-    /// requirement was careful to avoid, and which this fix must not reintroduce.
-    /// </para>
+    /// The second control. An EMPTY leaf whose checkpoint is frozen but whose WAL
+    /// has NOT moved past it must not be driven: it is caught up, so a replay
+    /// would cost load and advance nothing.
     /// </summary>
     [Test]
-    public async Task Coverage_lag_tick_never_drives_an_empty_leaf_whose_checkpoint_has_frozen()
+    public async Task Coverage_lag_tick_never_drives_a_caught_up_empty_leaf()
     {
         var treeId = UniqueCoverageRepairTreeId("checkpoint-frozen-empty");
+        var wal = new GrowingWal();
 
         var (grain, _, _, _) = CreateLeafForCoverageRepair(
             persistedCheckpoint: -1L,
             reClassifyEveryN: 1000,
             saveFailure: null,
-            treeId: treeId);
+            treeId: treeId,
+            replayCoordinator: wal.Coordinator);
 
         await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
-
-        // Deliberately NO SeedRow. This is the only difference from the defect
-        // fixture, so a pass here is evidence about the live-data requirement.
+        wal.GrowTo(4);
         await ((ILeafProjection)grain).SetCheckpointOffsetAsync(4, CancellationToken.None);
+
+        var reasons = new List<string>();
+        using (ListenForDriverDeclinesOnTree(treeId, reasons))
+        {
+            for (var tick = 0; tick < TicksToReachStalledDrive * 2; tick++)
+            {
+                await grain.OnCoverageLagTimerTickAsync(CancellationToken.None);
+            }
+        }
+
+        Assert.That(reasons, Is.Not.Empty,
+            "input count: the ticks must have reached the driver, or the negative assertion below "
+            + "proves nothing about the caught-up carve-out");
+
+        Assert.That(
+            reasons,
+            Does.Not.Contain(LatticeMetrics.DriverDeclineRecheckCheckpointStalled.Value),
+            "the WAL head has not moved past the checkpoint, so there is nothing to drain");
+    }
+
+    /// <summary>
+    /// Issue #6145. An EMPTY leaf - an aggregation-view leaf that holds no rows
+    /// in a partition - whose replay-claimed checkpoint freezes while sibling
+    /// leaves append must still be driven. The live advance only moves a
+    /// checkpoint to the leaf's own high, so nothing else ever advances it, and
+    /// the frozen claim is reported as drain lag for as long as the source is
+    /// quiet. Before the fix the stall predicate required live rows and this
+    /// leaf was never driven.
+    /// </summary>
+    [Test]
+    public async Task Coverage_lag_tick_drives_an_empty_leaf_whose_checkpoint_has_frozen_behind_the_wal()
+    {
+        var treeId = UniqueCoverageRepairTreeId("checkpoint-frozen-empty-behind");
+        var wal = new GrowingWal();
+
+        var (grain, _, _, _) = CreateLeafForCoverageRepair(
+            persistedCheckpoint: -1L,
+            reClassifyEveryN: 1000,
+            saveFailure: null,
+            treeId: treeId,
+            replayCoordinator: wal.Coordinator);
+
+        await LeafActivationHarness.ActivateAsync(grain, CancellationToken.None);
+        await ((ILeafProjection)grain).SetCheckpointOffsetAsync(4, CancellationToken.None);
+        wal.GrowTo(5);
 
         var reasons = new List<string>();
         using (ListenForDriverDeclinesOnTree(treeId, reasons))
@@ -209,15 +247,11 @@ public partial class BPlusLeafGrainTests
             }
         }
 
-        Assert.That(reasons, Is.Not.Empty,
-            "input count: the ticks must have reached the driver, or the negative assertion below "
-            + "proves nothing about the empty-leaf carve-out");
-
         Assert.That(
             reasons,
-            Does.Not.Contain(LatticeMetrics.DriverDeclineRecheckCheckpointStalled.Value),
-            "an empty leaf has no rows whose durability depends on the checkpoint, so it must not "
-            + "be charged a replay however long its checkpoint has been still");
+            Does.Contain(LatticeMetrics.DriverDeclineRecheckCheckpointStalled.Value),
+            "an empty leaf whose claimed checkpoint trails the WAL head must be driven, or its "
+            + "drain lag never clears while the source stays quiet");
     }
 
     /// <summary>

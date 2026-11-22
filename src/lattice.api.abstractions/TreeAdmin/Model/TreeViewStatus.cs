@@ -51,4 +51,13 @@ public sealed record TreeViewStatus
     /// unavailable.
     /// </summary>
     [Id(6)] public string? ProjectionVersion { get; init; }
+
+    /// <summary>
+    /// The view's lag as a time: how long the oldest committed source entry the view
+    /// has not applied has been unapplied. <see cref="TimeSpan.Zero"/> when the view
+    /// has caught up; otherwise a lower bound that undershoots by at most one of the
+    /// maintainer's lag observations and restarts when the maintainer reactivates.
+    /// <see langword="null"/> when the serving silo predates the field.
+    /// </summary>
+    [Id(7)] public TimeSpan? ApplyLagAge { get; init; }
 }

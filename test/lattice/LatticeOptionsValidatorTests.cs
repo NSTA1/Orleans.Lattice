@@ -1471,4 +1471,23 @@ public class LatticeOptionsValidatorTests
         Assert.That(result.Failed, Is.True);
         Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.LeafSnapshotMaxCoverageLagSeconds)));
     }
+
+    [TestCase(0)]
+    [TestCase(1)]
+    [TestCase(LatticeOptions.DefaultLeafCheckpointStallCheckIntervalSeconds)]
+    [TestCase(LatticeOptions.MaxLeafCheckpointStallCheckIntervalSeconds)]
+    public void LeafCheckpointStallCheckIntervalSeconds_within_range_succeeds(int value)
+    {
+        var result = Validate(o => o.LeafCheckpointStallCheckIntervalSeconds = value);
+        Assert.That(result.Succeeded, Is.True);
+    }
+
+    [TestCase(-1)]
+    [TestCase(LatticeOptions.MaxLeafCheckpointStallCheckIntervalSeconds + 1)]
+    public void LeafCheckpointStallCheckIntervalSeconds_outside_range_fails(int value)
+    {
+        var result = Validate(o => o.LeafCheckpointStallCheckIntervalSeconds = value);
+        Assert.That(result.Failed, Is.True);
+        Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeOptions.LeafCheckpointStallCheckIntervalSeconds)));
+    }
 }

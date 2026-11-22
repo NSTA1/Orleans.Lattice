@@ -203,7 +203,7 @@ internal sealed partial class ViewMaintainerGrain
     {
         var lag = await GetLagAsync(cancellationToken);
         var activeTreeId = await GetActiveTreeIdAsync(cancellationToken);
-        return new ViewMaintainerStatus(lag, activeTreeId);
+        return new ViewMaintainerStatus(lag, activeTreeId, ObserveLagAge(lag));
     }
 
     /// <inheritdoc />
