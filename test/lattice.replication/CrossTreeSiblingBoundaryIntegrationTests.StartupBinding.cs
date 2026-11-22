@@ -145,8 +145,19 @@ public partial class CrossTreeSiblingBoundaryIntegrationTests
             await SignalShipperAsync(_siteB.Client, sibling, SiteAClusterId);
             var westWriteArrived = await WaitForValueAsync(_siteA.Client, sibling, westWriteKey, [2], TimeSpan.FromSeconds(40));
 
-            var stable = await CaptureDrainStateAsync(tree, sibling);
+            // The test shortens SiblingBoundaryReseedAfter, and the cutover can trim the new
+            // physical log before the reverse shipper registers, so a re-seed can still be in
+            // flight when the writes converge (#6019): wait for state and link health to settle.
+            var stable = await WaitForDrainQuiescenceAsync(tree, sibling, TimeSpan.FromSeconds(60));
             var healthyLinks = ReadOutboundHealth(tree, sibling);
+            var healthDeadline = Environment.TickCount64 + 30_000;
+            while (!healthyLinks.All(static row => row.Contains("healthy=True", StringComparison.Ordinal))
+                && Environment.TickCount64 < healthDeadline)
+            {
+                await Task.Delay(250);
+                healthyLinks = ReadOutboundHealth(tree, sibling);
+            }
+
             TestContext.WriteLine("final-health:" + string.Join(" | ", healthyLinks));
             TestContext.WriteLine("final-bootstrap:" + stable);
             await CaptureStartupLogAsync("after-values", sibling, after);
