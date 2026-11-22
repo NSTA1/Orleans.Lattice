@@ -93,7 +93,10 @@ public sealed class U1Contract() : ChapterContract("U1")
     public static StoryEntry RefusedOrder101 { get; } = new(
         Names.Orders.Order101, StoryData.OrderJson(101, StoryData.SeededTotal(101), StoryData.InvalidStatus));
 
-    /// <summary>Writes <paramref name="entry"/> to <c>factory-orders</c>; a refusal by the policy is the expected outcome for an invalid one.</summary>
+    /// <summary>
+    /// Writes <paramref name="entry"/> to <c>factory-orders</c>, retrying a transient failure (writing
+    /// the same value again is idempotent); a refusal by the policy is the expected outcome for an invalid one.
+    /// </summary>
     /// <param name="data">The Data API.</param>
     /// <param name="entry">The entry.</param>
     /// <returns>Whether the write landed.</returns>
@@ -101,8 +104,11 @@ public sealed class U1Contract() : ChapterContract("U1")
     {
         try
         {
-            await data.SetAsync(new DataSetRequest { TreeId = Names.Trees.FactoryOrders, Key = entry.Key, Value = entry.Value });
-            return true;
+            return await ContractWait.RetryingAsync($"writing {entry.Key}", async () =>
+            {
+                await data.SetAsync(new DataSetRequest { TreeId = Names.Trees.FactoryOrders, Key = entry.Key, Value = entry.Value });
+                return true;
+            });
         }
         catch (Grpc.Core.RpcException ex) when (!ContractWait.IsTransient(ex.StatusCode))
         {
