@@ -109,7 +109,7 @@ internal sealed partial class BPlusInternalGrain
         try
         {
             TracePersist("RemoveChildCoreAsync");
-            await state.WriteStateAsync();
+            await TopologySeedPersist.WriteRecoveringLandedConflictAsync(state, ResolveLogger(), context);
         }
         catch
         {
