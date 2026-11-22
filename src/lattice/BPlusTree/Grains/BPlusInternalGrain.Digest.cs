@@ -128,7 +128,7 @@ internal sealed partial class BPlusInternalGrain
             state.State.ParentId = parentId;
             try
             {
-                await state.WriteStateAsync();
+                await TopologySeedPersist.WriteRecoveringLandedConflictAsync(state, ResolveLogger(), context);
             }
             catch
             {
@@ -235,7 +235,7 @@ internal sealed partial class BPlusInternalGrain
             if (state.State.ChildDigests.Remove(childId))
             {
                 RecomputeSubtreeAggregatesFromChildDigests();
-                await state.WriteStateAsync();
+                await TopologySeedPersist.WriteRecoveringLandedConflictAsync(state, ResolveLogger(), context);
                 MarkUpwardPublishPending();
             }
             return;
@@ -302,7 +302,7 @@ internal sealed partial class BPlusInternalGrain
         state.State.SubtreeEntryCount = entryCount;
         state.State.SubtreeHighestCheckpointOffset = maxCheckpoint;
 
-        await state.WriteStateAsync();
+        await TopologySeedPersist.WriteRecoveringLandedConflictAsync(state, ResolveLogger(), context);
 
         // Propagate upward when we have a parent. The published snapshot
         // is our own current subtree state, irrespective of whether the

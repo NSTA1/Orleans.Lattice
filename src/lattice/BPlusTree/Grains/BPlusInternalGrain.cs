@@ -12,7 +12,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </summary>
 internal sealed partial class BPlusInternalGrain(
     IGrainContext context,
-    [PersistentState("internal", LatticeOptions.StorageProviderName)] IPersistentState<InternalNodeState> state,
+    [PersistentState(TopologySeedPersist.InternalStateName, LatticeOptions.StorageProviderName)] IPersistentState<InternalNodeState> state,
     IGrainFactory grainFactory,
     LatticeOptionsResolver optionsResolver) : IBPlusInternalGrain, IGrainBase
 {
@@ -164,7 +164,7 @@ internal sealed partial class BPlusInternalGrain(
         try
         {
             TracePersist(nameof(InitializeAsync));
-            await TopologySeedPersist.WriteAdoptingBenignFirstCreateRaceAsync(state, ResolveLogger(), context.GrainId);
+            await TopologySeedPersist.WriteAdoptingBenignFirstCreateRaceAsync(state, ResolveLogger(), context);
         }
         catch
         {
@@ -222,7 +222,7 @@ internal sealed partial class BPlusInternalGrain(
         try
         {
             TracePersist(nameof(InitializeWithChildrenAsync));
-            await TopologySeedPersist.WriteAdoptingBenignFirstCreateRaceAsync(state, ResolveLogger(), context.GrainId);
+            await TopologySeedPersist.WriteAdoptingBenignFirstCreateRaceAsync(state, ResolveLogger(), context);
         }
         catch
         {
@@ -441,7 +441,7 @@ internal sealed partial class BPlusInternalGrain(
             try
             {
                 TracePersist("AcceptSplitCoreAsync.recovery");
-                await state.WriteStateAsync();
+                await TopologySeedPersist.WriteRecoveringLandedConflictAsync(state, ResolveLogger(), context);
             }
             catch
             {
@@ -509,7 +509,7 @@ internal sealed partial class BPlusInternalGrain(
         try
         {
             TracePersist("AcceptSplitCoreAsync.main");
-            await state.WriteStateAsync();
+            await TopologySeedPersist.WriteRecoveringLandedConflictAsync(state, ResolveLogger(), context);
         }
         catch
         {
@@ -575,7 +575,7 @@ internal sealed partial class BPlusInternalGrain(
         try
         {
             TracePersist(nameof(SetTreeIdAsync));
-            await TopologySeedPersist.WriteAdoptingBenignFirstCreateRaceAsync(state, ResolveLogger(), context.GrainId);
+            await TopologySeedPersist.WriteAdoptingBenignFirstCreateRaceAsync(state, ResolveLogger(), context);
         }
         catch
         {
@@ -620,7 +620,7 @@ internal sealed partial class BPlusInternalGrain(
         PruneMovedChildDigests(rightChildren.Select(c => c.ChildId));
 
         TracePersist(nameof(SplitAsync));
-        await state.WriteStateAsync();
+        await TopologySeedPersist.WriteRecoveringLandedConflictAsync(state, ResolveLogger(), context);
 
         // Republish our now-reduced subtree digest to the parent so it
         // refreshes its stored snapshot for us. The prune above recomputed

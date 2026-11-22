@@ -114,6 +114,13 @@ public sealed class DashboardJsonTests
             // Both reference docs prescribe an alert keyed off this metric.
             "orleans.lattice.leaf.unresolved_prepare_ledger_beyond_cap",
 
+            // orleans.lattice.storage.landed_write_conflicts_adopted (issue
+            // #5095) is an alert-only anomaly counter: it sits at zero unless a
+            // storage client retries an already-committed topology write, so a
+            // bundled trend panel would be a permanently flat graph. The
+            // reference docs prescribe investigating a sustained non-zero rate.
+            "orleans.lattice.storage.landed_write_conflicts_adopted",
+
             // The three registry fan-in gate state histograms (issue #3266) are
             // instrument-grade diagnostics, not operator-facing signals. They
             // exist to answer one question a rig asks and an operator does not:

@@ -1,4 +1,9 @@
+using System.Runtime.ExceptionServices;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Orleans.Core;
+using Orleans.Lattice.BPlusTree.State;
+using Orleans.Serialization;
 using Orleans.Storage;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
@@ -71,14 +76,44 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// first-create is swallowed and adopted before the caller's revert can undo the
 /// seed it was trying to persist.
 /// </para>
+/// <para>
+/// <b>A write that landed but was reported as a conflict is adopted too
+/// (#5095).</b> A storage client that transparently retries a request whose
+/// first attempt committed sees its own new etag on the retry and reports an
+/// etag conflict, although the row already holds exactly what this activation
+/// wrote. Surfacing that conflict deactivated the grain in the middle of a split
+/// and stranded the stale etag on the next checkpoint barrier, which is how a
+/// large ascending <c>SetManyAsync</c> wedged behind a long WAL replay. Every
+/// write through this helper therefore re-reads the stored row on a conflict and
+/// adopts its etag when, and only when, the row serialises byte-for-byte equal to
+/// the state this activation wrote. Any difference - a genuine competing writer
+/// or a stale activation - rethrows the original conflict, so the #1560
+/// fail-loud contract is unchanged; the check can only err towards surfacing.
+/// </para>
 /// </remarks>
 internal static class TopologySeedPersist
 {
+    /// <summary>The persistent-state name of <see cref="BPlusLeafGrain"/>.</summary>
+    public const string LeafStateName = "leaf";
+
+    /// <summary>The persistent-state name of <see cref="BPlusInternalGrain"/>.</summary>
+    public const string InternalStateName = "internal";
+
+    /// <summary>The persistent-state name of <see cref="ShardRootGrain"/>.</summary>
+    public const string ShardRootStateName = "shardroot";
+
+    private static string? StateNameOf<TState>() =>
+        typeof(TState) == typeof(LeafNodeState) ? LeafStateName
+        : typeof(TState) == typeof(InternalNodeState) ? InternalStateName
+        : typeof(TState) == typeof(ShardRootState) ? ShardRootStateName
+        : null;
+
     /// <summary>
     /// Writes <paramref name="state"/>, converging a benign cold-start
     /// first-create write race by re-reading and adopting the
-    /// concurrently-committed row. Every other failure - including a stale-state
-    /// conflict on an existing row - is rethrown unchanged.
+    /// concurrently-committed row, and adopting a write that landed but was
+    /// reported as an etag conflict (#5095). Every other failure - including a
+    /// stale-state conflict on an existing row - is rethrown unchanged.
     /// <para>
     /// <c>creatingRow</c> is the load-bearing condition; see the type remarks for
     /// why the etag clause beside it is vacuous on <c>AdoNetGrainStorage</c> and
@@ -91,11 +126,37 @@ internal static class TopologySeedPersist
     /// Optional logger for the best-effort convergence debug line; may be
     /// <see langword="null"/>.
     /// </param>
-    /// <param name="grainId">The grain id, for the convergence debug line.</param>
-    public static async Task WriteAdoptingBenignFirstCreateRaceAsync<TState>(
+    /// <param name="context">
+    /// The grain's context, which supplies the grain id for the convergence debug
+    /// line and the services the landed-write check reads the committed row with.
+    /// </param>
+    public static Task WriteAdoptingBenignFirstCreateRaceAsync<TState>(
         IPersistentState<TState> state,
         ILogger? logger,
-        GrainId grainId)
+        IGrainContext context)
+        => WriteCoreAsync(state, logger, context, adoptBenignFirstCreate: true);
+
+    /// <summary>
+    /// Writes <paramref name="state"/>, recovering only a write that landed but
+    /// was reported as an etag conflict (issue #5095). Every other failure -
+    /// including a benign first-create race and a genuine stale-state conflict -
+    /// is rethrown unchanged.
+    /// </summary>
+    /// <typeparam name="TState">The persisted grain-state POCO.</typeparam>
+    /// <param name="state">The grain's persistent state.</param>
+    /// <param name="logger">Optional logger; may be <see langword="null"/>.</param>
+    /// <param name="context">The grain's context.</param>
+    public static Task WriteRecoveringLandedConflictAsync<TState>(
+        IPersistentState<TState> state,
+        ILogger? logger,
+        IGrainContext context)
+        => WriteCoreAsync(state, logger, context, adoptBenignFirstCreate: false);
+
+    private static async Task WriteCoreAsync<TState>(
+        IPersistentState<TState> state,
+        ILogger? logger,
+        IGrainContext context,
+        bool adoptBenignFirstCreate)
     {
         // #1557 / #1566: capture whether this write is an initial create BEFORE
         // the attempt. This flag - NOT the etag test below - is what makes
@@ -109,14 +170,105 @@ internal static class TopologySeedPersist
             await state.WriteStateAsync();
         }
         catch (InconsistentStateException ex)
-            when (creatingRow
+            when (adoptBenignFirstCreate
+                && creatingRow
                 && string.IsNullOrEmpty(ex.StoredEtag)
                 && string.IsNullOrEmpty(ex.CurrentEtag))
         {
             await state.ReadStateAsync();
             logger?.LogDebug(
                 "Topology grain {GrainId} converged a benign first-create write race (#1557/#1566) by adopting the concurrently-committed row.",
-                grainId);
+                context.GrainId);
+        }
+        catch (InconsistentStateException ex)
+        {
+            if (!await TryAdoptLandedWriteAsync(state, context, creatingRow))
+            {
+                ExceptionDispatchInfo.Capture(ex).Throw();
+            }
+
+            LatticeMetrics.LandedWriteConflictsAdopted.Add(1, LatticeTenantLabel.ForTree(TreeIdOf(state.State)));
+            logger?.LogWarning(
+                "Topology grain {GrainId} adopted a write that landed but was reported as an etag conflict (#5095), for example by a storage-client retry of a committed request.",
+                context.GrainId);
+        }
+    }
+
+    private static string? TreeIdOf<TState>(TState state) => state switch
+    {
+        LeafNodeState leaf => leaf.TreeId,
+        InternalNodeState node => node.TreeId,
+        _ => null,
+    };
+
+    /// <summary>
+    /// Issue #5095: a storage client that retries a request which already
+    /// committed (the Azure SDK does so on a timeout) reports an etag conflict
+    /// for a write that landed. Rethrowing it deactivates the grain mid-call and
+    /// leaves every interleaved turn holding a stale etag, so a single transient
+    /// fault wedges the tree. This re-reads the committed row without touching
+    /// <see cref="IPersistentState{TState}.State"/> and, only when it is
+    /// byte-identical to the state just written, adopts its etag.
+    /// </summary>
+    /// <remarks>
+    /// The check is conservative: any doubt - no storage service, a row that
+    /// differs (a genuine stale-state conflict, or in-memory state that moved on
+    /// since the write began), or a failure reading it - answers
+    /// <see langword="false"/>, so the conflict surfaces exactly as before and the
+    /// #1560 fail-loud contract holds. Equal bytes mean the durable row already
+    /// holds what this write intended, so adopting it loses nothing.
+    /// </remarks>
+    private static async Task<bool> TryAdoptLandedWriteAsync<TState>(
+        IPersistentState<TState> state,
+        IGrainContext context,
+        bool creatingRow)
+    {
+        try
+        {
+            if (state is not StateStorageBridge<TState> bridge)
+            {
+                return false;
+            }
+
+            var services = context.ActivationServices;
+            var serializer = services.GetService<Serializer>();
+            var storage = services.GetKeyedService<IGrainStorage>(LatticeOptions.StorageProviderName)
+                ?? services.GetService<IGrainStorage>();
+            var stateName = StateNameOf<TState>();
+            if (serializer is null || storage is null || stateName is null)
+            {
+                return false;
+            }
+
+            var committed = new GrainState<TState>();
+            await storage.ReadStateAsync(stateName, context.GrainId, committed);
+            if (!committed.RecordExists || string.IsNullOrEmpty(committed.ETag))
+            {
+                return false;
+            }
+
+            var intended = serializer.SerializeToArray(state.State);
+            if (!intended.AsSpan().SequenceEqual(serializer.SerializeToArray(committed.State)))
+            {
+                return false;
+            }
+
+            if (creatingRow)
+            {
+                // RecordExists has no public setter on the bridge, so a create
+                // adopts the identical row the way the #1557 path does.
+                await state.ReadStateAsync();
+            }
+            else
+            {
+                bridge.Etag = committed.ETag;
+            }
+
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
         }
     }
 }

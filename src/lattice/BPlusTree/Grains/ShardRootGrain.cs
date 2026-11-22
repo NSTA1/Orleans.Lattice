@@ -29,7 +29,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 [Orleans.Placement.RandomPlacement]
 internal sealed partial class ShardRootGrain(
     IGrainContext context,
-    [PersistentState("shardroot", LatticeOptions.StorageProviderName)] IPersistentState<ShardRootState> state,
+    [PersistentState(TopologySeedPersist.ShardRootStateName, LatticeOptions.StorageProviderName)] IPersistentState<ShardRootState> state,
     IGrainFactory grainFactory,
     LatticeOptionsResolver optionsResolver,
     ILogger<ShardRootGrain> logger,
@@ -606,7 +606,7 @@ internal sealed partial class ShardRootGrain(
             // unaffected. The shard-root seed's root leaf uses a deterministic
             // id (see EnsureRootSlowAsync), so adopting the winner's row
             // reuses the same leaf identity - no orphan.
-            await TopologySeedPersist.WriteAdoptingBenignFirstCreateRaceAsync(state, logger, context.GrainId);
+            await TopologySeedPersist.WriteAdoptingBenignFirstCreateRaceAsync(state, logger, context);
         }
         finally
         {

@@ -718,6 +718,17 @@ public static class LatticeMetrics
             description: "Projection-digest reads served by a shard root, covering whole-shard and key-range digest reads.");
 
     /// <summary>
+    /// Counter incremented once each time a leaf, internal-node, or shard-root
+    /// write that landed in storage but was reported as an etag conflict - for
+    /// example by a storage client retrying a request that had already committed -
+    /// is recognised and adopted instead of failing the grain (issue #5095). A
+    /// non-zero rate means the storage client is retrying committed writes.
+    /// </summary>
+    public static readonly Counter<long> LandedWriteConflictsAdopted =
+        Meter.CreateCounter<long>("orleans.lattice.storage.landed_write_conflicts_adopted", unit: "{write}",
+            description: "Topology-grain writes that landed but were reported as an etag conflict (for example by a storage-client retry) and were adopted rather than failing the grain.");
+
+    /// <summary>
     /// Counter incremented once for every leaf-side projection-digest decision
     /// point, tagged with <see cref="TagTree"/> and <see cref="TagPath"/>:
     /// <list type="bullet">

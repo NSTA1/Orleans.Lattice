@@ -379,6 +379,7 @@ A throughput-style counter measures either **operations** or **records**, and th
 | `orleans.lattice.storage.wal.uncompressed_bytes` | counter (`By`) | `tree`, `tenant` | Overview | WAL compression savings ratio by tree |
 | `orleans.lattice.storage.wal.stored_bytes` | counter (`By`) | `tree`, `tenant` | Overview | WAL compression savings ratio by tree |
 | `orleans.lattice.storage.wal.compression_skipped` | counter (`{row}`) | `tree`, `reason`, `tenant` | Overview | WAL compression skips by reason |
+| `orleans.lattice.storage.landed_write_conflicts_adopted` | counter (`{write}`) | `tenant` | (none) | **not charted** |
 | `orleans.lattice.saga.prepare.duration` | histogram (ms) | `tree`, `wal_partitions`, `tenant` | AtomicWrites | Saga phase durations p95 (ms) - prepare / decision / broadcast / checkpoint / reminder |
 | `orleans.lattice.saga.terminal_decision.duration` | histogram (ms) | `tree`, `wal_partitions`, `tenant` | AtomicWrites | Saga phase durations p95 (ms) - prepare / decision / broadcast / checkpoint / reminder |
 | `orleans.lattice.saga.broadcast.duration` | histogram (ms) | `tree`, `wal_partitions`, `tenant` | AtomicWrites | Saga phase durations p95 (ms) - prepare / decision / broadcast / checkpoint / reminder |
