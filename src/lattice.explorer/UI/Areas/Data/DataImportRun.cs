@@ -60,6 +60,7 @@ internal sealed class DataImportRun : IDisposable
     private long _checked;
     private int _phase;
     private volatile bool _stopRequested;
+    private CancellationTokenSource? _reading;
     private string? _failure;
     private string? _note;
     private long? _treeKeys;
@@ -163,6 +164,17 @@ internal sealed class DataImportRun : IDisposable
     public void Stop()
     {
         _stopRequested = true;
+
+        // Stop reading the file now rather than once the chunk in flight commits: an unread
+        // browser upload times out after a minute and takes the circuit down with it.
+        try
+        {
+            _ = Volatile.Read(ref _reading)?.CancelAsync();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+
         Changed?.Invoke();
     }
 
@@ -321,7 +333,7 @@ internal sealed class DataImportRun : IDisposable
         {
             var channel = NewChannel();
             using var reading = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            var producer = ProduceAsync(file, reader, channel.Writer, lines: null, seed: true, reading.Token);
+            var producer = ProduceAsync(file, reader, channel.Writer, lines: null, seed: true, Track(reading));
             var progress = new Sink<TreeBulkLoadChunkAck>(ack =>
             {
                 // Every chunk but the last is full, so the entries through an acknowledged
@@ -360,7 +372,7 @@ internal sealed class DataImportRun : IDisposable
             var channel = NewChannel();
             using var reading = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             var lines = new ConcurrentQueue<(long Ordinal, long Line)>();
-            var producer = ProduceAsync(file, reader, channel.Writer, lines, seed: false, reading.Token);
+            var producer = ProduceAsync(file, reader, channel.Writer, lines, seed: false, Track(reading));
             var progress = new Sink<DataSetManyStreamBatch>(batch =>
             {
                 var end = batch.FirstOrdinal + batch.EntryCount;
@@ -434,9 +446,20 @@ internal sealed class DataImportRun : IDisposable
 
             writer.TryComplete();
         }
+        catch (Exception) when (_stopRequested)
+        {
+            // Stop cancelled the read: the entries already handed over are still written.
+            writer.TryComplete();
+        }
         catch (Exception exception)
         {
             writer.TryComplete(exception);
+        }
+        finally
+        {
+            // Nothing reads the file after this, so release it: a browser upload left unread
+            // times out and faults the circuit.
+            await file.DisposeAsync().ConfigureAwait(false);
         }
     }, CancellationToken.None);
 
@@ -461,10 +484,11 @@ internal sealed class DataImportRun : IDisposable
         }
     }
 
-    private static async Task DrainAsync(Channel<DataEntry> channel, Task producer, CancellationTokenSource reading)
+    private async Task DrainAsync(Channel<DataEntry> channel, Task producer, CancellationTokenSource reading)
     {
         // The writer has finished with the channel: stop the reader, and empty the channel so
         // a reader waiting for room wakes to the cancellation.
+        Interlocked.CompareExchange(ref _reading, null, reading);
         await reading.CancelAsync().ConfigureAwait(false);
         channel.Writer.TryComplete();
         while (channel.Reader.TryRead(out _))
@@ -472,6 +496,18 @@ internal sealed class DataImportRun : IDisposable
         }
 
         await producer.ConfigureAwait(false);
+    }
+
+    /// <summary>Makes <paramref name="reading"/> the one <see cref="Stop"/> cancels.</summary>
+    private CancellationToken Track(CancellationTokenSource reading)
+    {
+        Volatile.Write(ref _reading, reading);
+        if (_stopRequested)
+        {
+            reading.Cancel();
+        }
+
+        return reading.Token;
     }
 
     private Channel<DataEntry> NewChannel() => Channel.CreateBounded<DataEntry>(new BoundedChannelOptions(_channelCapacity)

@@ -99,7 +99,7 @@ public sealed partial class DataStewardJourney
     private async Task EditBinaryAndRawValuesAsync()
     {
         await _priya.Shell.GotoAsync("/data/" + Names.Trees.FactoryTelemetry);
-        await Expect(_tree.Heading).ToHaveTextAsync(Names.Trees.FactoryTelemetry);
+        await _tree.ExpectOpenAsync(Names.Trees.FactoryTelemetry);
         await _tree.WaitForKeysAsync();
         // Not reading/latest, which the line feed overwrites twice a second.
         var reading = (await _tree.KeysAsync()).First(key => key != "reading/latest");
@@ -162,7 +162,7 @@ public sealed partial class DataStewardJourney
     private async Task CreateAndDeleteAnEntryAndTailHistoryAsync()
     {
         await _priya.Shell.GotoAsync("/data/" + Names.Trees.FactoryOrders);
-        await Expect(_tree.Heading).ToHaveTextAsync(Names.Trees.FactoryOrders);
+        await _tree.ExpectOpenAsync(Names.Trees.FactoryOrders);
         await _tree.WaitForKeysAsync();
         await _tree.NewEntry.ClickAsync();
         var editor = new DataEntryEditor(_priya.Page, "New entry");

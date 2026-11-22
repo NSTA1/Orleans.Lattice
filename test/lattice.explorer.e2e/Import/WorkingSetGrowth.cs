@@ -40,6 +40,13 @@ internal sealed record WorkingSetGrowth(string Process, long Baseline, long Peak
     /// <summary>The live managed heap once the import had finished and its memory was settled, in bytes.</summary>
     public long? LiveAfter { get; init; }
 
+    /// <summary>
+    /// The lowest live heap read once the import had finished, after the process was settled
+    /// further while it was still over what it may keep, in bytes; <see langword="null"/> when
+    /// it was not read. At or below <see cref="LiveAfter"/>.
+    /// </summary>
+    public long? LiveDrained { get; init; }
+
     /// <summary>The working set once the import had finished and its memory was settled, in bytes.</summary>
     public long? SettledAfter { get; init; }
 
@@ -70,11 +77,12 @@ internal sealed record WorkingSetGrowth(string Process, long Baseline, long Peak
         : null;
 
     /// <summary>
-    /// How far the settled live heap after the import is above the settled live heap before the
-    /// warm-up (or before the import, without a warm-up), in bytes: what the warm-up and the
-    /// import together left behind. <see langword="null"/> without those readings.
+    /// How far the drained live heap after the import (<see cref="LiveDrained"/>, or
+    /// <see cref="LiveAfter"/> without it) is above the settled live heap before the warm-up (or
+    /// before the import, without a warm-up), in bytes: what the warm-up and the import together
+    /// left behind. <see langword="null"/> without those readings.
     /// </summary>
-    public long? LiveKept => (WarmUpLiveBaseline ?? LiveBaseline) is { } before && LiveAfter is { } after
+    public long? LiveKept => (WarmUpLiveBaseline ?? LiveBaseline) is { } before && (LiveDrained ?? LiveAfter) is { } after
         ? Math.Max(0, after - before)
         : null;
 
@@ -88,12 +96,12 @@ internal sealed record WorkingSetGrowth(string Process, long Baseline, long Peak
         var text = new StringBuilder();
         text.AppendLine(CultureInfo.InvariantCulture, $"### {title} ({Mb(fileBytes)} file)");
         text.AppendLine();
-        text.AppendLine("| Process | Live heap baseline | Live heap peak | Live heap settled | Live growth | Live in flight | Warm-up live baseline | Kept across both imports | Warm-up live growth | Working set baseline | Warm-up working set peak | Working set peak | Working set growth | Working set settled | Samples (live / working set) | Collector |");
-        text.AppendLine("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|");
+        text.AppendLine("| Process | Live heap baseline | Live heap peak | Live heap settled | Live heap drained | Live growth | Live in flight | Warm-up live baseline | Kept across both imports | Warm-up live growth | Working set baseline | Warm-up working set peak | Working set peak | Working set growth | Working set settled | Samples (live / working set) | Collector |");
+        text.AppendLine("|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|");
         foreach (var reading in readings)
         {
             text.AppendLine(CultureInfo.InvariantCulture,
-                $"| {reading.Process} | {Mb(reading.LiveBaseline)} | {Mb(reading.LivePeak)} | {Mb(reading.LiveAfter)} | {Mb(reading.LiveGrowth)} | {Mb(reading.LiveInFlight)} | {Mb(reading.WarmUpLiveBaseline)} | {Mb(reading.LiveKept)} | {Mb(reading.WarmUpLiveGrowth)} | {Mb(reading.Baseline)} | {Mb(reading.WarmUpPeak)} | {Mb(reading.Peak)} | {Mb(reading.Growth)} | {Mb(reading.SettledAfter)} | {reading.LiveSamples} / {reading.Samples} | {reading.Collector ?? "-"} |");
+                $"| {reading.Process} | {Mb(reading.LiveBaseline)} | {Mb(reading.LivePeak)} | {Mb(reading.LiveAfter)} | {Mb(reading.LiveDrained)} | {Mb(reading.LiveGrowth)} | {Mb(reading.LiveInFlight)} | {Mb(reading.WarmUpLiveBaseline)} | {Mb(reading.LiveKept)} | {Mb(reading.WarmUpLiveGrowth)} | {Mb(reading.Baseline)} | {Mb(reading.WarmUpPeak)} | {Mb(reading.Peak)} | {Mb(reading.Growth)} | {Mb(reading.SettledAfter)} | {reading.LiveSamples} / {reading.Samples} | {reading.Collector ?? "-"} |");
         }
 
         return text.ToString();

@@ -107,21 +107,21 @@ public sealed partial class DataStewardJourney
 
         await _priya.Shell.Suggestions.Nth(index).ClickAsync();
         await Expect(_priya.Shell.AddressInput).ToBeHiddenAsync();
-        await Expect(_tree.Heading).ToHaveTextAsync(Names.Trees.FactoryOrders);
+        await _tree.ExpectOpenAsync(Names.Trees.FactoryOrders);
         await _tree.WaitForKeysAsync();
         await CheckpointAsync("2", "completed-tree", "Accepting the completion opens factory-orders");
 
         // The alias: orders names the same tree. A read is authorized on the name it addresses,
         // so stewards-factory grants her orders as well as factory-orders (#5597).
         await _priya.Shell.GotoAsync("/data/" + Names.Aliases.Orders);
-        await Expect(_tree.Heading).ToHaveTextAsync(Names.Aliases.Orders);
+        await _tree.ExpectOpenAsync(Names.Aliases.Orders);
         await _tree.WaitForKeysAsync();
         await _tree.SetPrefixAsync("order/00");
         Assert.That(await _tree.KeysAsync(), Has.Count.EqualTo(25), "the orders alias reads the seeded factory-orders keys");
         Coverage.Hit("use-case:data/alias-resolution");
         await CheckpointAsync("2", "alias", "/data/orders reaches factory-orders through the alias");
         await _priya.Shell.GotoAsync("/data/" + Names.Trees.FactoryOrders);
-        await Expect(_tree.Heading).ToHaveTextAsync(Names.Trees.FactoryOrders);
+        await _tree.ExpectOpenAsync(Names.Trees.FactoryOrders);
         await _tree.WaitForKeysAsync();
 
         // A prefix the line feed never writes, so the pages hold still while she pages them.
@@ -161,7 +161,7 @@ public sealed partial class DataStewardJourney
     private async Task FollowLiveUpdatesAndRecoverAnExpiredCursorAsync()
     {
         await _priya.Shell.GotoAsync("/data/" + Names.Trees.FactoryOrders);
-        await Expect(_tree.Heading).ToHaveTextAsync(Names.Trees.FactoryOrders);
+        await _tree.ExpectOpenAsync(Names.Trees.FactoryOrders);
         await _tree.WaitForKeysAsync();
 
         // A decade of order numbers the line feed is about to reach: empty now, filled live.

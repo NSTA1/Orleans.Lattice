@@ -26,6 +26,17 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Import;
 /// about a quarter of every byte streamed through it fails even with no one-time state, and
 /// every recorded silo carried 40 MB or more of that state, so in practice far less fails.
 /// </para>
+/// <para>
+/// <b>Kept is read once the heap has drained.</b> A silo releases what a large upsert queued
+/// on its own schedule, and on a slow run that comes after the heap has held level for the
+/// sampler's quiet rounds (#6115). Run 45008970668 read west-silo-1 as keeping 102.2 MB, with
+/// only 0.7 MB in flight: its settled heap had not yet come down. On the run before, the same
+/// silo settled at 149.3 MB after the import, below the 181.0 MB it started it at, as state
+/// queued by the warm-up was released late. So a
+/// process still over this bound is settled further, for a bounded time, and what it kept is
+/// read from <see cref="WorkingSetGrowth.LiveDrained"/>. The in-flight bound keeps reading
+/// <see cref="WorkingSetGrowth.LiveAfter"/>, so the longer wait cannot widen it.
+/// </para>
 /// </remarks>
 internal static class ImportMemoryBudget
 {
@@ -60,9 +71,26 @@ internal static class ImportMemoryBudget
 
         if (kept >= KeptCeilingBytes)
         {
-            violations.Add($"{reading.Process} kept {WorkingSetGrowth.Mb(kept)} of live heap across the warm-up and a {mode} of a {WorkingSetGrowth.Mb(fileBytes)} file, from {WorkingSetGrowth.Mb(reading.WarmUpLiveBaseline ?? reading.LiveBaseline ?? 0)} to {WorkingSetGrowth.Mb(reading.LiveAfter ?? 0)} (ceiling {WorkingSetGrowth.Mb(KeptCeilingBytes)})");
+            violations.Add($"{reading.Process} kept {WorkingSetGrowth.Mb(kept)} of live heap across the warm-up and a {mode} of a {WorkingSetGrowth.Mb(fileBytes)} file, from {WorkingSetGrowth.Mb(reading.WarmUpLiveBaseline ?? reading.LiveBaseline ?? 0)} to {WorkingSetGrowth.Mb(reading.LiveDrained ?? reading.LiveAfter ?? 0)} (ceiling {WorkingSetGrowth.Mb(KeptCeilingBytes)})");
         }
 
         return violations;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="reading"/> shows a process keeping state the drain cannot release
+    /// (#6150): it still kept <see cref="KeptCeilingBytes"/> or more once the hold ran out, and the
+    /// hold freed less than half of what it kept (run 45052486937: west-silo-1 freed 6.5 MB of
+    /// 105.0 MB in three minutes). A heap the hold brought down by half of what it kept or more
+    /// was still draining: that is a slow drain (#6115).
+    /// </summary>
+    /// <param name="reading">One process's readings across the import.</param>
+    /// <returns><see langword="true"/> when the reading carries the retention signature.</returns>
+    public static bool IsRetained(WorkingSetGrowth reading)
+    {
+        ArgumentNullException.ThrowIfNull(reading);
+        return reading.LiveKept is { } kept && kept >= KeptCeilingBytes
+            && reading.LiveAfter is { } settled && reading.LiveDrained is { } drained
+            && settled - drained < kept / 2;
     }
 }

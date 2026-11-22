@@ -1,6 +1,7 @@
 using System.Text.RegularExpressions;
 using Microsoft.Playwright;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Browser;
+using Orleans.Lattice.Explorer.EndToEnd.Tests.Journeys;
 using static Microsoft.Playwright.Assertions;
 
 namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Shell;
@@ -109,7 +110,9 @@ public sealed partial class ShellPage
     {
         ArgumentNullException.ThrowIfNull(control);
         await Page.EvaluateAsync("() => { window.__ltLeaving = true; }");
-        await control.ClickAsync();
+        // The click waits for the post's redirect, which a saturated estate can hold past
+        // Playwright's 30 s default.
+        await control.ClickAsync(new() { Timeout = PanelSettled.BoundMs });
         await JourneyBrowser.WaitForInteractiveAsync(Page);
     }
 
@@ -184,15 +187,17 @@ public sealed partial class ShellPage
     /// <param name="user">The user name.</param>
     public async Task ExpectSignedInAsync(string user)
     {
+        // The chrome names the identity only once the new circuit has resolved it from the
+        // cluster, which a saturated estate can hold past the 5 s default.
         if (await IsCompactAsync())
         {
             var session = await OpenIdentityMenuAsync();
-            await Expect(session).ToContainTextAsync(user);
+            await Expect(session).ToContainTextAsync(user, new() { Timeout = PanelSettled.BoundMs });
             await CloseMenuAsync();
             return;
         }
 
-        await Expect(SessionButton(user)).ToBeVisibleAsync();
+        await Expect(SessionButton(user)).ToBeVisibleAsync(new() { Timeout = PanelSettled.BoundMs });
     }
 
     /// <summary>

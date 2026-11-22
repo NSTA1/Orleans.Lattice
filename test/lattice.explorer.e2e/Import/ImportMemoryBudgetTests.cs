@@ -57,6 +57,54 @@ public sealed class ImportMemoryBudgetTests
         Assert.That(ImportMemoryBudget.Violations(reading, "upsert", FileBytes), Is.Empty);
     }
 
+    /// <summary>
+    /// Explorer Journeys run 45008970668 (job 137166900799), west-silo-1 during the 200 MB
+    /// upsert: warm-up live baseline 143.4 MB, live baseline 188.5 MB, peak 246.3 MB, settled
+    /// 245.7 MB - 0.7 MB in flight, read as keeping 102.2 MB because its heap had not yet come
+    /// down (#6115). Judged on the heap it drains to, it passes; the in-flight bound still
+    /// reads the settled heap, so draining further does not widen it.
+    /// </summary>
+    [Test]
+    public void A_silo_that_drains_after_its_quiet_rounds_is_judged_on_its_drained_heap()
+    {
+        var reading = Reading(warmUpBaseline: 1434 * Mb / 10, baseline: 1885 * Mb / 10, peak: 2463 * Mb / 10, settled: 2457 * Mb / 10);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ImportMemoryBudget.Violations(reading, "upsert", FileBytes), Has.Count.EqualTo(1), "the recorded reading, before the drain");
+            Assert.That(ImportMemoryBudget.Violations(reading with { LiveDrained = 150 * Mb }, "upsert", FileBytes), Is.Empty);
+            Assert.That((reading with { LiveDrained = 150 * Mb }).LiveInFlight, Is.EqualTo(reading.LiveInFlight));
+        });
+    }
+
+    /// <summary>A process that keeps state past the hold is still read as keeping it.</summary>
+    [Test]
+    public void A_process_still_keeping_state_once_drained_fails()
+    {
+        var reading = Reading(warmUpBaseline: 120 * Mb, baseline: 125 * Mb, peak: 200 * Mb, settled: 199 * Mb) with { LiveDrained = 190 * Mb };
+
+        Assert.That(ImportMemoryBudget.Violations(reading, "upsert", FileBytes), Has.Count.EqualTo(1));
+    }
+
+    /// <summary>
+    /// Explorer Journeys run 45042005049, west-silo-1 during the 200 MB upsert (#6150): kept
+    /// 97.9 MB, settled 245.6 MB and drained only to 241.8 MB, so the hold did not release it.
+    /// A heap still falling by a drain step, or one under the kept ceiling, is not retained.
+    /// </summary>
+    [Test]
+    public void A_heap_the_hold_does_not_bring_down_is_retained()
+    {
+        var reading = Reading(warmUpBaseline: 1439 * Mb / 10, baseline: 2139 * Mb / 10, peak: 2794 * Mb / 10, settled: 2456 * Mb / 10) with { LiveDrained = 2418 * Mb / 10 };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ImportMemoryBudget.IsRetained(reading), Is.True);
+            Assert.That(ImportMemoryBudget.IsRetained(reading with { LiveAfter = 2560 * Mb / 10, LiveDrained = 2495 * Mb / 10 }), Is.True, "freed 6.5 MB of 105.6 MB");
+            Assert.That(ImportMemoryBudget.IsRetained(reading with { LiveDrained = 2080 * Mb / 10 }), Is.False, "still draining");
+            Assert.That(ImportMemoryBudget.IsRetained(reading with { WarmUpLiveBaseline = 200 * Mb }), Is.False, "under the kept ceiling");
+        });
+    }
+
     /// <summary>A process holding a fifth of the file while it streams, and releasing it after, fails.</summary>
     [Test]
     public void A_process_holding_a_fifth_of_the_file_in_flight_fails()

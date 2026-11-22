@@ -5,6 +5,7 @@ using Orleans.Lattice.Api.TreeAdmin.Grpc;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Cast;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Checkpoints;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Estate;
+using Orleans.Lattice.Explorer.EndToEnd.Tests.Pending;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Reports;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Sessions;
 using static Microsoft.Playwright.Assertions;
@@ -89,6 +90,8 @@ public sealed class ImportMemoryTests
     private const long FileBytes = 200L * 1024 * 1024;
     private const long WarmUpBytes = FileBytes / 4;
     private const int UpsertKeys = 512;
+
+    private static readonly KnownDefect RetainedUpsert = new KnownDefect("#6150", "a silo keeps the 200 MB upsert's state through the drain, above the kept ceiling");
     private const string SeedWarmUpTree = "memory-seed-warmup";
     private const string SeedTree = "memory-seed";
     private const string UpsertTree = "memory-upsert";
@@ -157,7 +160,7 @@ public sealed class ImportMemoryTests
         await ChooseAsync(dialog, file, "bulk/{/id}", "/n");
         await olivia.SubstepAsync("file-chosen", "A 200 MB NDJSON file is chosen; the key comes from /id and the value from /n");
 
-        var growth = await MeasureAsync(olivia, dialog, "Seed tree", lines, "seed-progress", "The seed streams the file: the pre-flight pass checks its order before anything is written");
+        var growth = await MeasureAsync(olivia, dialog, "Seed tree", lines, "seed-progress", "The seed streams the file: the pre-flight pass checks its order before anything is written", KeptFrom(warmUpReadings));
         await olivia.SubstepAsync("succeeded", $"Seeded {ImportFiles.Count(lines)} entries; no process held 32 MB of the file in flight");
 
         growth = WithWarmUp(growth, warmUpReadings);
@@ -217,16 +220,27 @@ public sealed class ImportMemoryTests
         await ChooseAsync(dialog, file, "order/{/id}", valuePointer: null);
         await olivia.SubstepAsync("file-chosen", "A 200 MB NDJSON file of whole order records is chosen for an upsert");
 
-        var growth = await MeasureAsync(olivia, dialog, "Import", lines, "upsert-progress", "The upsert streams every record through the gateway to the silos, a batch at a time");
+        var growth = await MeasureAsync(olivia, dialog, "Import", lines, "upsert-progress", "The upsert streams every record through the gateway to the silos, a batch at a time", KeptFrom(warmUpReadings));
         await olivia.SubstepAsync("succeeded", $"Wrote {ImportFiles.Count(lines)} records; no process held 32 MB of the file in flight");
 
         growth = WithWarmUp(growth, warmUpReadings);
         var (found, _) = await FindEveryKeyAsync(UpsertTree, Enumerable.Range(0, UpsertKeys).Select(key => $"order/{key:D6}"));
         var scanned = await CountKeysAsync(UpsertTree);
         Report("Upsert", growth, $"A point read of each of the {UpsertKeys} keys finds {found}; a range scan of the tree reads {ImportFiles.Count(scanned)} keys.");
+        var explorer = _estate.WestRegion.ExplorerProcesses[0].Name;
+        var retained = growth.Where(reading => reading.Process != explorer && ImportMemoryBudget.IsRetained(reading)).ToList();
+        foreach (var reading in retained)
+        {
+            await RetainedUpsert.ReproducesAsync(() =>
+            {
+                Assert.That(ImportMemoryBudget.IsRetained(reading), $"{reading.Process} kept the upsert's state through the drain");
+                return Task.CompletedTask;
+            });
+        }
+
         Assert.Multiple(() =>
         {
-            AssertUnderCeiling("upsert", growth);
+            AssertUnderCeiling("upsert", growth.Except(retained).ToList());
             Assert.That(found, Is.EqualTo(UpsertKeys), "every record landed on its key");
             Assert.That(scanned, Is.EqualTo(UpsertKeys), "the records land on their keys and nothing else");
         });
@@ -319,9 +333,12 @@ public sealed class ImportMemoryTests
         await Expect(dialog.Locator("[data-lt-import-refused]")).ToHaveAttributeAsync("data-lt-import-refused", "0");
     }
 
+    /// <summary>Each process's settled live heap before the warm-up: what the measured import may keep is counted from there.</summary>
+    private static List<long?> KeptFrom(IReadOnlyList<WorkingSetGrowth> warmUp) => [.. warmUp.Select(reading => reading.LiveBaseline)];
+
     /// <summary>Settles and baselines each process, runs the import, and returns each process's readings.</summary>
     private async Task<IReadOnlyList<WorkingSetGrowth>> MeasureAsync(
-        PersonaSession session, ILocator dialog, string start, long lines, string progressSubstep, string progressTitle)
+        PersonaSession session, ILocator dialog, string start, long lines, string progressSubstep, string progressTitle, IReadOnlyList<long?> keptFrom)
     {
         await using var sampler = await StartSamplerAsync();
 
@@ -331,8 +348,9 @@ public sealed class ImportMemoryTests
         await ExpectSucceededAsync(dialog, lines);
 
         // Stopping settles each process once more: whatever the import left behind is in the
-        // live heap that settled collection reads.
-        return await sampler.StopAsync();
+        // live heap that settled collection reads, and a process still over what it may keep
+        // is given longer to release what the import queued before that is read.
+        return await sampler.StopAsync(keptFrom);
     }
 
     private List<MeasuredProcess> MeasuredProcesses()

@@ -101,6 +101,18 @@ public sealed class ClusterTreeCreationTests : ClusterTestContext
     }
 
     [Test]
+    public async Task A_no_from_a_probe_that_could_not_answer_is_not_remembered()
+    {
+        Admin.ProbeCapabilitiesAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .ThrowsAsync(new TimeoutException("slow"));
+        Assert.That(await Creation.CanCreateAsync(), Is.False, "fails closed");
+
+        Admin.ProbeCapabilitiesAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(call => Capabilities(call.Arg<string>(), admin: true));
+        Assert.That(await Creation.CanCreateAsync(), Is.True, "asked again at once");
+    }
+
+    [Test]
     public async Task A_deleted_listed_tree_is_never_asked_about()
     {
         UseTrees(Tree("orders") with { Lifecycle = TreeLifecycleState.SoftDeleted });

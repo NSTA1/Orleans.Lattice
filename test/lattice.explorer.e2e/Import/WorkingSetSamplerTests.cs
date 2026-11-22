@@ -68,4 +68,52 @@ public sealed class WorkingSetSamplerTests
             Assert.That(settled, Is.EqualTo(new[] { 460 * Mb }));
         });
     }
+
+    [Test]
+    public async Task A_heap_over_what_it_may_keep_is_settled_further_until_it_is_under()
+    {
+        var readings = new Queue<long[]>([[245 * Mb, 180 * Mb], [244 * Mb, 180 * Mb], [150 * Mb, 181 * Mb], [100 * Mb, 100 * Mb]]);
+
+        var drained = await WorkingSetSampler.HoldUntilUnderAsync(
+            [246 * Mb, 180 * Mb], () => Task.FromResult(readings.Dequeue()), () => Task.CompletedTask, [207 * Mb, 207 * Mb], rounds: 36);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(drained, Is.EqualTo(new[] { 150 * Mb, 180 * Mb }));
+            Assert.That(readings, Has.Count.EqualTo(1), "the hold ends once every heap is under what it may keep");
+        });
+    }
+
+    [Test]
+    public async Task A_heap_under_what_it_may_keep_is_not_held()
+    {
+        var settles = 0;
+        long[] settled = [190 * Mb];
+
+        var drained = await WorkingSetSampler.HoldUntilUnderAsync(
+            settled, () => Task.FromResult<long[]>([++settles * Mb]), () => Task.CompletedTask, [207 * Mb], rounds: 36);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(drained, Is.EqualTo(settled));
+            Assert.That(settles, Is.Zero);
+        });
+    }
+
+    [Test]
+    public async Task The_hold_is_bounded_and_leaves_the_settled_reading_alone()
+    {
+        var settles = 0;
+        long[] settled = [246 * Mb];
+
+        var drained = await WorkingSetSampler.HoldUntilUnderAsync(
+            settled, () => Task.FromResult<long[]>([246 * Mb - (++settles * Mb)]), () => Task.CompletedTask, [207 * Mb], rounds: 3);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(settles, Is.EqualTo(3));
+            Assert.That(drained, Is.EqualTo(new[] { 243 * Mb }), "a heap that keeps state is still read as keeping it");
+            Assert.That(settled, Is.EqualTo(new[] { 246 * Mb }), "the settled reading the in-flight bound uses is not changed");
+        });
+    }
 }
