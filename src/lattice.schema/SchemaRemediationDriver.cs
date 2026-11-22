@@ -36,7 +36,8 @@ internal static class SchemaRemediationDriver
 
     /// <summary>
     /// Accepts a remediation, waiting behind another alias operation that holds the
-    /// tree's alias reservation (#5750).
+    /// tree's alias reservation (#5750), and retrying an accept call that timed out
+    /// (#5832), both within <paramref name="ceiling"/>.
     /// </summary>
     /// <param name="treeId">The tree, for the log.</param>
     /// <param name="accept">The accept call.</param>
@@ -64,6 +65,7 @@ internal static class SchemaRemediationDriver
         ArgumentNullException.ThrowIfNull(accept);
         backoff ??= AliasWaitBackoff;
         var started = Stopwatch.GetTimestamp();
+        var reportedWaiting = false;
         for (var attempt = 0; ; attempt++)
         {
             try
@@ -84,11 +86,30 @@ internal static class SchemaRemediationDriver
                 logger?.LogInformation(
                     "Schema remediation of tree {TreeId} is waiting for alias operation {Holder} to finish before it starts.",
                     treeId, refused.HolderOperationId);
-                if (attempt == 0 && progress is not null)
+                if (!reportedWaiting && progress is not null)
                 {
+                    reportedWaiting = true;
                     await ReportWaitingAsync(progress, cancellationToken).ConfigureAwait(false);
                 }
 
+                await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
+            }
+            catch (TimeoutException timedOut)
+            {
+                // The accept call outran the grain call timeout, typically while the
+                // silo is saturated by the alias holder's cleanup fan-out (#5832). The
+                // accept may still land, but it is idempotent: a retry with the same
+                // parameters returns the in-flight report instead of accepting twice.
+                var delay = backoff[Math.Min(attempt, backoff.Count - 1)];
+                if (Stopwatch.GetElapsedTime(started) + delay > ceiling)
+                {
+                    throw;
+                }
+
+                logger?.LogWarning(
+                    timedOut,
+                    "Accepting the schema remediation of tree {TreeId} timed out; retrying.",
+                    treeId);
                 await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
             }
         }
