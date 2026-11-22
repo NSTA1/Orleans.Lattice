@@ -18,6 +18,21 @@ internal sealed class TopologySeedPersistProbeGrain(
     }
 
     /// <inheritdoc />
+    public async Task<bool> TryWriteSwallowingConflictAsync(long value)
+    {
+        state.State.SubtreeEntryCount = value;
+        try
+        {
+            await TopologySeedPersist.WriteRecoveringLandedConflictAsync(state, null, GrainContext);
+            return true;
+        }
+        catch (Orleans.Storage.InconsistentStateException)
+        {
+            return false;
+        }
+    }
+
+    /// <inheritdoc />
     public async Task<long> ReadStoredAsync()
     {
         await state.ReadStateAsync();

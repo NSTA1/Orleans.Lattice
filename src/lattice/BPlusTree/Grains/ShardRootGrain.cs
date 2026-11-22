@@ -606,7 +606,11 @@ internal sealed partial class ShardRootGrain(
             // unaffected. The shard-root seed's root leaf uses a deterministic
             // id (see EnsureRootSlowAsync), so adopting the winner's row
             // reuses the same leaf identity - no orphan.
-            await TopologySeedPersist.WriteAdoptingBenignFirstCreateRaceAsync(state, logger, context);
+            // A stale-state conflict is not retired here: the flush loop retries it
+            // up to MaxConsecutiveFlushFailures and then deactivates through the
+            // write-drain fence (#2432), which an immediate deactivation would bypass.
+            await TopologySeedPersist.WriteAdoptingBenignFirstCreateRaceAsync(
+                state, logger, context, retireOnUnadoptedConflict: false);
         }
         finally
         {
