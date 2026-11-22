@@ -113,7 +113,7 @@ public sealed partial class DataStewardJourney
         // for minutes, so the wait follows the operation itself while it advances.
         await WaitForOperationAsync(Api.TreeAdmin.TreeAdminOperationKinds.ViewReconcile, $"the reconcile of {view}");
         await Expect(_priya.Shell.Toasts.Filter(new() { HasTextRegex = new Regex("^\\s*Reconciled " + Regex.Escape(view)) }))
-            .Not.ToHaveCountAsync(0, new() { Timeout = 60_000 });
+            .Not.ToHaveCountAsync(0, new() { Timeout = PanelSettled.BoundMs });
         Coverage.Hit("tab:data/views");
         Coverage.Hit("use-case:data/view-reconcile");
         await CheckpointAsync("12", "view-reconciled", "Reconcile... runs on the cluster and reports its outcome");
@@ -144,7 +144,9 @@ public sealed partial class DataStewardJourney
         // maintenance under system origin, whatever repair work the estate presents (#5613).
         await WaitForOperationAsync(Api.TreeAdmin.TreeAdminOperationKinds.TagIndexReconcile, $"the reconcile of {Names.TagIndexes.OrderStatus}");
         var reconciled = _priya.Shell.Toasts.Filter(new() { HasTextRegex = new Regex("^Reconciled " + Regex.Escape(Names.TagIndexes.OrderStatus) + ": scanned ") });
-        await Expect(reconciled.First).ToBeVisibleAsync(new() { Timeout = 60_000 });
+        // The panel follows the operation on its own reads, which back off to 30 s while the
+        // saturated estate refuses them, so its toast can trail the server's Succeeded.
+        await Expect(reconciled.First).ToBeVisibleAsync(new() { Timeout = PanelSettled.BoundMs });
         Coverage.Hit("use-case:data/tag-index-reconcile");
         await CheckpointAsync("12", "reconciled", "The tag-index reconcile runs on the cluster and reports what it scanned and removed");
 
