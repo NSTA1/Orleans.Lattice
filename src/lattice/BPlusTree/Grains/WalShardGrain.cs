@@ -1537,19 +1537,86 @@ internal sealed partial class WalShardGrain(
     /// <summary>
     /// Records a flush window whose provider call the activation stopped waiting
     /// for while it may still land: for the move quiesce (issue #4525) and for the
-    /// read watermark (issue #4621).
+    /// read watermark (issue #4621). The window stays fenced until nothing of it
+    /// can still land, which is later than the call's completion when the call
+    /// faults with an unknown outcome (issue #6146).
     /// </summary>
     private void TrackAbandonedWindow(long startOffset, long endOffsetExclusive, Task? work)
     {
-        if (work is null || work.IsCompleted)
+        if (work is null)
+        {
+            return;
+        }
+
+        var fence = UntilNothingCanLand(work);
+        if (fence is null)
         {
             return;
         }
 
         lock (_stateGate)
         {
-            _outstandingProviderWork.Add(work);
-            AbandonedWindows()?.Add(startOffset, endOffsetExclusive, work);
+            _outstandingProviderWork.Add(fence);
+            AbandonedWindows()?.Add(startOffset, endOffsetExclusive, fence);
+        }
+    }
+
+    /// <summary>
+    /// Returns a task that completes, never faulting, once nothing of
+    /// <paramref name="work"/> can still land, or <see langword="null"/> when that
+    /// is already so (issue #6146). A flush whose deadline abandons its provider
+    /// call cancels the call too, and the provider may surface the cancellation
+    /// promptly, marked unknown, while the abandoned request can still commit; the
+    /// call's completion alone would retire the window and let the resync reissue
+    /// offsets beneath a landing still in motion. Work that has already completed
+    /// is resolved synchronously, without allocating.
+    /// </summary>
+    private static Task? UntilNothingCanLand(Task work)
+    {
+        if (!work.IsCompleted)
+        {
+            return UntilNothingCanLandAsync(work);
+        }
+
+        return UnsettledOutcomeOf(work) is { IsCompleted: false } settled ? settled : null;
+    }
+
+    private static async Task UntilNothingCanLandAsync(Task work)
+    {
+        await work.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        if (UnsettledOutcomeOf(work) is { } settled)
+        {
+            await settled.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+        }
+    }
+
+    /// <summary>
+    /// The settle signal of the unknown outcome a completed <paramref name="work"/>
+    /// faulted with, or <see langword="null"/> when it succeeded or faulted with a
+    /// fault the provider did not mark, which proves nothing of the batch can land.
+    /// </summary>
+    private static Task? UnsettledOutcomeOf(Task work)
+    {
+        if (work.IsCompletedSuccessfully)
+        {
+            return null;
+        }
+
+        if (work.Exception is { } faulted)
+        {
+            return WalAppendOutcomeUnknown.Find(faulted)?.Settled;
+        }
+
+        // A cancelled task exposes the cancellation the provider surfaced, and so
+        // its mark, only by rethrowing it.
+        try
+        {
+            work.GetAwaiter().GetResult();
+            return null;
+        }
+        catch (Exception cancelled)
+        {
+            return WalAppendOutcomeUnknown.Find(cancelled)?.Settled;
         }
     }
 
