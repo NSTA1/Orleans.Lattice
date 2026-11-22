@@ -825,14 +825,16 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
-    /// Consecutive coverage-lag ticks a leaf must show an unchanged durable
-    /// checkpoint, while holding live data, before
-    /// <see cref="IsCheckpointStalledBehindLiveDataAsync"/> routes it to the
-    /// starvation drive (issue #3389).
+    /// Consecutive stall-check ticks a leaf must show an unchanged durable
+    /// checkpoint before <see cref="IsCheckpointStalledBehindLiveDataAsync"/>
+    /// routes it to the starvation drive (issues #3389, #6145).
     /// <para>
     /// Greater than one to debounce transient stalls. An unchanged checkpoint
     /// alone does not distinguish a quiet leaf from a frozen one: the drive
-    /// additionally requires unscanned WAL work on a partition holding rows.
+    /// additionally requires unscanned WAL work on a probed partition. The
+    /// ticks are those of the coverage-lag timer, whose period is the lesser
+    /// of <see cref="LatticeOptions.LeafSnapshotMaxCoverageLagSeconds"/> and
+    /// <see cref="LatticeOptions.LeafCheckpointStallCheckIntervalSeconds"/>.
     /// </para>
     /// </summary>
     private const int CheckpointStallTicksBeforeDrive = 3;
@@ -845,10 +847,18 @@ internal sealed partial class BPlusLeafGrain
     private long _lastCheckpointProgressSignature = long.MinValue;
 
     /// <summary>
-    /// Consecutive coverage-lag ticks on which the checkpoint signature was
-    /// unchanged while the leaf held live data.
+    /// Consecutive stall-check ticks on which the checkpoint signature was
+    /// unchanged.
     /// </summary>
     private int _consecutiveCheckpointStallTicks;
+
+    /// <summary>
+    /// The fast stall check's own count of unchanged ticks (issue #6145), kept
+    /// apart from <see cref="_consecutiveCheckpointStallTicks"/> so the fast
+    /// cadence never changes how often the full pass probes the coordinators.
+    /// Progress resets both.
+    /// </summary>
+    private int _fastCheckpointStallTicks;
 
     /// <summary>
     /// How far live-advance steps raised the checkpoint signature since the last stall
@@ -862,10 +872,22 @@ internal sealed partial class BPlusLeafGrain
     private string? _checkpointStallCoordinatorTreeId;
 
     /// <summary>
-    /// Whether this leaf holds rows and its durable checkpoint, though present,
-    /// has STOPPED ADVANCING across
-    /// <see cref="CheckpointStallTicksBeforeDrive"/> consecutive coverage-lag
-    /// ticks (issue #3389).
+    /// Whether this leaf's durable checkpoint, though present, has STOPPED
+    /// ADVANCING across <see cref="CheckpointStallTicksBeforeDrive"/>
+    /// consecutive stall-check ticks while the WAL holds unscanned entries
+    /// beyond it (issues #3389, #6145).
+    /// <para>
+    /// <b>Rows are not required (issue #6145).</b> This predicate once declined
+    /// any leaf holding no rows, on the reading that an empty leaf has nothing
+    /// to lose. It has nothing to lose, but it still owns a materialiser
+    /// consumer per partition, and that consumer's frozen checkpoint is
+    /// reported in full as drain lag and holds the WAL floor. In an
+    /// aggregation view whose sibling leaves keep appending, a leaf with no
+    /// rows in a partition can never move its checkpoint by a live advance,
+    /// which stops at the leaf's own high, so it stalled for as long as the
+    /// source kept writing. Every checkpointed partition is therefore probed;
+    /// a never-checkpointed one is probed only when it holds rows, as before.
+    /// </para>
     /// <para>
     /// This is the population <see cref="IsStarvedOfDurableCheckpoint"/>
     /// excludes by construction. That predicate returns <c>false</c> the moment
@@ -900,7 +922,7 @@ internal sealed partial class BPlusLeafGrain
     /// sound precisely because checkpoints are monotonic non-decreasing: an
     /// unchanged sum therefore means no partition advanced, with no collision
     /// to worry about, and a changed sum means at least one did.
-    /// Once the threshold is reached, a live partition's exclusive WAL head
+    /// Once the threshold is reached, a probed partition's exclusive WAL head
     /// must be beyond <c>checkpoint + 1</c>. Otherwise the leaf is caught up
     /// and must not ask for a replay permit (issue #3612). The probe repeats
     /// on a later opportunity, so a new append cannot be latched out.
@@ -927,8 +949,15 @@ internal sealed partial class BPlusLeafGrain
     /// one, and those have different causes and different remedies.
     /// </para>
     /// </summary>
+    /// <param name="partitionCount">The tree's WAL partition count.</param>
+    /// <param name="cancellationToken">Cancels the coordinator head probes.</param>
+    /// <param name="localEvidenceOnly">
+    /// The fast stall check (issue #6145): replace the coordinator head probe with
+    /// this process's acknowledged-append timeline, so the check makes no grain
+    /// call. See <see cref="HasLocalUnscannedAppendEvidence"/>.
+    /// </param>
     internal async ValueTask<bool> IsCheckpointStalledBehindLiveDataAsync(
-        int partitionCount, CancellationToken cancellationToken)
+        int partitionCount, CancellationToken cancellationToken, bool localEvidenceOnly = false)
     {
         long signature = 0;
         var anyCheckpointed = false;
@@ -949,6 +978,7 @@ internal sealed partial class BPlusLeafGrain
             // population; claiming it here too would double-drive it.
             _lastCheckpointProgressSignature = signature;
             _consecutiveCheckpointStallTicks = 0;
+            _fastCheckpointStallTicks = 0;
             return false;
         }
 
@@ -967,41 +997,53 @@ internal sealed partial class BPlusLeafGrain
             if (movedByOther)
             {
                 _consecutiveCheckpointStallTicks = 0;
+                _fastCheckpointStallTicks = 0;
+                _fastStallEvidenceSpent = false;
                 return false;
             }
         }
 
-        // Unchanged. That is only a fault if there are rows whose durability
-        // depends on the checkpoint advancing: a genuinely empty leaf has
-        // nothing to lose and must not be charged a replay on every tick.
-        var liveData = _checkpointStallLiveData = ComputePartitionsWithLiveData(
-            partitionCount, _checkpointStallLiveData);
-        var holdsLiveData = false;
-        for (var p = 0; p < liveData.Length; p++)
+        if (localEvidenceOnly)
         {
-            if (liveData[p])
+            if (++_fastCheckpointStallTicks < CheckpointStallTicksBeforeDrive)
             {
-                holdsLiveData = true;
-                break;
+                return false;
             }
+
+            if (_fastStallEvidenceSpent)
+            {
+                // A fast drive already acted on this evidence and nothing has
+                // moved since: the local timeline may be stale (a purged and
+                // recreated tree, say), so the full pass's coordinator probe
+                // decides from here.
+                _fastCheckpointStallTicks = CheckpointStallTicksBeforeDrive - 1;
+                return false;
+            }
+
+            _fastCheckpointStallTicks = NextCheckpointStallRearm();
+            return HasLocalUnscannedAppendEvidence(partitionCount);
         }
 
-        if (!holdsLiveData)
-        {
-            _consecutiveCheckpointStallTicks = 0;
-            return false;
-        }
-
+        // Unchanged. Issue #6145: this is a fault whether or not the leaf holds
+        // rows. A leaf with no rows in a partition still owns a materialiser
+        // consumer there, and its frozen checkpoint is reported as drain lag
+        // and holds the WAL floor while sibling leaves append. A live advance
+        // cannot move it past those foreign records, so only the drive's
+        // replay can. A caught-up leaf (head - 1 == checkpoint on every probed
+        // partition) is still never driven, so a quiet empty leaf costs a head
+        // probe per threshold, not a replay.
         if (++_consecutiveCheckpointStallTicks < CheckpointStallTicksBeforeDrive)
         {
             return false;
         }
 
-        // Re-arm on every opportunity, including a refused or deferred drive.
-        // Mixing the opportunity with the leaf id also breaks repeated cohorts.
-        var mixed = ((ulong)(uint)context.GrainId.GetHashCode() + ++_checkpointStallRearms)
-            * 0x9E3779B97F4A7C15UL;
-        _consecutiveCheckpointStallTicks = -(int)((mixed >> 32) % 3);
+        // Live data matters only for a partition this leaf has never
+        // checkpointed: that partition is probed when it holds rows, exactly
+        // as before, while every checkpointed partition is probed regardless.
+        var liveData = _checkpointStallLiveData = ComputePartitionsWithLiveData(
+            partitionCount, _checkpointStallLiveData);
+
+        _consecutiveCheckpointStallTicks = NextCheckpointStallRearm();
         if (_checkpointStallCoordinators is null
             || _checkpointStallCoordinators.Length != partitionCount
             || !string.Equals(_checkpointStallCoordinatorTreeId, state.State.TreeId, StringComparison.Ordinal))
@@ -1011,7 +1053,7 @@ internal sealed partial class BPlusLeafGrain
         }
         for (var p = 0; p < liveData.Length; p++)
         {
-            if (!liveData[p])
+            if (!liveData[p] && GetCurrentCheckpointForPartition(p) < 0)
                 continue;
 
             var coordinator = _checkpointStallCoordinators[p] ??=
@@ -1040,6 +1082,74 @@ internal sealed partial class BPlusLeafGrain
 
         return false;
     }
+
+    /// <summary>
+    /// The stall count to re-arm with on every drive opportunity, including a
+    /// refused or deferred drive: zero to two ticks of per-leaf jitter below
+    /// zero. Mixing the opportunity with the leaf id also breaks repeated cohorts.
+    /// </summary>
+    private int NextCheckpointStallRearm()
+    {
+        var mixed = ((ulong)(uint)context.GrainId.GetHashCode() + ++_checkpointStallRearms)
+            * 0x9E3779B97F4A7C15UL;
+        return -(int)((mixed >> 32) % 3);
+    }
+
+    /// <summary>
+    /// Whether this process acknowledged an append beyond the checkpoint of a
+    /// partition whose checkpoint is reported as a drain claim (issue #6145).
+    /// <para>
+    /// The evidence is <see cref="WalCommitLogWriter._walAppendTimes"/>, the
+    /// acknowledged-append timeline the drain-age sampler already keeps, so
+    /// reading it makes no grain call and allocates nothing. It cannot report a
+    /// false positive about an append: every offset in it was acknowledged by the
+    /// WAL. It can miss one acknowledged on another silo, which the full pass's
+    /// coordinator head probe still finds. Only partitions with a checkpoint whose
+    /// latest advance was not the live advance are considered: those are the ones
+    /// a materialiser consumer reports as drain lag, since a live-advanced
+    /// partition withdraws its claim (#5981).
+    /// </para>
+    /// </summary>
+    /// <param name="partitionCount">The tree's WAL partition count.</param>
+    private bool HasLocalUnscannedAppendEvidence(int partitionCount)
+    {
+        if (state.State.TreeId is not { Length: > 0 } treeId
+            || !WalCommitLogWriter._walAppendTimes.TryGetValue(treeId, out var timelines))
+        {
+            return false;
+        }
+
+        for (var p = 0; p < partitionCount; p++)
+        {
+            var checkpoint = GetCurrentCheckpointForPartition(p);
+            if (checkpoint < 0
+                || IsLiveAdvancedPartition(p)
+                || !timelines.TryGetValue(p, out var timeline))
+            {
+                continue;
+            }
+
+            // Beyond this leaf's own highest append too: appends that may all be
+            // its own are the live advance's to cover, on the full pass, without
+            // a replay.
+            var ownHigh = _liveOwnHigh is { } own && p < own.Length ? own[p] : -1L;
+            var head = timeline.Head;
+            if (head > checkpoint && head > ownHigh)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Set when a fast stall check dispatched a drive on local evidence, and
+    /// cleared when the checkpoint next moves by anything but a live advance
+    /// (issue #6145). While set, fast checks decline and the full pass's
+    /// coordinator probe decides, so stale local evidence cannot repeat a drive.
+    /// </summary>
+    private bool _fastStallEvidenceSpent;
 
     /// <summary>
     /// Whether a caller-supplied per-partition coverage claim asserts coverage
@@ -2846,13 +2956,15 @@ internal sealed partial class BPlusLeafGrain
             return;
         }
 
-        var period = TimeSpan.FromSeconds(lagSeconds);
+        var period = ComputeCoverageLagTimerPeriod(lagSeconds, resolved.LeafCheckpointStallCheckIntervalSeconds);
+        _coverageLagFullPassEvery = ComputeCoverageLagFullPassEvery(lagSeconds, period);
+        _coverageLagFiresSinceFullPass = 0;
         var dueTime = ComputeCoverageLagJitter(context.GrainId.GetHashCode(), period);
 
         try
         {
             _coverageLagTimer = this.RegisterGrainTimer(
-                OnCoverageLagTimerTickAsync,
+                OnCoverageLagTimerFireAsync,
                 new GrainTimerCreationOptions(dueTime: dueTime, period: period));
         }
         catch
@@ -2895,6 +3007,130 @@ internal sealed partial class BPlusLeafGrain
         var mixed = (ulong)(uint)grainIdHash * 0x9E3779B97F4A7C15UL;
         var phase = (long)(mixed % (ulong)Math.Max(1L, period.Ticks));
         return TimeSpan.FromTicks(phase);
+    }
+
+    /// <summary>
+    /// How many coverage-lag timer fires make one full pass; every other fire is
+    /// a fast stall check (issue #6145). One when the timer runs on the
+    /// coverage-lag cadence itself.
+    /// </summary>
+    private int _coverageLagFullPassEvery = 1;
+
+    /// <summary>
+    /// Timer fires since the last full pass, or <c>0</c> before the first fire,
+    /// which is always a full pass.
+    /// </summary>
+    private int _coverageLagFiresSinceFullPass;
+
+    /// <summary>
+    /// Test-only: sets how many timer fires make one full pass, as
+    /// <c>EnsureCoverageLagTimerAsync</c> would, without registering a timer.
+    /// </summary>
+    /// <param name="every">Fires per full pass; at least one.</param>
+    internal void SetCoverageLagFullPassEveryForTest(int every)
+    {
+        _coverageLagFullPassEvery = Math.Max(1, every);
+        _coverageLagFiresSinceFullPass = 0;
+    }
+
+    /// <summary>
+    /// The coverage-lag timer's period: the stall-check interval when it is
+    /// positive and shorter than the coverage lag, else the coverage lag
+    /// (issue #6145). One timer serves both, so the fast check costs no timer.
+    /// </summary>
+    /// <param name="lagSeconds">The positive coverage-lag bound, in seconds.</param>
+    /// <param name="stallCheckSeconds">The stall-check interval, in seconds.</param>
+    internal static TimeSpan ComputeCoverageLagTimerPeriod(int lagSeconds, int stallCheckSeconds)
+        => TimeSpan.FromSeconds(stallCheckSeconds > 0 && stallCheckSeconds < lagSeconds
+            ? stallCheckSeconds
+            : lagSeconds);
+
+    /// <summary>
+    /// The number of fires of a timer of <paramref name="period"/> that keeps
+    /// full passes no further apart than <paramref name="lagSeconds"/>: the
+    /// ceiling of their ratio, at least one.
+    /// </summary>
+    /// <param name="lagSeconds">The positive coverage-lag bound, in seconds.</param>
+    /// <param name="period">The timer's period.</param>
+    internal static int ComputeCoverageLagFullPassEvery(int lagSeconds, TimeSpan period)
+    {
+        var periodSeconds = Math.Max(1L, (long)period.TotalSeconds);
+        return (int)Math.Max(1L, (lagSeconds + periodSeconds - 1) / periodSeconds);
+    }
+
+    /// <summary>
+    /// The coverage-lag timer's callback. The first fire and every
+    /// <see cref="_coverageLagFullPassEvery"/>-th one after it run the full
+    /// <see cref="OnCoverageLagTimerTickAsync"/>, so the coverage-lag bound is
+    /// unchanged; the fires between run the grain-call-free
+    /// <see cref="OnCheckpointStallFastTickAsync"/> (issue #6145).
+    /// </summary>
+    /// <param name="cancellationToken">Cancelled on deactivation.</param>
+    internal Task OnCoverageLagTimerFireAsync(CancellationToken cancellationToken)
+    {
+        if (_coverageLagFiresSinceFullPass == 0 || _coverageLagFiresSinceFullPass >= _coverageLagFullPassEvery)
+        {
+            _coverageLagFiresSinceFullPass = 1;
+            return OnCoverageLagTimerTickAsync(cancellationToken);
+        }
+
+        _coverageLagFiresSinceFullPass++;
+        return OnCheckpointStallFastTickAsync(cancellationToken).AsTask();
+    }
+
+    /// <summary>
+    /// The fast stall check (issue #6145). A materialiser consumer over a quiet
+    /// source sits on a frozen replay checkpoint while sibling leaves append,
+    /// and the full pass alone takes three coverage-lag periods (fifteen minutes
+    /// by default) to notice. This counts the same stall ticks on
+    /// <see cref="LatticeOptions.LeafCheckpointStallCheckIntervalSeconds"/>
+    /// instead, and makes no grain call to do it: the evidence is this
+    /// process's acknowledged-append timeline (see
+    /// <see cref="HasLocalUnscannedAppendEvidence"/>). When it finds a frozen
+    /// checkpoint with an append beyond it, it dispatches the same starvation
+    /// drive the full pass would, with the same single-flight, admission,
+    /// refusal backoff, stale-projection skip, and yield to queued replays.
+    /// <para>
+    /// Everything else stays on the full pass: the never-checkpointed drive, the
+    /// live advance and the close backstop (both make grain calls), the bank
+    /// step, and the recheck. A stall whose appends were all acknowledged on
+    /// another silo is invisible here and is found by the full pass's coordinator
+    /// probe, as before.
+    /// </para>
+    /// </summary>
+    /// <param name="cancellationToken">Cancelled on deactivation.</param>
+    internal async ValueTask OnCheckpointStallFastTickAsync(CancellationToken cancellationToken)
+    {
+        if (state.State.TreeId is not { Length: > 0 })
+        {
+            return;
+        }
+
+        var resolved = await GetOptionsAsync();
+        if (resolved.LeafSnapshotMaxCoverageLagSeconds <= 0)
+        {
+            var disabled = System.Threading.Interlocked.Exchange(ref _coverageLagTimer, null);
+            disabled?.Dispose();
+            return;
+        }
+
+        var partitionCount = Math.Max(1, resolved.WalPartitions);
+        if (IsStarvedOfDurableCheckpoint(partitionCount)
+            || !await IsCheckpointStalledBehindLiveDataAsync(partitionCount, cancellationToken, localEvidenceOnly: true))
+        {
+            return;
+        }
+
+        ObserveDriverDecline(LatticeMetrics.DriverDeclineRecheckCheckpointStalled);
+        if (QueuedReplayPermitWaiters > 0)
+        {
+            ObserveDriverDecline(LatticeMetrics.DriverDeclineRecheckDriveYielded);
+            _fastCheckpointStallTicks = CheckpointStallTicksBeforeDrive - 1;
+            return;
+        }
+
+        _fastStallEvidenceSpent = true;
+        await DispatchTimerDriveAsync(partitionCount, "arm=stalled-drive-fast");
     }
 
     /// <summary>

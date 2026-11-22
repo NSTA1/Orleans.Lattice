@@ -1958,6 +1958,11 @@
           "name": "ProjectionVersion",
           "type": "string?",
           "required": false
+        },
+        {
+          "name": "ApplyLagAge",
+          "type": "TimeSpan?",
+          "required": false
         }
       ],
       "source": "src/lattice.api.abstractions/TreeAdmin/Model/TreeViewStatus.cs#TreeViewStatus"

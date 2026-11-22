@@ -50,7 +50,7 @@ public sealed class LatticeTreeAdminViewStatusTests
     [Test]
     public async Task GetViewStatusAsync_projects_lag_and_active_generation_from_one_maintainer_call()
     {
-        var (facade, maintainer) = Create(new ViewMaintainerStatus(7, "view-orders-by-customer#g2"));
+        var (facade, maintainer) = Create(new ViewMaintainerStatus(7, "view-orders-by-customer#g2", TimeSpan.FromSeconds(42)));
 
         var status = await facade.GetViewStatusAsync(View);
 
@@ -59,6 +59,7 @@ public sealed class LatticeTreeAdminViewStatusTests
             Assert.That(status.ViewName, Is.EqualTo(View));
             Assert.That(status.SourceTreeId, Is.EqualTo(Source));
             Assert.That(status.ApplyLag, Is.EqualTo(7));
+            Assert.That(status.ApplyLagAge, Is.EqualTo(TimeSpan.FromSeconds(42)));
             Assert.That(status.ActiveTreeId, Is.EqualTo("view-orders-by-customer#g2"));
         });
         await maintainer.Received(1).GetStatusAsync(Arg.Any<CancellationToken>());

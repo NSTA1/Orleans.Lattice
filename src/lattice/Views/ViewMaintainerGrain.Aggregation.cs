@@ -226,7 +226,9 @@ internal sealed partial class ViewMaintainerGrain
             await ReportDrainCheckpointsAsync(walTreeId, highest, cancellationToken);
         }
 
-        ApplyLag.Record(await DrainLagAsync(drain, applied, walTreeId, partitions, cancellationToken), ViewTag, ViewTenantTag);
+        var drainLag = await DrainLagAsync(drain, applied, walTreeId, partitions, cancellationToken);
+        ApplyLag.Record(drainLag, ViewTag, ViewTenantTag);
+        ObserveLagAge(drainLag);
         BacklogDepth.Record(backlogRead, ViewTag, ViewTenantTag);
         if (applied > 0)
         {

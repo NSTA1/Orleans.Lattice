@@ -269,6 +269,13 @@ internal sealed class LatticeOptionsValidator : IValidateOptions<LatticeOptions>
                 + "bound in any useful sense, and the ceiling also keeps the per-leaf first-tick jitter well inside "
                 + "the range its arithmetic is defined over.");
         }
+        if (options.LeafCheckpointStallCheckIntervalSeconds < 0
+            || options.LeafCheckpointStallCheckIntervalSeconds > LatticeOptions.MaxLeafCheckpointStallCheckIntervalSeconds)
+        {
+            return ValidateOptionsResult.Fail(
+                $"{nameof(LatticeOptions.LeafCheckpointStallCheckIntervalSeconds)} must be between 0 and {LatticeOptions.MaxLeafCheckpointStallCheckIntervalSeconds} "
+                + "(0 checks for a frozen replay checkpoint only on the coverage-lag cadence).");
+        }
 if (options.WalMaxPendingBatches < 1)
 {
     return ValidateOptionsResult.Fail(

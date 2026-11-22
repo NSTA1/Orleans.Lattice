@@ -1950,6 +1950,37 @@ public class LatticeOptions
     public const int MaxLeafSnapshotCoverageLagSeconds = 86_400;
 
     /// <summary>
+    /// Interval, in seconds, at which an active leaf checks whether its WAL
+    /// replay checkpoint has frozen behind appends this process acknowledged,
+    /// and drives a bounded catch-up replay when it has (issue #6145). Set to
+    /// <c>0</c> to check only on the
+    /// <see cref="LeafSnapshotMaxCoverageLagSeconds"/> cadence.
+    /// <para>
+    /// A view leaf that holds no rows in a partition never advances that
+    /// partition's checkpoint from its own writes, so while sibling leaves keep
+    /// appending its materialiser consumer reports a growing drain lag over an
+    /// otherwise quiet source. The check closes that gap within about three to
+    /// five intervals. It reads only process-local append evidence, so a check
+    /// that finds nothing makes no grain call and allocates nothing; appends
+    /// acknowledged on another silo are still found by the full pass every
+    /// <see cref="LeafSnapshotMaxCoverageLagSeconds"/>. A value at or above that
+    /// bound has no effect. It shares the coverage-lag timer and adds no timer
+    /// or collection per leaf.
+    /// </para>
+    /// </summary>
+    public int LeafCheckpointStallCheckIntervalSeconds { get; set; } = DefaultLeafCheckpointStallCheckIntervalSeconds;
+
+    /// <summary>Default value for <see cref="LeafCheckpointStallCheckIntervalSeconds"/> (<c>10</c>).</summary>
+    public const int DefaultLeafCheckpointStallCheckIntervalSeconds = 10;
+
+    /// <summary>
+    /// Maximum accepted value for <see cref="LeafCheckpointStallCheckIntervalSeconds"/>
+    /// (<c>86400</c>, one day, the same ceiling as
+    /// <see cref="MaxLeafSnapshotCoverageLagSeconds"/>).
+    /// </summary>
+    public const int MaxLeafCheckpointStallCheckIntervalSeconds = 86_400;
+
+    /// <summary>
     /// When <c>true</c> (the default), a leaf snapshot capture encodes its
     /// rows into the compact binary frame
     /// (<c>LeafSnapshotBlob.EncodedRows</c>) instead of persisting them as the

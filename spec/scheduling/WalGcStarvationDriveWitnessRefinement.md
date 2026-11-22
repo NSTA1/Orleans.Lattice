@@ -37,7 +37,7 @@ by dropping the stall and call fields. See the core's
 |-------------|---------------|------------------|----------|
 | `GcPass` | Deliver the next eligible frozen-rank sweep attempt; policy may refuse. | `ShareBoundedTouchRunner.RunAsync`, `BPlusLeafGrain.TryAcquireStarvationReplayPermit`. | Yes: `LatticeWalGcSchedulerCadenceTests.A_pass_with_one_free_replay_slot_spends_it_on_the_floor_holder_not_a_leaf_above_it`, `LatticeWalGcSchedulerCadenceTests.A_pass_re_drives_a_refused_floor_holder_once_a_sibling_frees_the_slot_instead_of_leaving_it_to_a_later_pass`. |
 | `PassRearm` | Finish the drained pass and admit a later cadence/backoff episode; preserve non-exhausted budget debt. | `LatticeWalGcScheduler.ObserveAndHealBlockedTreeAsync`. | Yes: `LatticeWalGcSchedulerCadenceTests.ExecuteAsync_refunds_admission_refusals_after_a_prior_completed_drive`. |
-| `TimerTick` | Check a live frozen checkpoint against the WAL head and invalidate the refresh witness at each threshold. | `BPlusLeafGrain.OnCoverageLagTimerTickAsync`, `BPlusLeafGrain.IsCheckpointStalledBehindLiveDataAsync`. | Yes: `BPlusLeafGrainTests.Coverage_stall_timer_caught_up_leaf_never_requests_a_replay_permit`, `BPlusLeafGrainTests.Coverage_stall_timer_refreshes_its_phase_on_every_refused_or_deferred_opportunity`. |
+| `TimerTick` | Check a live frozen checkpoint against the WAL head and invalidate the refresh witness at each threshold. | `BPlusLeafGrain.OnCoverageLagTimerTickAsync`, `BPlusLeafGrain.OnCheckpointStallFastTickAsync`, `BPlusLeafGrain.IsCheckpointStalledBehindLiveDataAsync`. | Yes: `BPlusLeafGrainTests.Coverage_stall_timer_caught_up_leaf_never_requests_a_replay_permit`, `BPlusLeafGrainTests.Coverage_stall_timer_refreshes_its_phase_on_every_refused_or_deferred_opportunity`, `BPlusLeafGrainTests.Fast_stall_check_never_drives_a_leaf_the_local_timeline_shows_caught_up`. |
 | `TimerDispatchDrive` | Deliver the interleaving one-shot callback, not a drive awaited by the timer turn. | `BPlusLeafGrain.DispatchTimerDriveAsync`. | Yes: `BPlusLeafGrainTests.Coverage_timer_dispatch_releases_the_turn_while_storage_is_pending`. |
 | `DriveOpportunity` | Consume one budget opportunity, optionally bank one earned offset, and return capacity at the bound. | `BPlusLeafGrain.DriveStarvedCheckpointAsync`, `BPlusLeafGrain.ReleaseStarvationReplayPermit`. | Yes: `BPlusLeafGrainTests.DriveStarvedCheckpointAsync_releases_its_replay_permit_while_the_slice_read_is_still_parked`, `BPlusLeafGrainTests.DriveStarvedCheckpointAsync_advances_the_checkpoint_of_a_leaf_that_is_already_resident`. |
 | `ReArm` | Refresh the phase for this opportunity, including refused/deferred work. | `BPlusLeafGrain.IsCheckpointStalledBehindLiveDataAsync`. | Yes: `BPlusLeafGrainTests.Coverage_stall_timer_refreshes_its_phase_on_every_refused_or_deferred_opportunity`. |
@@ -131,3 +131,16 @@ parametric argument remain qualified below.
   and so to the original model, through that argument.
   No production symbol: the gap is about a model-to-model refinement, not a
   production mechanism.
+- **A second, local tick enables the same stall check (#6145).** Production
+  also runs `BPlusLeafGrain.OnCheckpointStallFastTickAsync` on a short cadence.
+  It reads only process-local WAL append evidence, makes no grain call, and
+  when that evidence shows appends past the pin it dispatches the same
+  single-flight `BPlusLeafGrain.DispatchTimerDriveAsync`. It is one more
+  enabling schedule of `TimerTick`, and the drive it dispatches is unchanged, so
+  it stays within the abstracted stall clock. The stall predicate no longer
+  requires live rows, which also stays within it: the model never conditioned
+  `TimerTick` on row count. The tick yields while replays queue, like the
+  stalled drive above.
+  Production symbols: `BPlusLeafGrain.OnCheckpointStallFastTickAsync`,
+  `BPlusLeafGrain.DispatchTimerDriveAsync`,
+  `BPlusLeafGrain.IsCheckpointStalledBehindLiveDataAsync`.

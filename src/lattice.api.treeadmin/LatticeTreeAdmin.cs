@@ -2055,6 +2055,7 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
             SourceTreeId = registration.SourceTreeId,
             IsAggregation = registration.IsAggregation,
             ApplyLag = lag,
+            ApplyLagAge = status.LagAge,
             ActiveTreeId = activeTreeId ?? string.Empty,
             ProviderKey = registration.ProviderKey,
             ProjectionVersion = registration.ProjectionVersion,

@@ -922,6 +922,7 @@ public sealed class TreeAdminGrpcDtoSerializationTests
             ActiveTreeId = "view-orders-by-region",
             ProviderKey = "provider-a",
             ProjectionVersion = "v3",
+            ApplyLagAge = TimeSpan.FromSeconds(95),
         });
 
         Assert.Multiple(() =>
@@ -933,6 +934,7 @@ public sealed class TreeAdminGrpcDtoSerializationTests
             Assert.That(copy.ActiveTreeId, Is.EqualTo("view-orders-by-region"));
             Assert.That(copy.ProviderKey, Is.EqualTo("provider-a"));
             Assert.That(copy.ProjectionVersion, Is.EqualTo("v3"));
+            Assert.That(copy.ApplyLagAge, Is.EqualTo(TimeSpan.FromSeconds(95)));
             Assert.That(copy.GetType().GetProperty("Payload"), Is.Null);
         });
     }

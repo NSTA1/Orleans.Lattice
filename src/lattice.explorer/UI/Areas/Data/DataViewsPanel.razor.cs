@@ -185,6 +185,8 @@ public partial class DataViewsPanel : IDisposable
         {
             null => "Status unknown",
             { ApplyLag: 0 } => "Current",
+            { ApplyLagAge: { } age } status when age > TimeSpan.Zero =>
+                $"{DataFormat.Count(status.ApplyLag)} behind, oldest {LtTimeText.Duration(age)}",
             { } status => $"{DataFormat.Count(status.ApplyLag)} behind",
         };
 
