@@ -86,6 +86,24 @@ public sealed class ImportMemoryBudgetTests
         Assert.That(ImportMemoryBudget.Violations(reading, "upsert", FileBytes), Has.Count.EqualTo(1));
     }
 
+    /// <summary>
+    /// Explorer Journeys run 45042005049, west-silo-1 during the 200 MB upsert (#6150): kept
+    /// 97.9 MB, settled 245.6 MB and drained only to 241.8 MB, so the hold did not release it.
+    /// A heap still falling by a drain step, or one under the kept ceiling, is not retained.
+    /// </summary>
+    [Test]
+    public void A_heap_the_hold_does_not_bring_down_is_retained()
+    {
+        var reading = Reading(warmUpBaseline: 1439 * Mb / 10, baseline: 2139 * Mb / 10, peak: 2794 * Mb / 10, settled: 2456 * Mb / 10) with { LiveDrained = 2418 * Mb / 10 };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ImportMemoryBudget.IsRetained(reading), Is.True);
+            Assert.That(ImportMemoryBudget.IsRetained(reading with { LiveDrained = 2400 * Mb / 10 }), Is.False, "still draining");
+            Assert.That(ImportMemoryBudget.IsRetained(reading with { WarmUpLiveBaseline = 200 * Mb }), Is.False, "under the kept ceiling");
+        });
+    }
+
     /// <summary>A process holding a fifth of the file while it streams, and releasing it after, fails.</summary>
     [Test]
     public void A_process_holding_a_fifth_of_the_file_in_flight_fails()

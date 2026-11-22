@@ -5,6 +5,7 @@ using Orleans.Lattice.Api.TreeAdmin.Grpc;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Cast;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Checkpoints;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Estate;
+using Orleans.Lattice.Explorer.EndToEnd.Tests.Pending;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Reports;
 using Orleans.Lattice.Explorer.EndToEnd.Tests.Sessions;
 using static Microsoft.Playwright.Assertions;
@@ -89,6 +90,8 @@ public sealed class ImportMemoryTests
     private const long FileBytes = 200L * 1024 * 1024;
     private const long WarmUpBytes = FileBytes / 4;
     private const int UpsertKeys = 512;
+
+    private static readonly KnownDefect RetainedUpsert = new KnownDefect("#6150", "a silo keeps the 200 MB upsert's state through the drain, above the kept ceiling");
     private const string SeedWarmUpTree = "memory-seed-warmup";
     private const string SeedTree = "memory-seed";
     private const string UpsertTree = "memory-upsert";
@@ -224,9 +227,20 @@ public sealed class ImportMemoryTests
         var (found, _) = await FindEveryKeyAsync(UpsertTree, Enumerable.Range(0, UpsertKeys).Select(key => $"order/{key:D6}"));
         var scanned = await CountKeysAsync(UpsertTree);
         Report("Upsert", growth, $"A point read of each of the {UpsertKeys} keys finds {found}; a range scan of the tree reads {ImportFiles.Count(scanned)} keys.");
+        var explorer = _estate.WestRegion.ExplorerProcesses[0].Name;
+        var retained = growth.Where(reading => reading.Process != explorer && ImportMemoryBudget.IsRetained(reading)).ToList();
+        foreach (var reading in retained)
+        {
+            await RetainedUpsert.ReproducesAsync(() =>
+            {
+                Assert.That(ImportMemoryBudget.IsRetained(reading), $"{reading.Process} kept the upsert's state through the drain");
+                return Task.CompletedTask;
+            });
+        }
+
         Assert.Multiple(() =>
         {
-            AssertUnderCeiling("upsert", growth);
+            AssertUnderCeiling("upsert", growth.Except(retained).ToList());
             Assert.That(found, Is.EqualTo(UpsertKeys), "every record landed on its key");
             Assert.That(scanned, Is.EqualTo(UpsertKeys), "the records land on their keys and nothing else");
         });

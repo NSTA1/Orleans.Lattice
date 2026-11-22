@@ -76,4 +76,20 @@ internal static class ImportMemoryBudget
 
         return violations;
     }
+
+    /// <summary>
+    /// Whether <paramref name="reading"/> shows a process keeping state the drain cannot release
+    /// (#6150): it kept <see cref="KeptCeilingBytes"/> or more, and its drained heap is within one
+    /// <see cref="WorkingSetSampler.DrainStepBytes"/> of its settled heap, so the hold did not
+    /// bring it down. A heap that was still falling is not this: that is a slow drain (#6115).
+    /// </summary>
+    /// <param name="reading">One process's readings across the import.</param>
+    /// <returns><see langword="true"/> when the reading carries the retention signature.</returns>
+    public static bool IsRetained(WorkingSetGrowth reading)
+    {
+        ArgumentNullException.ThrowIfNull(reading);
+        return reading.LiveKept is { } kept && kept >= KeptCeilingBytes
+            && reading.LiveAfter is { } settled && reading.LiveDrained is { } drained
+            && settled - drained < WorkingSetSampler.DrainStepBytes;
+    }
 }
