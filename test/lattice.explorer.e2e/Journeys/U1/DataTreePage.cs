@@ -191,13 +191,22 @@ internal sealed class DataTreePage(PersonaSession session)
     /// <summary>The open entry's History of this key link.</summary>
     public ILocator HistoryOfKey => Entry.GetByRole(AriaRole.Link, new() { Name = "History of this key", Exact = true });
 
+    /// <summary>
+    /// Waits for the page to head <paramref name="tree"/>. The tree page draws skeletons until its
+    /// server read of the tree ends, so the wait is bounded by <see cref="PanelSettled.Bound"/>,
+    /// not the default expect timeout.
+    /// </summary>
+    /// <param name="tree">The tree's logical id or alias the page was opened on.</param>
+    public async Task ExpectOpenAsync(string tree) =>
+        await Expect(Heading).ToHaveTextAsync(tree, new() { Timeout = PanelSettled.BoundMs });
+
     /// <summary>Opens <paramref name="key"/> in <paramref name="tree"/>'s Keys tab by its address and waits for its value.</summary>
     /// <param name="tree">The tree's logical id.</param>
     /// <param name="key">The key.</param>
     public async Task OpenEntryAsync(string tree, string key)
     {
         await session.Shell.GotoAsync($"/data/{tree}?key={Uri.EscapeDataString(key)}");
-        await Expect(Heading).ToHaveTextAsync(tree, new() { Timeout = PanelSettled.BoundMs });
+        await ExpectOpenAsync(tree);
         await ExpectEntryAsync(key);
         Coverage.Hit("query:shell.key");
         Coverage.Hit("use-case:data/entry-view");

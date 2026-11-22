@@ -164,7 +164,7 @@ public sealed partial class DataStewardJourney
         var orders = Names.Trees.FactoryOrders;
         var file = StoryData.WriteFile(_files, Names.Files.CorrectionsNdjson);
         await _priya.Shell.GotoAsync("/data/" + orders);
-        await Expect(_tree.Heading).ToHaveTextAsync(orders);
+        await _tree.ExpectOpenAsync(orders);
         await _tree.WaitForKeysAsync();
 
         await _tree.Import.ClickAsync();
