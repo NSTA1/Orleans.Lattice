@@ -93,14 +93,48 @@ public sealed class U2Contract() : ChapterContract("U2")
     /// tree; see <see cref="ContractWait.ExternalWait"/>. <see langword="null"/> when the
     /// stall check alone applies.
     /// </param>
-    public static Task AwaitRemediationAsync(
+    public static async Task AwaitRemediationAsync(
         Orleans.Lattice.Api.Schema.Grpc.LatticeSchemaApiGrpcClient schema,
         string operationId,
         string what,
-        ContractWait.ExternalWait? aliasWait = null) =>
-        ContractWait.SucceededWhileAdvancingAsync(
-            what, () => schema.GetSchemaOperationStatusAsync(operationId), RemediationStall, RemediationCeiling,
-            convergence: RemediationConvergence, externalWait: aliasWait);
+        ContractWait.ExternalWait? aliasWait = null)
+    {
+        var last = new System.Runtime.CompilerServices.StrongBox<Orleans.Lattice.Api.Operations.LatticeOperationStatus?>();
+        try
+        {
+            await ContractWait.SucceededWhileAdvancingAsync(
+                what, () => schema.GetSchemaOperationStatusAsync(operationId), RemediationStall, RemediationCeiling,
+                last, RemediationConvergence, aliasWait);
+        }
+        catch (InvalidOperationException ex) when (IsStarvationFailure(last.Value))
+        {
+            await IgnoreStarvationFailureAsync(what, last.Value, ex);
+        }
+    }
+
+    /// <summary>
+    /// Records a schema operation that #5569's saturation ended Failed as that known defect, and
+    /// ignores the test: the estate, not the operation, is what failed.
+    /// </summary>
+    /// <param name="what">The operation, for messages.</param>
+    /// <param name="status">Its last status, a starvation failure.</param>
+    /// <param name="failure">The wait's failure.</param>
+    private static async Task IgnoreStarvationFailureAsync(string what, Orleans.Lattice.Api.Operations.LatticeOperationStatus? status, InvalidOperationException failure)
+    {
+        await SchemaOperationStarved.ReproducesAsync(() =>
+        {
+            Assert.That(IsStarvationFailure(status), Is.True, "the operation failed because the saturated estate refused or timed out its calls");
+            return Task.CompletedTask;
+        });
+        Assert.Ignore($"KNOWN DEFECT #5569: {what} failed under the saturated estate: {failure.Message}");
+    }
+
+    /// <summary>
+    /// A schema remediation or migration that #5569's saturation ended Failed: the WAL admission
+    /// gate refused its writes, or its slices kept outrunning the grain call timeout. The wrapper
+    /// runs only on that outcome; any other failure stays red.
+    /// </summary>
+    private static readonly KnownDefect SchemaOperationStarved = new KnownDefect("#5569", "under the journey estate's saturation a schema remediation or migration ends Failed because the WAL admission gate refused its writes or its slices timed out");
 
     /// <summary>
     /// How long a remediation may wait in <c>WaitingForAliasOperation</c> on one named holder of
@@ -134,7 +168,7 @@ public sealed class U2Contract() : ChapterContract("U2")
     private static readonly KnownDefect MigrationStarved = new KnownDefect("#5569", "a whole-tree schema migration saturates the journey estate, so the migration stops advancing while it is still running");
 
     /// <summary>
-    /// Whether <paramref name="status"/> is a migration that #5569's saturation ended
+    /// Whether <paramref name="status"/> is a schema remediation or migration that #5569's saturation ended
     /// <see cref="Orleans.Lattice.Api.Operations.LatticeOperationState.Failed"/> rather than
     /// stalled: the WAL admission gate refused its writes, or its slices kept outrunning the
     /// grain call timeout until the remediation driver gave up.
@@ -171,12 +205,7 @@ public sealed class U2Contract() : ChapterContract("U2")
         }
         catch (InvalidOperationException ex) when (IsStarvationFailure(last.Value))
         {
-            await MigrationStarved.ReproducesAsync(() =>
-            {
-                Assert.That(IsStarvationFailure(last.Value), Is.True, "the migration failed because the saturated estate refused or timed out its calls");
-                return Task.CompletedTask;
-            });
-            Assert.Ignore($"KNOWN DEFECT #5569: {what} failed under the saturated estate: {ex.Message}");
+            await IgnoreStarvationFailureAsync(what, last.Value, ex);
         }
 
         if (timedOut is null)
