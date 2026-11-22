@@ -56,6 +56,46 @@ public partial class WalShardGrainTests
         });
     }
 
+    // Issue #6146: the flush deadline cancels the provider call it abandons, and the
+    // provider surfaces that cancellation promptly, marked unknown, while the abandoned
+    // request can still commit. Fencing the window only on the call's completion let
+    // the resync re-seed beneath it and reissue its offsets.
+    [Test]
+    public async Task A_deadline_abandoned_call_is_fenced_until_its_unknown_outcome_settles_not_until_it_returns()
+    {
+        var provider = new CancelledUnknownOutcomeWalStorageProvider(new InMemoryWalStorageProvider(), faultedOffset: 0);
+        var grain = await CreateGrainAsync(provider, new LatticeOptions
+        {
+            WalMaxBatchEntries = 1,
+            WalMaxPendingBatches = 8,
+            WalFlushTimeout = TimeSpan.FromMilliseconds(200),
+        });
+
+        Assert.That(async () => await grain.AppendAsync(MakeEntry("k0"), CancellationToken.None),
+            Throws.TypeOf<TimeoutException>(), "the flush deadline abandons the provider call");
+        await provider.CallReturned.Task.WaitAsync(TimeSpan.FromSeconds(15));
+
+        await provider.LandStrayAsync();
+        var acknowledged = new List<(long Offset, string Key)>();
+        foreach (var key in new[] { "k1", "k2" })
+        {
+            acknowledged.Add((await grain.AppendAsync(MakeEntry(key), CancellationToken.None), key));
+        }
+
+        provider.Settle();
+        await WaitForAbandonedWindowsToSettleAsync(provider);
+        var stored = await ReadAllAsync(provider);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(acknowledged.Select(a => a.Offset), Is.EqualTo(new[] { 1L, 2L }),
+                "the resync re-seeds above a window whose call returned but whose outcome had not settled");
+            Assert.That(stored.Select(e => (e.Offset, e.Mutation.Key)),
+                Is.EqualTo(new[] { (0L, "k0") }.Concat(acknowledged)),
+                "no acknowledged append is reissued beneath the late landing");
+        });
+    }
+
     [Test]
     public async Task A_window_whose_outcome_was_unknown_becomes_a_hole_once_it_settles_without_landing()
     {
@@ -124,6 +164,60 @@ public partial class WalShardGrainTests
         });
 
         provider.Settle();
+    }
+
+    /// <summary>
+    /// <see cref="IWalStorageProvider"/> decorator whose first call for one offset
+    /// waits until its token is cancelled, then returns at once with that cancellation
+    /// marked as an unknown outcome, keeping the batch so the test can land it late:
+    /// the shape of a deadline-abandoned phase-1 request still in flight (#6146).
+    /// </summary>
+    private sealed class CancelledUnknownOutcomeWalStorageProvider(IWalStorageProvider inner, long faultedOffset) : IWalStorageProvider
+    {
+        private readonly TaskCompletionSource _settled = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private List<WalEntry>? _stray;
+        private int _faultedOnce;
+
+        /// <summary>Completes when the abandoned call has returned to the shard.</summary>
+        internal TaskCompletionSource CallReturned { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        /// <summary>Lands the batch the cancelled call abandoned.</summary>
+        public Task LandStrayAsync() => inner.AppendBatchAsync(TreeId, ShardIndex, _stray!, CancellationToken.None);
+
+        /// <summary>Completes the settle signal: no write of the batch can still land.</summary>
+        public void Settle() => _settled.TrySetResult();
+
+        public async Task AppendBatchAsync(string treeId, int shardIndex, IReadOnlyList<WalEntry> entries, CancellationToken cancellationToken)
+        {
+            if (entries.Any(e => e.Offset == faultedOffset) && Interlocked.Exchange(ref _faultedOnce, 1) == 0)
+            {
+                _stray = entries.ToList();
+                try
+                {
+                    await Task.Delay(Timeout.Infinite, cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException cancelled)
+                {
+                    WalAppendOutcomeUnknown.Mark(cancelled, _settled.Task, attempts: 1, clientAbandonedAttempts: 1);
+                    CallReturned.TrySetResult();
+                    throw;
+                }
+            }
+
+            await inner.AppendBatchAsync(treeId, shardIndex, entries, cancellationToken).ConfigureAwait(false);
+        }
+
+        public IAsyncEnumerable<WalEntry> ReadAsync(string treeId, int shardIndex, long fromOffsetExclusive, int maxEntries, CancellationToken cancellationToken)
+            => inner.ReadAsync(treeId, shardIndex, fromOffsetExclusive, maxEntries, cancellationToken);
+
+        public Task<long> GetHighestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken)
+            => inner.GetHighestOffsetAsync(treeId, shardIndex, cancellationToken);
+
+        public Task<long> GetLowestOffsetAsync(string treeId, int shardIndex, CancellationToken cancellationToken)
+            => inner.GetLowestOffsetAsync(treeId, shardIndex, cancellationToken);
+
+        public Task TrimAsync(string treeId, int shardIndex, long throughOffsetInclusive, CancellationToken cancellationToken)
+            => inner.TrimAsync(treeId, shardIndex, throughOffsetInclusive, cancellationToken);
     }
 
     /// <summary>
