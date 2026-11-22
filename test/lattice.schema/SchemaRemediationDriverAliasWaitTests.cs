@@ -103,6 +103,46 @@ public sealed class SchemaRemediationDriverAliasWaitTests
     }
 
     [Test]
+    public async Task A_timed_out_accept_is_retried_within_the_ceiling()
+    {
+        var calls = 0;
+        Task<LatticeSchemaRemediationReport> Accept() => ++calls switch
+        {
+            1 => Task.FromException<LatticeSchemaRemediationReport>(Held()),
+            2 => Task.FromException<LatticeSchemaRemediationReport>(new TimeoutException("accept timed out")),
+            _ => Task.FromResult(Accepted),
+        };
+        var progress = new RecordingProgress();
+
+        var report = await SchemaRemediationDriver.AcceptAsync(
+            "orders", Accept, TimeSpan.FromMinutes(15), logger: null, CancellationToken.None, NoDelay, progress);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(report, Is.EqualTo(Accepted), "issue #5832: a saturated accept no longer fails the operation");
+            Assert.That(calls, Is.EqualTo(3));
+            Assert.That(progress.Phases, Is.EqualTo(new[] { SchemaOperationPhases.WaitingForAliasOperation }));
+        });
+    }
+
+    [Test]
+    public void A_timed_out_accept_fails_once_the_retry_would_pass_the_ceiling()
+    {
+        var calls = 0;
+        Task<LatticeSchemaRemediationReport> Accept()
+        {
+            calls++;
+            return Task.FromException<LatticeSchemaRemediationReport>(new TimeoutException("accept timed out"));
+        }
+
+        Assert.ThrowsAsync<TimeoutException>(() =>
+            SchemaRemediationDriver.AcceptAsync(
+                "orders", Accept, TimeSpan.FromSeconds(30), logger: null, CancellationToken.None,
+                [TimeSpan.FromSeconds(20)]));
+        Assert.That(calls, Is.EqualTo(2));
+    }
+
+    [Test]
     public async Task The_wait_is_reported_once_on_entering_it_not_once_per_refusal()
     {
         var calls = 0;
