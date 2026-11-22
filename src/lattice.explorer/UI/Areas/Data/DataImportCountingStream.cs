@@ -8,6 +8,7 @@ namespace Orleans.Lattice.Explorer.UI.Areas.Data;
 internal sealed class DataImportCountingStream(Stream inner) : Stream
 {
     private long _bytesRead;
+    private int _disposed;
 
     /// <summary>The bytes read so far. Safe to read from any thread.</summary>
     public long BytesRead => Volatile.Read(ref _bytesRead);
@@ -59,7 +60,7 @@ internal sealed class DataImportCountingStream(Stream inner) : Stream
     /// <inheritdoc />
     protected override void Dispose(bool disposing)
     {
-        if (disposing)
+        if (disposing && Interlocked.Exchange(ref _disposed, 1) == 0)
         {
             inner.Dispose();
         }
@@ -70,7 +71,11 @@ internal sealed class DataImportCountingStream(Stream inner) : Stream
     /// <inheritdoc />
     public override async ValueTask DisposeAsync()
     {
-        await inner.DisposeAsync().ConfigureAwait(false);
+        if (Interlocked.Exchange(ref _disposed, 1) == 0)
+        {
+            await inner.DisposeAsync().ConfigureAwait(false);
+        }
+
         await base.DisposeAsync().ConfigureAwait(false);
     }
 

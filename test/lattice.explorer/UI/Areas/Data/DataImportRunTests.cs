@@ -119,6 +119,35 @@ public sealed class DataImportRunTests
     }
 
     [Test]
+    public async Task Stop_releases_the_file_while_the_batch_in_flight_is_still_being_written()
+    {
+        var data = FakeStreamingData.Create();
+        var bytes = Encoding.UTF8.GetBytes(string.Concat(Enumerable.Range(0, 5_000).Select(i => $"{{\"id\":\"k{i}\"}}\n")));
+        var file = new DisposalTrackingStream(bytes);
+        DataImportRun? run = null;
+        var releasedInFlight = false;
+        FakeStreamingData.Of(data).AfterBatch = batch =>
+        {
+            if (batch == 0)
+            {
+                run!.Stop();
+                releasedInFlight = SpinWait.SpinUntil(() => file.Disposed, TimeSpan.FromSeconds(10));
+            }
+        };
+        run = new DataImportRun("orders", new DataImportSettings { KeyTemplate = "/id" }, () => file, bytes.Length, data, admin: null, channelCapacity: 16);
+
+        await run.RunAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(releasedInFlight, Is.True, "an unread browser upload times out and faults the circuit");
+            Assert.That(run.Phase, Is.EqualTo(DataImportPhase.Stopped));
+            Assert.That(run.EntriesCommitted, Is.EqualTo(FakeStreamingData.Of(data).Written.Count));
+        });
+        run.Dispose();
+    }
+
+    [Test]
     public async Task Ending_the_circuit_cancels_the_import()
     {
         var data = FakeStreamingData.Create();
@@ -234,6 +263,20 @@ public sealed class DataImportRunTests
     {
         var bytes = Encoding.UTF8.GetBytes(text);
         return new DataImportRun("orders", new DataImportSettings { KeyTemplate = "/id", Mode = DataImportMode.Seed }, () => new MemoryStream(bytes), bytes.Length, data: null, admin);
+    }
+
+    /// <summary>A file that records when it is released.</summary>
+    private sealed class DisposalTrackingStream(byte[] bytes) : MemoryStream(bytes)
+    {
+        private volatile bool _disposed;
+
+        internal bool Disposed => _disposed;
+
+        protected override void Dispose(bool disposing)
+        {
+            _disposed = true;
+            base.Dispose(disposing);
+        }
     }
 
     /// <summary>

@@ -166,6 +166,14 @@ public sealed partial class DataStewardJourney
     }
 
     /// <summary>
+    /// How long a stopped seed may take to end. The chunk in flight when the stop lands is still
+    /// committed, and under starvation (#5569) the stream resumes it up to
+    /// <see cref="TreeBulkLoadStreamOptions.DefaultMaxResumeAttempts"/> times at 30 s each before
+    /// the commit, about 150 s in all; the bound doubles that.
+    /// </summary>
+    private static readonly float StoppedSeedEndMs = (float)TimeSpan.FromMinutes(5).TotalMilliseconds;
+
+    /// <summary>
     /// Waits for the stopped import to end. A seed still commits the chunk it holds when the stop
     /// lands, and under replay-permit starvation (#5569) that commit times out, so the run ends
     /// Failed saying it could not seed the tree; that is recorded as the starved seed. Any other
@@ -174,7 +182,7 @@ public sealed partial class DataStewardJourney
     /// <returns><see langword="true"/> when the seed starved; <see langword="false"/> when it stopped.</returns>
     private static async Task<bool> ExpectStoppedOrStarvedAsync(DataImportDialog import)
     {
-        await Expect(import.State).ToHaveAttributeAsync("data-lt-import-state", new Regex("^(succeeded|failed|stopped|cancelled)$"), new() { Timeout = PanelSettled.BoundMs });
+        await Expect(import.State).ToHaveAttributeAsync("data-lt-import-state", new Regex("^(succeeded|failed|stopped|cancelled)$"), new() { Timeout = StoppedSeedEndMs });
         if (await import.State.GetAttributeAsync("data-lt-import-state") != "failed")
         {
             await import.ExpectEndAsync("stopped", PanelSettled.BoundMs);
