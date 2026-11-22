@@ -90,6 +90,13 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// or a stale activation - rethrows the original conflict, so the #1560
 /// fail-loud contract is unchanged; the check can only err towards surfacing.
 /// </para>
+/// <para>
+/// <b>A conflict that is not adopted retires the activation.</b> Its cached etag
+/// is stale, so it requests deactivation before rethrowing, even where the caller
+/// swallows the failure as best-effort; a surviving activation would otherwise
+/// fail every later write against that etag. A caller that owns a bounded retry
+/// and its own drain-aware deactivation (the shard root's flush loop) opts out.
+/// </para>
 /// </remarks>
 internal static class TopologySeedPersist
 {
@@ -130,11 +137,18 @@ internal static class TopologySeedPersist
     /// The grain's context, which supplies the grain id for the convergence debug
     /// line and the services the landed-write check reads the committed row with.
     /// </param>
+    /// <param name="retireOnUnadoptedConflict">
+    /// Whether a conflict that cannot be adopted requests deactivation of the
+    /// activation before rethrowing (the default). Pass <see langword="false"/> only
+    /// from a caller that retries the conflict and deactivates itself once it gives
+    /// up, as the shard root does after <c>MaxConsecutiveFlushFailures</c>.
+    /// </param>
     public static Task WriteAdoptingBenignFirstCreateRaceAsync<TState>(
         IPersistentState<TState> state,
         ILogger? logger,
-        IGrainContext context)
-        => WriteCoreAsync(state, logger, context, adoptBenignFirstCreate: true);
+        IGrainContext context,
+        bool retireOnUnadoptedConflict = true)
+        => WriteCoreAsync(state, logger, context, adoptBenignFirstCreate: true, retireOnUnadoptedConflict);
 
     /// <summary>
     /// Writes <paramref name="state"/>, recovering only a write that landed but
@@ -150,13 +164,14 @@ internal static class TopologySeedPersist
         IPersistentState<TState> state,
         ILogger? logger,
         IGrainContext context)
-        => WriteCoreAsync(state, logger, context, adoptBenignFirstCreate: false);
+        => WriteCoreAsync(state, logger, context, adoptBenignFirstCreate: false, retireOnUnadoptedConflict: true);
 
     private static async Task WriteCoreAsync<TState>(
         IPersistentState<TState> state,
         ILogger? logger,
         IGrainContext context,
-        bool adoptBenignFirstCreate)
+        bool adoptBenignFirstCreate,
+        bool retireOnUnadoptedConflict)
     {
         // #1557 / #1566: capture whether this write is an initial create BEFORE
         // the attempt. This flag - NOT the etag test below - is what makes
@@ -184,6 +199,11 @@ internal static class TopologySeedPersist
         {
             if (!await TryAdoptLandedWriteAsync(state, context, creatingRow))
             {
+                if (retireOnUnadoptedConflict)
+                {
+                    RetireStaleActivation(context, logger);
+                }
+
                 ExceptionDispatchInfo.Capture(ex).Throw();
             }
 
@@ -191,6 +211,41 @@ internal static class TopologySeedPersist
             logger?.LogWarning(
                 "Topology grain {GrainId} adopted a write that landed but was reported as an etag conflict (#5095), for example by a storage-client retry of a committed request.",
                 context.GrainId);
+        }
+    }
+
+    /// <summary>
+    /// Requests deactivation of an activation whose write lost an etag check that
+    /// could not be adopted. Its cached etag is stale from here on, so every later
+    /// write it makes fails identically; only a fresh activation, which reloads the
+    /// row, can write again (the rule <see cref="GrainStateWriteFaults"/> already
+    /// applies to the saga grains).
+    /// </summary>
+    /// <remarks>
+    /// Orleans deactivates an activation whose call surfaces an
+    /// <see cref="InconsistentStateException"/> to the runtime, but several
+    /// topology paths swallow a failed write as best-effort - a parked child-digest
+    /// fold released under an internal node's split gate, for one - so the
+    /// activation stayed alive, every gate-held write after it failed against the
+    /// same stale etag, and the tree froze behind it. Requesting deactivation here,
+    /// at the one seam every topology write passes, retires the activation whether
+    /// or not its caller rethrows. Deactivation waits for in-flight requests, and a
+    /// repeated request is a no-op.
+    /// </remarks>
+    private static void RetireStaleActivation(IGrainContext context, ILogger? logger)
+    {
+        try
+        {
+            context.Deactivate(new DeactivationReason(
+                DeactivationReasonCode.ApplicationError,
+                "Topology grain state write lost an etag check; reloading the durable row in a fresh activation."));
+            logger?.LogWarning(
+                "Topology grain {GrainId} lost an etag check on a state write that did not land as written; deactivating so a fresh activation reloads the durable row.",
+                context.GrainId);
+        }
+        catch (Exception deactivateFailure)
+        {
+            logger?.LogWarning(deactivateFailure, "Topology grain {GrainId} could not request deactivation after a lost etag check.", context.GrainId);
         }
     }
 

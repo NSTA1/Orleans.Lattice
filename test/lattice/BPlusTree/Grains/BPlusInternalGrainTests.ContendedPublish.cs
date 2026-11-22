@@ -136,4 +136,46 @@ public partial class BPlusInternalGrainTests
 
         Assert.That(persisted, Is.GreaterThan(before), "the next holder re-drives the parked publish");
     }
+
+    [Test]
+    public async Task A_parked_fold_that_loses_an_etag_check_retires_the_activation()
+    {
+        // The release path swallows a failed fold as best-effort, so the runtime
+        // never sees the conflict; without an explicit deactivation the activation
+        // kept its stale etag and every later gate-held write failed against it.
+        var (grain, state, forward, accept) = await HoldSplitGateAsync();
+        state.OnWriteState = s =>
+        {
+            if (s.ChildDigests.TryGetValue(Child0, out var d) && d.PublishSequence == 9)
+            {
+                throw new Orleans.Storage.InconsistentStateException("etag mismatch", "stored", "current");
+            }
+        };
+
+        await grain.OnChildDigestPublishedAsync(Child0, DeferredSnapshot with { PublishSequence = 9 });
+        forward.TrySetResult(null);
+        var result = await accept.WaitAsync(TimeSpan.FromSeconds(10));
+
+        Assert.That(result, Is.Not.Null, "the holder's own division is unaffected");
+        ((IGrainBase)grain).GrainContext.Received(1).Deactivate(Arg.Any<DeactivationReason>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task A_parked_fold_that_faults_without_a_conflict_keeps_the_activation()
+    {
+        var (grain, state, forward, accept) = await HoldSplitGateAsync();
+        state.OnWriteState = s =>
+        {
+            if (s.ChildDigests.TryGetValue(Child0, out var d) && d.PublishSequence == 9)
+            {
+                throw new IOException("storage unavailable");
+            }
+        };
+
+        await grain.OnChildDigestPublishedAsync(Child0, DeferredSnapshot with { PublishSequence = 9 });
+        forward.TrySetResult(null);
+        await accept.WaitAsync(TimeSpan.FromSeconds(10));
+
+        ((IGrainBase)grain).GrainContext.DidNotReceive().Deactivate(Arg.Any<DeactivationReason>(), Arg.Any<CancellationToken>());
+    }
 }

@@ -32,6 +32,7 @@ public sealed class SetManyLandedConflictTests
     private static int s_topologyWrites;
     private static int s_landedProbeWrite;
     private static int s_unlandedProbeWrite;
+    private static int s_divergedProbeWrite;
 
     private TestCluster _cluster = null!;
 
@@ -117,9 +118,40 @@ public sealed class SetManyLandedConflictTests
         Assert.That(await _cluster.Client.GetGrain<ITopologySeedPersistProbeGrain>(ProbePrefix + "unlanded").ReadStoredAsync(),
             Is.EqualTo(1));
     }
+    [Test]
+    public async Task A_swallowed_conflict_that_cannot_be_adopted_retires_the_activation_so_later_writes_succeed()
+    {
+        // The wedge in an 8-silo set-many run: during a storage stall a topology
+        // write landed, interleaved turns moved the in-memory state on, and the
+        // conflict reported for the landed write could not be adopted. A
+        // best-effort caller swallowed it, so the activation survived with a stale
+        // etag and every later write it made failed the same way.
+        var probe = _cluster.Client.GetGrain<ITopologySeedPersistProbeGrain>(ProbePrefix + "diverged");
+        Assert.That(await probe.TryWriteSwallowingConflictAsync(1), Is.True);
+
+        Interlocked.Exchange(ref s_divergedProbeWrite, 1);
+        Assert.That(await probe.TryWriteSwallowingConflictAsync(2), Is.False,
+            "the injected landed write whose state moved on must surface as a conflict");
+
+        Assert.That(await probe.TryWriteSwallowingConflictAsync(3), Is.True,
+            "a conflicted activation must be retired, so the next write reloads the row rather than reusing a stale etag");
+        Assert.That(await probe.ReadStoredAsync(), Is.EqualTo(3));
+    }
+
     private static long Injected() => Storages.Sum(s => s.Injected);
 
     private static bool IsProbe(GrainId grainId) => grainId.Key.ToString()!.StartsWith(ProbePrefix, StringComparison.Ordinal);
+
+    private static bool DivergeProbe(GrainId grainId, object? state)
+    {
+        if (!IsProbe(grainId) || state is not InternalNodeState node || !TakeOneShot(ref s_divergedProbeWrite))
+        {
+            return false;
+        }
+
+        node.SubtreeEntryCount += 1_000;
+        return true;
+    }
 
     private static bool TakeOneShot(ref int flag) => Interlocked.CompareExchange(ref flag, 0, 1) == 1;
 
@@ -142,7 +174,8 @@ public sealed class SetManyLandedConflictTests
                             : s_landedFaults
                                 && IsTopologyState(stateName)
                                 && Interlocked.Increment(ref s_topologyWrites) % FaultEveryNthWrite == 0,
-                        static (_, grainId) => IsProbe(grainId) && TakeOneShot(ref s_unlandedProbeWrite));
+                        static (_, grainId) => IsProbe(grainId) && TakeOneShot(ref s_unlandedProbeWrite),
+                        static (_, grainId, state) => DivergeProbe(grainId, state));
                     lock (Storages)
                     {
                         Storages.Add(storage);

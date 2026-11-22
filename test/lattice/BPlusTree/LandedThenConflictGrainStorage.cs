@@ -14,11 +14,18 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// When <c>shouldRejectUnlanded</c> selects a write instead, it is refused with the same
 /// conflict <em>without</em> reaching the inner storage: a genuine conflict that must
 /// still surface.
+/// <para>
+/// When <c>divergeAfterLanding</c> selects a write, it lands and is then reported as a
+/// conflict after the selector has moved the caller's in-memory state on, as an
+/// interleaved turn does during a slow write. The stored row no longer matches the
+/// state, so the conflict cannot be adopted and the activation's ETag is left stale.
+/// </para>
 /// </remarks>
 internal sealed class LandedThenConflictGrainStorage(
     IGrainStorage inner,
     Func<string, GrainId, bool> shouldFault,
-    Func<string, GrainId, bool>? shouldRejectUnlanded = null) : IGrainStorage
+    Func<string, GrainId, bool>? shouldRejectUnlanded = null,
+    Func<string, GrainId, object?, bool>? divergeAfterLanding = null) : IGrainStorage
 {
     private long _injected;
     private long _rejected;
@@ -48,7 +55,8 @@ internal sealed class LandedThenConflictGrainStorage(
         var priorETag = grainState.ETag;
         var priorExists = grainState.RecordExists;
         await inner.WriteStateAsync(stateName, grainId, grainState);
-        if (!shouldFault(stateName, grainId))
+        var diverged = divergeAfterLanding?.Invoke(stateName, grainId, grainState.State) == true;
+        if (!diverged && !shouldFault(stateName, grainId))
         {
             return;
         }
