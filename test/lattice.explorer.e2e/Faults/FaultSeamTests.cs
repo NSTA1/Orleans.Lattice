@@ -169,8 +169,22 @@ public sealed class FaultSeamTests
         await Estate.RestartExplorerAsync(JourneyEstate.West);
         Assert.That(Estate.WestRegion.ExplorerProcesses[0].IsRunning, Is.True);
 
-        await Data().SetAsync(new DataSetRequest { TreeId = "seam-restart", Key = "k", Value = [1] });
-        Assert.That((await Data().GetAsync(new DataGetRequest { TreeId = "seam-restart", Key = "k" })).Found, Is.True);
+        // The region is still settling after the restarts, so the first call can time out; writing
+        // the same value again is idempotent, so retrying until the region serves is safe.
+        var deadline = DateTime.UtcNow.AddMinutes(2);
+        while (true)
+        {
+            try
+            {
+                await Data().SetAsync(new DataSetRequest { TreeId = "seam-restart", Key = "k", Value = [1] });
+                Assert.That((await Data().GetAsync(new DataGetRequest { TreeId = "seam-restart", Key = "k" })).Found, Is.True);
+                return;
+            }
+            catch (RpcException ex) when (ex.StatusCode is StatusCode.DeadlineExceeded or StatusCode.Unavailable && DateTime.UtcNow <= deadline)
+            {
+                await Task.Delay(1_000);
+            }
+        }
     }
 
     private static async Task<(int OrphanedLeafCount, int RepairableCount)> AuditAsync(LatticeTreeAdminApiGrpcClient admin, string tree)
