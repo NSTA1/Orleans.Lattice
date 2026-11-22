@@ -31,7 +31,7 @@ public sealed class MigrationStarvationSelfTests
     {
         OperationId = "op",
         Kind = "SchemaMigration",
-        Scope = default,
+        Scope = new LatticeOperationScope { TenantId = string.Empty, TreeIds = [] },
         State = state,
         Phase = "Build",
         FailureReason = reason,

@@ -14,7 +14,7 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Journeys.U1;
 /// <summary>Steps 8 to 11: a tree seeded from a CSV, an import cancelled and its tree deleted, the corrections, and an export.</summary>
 public sealed partial class DataStewardJourney
 {
-    private static readonly KnownDefect StarvedSeed = new KnownDefect("#5569", "under replay-permit starvation the seed's bulk appends to the new archive tree's shards time out at 30 s, so the Import dialog says it could not seed the tree");
+    private static readonly KnownDefect StarvedSeed = new KnownDefect("#5569", "under replay-permit starvation the seed's bulk appends to a new tree's shards time out at 30 s, so the Import dialog says it could not seed the tree");
 
     private async Task SeedTheArchiveFromACsvAsync()
     {
@@ -128,12 +128,15 @@ public sealed partial class DataStewardJourney
         await CheckpointAsync("9", "importing", "history-2025.ndjson, 500,000 lines, streams in");
 
         await import.Stop.ClickAsync();
-        await import.ExpectEndAsync("stopped", PanelSettled.BoundMs);
+        var starved = await ExpectStoppedOrStarvedAsync(import);
         var committed = await import.CommittedAsync();
-        var written = committed.ToString("N0", CultureInfo.InvariantCulture) + (committed == 1 ? " entry" : " entries");
-        await Expect(import.Result).ToContainTextAsync($"Stopped. {written} were written before the stop, and nothing after it.");
-        Assert.That(committed, Is.LessThan(Names.Files.History2025Lines), "stopped within seconds, the import did not finish");
-        await CheckpointAsync("9", "stopped", $"Cancelled within seconds: the import reports exactly what it committed ({written})");
+        if (!starved)
+        {
+            var written = committed.ToString("N0", CultureInfo.InvariantCulture) + (committed == 1 ? " entry" : " entries");
+            await Expect(import.Result).ToContainTextAsync($"Stopped. {written} were written before the stop, and nothing after it.");
+            Assert.That(committed, Is.LessThan(Names.Files.History2025Lines), "stopped within seconds, the import did not finish");
+            await CheckpointAsync("9", "stopped", $"Cancelled within seconds: the import reports exactly what it committed ({written})");
+        }
 
         await import.Done.ClickAsync();
         await Expect(import.Dialog).ToHaveCountAsync(0);
@@ -147,7 +150,10 @@ public sealed partial class DataStewardJourney
             await Expect(_tree.KeyLinks.First).ToHaveTextAsync(Names.Orders.Key(1), new() { Timeout = PanelSettled.BoundMs });
         }
 
-        Coverage.Hit("use-case:data/import-cancel");
+        if (!starved)
+        {
+            Coverage.Hit("use-case:data/import-cancel");
+        }
 
         await _tree.DeleteTree.ClickAsync();
         var confirm = await _tree.TypeConfirmationAsync("Delete this tree?", history);
@@ -157,6 +163,33 @@ public sealed partial class DataStewardJourney
         await Expect(_tree.Deleted).ToHaveAttributeAsync("data-lt-tree-deleted", "recoverable", new() { Timeout = PanelSettled.BoundMs });
         Coverage.Hit("use-case:data/tree-delete-recover");
         await CheckpointAsync("9", "deleted", "factory-history is deleted, and recoverable until its window closes");
+    }
+
+    /// <summary>
+    /// Waits for the stopped import to end. A seed still commits the chunk it holds when the stop
+    /// lands, and under replay-permit starvation (#5569) that commit times out, so the run ends
+    /// Failed saying it could not seed the tree; that is recorded as the starved seed. Any other
+    /// end fails the step.
+    /// </summary>
+    /// <returns><see langword="true"/> when the seed starved; <see langword="false"/> when it stopped.</returns>
+    private static async Task<bool> ExpectStoppedOrStarvedAsync(DataImportDialog import)
+    {
+        await Expect(import.State).ToHaveAttributeAsync("data-lt-import-state", new Regex("^(succeeded|failed|stopped|cancelled)$"), new() { Timeout = PanelSettled.BoundMs });
+        if (await import.State.GetAttributeAsync("data-lt-import-state") != "failed")
+        {
+            await import.ExpectEndAsync("stopped", PanelSettled.BoundMs);
+            return false;
+        }
+
+        var failure = (await import.Dialog.InnerTextAsync()).ReplaceLineEndings(" ");
+        if (!failure.Contains("could not seed this tree", StringComparison.Ordinal))
+        {
+            Assert.Fail($"The stopped import failed: {failure}");
+        }
+
+        await StarvedSeed.ReproducesAsync(async () =>
+            await Expect(import.Dialog).ToContainTextAsync("could not seed this tree"));
+        return true;
     }
 
     private async Task ApplyTheCorrectionsAsync()

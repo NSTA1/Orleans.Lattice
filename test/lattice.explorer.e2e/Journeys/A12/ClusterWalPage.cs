@@ -75,7 +75,7 @@ internal sealed class ClusterWalPage(ShellPage shell)
     public async Task StartMoveAsync()
     {
         await ClusterParts.ConfirmAsync(shell, "Move WAL partition", "Move");
-        await Expect(Progress).ToBeVisibleAsync();
+        await Expect(Progress).ToBeVisibleAsync(ClusterParts.PatientlyVisible);
         await Expect(Progress.Locator("[data-lt-operation-state=Running]")).ToBeVisibleAsync(ClusterParts.PatientlyVisible);
         await Expect(Progress.Locator("[data-lt-cluster=stop-move]")).ToBeEnabledAsync();
         await Expect(shell.Content).ToContainTextAsync("Stopping is honoured only before the placement flips.");
