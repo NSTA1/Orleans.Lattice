@@ -99,7 +99,8 @@ public sealed class ImportMemoryBudgetTests
         Assert.Multiple(() =>
         {
             Assert.That(ImportMemoryBudget.IsRetained(reading), Is.True);
-            Assert.That(ImportMemoryBudget.IsRetained(reading with { LiveDrained = 2400 * Mb / 10 }), Is.False, "still draining");
+            Assert.That(ImportMemoryBudget.IsRetained(reading with { LiveAfter = 2560 * Mb / 10, LiveDrained = 2495 * Mb / 10 }), Is.True, "freed 6.5 MB of 105.6 MB");
+            Assert.That(ImportMemoryBudget.IsRetained(reading with { LiveDrained = 2080 * Mb / 10 }), Is.False, "still draining");
             Assert.That(ImportMemoryBudget.IsRetained(reading with { WarmUpLiveBaseline = 200 * Mb }), Is.False, "under the kept ceiling");
         });
     }

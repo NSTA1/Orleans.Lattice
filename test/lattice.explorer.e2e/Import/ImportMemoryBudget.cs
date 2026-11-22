@@ -79,9 +79,10 @@ internal static class ImportMemoryBudget
 
     /// <summary>
     /// Whether <paramref name="reading"/> shows a process keeping state the drain cannot release
-    /// (#6150): it kept <see cref="KeptCeilingBytes"/> or more, and its drained heap is within one
-    /// <see cref="WorkingSetSampler.DrainStepBytes"/> of its settled heap, so the hold did not
-    /// bring it down. A heap that was still falling is not this: that is a slow drain (#6115).
+    /// (#6150): it still kept <see cref="KeptCeilingBytes"/> or more once the hold ran out, and the
+    /// hold freed less than half of what it kept (run 45052486937: west-silo-1 freed 6.5 MB of
+    /// 105.0 MB in three minutes). A heap the hold brought down by half of what it kept or more
+    /// was still draining: that is a slow drain (#6115).
     /// </summary>
     /// <param name="reading">One process's readings across the import.</param>
     /// <returns><see langword="true"/> when the reading carries the retention signature.</returns>
@@ -90,6 +91,6 @@ internal static class ImportMemoryBudget
         ArgumentNullException.ThrowIfNull(reading);
         return reading.LiveKept is { } kept && kept >= KeptCeilingBytes
             && reading.LiveAfter is { } settled && reading.LiveDrained is { } drained
-            && settled - drained < WorkingSetSampler.DrainStepBytes;
+            && settled - drained < kept / 2;
     }
 }
