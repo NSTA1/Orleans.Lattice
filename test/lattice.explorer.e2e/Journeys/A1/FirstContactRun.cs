@@ -65,6 +65,15 @@ internal sealed partial class FirstContactRun
     private async Task ExpectHomeAsync()
     {
         await Shell.ExpectHeadingAsync(HomeHeading);
-        await Expect(Shell.Spine).ToBeVisibleAsync();
+
+        // Compact folds the spine into the closed Directory sheet, so its button stands in for it.
+        if (await Shell.IsCompactAsync())
+        {
+            await Expect(Shell.DirectoryButton).ToBeVisibleAsync();
+        }
+        else
+        {
+            await Expect(Shell.Spine).ToBeVisibleAsync();
+        }
     }
 }

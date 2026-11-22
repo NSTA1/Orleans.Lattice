@@ -32,6 +32,17 @@ internal sealed class WorkingSetSampler : IAsyncDisposable
     /// </summary>
     internal const int QuietRounds = 3;
 
+    /// <summary>
+    /// The most further settles taken while a process's settled live heap is still above what it
+    /// may keep: three minutes at <see cref="DrainInterval"/>. A silo releases state a large
+    /// upsert queued on its own schedule, and on a slow run that comes later than the quiet
+    /// rounds (run 45008970668: west-silo-1 held 102.2 MB above its pre-warm-up heap, level for
+    /// fifteen seconds; on the run before, the same silo dropped 31.7 MB after its warm-up had
+    /// settled). A process that genuinely keeps state is still read as keeping it once the
+    /// rounds run out.
+    /// </summary>
+    internal const int HoldRounds = 36;
+
     private readonly IReadOnlyList<MeasuredProcess> _processes;
     private readonly Func<MeasuredProcess, bool, Task<JourneyMemoryReading>> _probe;
     private readonly long[] _baseline;
@@ -101,22 +112,30 @@ internal sealed class WorkingSetSampler : IAsyncDisposable
 
     /// <summary>
     /// Stops sampling, settles each process until its live heap has drained, and returns every
-    /// reading.
+    /// reading. A process whose settled live heap is still <see cref="ImportMemoryBudget.KeptCeilingBytes"/> or more
+    /// above <paramref name="keptFrom"/> is settled further, at most <see cref="HoldRounds"/>
+    /// times, before what it kept is read.
     /// </summary>
+    /// <param name="keptFrom">
+    /// Each process's settled live heap before the first of the imports being measured, in bytes;
+    /// <see langword="null"/> (for the list, or for one process) to measure from this sampler's own baseline.
+    /// </param>
     /// <returns>One reading per process, in the order given.</returns>
-    public async Task<IReadOnlyList<WorkingSetGrowth>> StopAsync()
+    public async Task<IReadOnlyList<WorkingSetGrowth>> StopAsync(IReadOnlyList<long?>? keptFrom = null)
     {
         await StopSamplingAsync();
-        var settled = await SettleUntilDrainedAsync(
-            async () => [.. (await Task.WhenAll(_processes.Select(process => _probe(process, true)))).Select(reading => reading.LiveHeapBytes)],
-            () => Task.Delay(DrainInterval),
-            DrainRounds);
+        Func<Task<long[]>> settle = async () => [.. (await Task.WhenAll(_processes.Select(process => _probe(process, true)))).Select(reading => reading.LiveHeapBytes)];
+        Func<Task> pause = () => Task.Delay(DrainInterval);
+        var settled = await SettleUntilDrainedAsync(settle, pause, DrainRounds);
+        var holdAbove = _processes.Select((_, i) => (keptFrom?[i] ?? _liveBaseline[i]) + ImportMemoryBudget.KeptCeilingBytes).ToArray();
+        var drained = await HoldUntilUnderAsync(settled, settle, pause, holdAbove, HoldRounds);
         return [.. _processes.Select((process, i) => new WorkingSetGrowth(process.Name, _baseline[i], _peak[i], _samples)
         {
             LiveBaseline = _liveBaseline[i],
             LivePeak = _livePeak[i],
             LiveSamples = _liveSamples,
             LiveAfter = settled[i],
+            LiveDrained = drained[i],
             SettledAfter = Read(process.ProcessId),
             Collector = _collector[i],
         })];
@@ -154,6 +173,36 @@ internal sealed class WorkingSetSampler : IAsyncDisposable
             if (quiet >= QuietRounds)
             {
                 break;
+            }
+        }
+
+        return lowest;
+    }
+
+    /// <summary>
+    /// Starting from <paramref name="settled"/>, settles every process again after each
+    /// <paramref name="pause"/> for as long as any process's lowest live heap is at or above its
+    /// <paramref name="holdAbove"/>, at most <paramref name="rounds"/> times, and returns each
+    /// process's lowest reading. <paramref name="settled"/> is not changed, so the in-flight
+    /// reading it supplies is not stretched by the longer wait.
+    /// </summary>
+    /// <param name="settled">Each process's lowest settled live heap so far, in bytes.</param>
+    /// <param name="settle">Settles every process and returns each live heap, in bytes.</param>
+    /// <param name="pause">Waits between two settles.</param>
+    /// <param name="holdAbove">Each process's live heap at or above which it is settled further, in bytes.</param>
+    /// <param name="rounds">The most further settles.</param>
+    /// <returns>Each process's lowest settled live heap, in bytes.</returns>
+    internal static async Task<long[]> HoldUntilUnderAsync(
+        IReadOnlyList<long> settled, Func<Task<long[]>> settle, Func<Task> pause, IReadOnlyList<long> holdAbove, int rounds)
+    {
+        var lowest = settled.ToArray();
+        for (var round = 0; round < rounds && lowest.Where((heap, i) => heap >= holdAbove[i]).Any(); round++)
+        {
+            await pause();
+            var next = await settle();
+            for (var i = 0; i < lowest.Length; i++)
+            {
+                lowest[i] = Math.Min(lowest[i], next[i]);
             }
         }
 

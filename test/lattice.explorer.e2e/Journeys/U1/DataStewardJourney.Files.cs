@@ -255,7 +255,9 @@ public sealed partial class DataStewardJourney
     private async Task CreateTreeFromFileAsync(string tree, string step)
     {
         await _directory.OpenAsync();
-        await Expect(_directory.NewTreeFromFile).ToHaveTextAsync("New tree from file...");
+
+        // The control draws once the create gate's probes answer, which is after the listing on a loaded estate.
+        await Expect(_directory.NewTreeFromFile).ToHaveTextAsync("New tree from file...", new() { Timeout = PanelSettled.BoundMs });
         await _directory.NewTreeFromFile.ClickAsync();
         var create = _priya.Page.GetByRole(AriaRole.Dialog, new() { Name = "New tree from file" });
         await Expect(create).ToBeVisibleAsync();

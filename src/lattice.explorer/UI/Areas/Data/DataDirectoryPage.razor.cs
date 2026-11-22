@@ -218,6 +218,12 @@ public partial class DataDirectoryPage : IDisposable
     {
         _entries = null;
         _error = null;
+        if (!_canCreate)
+        {
+            // A gate whose probe could not answer is asked again with the list.
+            _ = LoadCreateGateAsync();
+        }
+
         try
         {
             await Directory.RefreshAsync(_lifetime.Token);

@@ -120,16 +120,23 @@ internal sealed class ClusterTreeCreation
             return false;
         }
 
-        var answer = await AdministersAsync(admin, ProbeTreeId, cancellationToken).ConfigureAwait(false)
-            || await AdministersAListedTreeAsync(admin, cancellationToken).ConfigureAwait(false);
-
-        // Remembered only for the caller it was read for, and only while that is still the caller.
-        if (_facades.Caller == caller)
+        var probe = await AdministersAsync(admin, ProbeTreeId, cancellationToken).ConfigureAwait(false);
+        bool? answer = probe;
+        if (probe != true)
         {
-            _canCreate = (answer, caller, _time.GetUtcNow());
+            var listed = await AdministersAListedTreeAsync(admin, cancellationToken).ConfigureAwait(false);
+            answer = listed == true ? true : probe is null || listed is null ? null : false;
         }
 
-        return answer;
+        // Remembered only for the caller it was read for, and only while that is still the caller.
+        // A no that rests on a probe which could not answer is not remembered, so the next ask
+        // probes again rather than hiding the control for the whole freshness window.
+        if (answer is { } definitive && _facades.Caller == caller)
+        {
+            _canCreate = (definitive, caller, _time.GetUtcNow());
+        }
+
+        return answer == true;
     }
 
     /// <summary>
@@ -197,7 +204,7 @@ internal sealed class ClusterTreeCreation
             return "This Explorer does not serve tree administration.";
         }
 
-        if (!await AdministersAsync(admin, request.TreeId, cancellationToken).ConfigureAwait(false))
+        if (await AdministersAsync(admin, request.TreeId, cancellationToken).ConfigureAwait(false) != true)
         {
             return $"You do not hold the administration grant over a tree named {request.TreeId}, so the cluster would refuse to create it.";
         }
@@ -309,7 +316,9 @@ internal sealed class ClusterTreeCreation
     private static bool AtCeiling(TenantQuotaDimensionUsage trees) =>
         trees.Usage is { } used && (trees.BurstLimit ?? trees.Limit) is { } ceiling && used >= ceiling;
 
-    private static async Task<bool> AdministersAsync(ILatticeTreeAdmin admin, string treeId, CancellationToken cancellationToken)
+    // True or false when the cluster answered (a denial is an answer), null when the
+    // probe could not answer. Callers fail closed on anything but true.
+    private static async Task<bool?> AdministersAsync(ILatticeTreeAdmin admin, string treeId, CancellationToken cancellationToken)
     {
         try
         {
@@ -320,14 +329,19 @@ internal sealed class ClusterTreeCreation
         {
             throw;
         }
+        catch (Exception exception) when (ClusterFaults.IsDenied(exception))
+        {
+            return false;
+        }
         catch (Exception)
         {
-            // Fail closed: a probe that cannot answer grants nothing.
-            return false;
+            return null;
         }
     }
 
-    private async Task<bool> AdministersAListedTreeAsync(ILatticeTreeAdmin admin, CancellationToken cancellationToken)
+    // True when a listed tree admits the caller, false when every probe answered no,
+    // null when the list or a probe could not answer.
+    private async Task<bool?> AdministersAListedTreeAsync(ILatticeTreeAdmin admin, CancellationToken cancellationToken)
     {
         IReadOnlyList<ClusterTreeEntry> trees;
         try
@@ -340,10 +354,11 @@ internal sealed class ClusterTreeCreation
         }
         catch (Exception)
         {
-            return false;
+            return null;
         }
 
         var probed = 0;
+        var unanswered = false;
         foreach (var tree in trees)
         {
             if (tree.Lifecycle != TreeLifecycleState.Active)
@@ -351,9 +366,13 @@ internal sealed class ClusterTreeCreation
                 continue;
             }
 
-            if (await AdministersAsync(admin, tree.TreeId, cancellationToken).ConfigureAwait(false))
+            switch (await AdministersAsync(admin, tree.TreeId, cancellationToken).ConfigureAwait(false))
             {
-                return true;
+                case true:
+                    return true;
+                case null:
+                    unanswered = true;
+                    break;
             }
 
             if (++probed == MaximumListedProbes)
@@ -362,7 +381,7 @@ internal sealed class ClusterTreeCreation
             }
         }
 
-        return false;
+        return unanswered ? null : false;
     }
 
     // The cluster answers for any tree the caller may read; a caller that may not,

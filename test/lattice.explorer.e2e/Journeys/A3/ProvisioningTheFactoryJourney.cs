@@ -148,7 +148,7 @@ public sealed class ProvisioningTheFactoryJourney : JourneyChapter
         await steps.StepAsync(3, async () =>
         {
             await data.OpenDirectoryAsync();
-            await Expect(data.NewTreeFromFile).ToHaveTextAsync("New tree from file...");
+            await Expect(data.NewTreeFromFile).ToHaveTextAsync("New tree from file...", new() { Timeout = PanelSettled.BoundMs });
             await steps.SubstepAsync("affordance", "The Data directory offers New tree from file...");
 
             await data.NewTreeFromFile.ClickAsync();
