@@ -133,6 +133,19 @@ public sealed class U2Contract() : ChapterContract("U2")
     /// </summary>
     private static readonly KnownDefect MigrationStarved = new KnownDefect("#5569", "a whole-tree schema migration saturates the journey estate, so the migration stops advancing while it is still running");
 
+    /// <summary>
+    /// Whether <paramref name="status"/> is a migration that #5569's saturation ended
+    /// <see cref="Orleans.Lattice.Api.Operations.LatticeOperationState.Failed"/> rather than
+    /// stalled: the WAL admission gate refused its writes, or its slices kept outrunning the
+    /// grain call timeout until the remediation driver gave up.
+    /// </summary>
+    /// <param name="status">The migration's last status.</param>
+    /// <returns><see langword="true"/> for a starvation failure.</returns>
+    internal static bool IsStarvationFailure(Orleans.Lattice.Api.Operations.LatticeOperationStatus? status) =>
+        status is { State: Orleans.Lattice.Api.Operations.LatticeOperationState.Failed, FailureReason: { } reason }
+        && (reason.StartsWith("LatticeSaturatedException:", StringComparison.Ordinal)
+            || reason.StartsWith("TimeoutException: The schema remediation slice timed out", StringComparison.Ordinal));
+
     /// <summary>How long a migration may go without moving to a new phase or completing more units.</summary>
     private static readonly TimeSpan MigrationStall = TimeSpan.FromMinutes(6);
 
@@ -155,6 +168,15 @@ public sealed class U2Contract() : ChapterContract("U2")
         catch (TimeoutException ex)
         {
             timedOut = ex;
+        }
+        catch (InvalidOperationException ex) when (IsStarvationFailure(last.Value))
+        {
+            await MigrationStarved.ReproducesAsync(() =>
+            {
+                Assert.That(IsStarvationFailure(last.Value), Is.True, "the migration failed because the saturated estate refused or timed out its calls");
+                return Task.CompletedTask;
+            });
+            Assert.Ignore($"KNOWN DEFECT #5569: {what} failed under the saturated estate: {ex.Message}");
         }
 
         if (timedOut is null)
