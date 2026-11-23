@@ -169,9 +169,16 @@ public sealed class WalAppendFenceFirstTouchCostIntegrationTests
     {
         var touch = await DefaultShapeFirstTouchAsync();
 
+        // #6162: a leaf's live-checkpoint advance asks its shard root for the live-advance
+        // view, which reads the marker fresh by design (it must see every open and close).
+        // Whether a leaf's advance runs inside the measured window is timing-dependent and
+        // is not first-touch cost, so each such call's one read is not charged here.
+        var liveAdvanceReads = touch.Get($"call {nameof(IShardRootGrain)}.{nameof(IShardRootGrain.GetLiveAdvanceViewAsync)}")
+            + touch.Get($"call {nameof(IShardRootGrain)}.{nameof(IShardRootGrain.GetHandOffMarkerAsync)}");
+
         Assert.Multiple(() =>
         {
-            Assert.That(touch.Get($"R {HandOffMarkerRows.ShardGrainType}"), Is.LessThanOrEqualTo(DefaultShards),
+            Assert.That(touch.Get($"R {HandOffMarkerRows.ShardGrainType}") - liveAdvanceReads, Is.LessThanOrEqualTo(DefaultShards),
                 "each shard root reads its hand-off marker once");
             Assert.That(touch.Get($"W {HandOffMarkerRows.ShardGrainType}"), Is.LessThanOrEqualTo(DefaultShards),
                 "each shard root writes its hand-off marker once (the initialise write is inherent to the hand-off fence)");
@@ -300,10 +307,16 @@ public sealed class WalAppendFenceFirstTouchCostIntegrationTests
     {
         public Task Invoke(IIncomingGrainCallContext context)
         {
-            if (context.InterfaceName.EndsWith(nameof(IWalShardGrain), StringComparison.Ordinal)
-                && context.TargetId.ToString().Contains(Counters.Target, StringComparison.Ordinal))
+            if (context.TargetId.ToString().Contains(Counters.Target, StringComparison.Ordinal))
             {
-                Counters.Add($"call {nameof(IWalShardGrain)}.{context.MethodName}");
+                if (context.InterfaceName.EndsWith(nameof(IWalShardGrain), StringComparison.Ordinal))
+                {
+                    Counters.Add($"call {nameof(IWalShardGrain)}.{context.MethodName}");
+                }
+                else if (context.InterfaceName.EndsWith(nameof(IShardRootGrain), StringComparison.Ordinal))
+                {
+                    Counters.Add($"call {nameof(IShardRootGrain)}.{context.MethodName}");
+                }
             }
 
             return context.Invoke();
