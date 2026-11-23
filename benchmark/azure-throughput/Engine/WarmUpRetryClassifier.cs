@@ -177,6 +177,41 @@ public static class WarmUpRetryClassifier
     }
 
     /// <summary>
+    /// True when <paramref name="ex"/> (or any exception in its inner chain) is
+    /// an Orleans grain-state ETag conflict (<c>InconsistentStateException</c>,
+    /// Azure Tables <c>UpdateConditionNotSatisfied</c>, HTTP 412) surfaced from a
+    /// topology grain during a bulk-load chunk.
+    /// <para>
+    /// Retryable for the preseed because the conflicting grain deactivates on the
+    /// lost ETag check and the next activation reloads the durable row, and the
+    /// chunk is re-driven under the same operation id, which is an idempotent
+    /// no-op on every shard that already applied it. Matched by type name and
+    /// message fragment because the exception may arrive inside an Orleans
+    /// envelope.
+    /// </para>
+    /// </summary>
+    public static bool IsTransientEtagConflict(Exception? ex)
+    {
+        for (var cur = ex; cur is not null; cur = cur.InnerException)
+        {
+            if (cur.GetType().Name == "InconsistentStateException")
+            {
+                return true;
+            }
+
+            var message = cur.Message;
+            if (!string.IsNullOrEmpty(message)
+                && (message.Contains("UpdateConditionNotSatisfied", StringComparison.Ordinal)
+                    || message.Contains("Table storage condition not Satisfied", StringComparison.Ordinal)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// The Azure Storage server-side outcomes <see cref="IsTransientStorageTimeout"/>
     /// treats as transient: a server timeout (<c>OperationTimedOut</c>, HTTP 500)
     /// and a busy service (<c>ServerBusy</c>, HTTP 503), by error code and by the

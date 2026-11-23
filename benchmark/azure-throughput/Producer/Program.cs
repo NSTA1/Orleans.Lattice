@@ -237,7 +237,21 @@ static async Task RunOrleansClientProducerAsync(string[] args)
     var workloadMode = BenchWorkloadMetadata.ParseWorkloadMode(Environment.GetEnvironmentVariable("BENCH_WORKLOAD_MODE"));
     var clientCount = Math.Clamp(ReadInt("BENCH_CLIENT_COUNT", 1), 1, 64);
     var atomicBatchSize = ReadInt("BENCH_ATOMIC_BATCH_SIZE", 64);
-    var preseedKeyCount = ReadIntAllowZero("BENCH_VEHICLE_COUNT", 0);
+    // The tree-size sweep decouples the seeded keyspace from the fleet size:
+    // BENCH_PRESEED_KEY_COUNT is the tree's total size, BENCH_PRESEED_START_OFFSET
+    // the keys an earlier rung already landed, BENCH_PRESEED_SKIP reuses the tree
+    // as it is. Unset, the seed is the fleet, as before.
+    var preseedKeyCount = ReadIntAllowZero("BENCH_PRESEED_KEY_COUNT", 0) is var explicitKeys and > 0
+        ? explicitKeys
+        : ReadIntAllowZero("BENCH_VEHICLE_COUNT", 0);
+    var preseedStartOffset = Math.Min(ReadIntAllowZero("BENCH_PRESEED_START_OFFSET", 0), preseedKeyCount);
+    var preseedSkip = Environment.GetEnvironmentVariable("BENCH_PRESEED_SKIP") == "1";
+    var readKeySpace = ReadIntAllowZero("BENCH_READ_KEY_SPACE", 0);
+    // The tree-size ladder grows one tree in segments and measures reads after
+    // each, all inside this one producer execution so the silos stay warm. A
+    // fresh cluster against a bulk-loaded tree has to cold-replay the WAL for
+    // every leaf, which measures replay rather than the tree's read latency.
+    var treeSizeLadder = ParseTreeSizeLadder(Environment.GetEnvironmentVariable("BENCH_TREE_SIZE_LADDER"));
     var clusteringConn = Environment.GetEnvironmentVariable("BENCH_CLUSTERING_CONNECTION_STRING");
     var clusteringTableServiceUri = Environment.GetEnvironmentVariable("BENCH_CLUSTERING_TABLE_SERVICE_URI");
     var clusteringTable = Environment.GetEnvironmentVariable("BENCH_CLUSTERING_TABLE") ?? "OrleansSiloInstances";
@@ -273,7 +287,7 @@ static async Task RunOrleansClientProducerAsync(string[] args)
     };
 
     Console.WriteLine($"[producer] mode=orleans-client vehicles={vehicleCount} tickHz={tickHz} duration={duration}s clients={clientCount}");
-    Console.WriteLine($"[producer] settings treeId={settings.TreeId} tcpPort={settings.TcpPort} batch={settings.BatchSize} flushMs={settings.FlushInterval.TotalMilliseconds:F0} flushConcurrency={settings.FlushConcurrency} pointFanOut={settings.EffectivePointFanOut} walPartitions={settings.WalPartitions} walMaxPending={settings.WalMaxPendingBatches} shardCountOverride={settings.ShardCountOverride} responseTimeoutSec={settings.ResponseTimeoutSec} workloadMode={BenchWorkloadMetadata.FormatWorkloadMode(settings.WorkloadMode)} atomicBatchSize={settings.AtomicBatchSize} preseedKeyCount={settings.PreseedKeyCount} walAccounts={settings.WalAccounts} walAccountsRequested={walAccountsRequested} walExtraAccounts={walExtraAccountUris.Length} clusteringTable={clusteringTable}");
+    Console.WriteLine($"[producer] settings treeId={settings.TreeId} tcpPort={settings.TcpPort} batch={settings.BatchSize} flushMs={settings.FlushInterval.TotalMilliseconds:F0} flushConcurrency={settings.FlushConcurrency} pointFanOut={settings.EffectivePointFanOut} walPartitions={settings.WalPartitions} walMaxPending={settings.WalMaxPendingBatches} shardCountOverride={settings.ShardCountOverride} responseTimeoutSec={settings.ResponseTimeoutSec} workloadMode={BenchWorkloadMetadata.FormatWorkloadMode(settings.WorkloadMode)} atomicBatchSize={settings.AtomicBatchSize} preseedKeyCount={settings.PreseedKeyCount} preseedStartOffset={preseedStartOffset} preseedSkip={(preseedSkip ? 1 : 0)} readKeySpace={readKeySpace} walAccounts={settings.WalAccounts} walAccountsRequested={walAccountsRequested} walExtraAccounts={walExtraAccountUris.Length} clusteringTable={clusteringTable}");
 
     // One IClusterClient reaches exactly one silo for this workload. Orleans
     // buckets client-to-grain traffic by TargetGrain hash to preserve per-grain
@@ -400,16 +414,27 @@ static async Task RunOrleansClientProducerAsync(string[] args)
         // process owns every client for the cohort, so seeding once through
         // the first client is race-free. A failed seed fails the cohort: the
         // report refuses read cells whose log has no preseed line.
-        if (BenchPreseed.IsRequired(settings.WorkloadMode, settings.PreseedKeyCount))
+        if (treeSizeLadder.Length > 0)
         {
-            await PreseedWithRetryAsync(lattice, settings, ct).ConfigureAwait(false);
+            await RunTreeSizeLadderAsync(lattice, lattices, clusterClient, settings, lifetime, logger,
+                vehicleCount, treeSizeLadder, ct).ConfigureAwait(false);
+            return;
+        }
+
+        if (BenchPreseed.IsRequired(settings.WorkloadMode, settings.PreseedKeyCount) && preseedSkip)
+        {
+            Console.WriteLine($"[producer] preseed treeId={settings.TreeId} entries={settings.PreseedKeyCount} payloadBytes={BenchPreseed.PayloadBytes} method=reuse attempts=0 elapsedMs=0 segmentStart={settings.PreseedKeyCount} segmentEntries=0");
+        }
+        else if (BenchPreseed.IsRequired(settings.WorkloadMode, settings.PreseedKeyCount))
+        {
+            await PreseedWithRetryAsync(lattice, settings, preseedStartOffset, ct).ConfigureAwait(false);
         }
         else
         {
             Console.WriteLine($"[producer] preseed treeId={settings.TreeId} skipped workloadMode={BenchWorkloadMetadata.FormatWorkloadMode(settings.WorkloadMode)} preseedKeyCount={settings.PreseedKeyCount}");
         }
 
-        var generator = CreateChannelGenerator(vehicleCount);
+        var generator = CreateChannelGenerator(vehicleCount, readKeySpace);
         var engine = new BenchIngestEngine(
             clusterClient,
             settings,
@@ -429,7 +454,56 @@ static async Task RunOrleansClientProducerAsync(string[] args)
     }
 }
 
-static ChannelGenerator CreateChannelGenerator(int vehicleCount)
+static int[] ParseTreeSizeLadder(string? raw)
+{
+    if (string.IsNullOrWhiteSpace(raw)) return [];
+    var rungs = raw.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+        .Select(static s => int.TryParse(s, out var n) && n > 0
+            ? n
+            : throw new ArgumentException($"BENCH_TREE_SIZE_LADDER entry '{s}' is not a positive integer."))
+        .ToArray();
+    for (var i = 1; i < rungs.Length; i++)
+    {
+        if (rungs[i] <= rungs[i - 1]) throw new ArgumentException("BENCH_TREE_SIZE_LADDER must be strictly ascending.");
+    }
+    return rungs;
+}
+
+static async Task RunTreeSizeLadderAsync(
+    ILattice lattice,
+    ILattice[] lattices,
+    IClusterClient clusterClient,
+    IngestSettings settings,
+    IHostApplicationLifetime lifetime,
+    ILogger logger,
+    int vehicleCount,
+    int[] ladder,
+    CancellationToken ct)
+{
+    // Each rung appends the keys between the previous rung and this one, then
+    // measures reads uniformly over every key seeded so far. The marker lines
+    // let the cohort log be split into one segment per rung; every segment
+    // carries its own preseed, FINAL, read-latency-final and DONE lines.
+    var seeded = 0;
+    for (var i = 0; i < ladder.Length && !ct.IsCancellationRequested; i++)
+    {
+        var rung = ladder[i];
+        var rungSettings = settings with { PreseedKeyCount = rung };
+        Console.WriteLine($"[producer] tree-size-rung index={i} rung={rung} phase=seed from={seeded}");
+        await PreseedWithRetryAsync(lattice, rungSettings, seeded, ct).ConfigureAwait(false);
+        seeded = rung;
+
+        Console.WriteLine($"[producer] tree-size-rung index={i} rung={rung} phase=measure");
+        var generator = CreateChannelGenerator(vehicleCount, rung);
+        var engine = new BenchIngestEngine(clusterClient, rungSettings, lifetime, new NoOpBenchSaturationGate(), logger);
+        await RunGeneratorAndDrainAsync(generator,
+            token => engine.DrainAsync(lattices, generator.Reader, token), ct).ConfigureAwait(false);
+        Console.WriteLine($"[producer] tree-size-rung index={i} rung={rung} phase=end");
+    }
+    Console.WriteLine($"[producer] tree-size-ladder complete rungs={ladder.Length} seeded={seeded}");
+}
+
+static ChannelGenerator CreateChannelGenerator(int vehicleCount, int readKeySpace = 0)
 {
     var raw = Environment.GetEnvironmentVariable("BENCH_GENERATOR_PARALLELISM");
     var parallelism = Environment.ProcessorCount;
@@ -438,7 +512,7 @@ static ChannelGenerator CreateChannelGenerator(int vehicleCount)
         throw new ArgumentException("BENCH_GENERATOR_PARALLELISM must be a non-negative integer (0 = automatic).");
     }
     if (parallelism == 0) parallelism = Environment.ProcessorCount;
-    return new ChannelGenerator(vehicleCount, parallelism);
+    return new ChannelGenerator(vehicleCount, parallelism, readKeySpace);
 }
 
 static async Task RunGeneratorAndDrainAsync(
@@ -556,15 +630,15 @@ static async Task WarmUpWithRetryAsync(ILattice lattice, string treeId, Cancella
         lastException);
 }
 
-static async Task PreseedWithRetryAsync(ILattice lattice, IngestSettings settings, CancellationToken ct)
+static async Task PreseedWithRetryAsync(ILattice lattice, IngestSettings settings, int startOffset, CancellationToken ct)
 {
     // Matches the cohort runner's preseed allowance, independently of the
     // warm-up, response and measurement budgets. BENCH_PRESEED_BUDGET_SEC
-    // overrides the key-count-scaled default.
+    // overrides the default, which scales with the segment being written.
     var overrideSec = ReadIntAllowZero("BENCH_PRESEED_BUDGET_SEC", 0);
-    var budget = overrideSec > 0 ? TimeSpan.FromSeconds(overrideSec) : BenchPreseed.BudgetFor(settings.PreseedKeyCount);
+    var budget = overrideSec > 0 ? TimeSpan.FromSeconds(overrideSec) : BenchPreseed.BudgetFor(settings.PreseedKeyCount - startOffset);
     await BenchPreseed.SeedWithRetryAsync(lattice, settings.PreseedKeyCount,
-        BenchPreseed.ChunkSize, settings.TreeId, budget, ct).ConfigureAwait(false);
+        BenchPreseed.ChunkSize, settings.TreeId, budget, ct, startOffset).ConfigureAwait(false);
 }
 static async Task SubmitAndWaitForReshardAsync(ILattice lattice, string treeId, int shardCount, CancellationToken ct)
 {

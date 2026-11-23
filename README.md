@@ -372,7 +372,7 @@ Use these documents for day-to-day use and operations:
 - [Benchmarks](docs/lattice/benchmarks.md) - prerequisites, running benchmarks, interpreting results.
 - [Performance: single-silo guide](docs/lattice/performance-single-silo.md) - approximate single-silo throughput and latency, measured against real Azure Tables.
 - [Performance: multi-silo scaling guide](docs/lattice/performance-multi-silo.md) - how that throughput responds as silos are added.
-- Performance methodology - how each performance table is produced and how to read it: [Layer 1](docs/lattice/performance-methodology-layer1.md) (in-process cost per call), [Layer 2](docs/lattice/performance-methodology-layer2.md) (one silo on Azure Tables), and [Layer 3](docs/lattice/performance-methodology-layer3.md) (scaling from one to eight silos).
+- [Performance: tree size](docs/lattice/performance-tree-size.md) - how point-read latency changes as one tree grows to 30 million keys, and how long a bulk seed takes.- Performance methodology - how each performance table is produced and how to read it: [Layer 1](docs/lattice/performance-methodology-layer1.md) (in-process cost per call), [Layer 2](docs/lattice/performance-methodology-layer2.md) (one silo on Azure Tables), and [Layer 3](docs/lattice/performance-methodology-layer3.md) (scaling from one to eight silos).
 - [Troubleshooting](docs/lattice/troubleshooting.md) - symptom-driven diagnosis: reading a `DiagnoseAsync` report, storage-provider write failures, split activity, slow scans, and stale reads.
 
 For internals (the "how"):
@@ -423,7 +423,7 @@ Orleans.Lattice inherits the asymptotic properties of a [B+ tree](https://en.wik
 
 With the default branching factor (~128 children per node), a shard with two million keys is only three levels deep. Depth adds no grain calls on the steady-state path: the shard root caches each internal node's routing table, so a single-key lookup crosses just three grains - the tree's router, the shard root, and the owning leaf or its per-silo read cache. Sharding (default 64) reduces per-shard *n* further; cross-shard operations scatter-gather across all shards.
 
-Measured single-silo throughput and latency against real Azure Tables are in the [single-silo performance guide](docs/lattice/performance-single-silo.md), and how throughput responds as silos are added is in the [multi-silo scaling guide](docs/lattice/performance-multi-silo.md).
+Measured single-silo throughput and latency against real Azure Tables are in the [single-silo performance guide](docs/lattice/performance-single-silo.md), and how throughput responds as silos are added is in the [multi-silo scaling guide](docs/lattice/performance-multi-silo.md). How read latency changes as a tree grows is in the [tree-size guide](docs/lattice/performance-tree-size.md).
 
 ## Releases
 

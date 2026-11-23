@@ -19,7 +19,8 @@ Each figure is the median of up to three runs, called cohorts, on a freshly
 provisioned Azure VM; the line under each table says how many were used.
 
 What adding silos buys is on a separate page:
-[Performance: multi-silo scaling](performance-multi-silo.md).
+[Performance: multi-silo scaling](performance-multi-silo.md). How read latency
+changes as one tree grows is on [Performance: tree size](performance-tree-size.md).
 
 The figures are steady-state averages from a warm silo. Cold starts, the first
 call to a newly activated grain, shard splits and bursts can all be much

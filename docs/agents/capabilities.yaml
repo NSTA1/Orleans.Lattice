@@ -2296,6 +2296,8 @@ capabilities:
         source: "docs/lattice/performance-multi-silo.md"
       - statement: "Layer 3 publishes completed work divided by active elapsed time."
         source: "docs/lattice/performance-methodology-layer3.md"
+      - statement: "The tree-size guide reports client-side point-read latency for one bulk-appended tree at each ladder size, read by a freshly started cluster."
+        source: "docs/lattice/performance-tree-size.md"
     non_guarantees:
       - statement: "The performance guides are approximate guides, not per-deployment service-level objectives."
         source: "docs/lattice/performance-single-silo.md"
@@ -2320,6 +2322,7 @@ capabilities:
       - "FEATURES.md"
       - "docs/lattice/performance-single-silo.md"
       - "docs/lattice/performance-multi-silo.md"
+      - "docs/lattice/performance-tree-size.md"
       - "docs/lattice/performance-methodology-layer1.md"
       - "docs/lattice/performance-methodology-layer2.md"
       - "docs/lattice/performance-methodology-layer3.md"

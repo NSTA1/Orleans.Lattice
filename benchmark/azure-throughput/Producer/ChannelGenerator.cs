@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text.Json;
 using System.Threading.Channels;
 using VehicleFleetSimulator.Abstractions;
+using VehicleFleetSimulator.AzureThroughput.Engine;
 
 namespace VehicleFleetSimulator.AzureThroughput.Producer;
 
@@ -11,6 +12,7 @@ internal sealed class ChannelGenerator
     private readonly Guid[] vehicles;
     private readonly string[] keys;
     private readonly int parallelism;
+    private readonly int readKeySpace;
     private readonly Channel<KeyValuePair<string, byte[]>[]> channel =
         Channel.CreateBounded<KeyValuePair<string, byte[]>[]>(new BoundedChannelOptions((1 << 16) / ChunkSize)
         {
@@ -19,11 +21,13 @@ internal sealed class ChannelGenerator
             SingleWriter = false,
         });
 
-    public ChannelGenerator(int vehicleCount, int parallelism)
+    public ChannelGenerator(int vehicleCount, int parallelism, int readKeySpace = 0)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(vehicleCount);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(parallelism);
+        ArgumentOutOfRangeException.ThrowIfNegative(readKeySpace);
         this.parallelism = Math.Min(vehicleCount, parallelism);
+        this.readKeySpace = readKeySpace;
         vehicles = new Guid[vehicleCount];
         keys = new string[vehicleCount];
         Span<byte> idBytes = stackalloc byte[16];
@@ -41,6 +45,24 @@ internal sealed class ChannelGenerator
 
     public ChannelReader<KeyValuePair<string, byte[]>> Reader { get; }
 
+    /// <summary>
+    /// Prime stride for <see cref="StridedReadIndex"/>: coprime with every key
+    /// space below it, so the sequence visits each index once per period.
+    /// </summary>
+    internal const long ReadStride = 2_147_483_647L;
+
+    /// <summary>
+    /// The seeded-key index a read worker reads at its <paramref name="sequence"/>-th
+    /// key when the read key space exceeds the fleet. Each worker starts at a
+    /// different phase and steps by a large prime, so reads range over the whole
+    /// seeded tree (defeating a fleet-sized hot set) instead of re-reading the
+    /// first <c>vehicleCount</c> keys.
+    /// </summary>
+    internal static int StridedReadIndex(long sequence, int keySpace) =>
+        (int)(sequence % keySpace * (ReadStride % keySpace) % keySpace);
+
+    private bool StridedReads(bool readOnly) => readOnly && readKeySpace > keys.Length;
+
     public async Task RunAsync(int tickHz, int duration, bool readOnly, CancellationToken ct)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(tickHz);
@@ -50,12 +72,16 @@ internal sealed class ChannelGenerator
         var deadline = duration > 0 ? started + (long)(duration * (double)Stopwatch.Frequency) : long.MaxValue;
         var interval = Math.Max(1, 1000 / tickHz) * Stopwatch.Frequency / 1000;
         var jsonOptions = new JsonSerializerOptions { IncludeFields = false, WriteIndented = false };
-        Console.WriteLine($"[producer] generatorParallelism={parallelism} vehicles={keys.Length} tickHz={tickHz} readOnly={readOnly}");
+        Console.WriteLine($"[producer] generatorParallelism={parallelism} vehicles={keys.Length} tickHz={tickHz} readOnly={readOnly} readKeySpace={(StridedReads(readOnly) ? readKeySpace : keys.Length)}");
+        var strided = StridedReads(readOnly);
 
         async Task GenerateAsync(int slice)
         {
             var begin = (int)((long)keys.Length * slice / parallelism);
             var end = (int)((long)keys.Length * (slice + 1) / parallelism);
+            // Disjoint per-worker sequences (worker phase in the high bits), so
+            // concurrent workers do not read the same key on the same tick.
+            long sequence = (long)slice << 40;
             var next = started;
             var scheduled = started;
             while (!ct.IsCancellationRequested)
@@ -78,6 +104,11 @@ internal sealed class ChannelGenerator
                     for (var j = 0; j < chunk.Length; j++)
                     {
                         var i = offset + j;
+                        if (strided)
+                        {
+                            chunk[j] = new(BenchPreseed.KeyFor(StridedReadIndex(sequence++, readKeySpace)), Array.Empty<byte>());
+                            continue;
+                        }
                         var bytes = readOnly ? Array.Empty<byte>() : JsonSerializer.SerializeToUtf8Bytes(
                             new VehicleTelemetryEvent(vehicles[i], timestamp, "A", "B",
                                 (i % 100) * 0.5, 100.0, 60.0, 40.0, VehicleStatus.Driving, 50.0), jsonOptions);

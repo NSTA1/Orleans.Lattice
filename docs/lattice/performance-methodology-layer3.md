@@ -6,7 +6,9 @@ agent_spec: "docs/agents/deployment.yaml"
 
 This page explains how the grid, charts and storage table in
 [Performance: multi-silo scaling](performance-multi-silo.md) are produced, and
-what bounds them. The results themselves live on that page.
+what bounds them. The results themselves live on that page. The same rig also
+runs the tree-size ladder in [Performance: tree size](performance-tree-size.md),
+whose page describes its own method.
 
 ## What it measures
 

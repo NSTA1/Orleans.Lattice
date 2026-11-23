@@ -300,6 +300,25 @@ param(
 	# saturated cell keeps advancing; a frozen one does not. 0 disables.
 	[int] $FreezeWedgeSec = 60,
 	[ValidateRange(1, 8)][int] $WalAccounts = 1,
+	# Tree-size ladder (read modes only). The keys the producer seeds, decoupled
+	# from the fleet (0 = the fleet, VehiclesPerSilo x SiloCount). The ladder
+	# grows one pinned tree segment by segment across cohorts: pass the same
+	# -TreeId, -WalTable and -GrainStateTable with -ResetStorage:$false, and
+	# -PreseedStartOffset at the size the tree already holds.
+	[ValidateRange(0, 2000000000)][int] $PreseedKeyCount = 0,
+	[ValidateRange(0, 2000000000)][int] $PreseedStartOffset = 0,
+	# Reuse the tree as already seeded to -PreseedKeyCount (no seed at all).
+	[switch] $PreseedSkip,
+	# Reads range over this many seeded keys rather than the fleet's own
+	# (BENCH_READ_KEY_SPACE); 0 = the fleet. Set to the tree size so the read
+	# set is not a fleet-sized hot set.
+	[ValidateRange(0, 2000000000)][int] $ReadKeySpace = 0,
+	# In-producer tree-size ladder (BENCH_TREE_SIZE_LADDER): a comma-separated,
+	# strictly ascending list of tree sizes. The producer grows one tree to
+	# each size in turn and runs a -DurationSec read measurement after each,
+	# all in one execution, so the silos stay warm between rungs. Supersedes
+	# -PreseedKeyCount, -PreseedStartOffset, -PreseedSkip and -ReadKeySpace.
+	[string] $TreeSizeLadder = '',
 	[switch] $DeferHarvest
 )
 
@@ -307,6 +326,21 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 . (Join-Path $PSScriptRoot 'aca-common.ps1')
+
+# Validate the ladder before anything bills; the producer re-validates it.
+$ladderRungs = @()
+if ($TreeSizeLadder) {
+	if ($WorkloadMode -notin @('get-point', 'get-many')) { throw "-TreeSizeLadder needs a read workload (get-point or get-many), not $WorkloadMode." }
+	$ladderRungs = @($TreeSizeLadder -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ } | ForEach-Object {
+		$n = 0
+		if (-not [int]::TryParse($_, [ref]$n) -or $n -le 0) { throw "-TreeSizeLadder entry '$_' is not a positive integer." }
+		$n
+	})
+	for ($i = 1; $i -lt $ladderRungs.Count; $i++) {
+		if ($ladderRungs[$i] -le $ladderRungs[$i - 1]) { throw '-TreeSizeLadder must be strictly ascending.' }
+	}
+}
+$ladderEnv = $ladderRungs -join ','
 
 $ctx = Read-AcaContext -NamePrefix $NamePrefix
 if (-not $TreeId) { $TreeId = "l3-$WorkloadMode-n$SiloCount-$(Get-Date -Format 'yyyyMMdd-HHmmss')" }
@@ -329,6 +363,9 @@ if ($WalAccounts - 1 -gt $walExtraAccounts.Count) {
 # is simply invisible to it. Derived from TreeId so the cluster stays greppable
 # back to its tree; both silo and producer must be given the same value.
 $ClusterId = "azure-throughput-$TreeId"
+# A reused tree (-ResetStorage:$false, the tree-size ladder) keeps its TreeId
+# across cohorts, so the ClusterId also needs a per-cohort stamp to stay fresh.
+if (-not $ResetStorage) { $ClusterId += "-$((Get-Date).ToUniversalTime().ToString('MMddHHmmss'))" }
 
 $runRoot = Get-AcaRunRoot
 $logStem = if ($CohortTag) { "$NamePrefix.n$SiloCount.$WorkloadMode.$CohortTag" } else { "$NamePrefix.n$SiloCount.$WorkloadMode" }
@@ -505,22 +542,18 @@ try {
 		# membership partition and finds no gateway.
 		"BENCH_CLUSTER_ID=$ClusterId"
 	)
+	# Always set (0 when unused): the job keeps env between executions, so an
+	# unset variable would inherit the previous cohort's value.
+	$prodEnv += @(
+		"BENCH_PRESEED_KEY_COUNT=$PreseedKeyCount",
+		"BENCH_PRESEED_START_OFFSET=$PreseedStartOffset",
+		"BENCH_PRESEED_SKIP=$(if ($PreseedSkip) { '1' } else { '0' })",
+		"BENCH_READ_KEY_SPACE=$ReadKeySpace",
+		"BENCH_TREE_SIZE_LADDER=$ladderEnv"
+	)
 	if ($walExtraAccounts.Count -gt 0) {
 		$prodEnv += "BENCH_WAL_EXTRA_ACCOUNT_URIS=$(@($walExtraAccounts | ForEach-Object { [string]$_.tableUri }) -join ';')"
 	}
-	Invoke-Az (@(
-		'containerapp', 'job', 'update',
-		'--name', $ctx.producerJob, '--resource-group', $ctx.resourceGroup,
-		'--set-env-vars') + $prodEnv + @('-o', 'none')) -TransientRetries 3 | Out-Null
-
-	Write-Host '[cohort] starting producer job' -ForegroundColor Cyan
-	$startJson = Invoke-Az @(
-		'containerapp', 'job', 'start',
-		'--name', $ctx.producerJob, '--resource-group', $ctx.resourceGroup,
-		'-o', 'json'
-	)
-	$execName = (($startJson | ConvertFrom-Json).name)
-	Write-Host "[cohort] execution=$execName" -ForegroundColor DarkGray
 
 	# Derive the ceiling from the budgets the producer actually runs under
 	# rather than a flat constant. A cohort legitimately spends, in series:
@@ -534,10 +567,39 @@ try {
 	# (BenchPreseed.BudgetFor: max(300 s, 1 s per 1,000 keys)), so the slack
 	# grows by the same excess over 300 s.
 	$preseedExtraSec = 0
-	if ($WorkloadMode -in @('get-point', 'get-many')) {
-		$preseedExtraSec = [math]::Max(0, [math]::Ceiling($VehicleCount / 1000.0) - 300)
+	if ($WorkloadMode -in @('get-point', 'get-many') -and -not $PreseedSkip) {
+		$seedKeys = if ($PreseedKeyCount -gt 0) { [math]::Max(0, $PreseedKeyCount - $PreseedStartOffset) } else { $VehicleCount }
+		$preseedExtraSec = [math]::Max(0, [math]::Ceiling($seedKeys / 1000.0) - 300)
 	}
 	$executionCeilingSec = $DurationSec + $WarmUpBudgetSec + $ResponseTimeoutSec + $InFlightTailBudgetSec + 300 + $preseedExtraSec
+	if ($ladderRungs.Count -gt 0) {
+		# Every rung runs a segment seed under its own scaled budget, then a
+		# full measurement window and its drain tail.
+		$ladderSec = 0
+		$prev = 0
+		foreach ($rung in $ladderRungs) {
+			$ladderSec += [math]::Max(300, [math]::Ceiling(($rung - $prev) / 1000.0)) + $DurationSec + $InFlightTailBudgetSec + 120
+			$prev = $rung
+		}
+		$executionCeilingSec = $WarmUpBudgetSec + $ResponseTimeoutSec + 300 + $ladderSec
+	}
+	Invoke-Az (@(
+		'containerapp', 'job', 'update',
+		'--name', $ctx.producerJob, '--resource-group', $ctx.resourceGroup,
+		# The job's replica timeout must cover the ceiling, or a long tree-size
+		# seed is killed by the platform before the harness gives up on it.
+		'--replica-timeout', [string][math]::Max(3600, $executionCeilingSec),
+		'--set-env-vars') + $prodEnv + @('-o', 'none')) -TransientRetries 3 | Out-Null
+
+	Write-Host '[cohort] starting producer job' -ForegroundColor Cyan
+	$startJson = Invoke-Az @(
+		'containerapp', 'job', 'start',
+		'--name', $ctx.producerJob, '--resource-group', $ctx.resourceGroup,
+		'-o', 'json'
+	)
+	$execName = (($startJson | ConvertFrom-Json).name)
+	Write-Host "[cohort] execution=$execName" -ForegroundColor DarkGray
+
 	$state = Wait-AcaJobExecution -Context $ctx -ExecutionName $execName -TimeoutSec $executionCeilingSec
 	Write-Host "[cohort] execution finished: $state" -ForegroundColor DarkGray
 	$producerEndUtc = (Get-Date).ToUniversalTime()

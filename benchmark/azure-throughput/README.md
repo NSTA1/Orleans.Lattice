@@ -584,6 +584,10 @@ before that step and leaves it to `complete-cohort-aca.ps1 -PendingHarvestPath <
 | `-FreezeWedgeSec` | `60` | Longest tolerated mid-run freeze - the cumulative `ops` count not advancing while `inFlight` stays above zero - before the cohort is graded `WEDGE`; `0` disables the check. |
 | `-WalAccounts` | `1` | Storage accounts the cohort's WAL partitions are spread across (1-8); the producer performs the spread after warm-up. Refused up front if the rig has fewer. |
 | `-DeferHarvest` | off | Return once the producer has finished and the silos are parked; the harvest, storage metrics and grading run later through `complete-cohort-aca.ps1`. |
+| `-PreseedKeyCount`, `-PreseedStartOffset` | `0`, `0` | Read modes only (`BENCH_PRESEED_KEY_COUNT` / `BENCH_PRESEED_START_OFFSET`). The tree size the producer seeds, decoupled from the fleet (`0` = the fleet), and the key index the seed starts at, so a cohort can extend a tree an earlier cohort seeded. See [Tree-size sweep](#tree-size-sweep). |
+| `-PreseedSkip` | off | Read modes only (`BENCH_PRESEED_SKIP=1`): reuse the tree as already seeded to `-PreseedKeyCount`; the producer logs `method=reuse`. |
+| `-ReadKeySpace` | `0` | `BENCH_READ_KEY_SPACE`: reads stride over this many seeded keys instead of the fleet's own (`0` = the fleet), so a large tree is read across its whole keyspace rather than a fleet-sized hot set. |
+| `-TreeSizeLadder` | none | Read modes only (`BENCH_TREE_SIZE_LADDER`): a comma-separated, strictly ascending list of tree sizes. In one producer execution the producer grows one tree to each size in turn (bulk-appending only the new keys) and runs a `-DurationSec` read measurement over every seeded key after each, so the silos stay warm between rungs. Supersedes the four options above. The execution ceiling and `--replica-timeout` widen to cover the largest rung's seed plus every measurement. See [Tree-size sweep](#tree-size-sweep). |
 
 Silo environment variables do not persist across cohorts on one rig. Each cohort applies
 its variables with one `az containerapp update --set-env-vars`, which merges into the app's
@@ -597,3 +601,51 @@ itself unless `-KeepAca` is set, and keeps a rig it reused. For a rig you deploy
 hand, or kept, delete `rg-<prefix>` yourself, or dot-source `scripts/aca-common.ps1` and
 run `Invoke-AcaTeardown -NamePrefix <prefix>`, which checks the ownership tag before
 deleting.
+
+## Tree-size sweep
+
+`benchmark/tree-size-report.ps1` answers a different question from the
+throughput sweeps: how point-read latency changes as **one tree grows**. It drives
+`run-cohort-aca.ps1` on a Layer 3 rig (`-NamePrefix`, provisioned with
+`deploy-aca.ps1`) and publishes
+[`docs/lattice/performance-tree-size.md`](../../docs/lattice/performance-tree-size.md).
+
+- **One cohort per silo count.** Each runs `run-cohort-aca.ps1 -TreeSizeLadder` on
+  fresh storage: one producer execution grows one tree rung by rung, bulk-appending only
+  the keys between the previous size and this one, and after each rung reads uniformly
+  over every seeded key for `-DurationSec` on the same, already warm cluster. The
+  producer brackets each rung with
+  `[producer] tree-size-rung index=.. rung=.. phase=seed|measure|end` markers, and the
+  driver splits the cohort log on them. A run ends with
+  `[producer] tree-size-ladder complete rungs=.. seeded=..`.
+- **Ladder** (`-Sizes`, default 1 M, 3 M, 10 M, 30 M keys) at 1 silo.
+- **Silo axis** (`-SiloAxisSizes`, default 1 M, 10 M, 30 M, at `-SiloCounts` 2 and 4,
+  plus the 1-silo ladder), with the offered load per silo held constant.
+- **Seed timing.** Every rung's seed line records its `elapsedMs`, so each cohort also
+  yields the cumulative time to seed every size at its silo count.
+
+Why warm: an earlier design re-read a tree seeded by an earlier cohort on freshly
+started silos. A bulk-loaded tree opened by a cold cluster replays its WAL leaf by
+leaf, serialised per partition, so those cohorts measured recovery rather than reads
+and graded `WEDGE`. Cold-start latency over a large tree is a separate measurement.
+
+Each rung publishes the producer's client-side read latency from its
+`[producer] read-latency-final window=steady ...` line (t >= 15 s of the rung's
+measurement), and the page marks the largest size whose p95 stays within
+`-DegradeP95Ms` (default 5 ms). The seed success line adds
+`elapsedMs=.. segmentStart=.. segmentEntries=..`, and a long seed logs a
+`[producer] preseed-progress` line every 1,048,576 keys. A silo count whose cohort
+leaves rungs unusable is retried once; the better attempt is kept.
+
+```powershell
+./scripts/deploy-aca.ps1 -NamePrefix latsz1
+../tree-size-report.ps1 -NamePrefix latsz1          # full sweep, rewrites the page
+../tree-size-report.ps1 -NamePrefix latsz1 -Resume  # continue an interrupted sweep
+../tree-size-report.ps1 -DryRun                     # re-render the page from state.json
+az group delete --name rg-latsz1 --yes --no-wait
+```
+
+State lives in `benchmark/.run/tree-size-report/<prefix>/state.json`; `-Resume` skips
+every silo count whose ladder is already fully usable. `-SkipDocUpdate` measures without touching the page.
+`scripts/Test-TreeSizeReport.ps1` is the parameterless self-test of the parser and
+renderers.

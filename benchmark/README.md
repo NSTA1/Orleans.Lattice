@@ -721,6 +721,12 @@ with the `-Layer3` switch and `-DryRun`: `-Layer 3 -DryRun` falls through to the
 single-silo replay. The rig scripts and their parameters are described in
 [`azure-throughput/README.md`](azure-throughput/README.md#layer-3-multi-silo-azure-container-apps).
 
+A companion driver, `tree-size-report.ps1`, uses the same Layer 3 rig to measure how
+point-read latency changes as one tree grows (1 M to 30 M keys by default, at 1, 2 and 4
+silos, plus seed timing) and rewrites
+[`docs/lattice/performance-tree-size.md`](../docs/lattice/performance-tree-size.md); see
+[`azure-throughput/README.md`](azure-throughput/README.md#tree-size-sweep).
+
 The script is the **only** way the published single-silo doc should be refreshed:
 the marker blocks are mechanically managed, and a CI hygiene test
 (`PerformanceReportMarkerHygieneTests`) fails the build if the marker contract

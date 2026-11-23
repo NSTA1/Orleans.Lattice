@@ -74,12 +74,15 @@ public class BenchPreseedTests
     }
 
     [Test]
-    public void BuildSortedEntries_holds_every_key_in_ascending_ordinal_order()
+    public void KeyFor_index_order_is_ascending_ordinal_key_order()
     {
-        var sorted = BenchPreseed.BuildSortedEntries(500);
+        int[] indices = [0, 1, 15, 16, 255, 256, 65_535, 65_536, 1_000_000, 16_777_215, 16_777_216, 30_000_000, int.MaxValue];
 
-        Assert.That(sorted.Select(e => e.Key), Is.EqualTo(Enumerable.Range(0, 500).Select(GeneratorKey).Order(StringComparer.Ordinal)));
-        Assert.That(sorted.All(e => e.Value.SequenceEqual(BenchPreseed.PayloadFor(Index(e.Key)))), Is.True, "each key keeps its own payload");
+        for (var j = 1; j < indices.Length; j++)
+        {
+            Assert.That(string.CompareOrdinal(BenchPreseed.KeyFor(indices[j - 1]), BenchPreseed.KeyFor(indices[j])), Is.LessThan(0),
+                $"KeyFor({indices[j - 1]}) must sort below KeyFor({indices[j]})");
+        }
     }
 
     [Test]
@@ -272,9 +275,28 @@ public class BenchPreseedTests
         Assert.That(calls, Is.EqualTo(1));
     }
 
+    [Test]
+    public async Task SeedWithRetryAsync_from_a_start_offset_writes_only_the_new_segment_under_absolute_ids()
+    {
+        var lattice = Substitute.For<ILattice>();
+        var operationIds = new List<string>();
+        var keys = new List<string>();
+        lattice.BulkAppendChunkAsync(Arg.Any<string>(), Arg.Any<IReadOnlyList<KeyValuePair<string, byte[]>>>(), Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                var chunk = ci.Arg<IReadOnlyList<KeyValuePair<string, byte[]>>>();
+                operationIds.Add(ci.Arg<string>());
+                keys.AddRange(chunk.Select(e => e.Key));
+                Assert.That(chunk.All(e => e.Value.SequenceEqual(BenchPreseed.PayloadFor(Array.IndexOf(SortedKeys(10), e.Key)))), Is.True);
+                return Task.FromResult(chunk.Count);
+            });
+
+        await BenchPreseed.SeedWithRetryAsync(lattice, 10, 4, "t", TimeSpan.FromSeconds(60), CancellationToken.None, startOffset: 4);
+
+        Assert.That(operationIds, Is.EqualTo(new[] { "preseed-t-4", "preseed-t-8" }));
+        Assert.That(keys, Is.EqualTo(SortedKeys(10).Skip(4)));
+    }
+
     private static string[] SortedKeys(int count) =>
         Enumerable.Range(0, count).Select(GeneratorKey).Order(StringComparer.Ordinal).ToArray();
-
-    private static int Index(string key) =>
-        Enumerable.Range(0, 500).First(i => GeneratorKey(i) == key);
 }

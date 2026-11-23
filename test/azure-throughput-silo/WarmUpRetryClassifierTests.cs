@@ -186,6 +186,23 @@ public class WarmUpRetryClassifierTests
         Assert.That(WarmUpRetryClassifier.IsTransientRequestTimeout(null), Is.False);
     }
 
+    // The message the Layer 3 tree-size preseed surfaced at offset 98304, abbreviated.
+    [TestCase("Table storage condition not Satisfied.  GrainType: internal, GrainId: bplusinternal/d760, TableName: TsGrainlatsz2, StoredETag: Unknown")]
+    [TestCase("Status: 412 (The update condition specified in the request was not satisfied.)\nErrorCode: UpdateConditionNotSatisfied")]
+    public void Grain_state_etag_conflict_wrapped_in_an_outer_exception_is_recognised(string message)
+    {
+        var ex = new InvalidOperationException("chunk failed", new InvalidOperationException(message));
+
+        Assert.That(WarmUpRetryClassifier.IsTransientEtagConflict(ex), Is.True);
+    }
+
+    [Test]
+    public void Unrelated_exception_is_not_an_etag_conflict()
+    {
+        Assert.That(WarmUpRetryClassifier.IsTransientEtagConflict(new InvalidOperationException("ErrorCode: OperationTimedOut")), Is.False);
+        Assert.That(WarmUpRetryClassifier.IsTransientEtagConflict(null), Is.False);
+    }
+
     // The message a bulk-load chunk surfaced on the Layer 3 rig, verbatim.
     [TestCase("Operation could not be completed within the specified time.\nRequestId:abc\nStatus: 500 (Operation could not be completed within the specified time.)\nErrorCode: OperationTimedOut")]
     [TestCase("ErrorCode: OperationTimedOut")]

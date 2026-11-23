@@ -587,7 +587,8 @@ runs one cohort at a given silo count. It is normally driven end to end by
 `benchmark/performance-report.ps1 -Layer3`; see
 [Performance: multi-silo scaling](performance-multi-silo.md) for the results
 and [how Layer 3 is measured](performance-methodology-layer3.md) for the
-method.
+method. `benchmark/tree-size-report.ps1` drives the same rig through a
+tree-size ladder; see [Performance: tree size](performance-tree-size.md).
 A Layer 3 run can also sweep a rig you provisioned yourself. Provision one
 first, using a prefix of three to nine lowercase letters or digits (the form
 `-ReuseAca` normalises a prefix to), then point the report at it:
