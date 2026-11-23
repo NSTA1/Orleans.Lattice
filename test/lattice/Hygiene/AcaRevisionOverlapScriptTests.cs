@@ -89,6 +89,9 @@ public sealed class AcaRevisionOverlapScriptTests
                 $global:LASTEXITCODE = 0
                 return 'Multiple'
             }
+            if ($verb -eq 'containerapp show --name' -and (Get-StubArg $a '--query') -like '*latestRevisionName*') {
+                return Write-StubJson ([pscustomobject]@{ rev = $OldName; state = 'Succeeded'; min = 1; max = 1 })
+            }
             if ($verb -eq 'containerapp revision set-mode') {
                 $global:LASTEXITCODE = 0
                 return
