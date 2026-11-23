@@ -43,10 +43,11 @@ param(
 	[int] $TickHz = 5,
 	[double] $DegradeP95Ms = 5.0,
 	[string] $WorkloadMode = 'get-point',
-	# Silo grain collection age (BENCH_GRAIN_COLLECTION_AGE_SEC). Every seeded leaf
-	# stays activated, running its periodic timers, until Orleans collects it;
-	# at the default age a multi-million-key seed is CPU-bound on idle leaves.
-	[int] $GrainCollectionAgeSec = 60,
+	# Silo grain collection age (BENCH_GRAIN_COLLECTION_AGE_SEC); 0 keeps the Orleans
+	# default. A short age speeds a large seed, but a bulk-loaded leaf has no persisted
+	# checkpoint, so every reactivation replays its WAL partition and the read
+	# measurement collapses. Leave it at 0 for published numbers.
+	[int] $GrainCollectionAgeSec = 0,
 	# Fail a rung's seed only when no chunk lands for this long.
 	[int] $PreseedStallSec = 900,
 	# Seed rate the execution ceiling assumes (keys/s).
@@ -536,7 +537,8 @@ if ($null -eq $state) {
 $state.measuredDate = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
 Save-TreeSizeState -State $state -Path $statePath
 
-foreach ($s in @($SiloCounts | Sort-Object)) {
+# Largest silo count first: it seeds fastest, so it shows earliest how far the sweep can reach.
+foreach ($s in @($SiloCounts | Sort-Object -Descending)) {
 	$key = "ladder-n$s"
 	[long[]] $ladder = Get-TreeSizeLadderFor -State $state -Silos $s
 	$existing = Get-StateValue -Container $state.cohorts -Key $key
@@ -551,12 +553,13 @@ foreach ($s in @($SiloCounts | Sort-Object)) {
 		if (Test-Path $log) { Remove-Item $log -Force }
 		Write-Host "[tree-size] $key attempt $attempt (silos=$s, ladder=$(($ladder | ForEach-Object { Format-SizeTag $_ }) -join ','))" -ForegroundColor Cyan
 		$started = Get-Date
+		$siloEnv = if ($GrainCollectionAgeSec -gt 0) { @("BENCH_GRAIN_COLLECTION_AGE_SEC=$GrainCollectionAgeSec") } else { @() }
 		try {
 			& $runCohort -NamePrefix $NamePrefix -SiloCount $s -WorkloadMode $WorkloadMode `
 				-DurationSec $DurationSec -VehiclesPerSilo $VehiclesPerSilo -TickHz $TickHz `
 				-CohortTag $tag -TreeSizeLadder ($ladder -join ',') ``
 				-PreseedStallSec $PreseedStallSec -PreseedKeysPerSecFloor $PreseedKeysPerSecFloor ``
-				-ExtraSiloEnv @("BENCH_GRAIN_COLLECTION_AGE_SEC=$GrainCollectionAgeSec") | Out-Host
+				-ExtraSiloEnv $siloEnv | Out-Host
 		} catch {
 			Write-Warning "[tree-size] $key attempt $attempt threw: $($_.Exception.Message)"
 		}

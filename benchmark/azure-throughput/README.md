@@ -639,9 +639,12 @@ measurement), and the page marks the largest size whose p95 stays within
 leaves rungs unusable is retried once; the better attempt is kept. A multi-hour seed
 is bounded by progress, not by a rate guess: `-PreseedStallSec` (default 900) fails it
 only when no chunk lands for that long, and `-PreseedKeysPerSecFloor` (default 250)
-sizes the execution ceiling. `-GrainCollectionAgeSec` (default 60) sets the silos'
-`BENCH_GRAIN_COLLECTION_AGE_SEC`, so leaves the seed has passed deactivate instead of
-each running its periodic timers on the silo for the rest of the cohort.
+sizes the execution ceiling. `-GrainCollectionAgeSec` (default 0, the Orleans default)
+sets the silos' `BENCH_GRAIN_COLLECTION_AGE_SEC`. A short age speeds a large seed, because
+leaves the seed has passed deactivate instead of running their periodic timers, but leave
+it unset for published numbers: a bulk-loaded leaf has no persisted checkpoint, so each
+reactivation replays its whole WAL partition, and at 60 s the 3 M-key read p95 rose to
+10-24 s.
 
 ```powershell
 ./scripts/deploy-aca.ps1 -NamePrefix latsz1
