@@ -236,10 +236,18 @@ $script:azScript = @($crash); $script:azCalls = 0
 $null = Invoke-Az @('containerapp', 'job', 'update') -TransientRetries 1 -AllowFailure 3>$null
 Assert-Case '-AllowFailure after exhausted retries returns with the failing exit code' ($LASTEXITCODE -eq 1 -and $script:azCalls -eq 2)
 $runCohortText = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'run-cohort-aca.ps1'))
-$jobStart = [regex]::Match($runCohortText, "(?s)'containerapp', 'job', 'start'.*?\)[^\r\n]*").Value
-$siloCount = @($common.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Set-AcaSiloCount' }, $true))[0].Extent.Text
+function Get-CommonFunctionText([string] $Name) {
+	@($common.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $Name }, $true))[0].Extent.Text
+}
+# The non-idempotent calls: the update in Invoke-AcaSiloUpdate and the start in
+# Start-AcaJobExecution. Each must run without -TransientRetries; the
+# reconcile in those functions replaces the retry.
+$updateCall = [regex]::Match((Get-CommonFunctionText 'Invoke-AcaSiloUpdate'), 'Invoke-Az \$UpdateArgs[^\r\n]*').Value
+$startCall = [regex]::Match((Get-CommonFunctionText 'Start-AcaJobExecution'), "(?s)'containerapp', 'job', 'start'.*?\)[^\r\n]*").Value
 Assert-Case 'the idempotent producer job update retries' ($runCohortText.Contains("'--set-env-vars') + `$prodEnv + @('-o', 'none')) -TransientRetries 3"))
-Assert-Case 'job start and the silo update never retry (a hidden success would duplicate them)' ($jobStart -and $jobStart -notmatch 'TransientRetries' -and $siloCount -notmatch 'TransientRetries')
+Assert-Case 'job start and the silo update never retry (a hidden success would duplicate them)' ($updateCall -and $updateCall -notmatch 'TransientRetries' -and $startCall -and $startCall -notmatch 'TransientRetries')
+Assert-Case 'the silo update goes through the reconciling wrapper' ((Get-CommonFunctionText 'Set-AcaSiloCount') -match 'Invoke-AcaSiloUpdate -Context')
+Assert-Case 'the cohort starts its producer through the reconciling wrapper' ($runCohortText -match 'Start-AcaJobExecution -Context \$ctx' -and $runCohortText -notmatch "Invoke-Az @\(\s*'containerapp', 'job', 'start'")
 Remove-Item Function:\az, Function:\Start-Sleep
 # --- child process argument rendering ---------------------------------------
 Assert-Case 'int arrays render as a PowerShell list' ((ConvertTo-ChildArgumentText @(1, 2, 4)) -eq '1,2,4')

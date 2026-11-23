@@ -46,7 +46,8 @@ parameters file. The folder also holds dot-sourced helper modules (`_run-cohort-
 of a Layer 3 cohort, see below) and parameterless self-tests of the grading logic, run with
 `pwsh -File` (`Test-CohortVerdict.ps1`, `Test-Layer3PreseedReport.ps1`,
 `Test-Layer3UnseededRetry.ps1`, `Test-ProducerBoundReport.ps1`, `Test-PerformanceReportHarness.ps1`,
-`Test-Layer3StorageMetrics.ps1`, `Test-Layer3OverlapHarvest.ps1`, `Test-Layer3Chart.ps1`, `Test-TreeSizeReport.ps1`). The Layer 3 sweep itself is
+`Test-Layer3StorageMetrics.ps1`, `Test-Layer3OverlapHarvest.ps1`, `Test-Layer3Chart.ps1`, `Test-TreeSizeReport.ps1`,
+`Test-AcaTransientReconcile.ps1`). The Layer 3 sweep itself is
 driven by `benchmark/performance-report.ps1 -Layer 3`, which calls `run-cohort-aca.ps1` per cohort.
 Between cohorts, `Set-AcaSiloCount` (in `aca-common.ps1`) does not return until every superseded
 silo revision has drained (`Wait-AcaRevisionsRetired`), so an old revision's replicas cannot
@@ -348,12 +349,26 @@ lines (steady preferred) and the seed line's `elapsedMs=.. segmentStart=.. segme
 
 **Transient `az` faults.** `Invoke-Az -TransientRetries N` re-runs a call whose output names a
 transient CLI or service fault (`Test-AzTransientFailure`: the CLI's "unexpected error" crash on a
-malformed response, a dropped connection, 429/500/502/503/504, a read timeout), 10 s apart and
-growing. Only idempotent calls use it: the producer `job update` (it only sets env vars; one such
-crash dropped a cohort before) and the Log Analytics queries of the job-log and silo-log
-harvests (one failed query dropped another). Never add it to `containerapp update` (each call mints a
-revision, so a retry after a hidden success tears down the cohort's cluster) or `job start` (a
-second execution). A cohort that still throws is skipped, and `-Resume` tops its cell up: new
+malformed response, a dropped or reset connection including WinError 10054, 429/500/502/503/504, a
+read timeout), 10 s apart and growing. Only idempotent calls use it: the producer `job update` (it
+only sets env vars; one such crash dropped a cohort before), the revision and app reads, the
+revision-mode set and deactivate, and the Log Analytics queries of the job-log and silo-log
+harvests (one failed query dropped another). Never add it to `containerapp update` (each call mints
+a revision, so a retry after a hidden success tears down the cohort's cluster) or `job start` (a
+second execution). Those two reconcile against service state instead. `Invoke-AcaSiloUpdate`
+snapshots the app's latest revision, provisioning state and min/max replicas before the update; on
+a transient failure it polls until the outcome is decided. A new revision means the update landed
+and the cohort proceeds. This is the common case: a 10054 reset hit the CLI's status poll after
+the PUT was accepted, and the revision came up healthy while the cohort aborted. A settled state
+with the old revision is landed only if it is a no-op (`Succeeded`, already pinned at the count,
+revision active); otherwise the update is re-issued once. An undecidable outcome throws rather
+than guessing. `Start-AcaJobExecution` likewise diffs the execution list before and after: exactly
+one new execution is returned, none is re-issued, more than one throws. The park is fault-tolerant
+too: `Wait-AcaSiloDrained` re-lists revisions every sixth poll and re-deactivates any that turned
+active again (a late-landing update). If the deadline passes with every revision inactive, the
+drain was merely slow, so it waits up to `TimeoutSec` more (once) instead of failing, and the
+cohort's `finally` park only warns. `Test-AcaTransientReconcile.ps1` pins all of these with a
+stubbed `az`. A cohort that still throws is skipped, and `-Resume` tops its cell up: new
 cohorts are tagged after the highest recorded tag (`c4` after `c2`, `c3`), never by count, which
 would overwrite an existing log. The harvests wrap every `if`-assigned query result in `@()`: an
 `if` assignment turns an empty array into `$null`, whose `.Count` throws under strict mode, so a
