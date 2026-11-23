@@ -41,7 +41,7 @@ public sealed partial class LiveCheckpointAdvanceIntegrationTests(bool eagerClai
     private const string UnstampedTree = "live-advance-unstamped";
     private const string OrphanTree = "live-advance-orphan";
     private const string BulkTree = "live-advance-bulk";
-    private static readonly string[] Trees = [LatencyTree, DuplicateTree, UnstampedTree, OrphanTree, BulkTree, BulkRawTree, BulkGraftTree, BulkCheckpointAppendTree, BulkCheckpointRawTree];
+    private static readonly string[] Trees = [LatencyTree, DuplicateTree, UnstampedTree, OrphanTree, BulkTree, BulkRawTree, BulkGraftTree, BulkCheckpointAppendTree, BulkCheckpointRawTree, BulkChunksTree, BulkReloadTree];
     private static readonly TimeSpan Budget = TimeSpan.FromSeconds(45);
     private TestCluster _cluster = null!;
 
@@ -64,7 +64,7 @@ public sealed partial class LiveCheckpointAdvanceIntegrationTests(bool eagerClai
         {
             // The raw bulk-checkpoint tree has a second shard so that a write can put rows
             // in the shared WAL partition while the loaded shard is still never written.
-            var shardCount = tree == BulkCheckpointRawTree ? 2 : 1;
+            var shardCount = tree is BulkCheckpointRawTree or BulkChunksTree or BulkReloadTree ? 2 : 1;
             await registry.RegisterAsync(tree, new TreeRegistryEntry { ShardCount = shardCount, MaxLeafKeys = 128, WalPartitions = 1 });
         }
     }
@@ -376,6 +376,14 @@ public sealed partial class LiveCheckpointAdvanceIntegrationTests(bool eagerClai
                     options.MaterialiserCheckpointEntries = 1_000_000;
                     options.WalMaterialiserMaxConcurrentReplays = 4;
                 });
+            }
+
+            // The residual trees (#6160) read a born leaf's persisted checkpoint as soon
+            // as its bulk operation returns, so every advance, the birth hint included,
+            // must persist when it is made rather than wait out the coalescing window.
+            foreach (var tree in new[] { BulkChunksTree, BulkReloadTree })
+            {
+                siloBuilder.ConfigureLattice(tree, options => options.MaterialiserCheckpointInterval = TimeSpan.Zero);
             }
         }
     }

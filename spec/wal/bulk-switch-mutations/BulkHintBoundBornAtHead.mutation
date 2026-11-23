@@ -18,9 +18,9 @@ PERTURBS: Create
 --- END
 
 --- FIND
-                   runHint, bulkAt, copied, relocOk, heldN, rpN, crashed, oUp, midLoad, skip, published, gen, wm,
+                   runActive, bulkAt, copied, relocOk, heldN, rpN, crashed, oUp, midLoad, skip, published, gen, wm,
                    closeHead, seedUnder, aborted>>
 --- REPLACE
-                   runHint, bulkAt, copied, relocOk, heldN, crashed, oUp, midLoad, skip, published, gen, wm,
+                   runActive, bulkAt, copied, relocOk, heldN, crashed, oUp, midLoad, skip, published, gen, wm,
                    closeHead, seedUnder, aborted>>
 --- END

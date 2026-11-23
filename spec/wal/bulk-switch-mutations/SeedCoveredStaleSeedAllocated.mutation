@@ -13,7 +13,7 @@ SeedRefused ==
     /\ seedGen < gen
     /\ seedSt' = "none"
     /\ UNCHANGED <<next, author, rowsO, rpO, fO, narrowed, cst, cCounted, phase, hint, tokOpen, prevOpen,
-                   prevHint, runHint, bulkAt, copied, relocOk, nUp, heldN, rpN, crashed, oUp, midLoad, skip,
+                   prevHint, runActive, bulkAt, copied, relocOk, nUp, heldN, rpN, crashed, oUp, midLoad, skip,
                    published, seedGen, gen, wm, closeHead, seedUnder, aborted>>
 --- REPLACE
 SeedRefused ==
@@ -26,6 +26,6 @@ SeedRefused ==
     /\ seedUnder' = [seedUnder EXCEPT ![next] = IF tokOpen THEN "open" ELSE "none"]
     /\ seedSt' = "done"
     /\ UNCHANGED <<rowsO, rpO, fO, narrowed, cst, cCounted, phase, hint, tokOpen, prevOpen,
-                   prevHint, runHint, bulkAt, copied, relocOk, nUp, rpN, crashed, oUp, midLoad, skip,
+                   prevHint, runActive, bulkAt, copied, relocOk, nUp, rpN, crashed, oUp, midLoad, skip,
                    published, seedGen, gen, wm, closeHead, aborted>>
 --- END

@@ -266,7 +266,7 @@
         "tlc": true,
         "tiers": ["deterministic"],
         "includeCategories": ["TlcShardWalBulkSwitch"],
-        "note": "WalBulkSwitch (epic #5605, live-advance module B): base 1,047,630 states, Skip variant 197,156 and 28 mutations co-located with their base, 30 cases. Measured locally on four CPUs (process affinity) with two TLC slots of two workers, Java 17, as the CI legs run: 1 m of tests, 1.96 minutes of dotnet test."
+        "note": "WalBulkSwitch (epic #5605, live-advance module B): base 952,198 states, Skip variant 197,156 and 28 mutations co-located with their base, 30 cases. Measured locally on four CPUs (process affinity) with two TLC slots of two workers, Java 17, as the CI legs run: 1 m of tests, 1.96 minutes of dotnet test."
       },
       {
         "shard": "formal-tlc-wal-live-advance-core",
