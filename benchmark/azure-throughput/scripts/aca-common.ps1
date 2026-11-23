@@ -1196,6 +1196,12 @@ function Get-AcaSiloLog {
 		200 rows at a time, the harvest took about 40 minutes per cohort.
 		Each replica's copies become one '[aca-silo ...] suppressed N' line
 		with the first and last timestamp, so the burst stays visible.
+		Orleans' 'Dropping expired message' warning
+		(Orleans.Messaging[101038], Messaging_DroppingExpiredMessage) is
+		treated the same way: an overloaded large-tree cohort logged more than
+		21,000 per replica, about 294,000 silo lines in all, which hit the
+		harvest's 200,000-row limit. Each suppressed event id gets its own
+		line per replica.
 	#>
 	[CmdletBinding()] param(
 		[Parameter(Mandatory)][System.Collections.IDictionary] $Context,
@@ -1209,7 +1215,13 @@ function Get-AcaSiloLog {
 	# harvest once returned three experiments' worth of unfiltered logs.
 	$revFilter = if ($RevisionName) { " | where RevisionName_s == '$RevisionName'" } else { '' }
 	if ($IncludeDiagnostics -and -not $RevisionName) { throw 'Silo diagnostics require the cohort RevisionName.' }
-	$noise = "Log_s contains 'Messaging[100071]'"
+	# High-volume Orleans events counted server-side instead of harvested.
+	$suppressedEvents = @(
+		@{ Id = '100071'; Text = 'Failed to address message' },
+		@{ Id = '101038'; Text = 'Dropping expired message' }
+	)
+	$noise = (@($suppressedEvents | ForEach-Object { "Log_s contains 'Messaging[$($_.Id)]'" }) -join ' or ')
+	$eventCase = 'case(' + (@($suppressedEvents | ForEach-Object { "Log_s contains 'Messaging[$($_.Id)]', '$($_.Id)'" }) -join ', ') + ", '')"
 	$lineFilter = if ($IncludeDiagnostics) { " | where not($noise)" } else { " | where Log_s startswith '[phaseA]'" }
 	# Freeze ingestion membership across pages, and keep each response well
 	# below Log Analytics' size limit: it can truncate before the row limit.
@@ -1237,12 +1249,15 @@ function Get-AcaSiloLog {
 	}
 	$suppressed = @()
 	if ($IncludeDiagnostics) {
-		$countQuery = "ContainerAppConsoleLogs_CL | where TimeGenerated between (datetime($($SinceUtc.ToString('o'))) .. datetime($($UntilUtc.ToString('o')))) | where ingestion_time() <= datetime($snapshot) | where ContainerAppName_s == '$($Context.siloApp)'$revFilter | where $noise | summarize n = count(), t0 = min(TimeGenerated), t1 = max(TimeGenerated) by ContainerGroupName_s | order by ContainerGroupName_s asc"
+		$countQuery = "ContainerAppConsoleLogs_CL | where TimeGenerated between (datetime($($SinceUtc.ToString('o'))) .. datetime($($UntilUtc.ToString('o')))) | where ingestion_time() <= datetime($snapshot) | where ContainerAppName_s == '$($Context.siloApp)'$revFilter | where $noise | extend e = $eventCase | summarize n = count(), t0 = min(TimeGenerated), t1 = max(TimeGenerated) by ContainerGroupName_s, e | order by ContainerGroupName_s asc, e asc"
 		$json = Invoke-Az @('monitor', 'log-analytics', 'query', '--workspace', $Context.workspaceId, '--analytics-query', $countQuery, '-o', 'json') -AllowFailure -TransientRetries 3
 		if ($LASTEXITCODE -ne 0) { throw "[aca] silo log count query failed. Query: $countQuery" }
 		$counts = @(if ($json -and $json.Trim()) { $json | ConvertFrom-Json -ErrorAction Stop })
 		$suppressed = @($counts | Where-Object { $_ -and [long]$_.n -gt 0 } | ForEach-Object {
-			"[aca-silo time=$($_.t0) replica=$($_.ContainerGroupName_s)] suppressed $([long]$_.n) 'Failed to address message' lines (Orleans.Messaging[100071]) up to $($_.t1); counted, not harvested"
+			$row = $_
+			$id = [string]$row.e
+			$text = @($suppressedEvents | Where-Object { $_.Id -eq $id } | ForEach-Object { $_.Text })[0]
+			"[aca-silo time=$($row.t0) replica=$($row.ContainerGroupName_s)] suppressed $([long]$row.n) '$text' lines (Orleans.Messaging[$id]) up to $($row.t1); counted, not harvested"
 		})
 	}
 	return @(@($rows | ForEach-Object {

@@ -137,7 +137,10 @@ try {
         $global:LASTEXITCODE = 0
         if ($kql.Contains('summarize n = count()')) {
             $script:countQuery = $kql
-            return (@(@{ ContainerGroupName_s = 'replica-b'; n = 124000; t0 = '2026-10-13T12:00:03Z'; t1 = '2026-10-13T12:00:33Z' }) | ConvertTo-Json -AsArray)
+            return (@(
+                @{ ContainerGroupName_s = 'replica-b'; e = '100071'; n = 124000; t0 = '2026-10-13T12:00:03Z'; t1 = '2026-10-13T12:00:33Z' },
+                @{ ContainerGroupName_s = 'replica-b'; e = '101038'; n = 21000; t0 = '2026-10-13T12:00:04Z'; t1 = '2026-10-13T12:00:34Z' }
+            ) | ConvertTo-Json -AsArray)
         }
         $script:query = $kql
         return $script:response
@@ -148,9 +151,10 @@ try {
     Assert-Case 'phaseA parser surface unchanged' ($lines[0] -eq '[phaseA] t=1s instrument=test')
     Assert-Case 'root cause includes replica and timestamp' ($lines[1] -match 'replica=replica-b.*root-cause')
     Assert-Case 'silo progress cannot contaminate producer throughput' ($lines[2] -notmatch '^\[silo\]')
-    Assert-Case 'unroutable-message noise is excluded from the paged harvest' ($script:query.Contains("where not(Log_s contains 'Messaging[100071]')"))
-    Assert-Case 'the excluded noise is counted per replica, pinned to the revision' ($script:countQuery.Contains("RevisionName_s == 'current'") -and $lines[3] -match "^\[aca-silo time=[^\]]+ replica=replica-b\] suppressed 124000 'Failed to address message' lines")
-    Assert-Case 'the count line cannot enter the throughput or phaseA series' ($lines[3] -notmatch '^\[(silo|phaseA|producer)\]')
+    Assert-Case 'unroutable-message and expired-message noise is excluded from the paged harvest' ($script:query.Contains("where not(Log_s contains 'Messaging[100071]' or Log_s contains 'Messaging[101038]')"))
+    Assert-Case 'the excluded noise is counted per replica and event id, pinned to the revision' ($script:countQuery.Contains("RevisionName_s == 'current'") -and $script:countQuery.Contains('by ContainerGroupName_s, e') -and $lines[3] -match "^\[aca-silo time=[^\]]+ replica=replica-b\] suppressed 124000 'Failed to address message' lines \(Orleans\.Messaging\[100071\]\)")
+    Assert-Case 'expired-message drops are counted on their own line' ($lines.Count -eq 5 -and $lines[4] -match "^\[aca-silo time=[^\]]+ replica=replica-b\] suppressed 21000 'Dropping expired message' lines \(Orleans\.Messaging\[101038\]\)")
+    Assert-Case 'the count lines cannot enter the throughput or phaseA series' (@($lines[3..4] | Where-Object { $_ -match '^\[(silo|phaseA|producer)\]' }).Count -eq 0)
     $threw = $false
     try { Get-AcaSiloLog $ctx ([datetime]::UtcNow) ([datetime]::UtcNow) -IncludeDiagnostics | Out-Null } catch { $threw = $true }
     Assert-Case 'full diagnostics refuse unscoped revision' $threw

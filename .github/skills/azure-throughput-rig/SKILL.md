@@ -280,9 +280,12 @@ membership, runs the producer job, parks the silos, then hands a pending-harvest
 (`<cohort log>.pending.json`: execution name, silo revision, cohort window, storage accounts) to
 `complete-cohort-aca.ps1`, which harvests the producer and silo logs from Log Analytics, appends
 one `[storage-metrics]` line per storage account the cohort used, grades the cohort and writes
-the cohort log. Orleans' `Failed to address message` errors (`Orleans.Messaging[100071]`) are
-counted, not harvested: one `[aca-silo ...] suppressed N` line per replica. Parking six silos
-logged 124,000 of them in 30 s (#5100), which the 200-row paging took about 40 minutes to fetch. With `-DeferHarvest` it returns after parking instead, leaving
+the cohort log. Orleans' `Failed to address message` errors (`Orleans.Messaging[100071]`) and
+`Dropping expired message` warnings (`Orleans.Messaging[101038]`) are counted, not harvested:
+one `[aca-silo ...] suppressed N` line per replica and event id. Parking six silos
+logged 124,000 of the first in 30 s (#5100), which the 200-row paging took about 40 minutes to
+fetch, and an overloaded large-tree cohort logged over 21,000 of the second per replica,
+past the harvest's 200,000-row limit. With `-DeferHarvest` it returns after parking instead, leaving
 `complete-cohort-aca.ps1 -PendingHarvestPath <path>` to the caller. The silos are scaled back to
 zero in a `finally` either way. Its load parameters are **per silo**, so every cell offers the
 same load per silo.
