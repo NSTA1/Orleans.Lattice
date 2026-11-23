@@ -557,8 +557,8 @@ foreach ($s in @($SiloCounts | Sort-Object -Descending)) {
 		try {
 			& $runCohort -NamePrefix $NamePrefix -SiloCount $s -WorkloadMode $WorkloadMode `
 				-DurationSec $DurationSec -VehiclesPerSilo $VehiclesPerSilo -TickHz $TickHz `
-				-CohortTag $tag -TreeSizeLadder ($ladder -join ',') ``
-				-PreseedStallSec $PreseedStallSec -PreseedKeysPerSecFloor $PreseedKeysPerSecFloor ``
+				-CohortTag $tag -TreeSizeLadder ($ladder -join ',') `
+				-PreseedStallSec $PreseedStallSec -PreseedKeysPerSecFloor $PreseedKeysPerSecFloor `
 				-ExtraSiloEnv $siloEnv | Out-Host
 		} catch {
 			Write-Warning "[tree-size] $key attempt $attempt threw: $($_.Exception.Message)"

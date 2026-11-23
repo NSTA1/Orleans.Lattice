@@ -29,6 +29,18 @@ function Assert-Case([string] $Name, [bool] $Condition) {
     $script:passed++
 }
 
+# A stray "``" continuation passes a literal backtick as the next parameter's value.
+$cohortCall = @($ast.FindAll({
+    param($node)
+    $node -is [System.Management.Automation.Language.CommandAst] -and
+        $node.CommandElements[0].Extent.Text -eq '$runCohort'
+}, $true))
+Assert-Case 'driver invokes run-cohort-aca once' ($cohortCall.Count -eq 1)
+Assert-Case 'run-cohort-aca call has no literal backtick argument' (-not @($cohortCall[0].CommandElements |
+    Where-Object { $_.Extent.Text -match '^`+$' }))
+Assert-Case 'run-cohort-aca call passes -ExtraSiloEnv' (@($cohortCall[0].CommandElements |
+    Where-Object { $_.Extent.Text -eq '-ExtraSiloEnv' }).Count -eq 1)
+
 $tmp = Join-Path ([IO.Path]::GetTempPath()) "tree-size-selftest-$PID"
 New-Item -ItemType Directory -Path $tmp -Force | Out-Null
 try {
