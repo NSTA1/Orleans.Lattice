@@ -86,18 +86,6 @@ internal static class BenchPreseed
     public const int ChunkSize = 16_384;
 
     /// <summary>
-    /// The <paramref name="count"/> seed entries in ascending ordinal key
-    /// order, the order <see cref="ILattice.BulkAppendChunkAsync"/> requires
-    /// within each chunk and across the whole stream.
-    /// </summary>
-    public static List<KeyValuePair<string, byte[]>> BuildSortedEntries(int count)
-    {
-        var entries = BuildEntries(count);
-        entries.Sort(static (a, b) => string.CompareOrdinal(a.Key, b.Key));
-        return entries;
-    }
-
-    /// <summary>
     /// The bulk-load operation id for the chunk starting at
     /// <paramref name="offset"/>. Stable for a given chunk, so a re-driven
     /// chunk is an idempotent no-op on every shard that already applied it.
@@ -127,9 +115,15 @@ internal static class BenchPreseed
     /// right edge with no splits: about one batched WAL append per leaf rather
     /// than per-entry routing and splits through SetManyAsync, whose per-shard
     /// fan-out stopped settling part-way through the 768,000-key six-silo seed.
-    /// It requires empty shards, which every Layer 3 cohort has: a fresh tree
-    /// id and freshly named tables, and the warm-up and empty-tree reshard
-    /// only read.
+    /// A read cohort's tree is fresh (a new tree id and freshly named tables),
+    /// so its shards start empty. The tree-size ladder instead grows one tree
+    /// segment by segment: each segment's keys sort above every key already
+    /// present, so they still append at each shard's right edge.
+    /// </para>
+    /// <para>
+    /// Entries are generated chunk by chunk in index order, which is
+    /// ascending ordinal key order (see <see cref="KeyFor"/>), so the seed's
+    /// memory is one chunk however large <paramref name="count"/> is.
     /// </para>
     /// <para>
     /// A retry resumes from <paramref name="startOffset"/>, the offset
@@ -161,28 +155,76 @@ internal static class BenchPreseed
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(chunkSize);
         ArgumentOutOfRangeException.ThrowIfNegative(startOffset);
         ArgumentOutOfRangeException.ThrowIfGreaterThan(startOffset, count);
-        var entries = BuildSortedEntries(count);
-        for (var offset = startOffset; offset < entries.Count; offset += chunkSize)
+        var payloads = new byte[256][];
+        for (var p = 0; p < payloads.Length; p++) payloads[p] = PayloadFor(p);
+        for (var offset = startOffset; offset < count; offset += chunkSize)
         {
             ct.ThrowIfCancellationRequested();
-            var chunk = entries.GetRange(offset, Math.Min(chunkSize, entries.Count - offset));
+            var chunk = BuildChunk(offset, Math.Min(chunkSize, count - offset), payloads);
             await lattice.BulkAppendChunkAsync(ChunkOperationId(treeId, offset), chunk, ct).ConfigureAwait(false);
-            onSliceWritten?.Invoke(offset + chunk.Count);
+            onSliceWritten?.Invoke(offset + chunk.Length);
         }
-        return entries.Count;
+        return count;
     }
 
+    /// <summary>
+    /// The seed entries <c>[offset, offset + length)</c>, generated on demand
+    /// so a multi-million-key seed never holds the whole keyspace in memory.
+    /// Index order is ascending ordinal key order: <see cref="KeyFor"/> puts
+    /// the index in the Guid's first field, which formats as eight big-endian
+    /// lower-case hex digits ahead of a constant suffix.
+    /// </summary>
+    private static KeyValuePair<string, byte[]>[] BuildChunk(int offset, int length, byte[][] payloads)
+    {
+        var chunk = new KeyValuePair<string, byte[]>[length];
+        for (var j = 0; j < length; j++)
+        {
+            var i = offset + j;
+            chunk[j] = new KeyValuePair<string, byte[]>(KeyFor(i), payloads[i & 0xFF]);
+        }
+        return chunk;
+    }
+
+    /// <summary>
+    /// Seeds entries <c>[startOffset, count)</c> with retries, under a
+    /// wall-clock <paramref name="budget"/>. A non-zero
+    /// <paramref name="startOffset"/> grows a tree that already holds the
+    /// first <paramref name="startOffset"/> keys (the tree-size ladder):
+    /// chunk operation ids use absolute offsets, so a segment never collides
+    /// with an earlier one.
+    /// </summary>
+    private static TimeSpan StallCheckPeriod(TimeSpan stall) =>
+        TimeSpan.FromTicks(Math.Clamp(stall.Ticks / 4, TimeSpan.FromMilliseconds(10).Ticks, TimeSpan.FromSeconds(5).Ticks));
+
     internal static async Task SeedWithRetryAsync(
-        ILattice lattice, int count, int chunkSize, string treeId, TimeSpan budget, CancellationToken ct)
+        ILattice lattice, int count, int chunkSize, string treeId, TimeSpan budget, CancellationToken ct, int startOffset = 0,
+        TimeSpan? stallTimeout = null)
     {
         const int MaxAttemptsPerSlice = 8;
+        const int ProgressEveryKeys = 1_048_576;
+        ArgumentOutOfRangeException.ThrowIfNegative(startOffset);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(startOffset, count);
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(ct);
         deadline.CancelAfter(budget);
         var token = deadline.Token;
-        var landed = 0;
+        var landed = startOffset;
         var attempts = 0;
         var sliceAttempt = 1;
         var sw = Stopwatch.StartNew();
+        // A multi-hour seed cannot be bounded by a rate guess, so a stall
+        // timeout fails the seed only when no chunk has landed for that long.
+        var lastProgressTicks = sw.Elapsed.Ticks;
+        var stalled = false;
+        using var stallTimer = stallTimeout is { } stall && stall > TimeSpan.Zero
+            ? new Timer(_ =>
+            {
+                if (sw.Elapsed.Ticks - Interlocked.Read(ref lastProgressTicks) > stall.Ticks)
+                {
+                    stalled = true;
+                    try { deadline.Cancel(); } catch (ObjectDisposedException) { }
+                }
+            }, null, StallCheckPeriod(stall), StallCheckPeriod(stall))
+            : null;
         try
         {
             while (true)
@@ -193,10 +235,15 @@ internal static class BenchPreseed
                 {
                     await SeedAsync(lattice, count, chunkSize, treeId, token, landed, offset =>
                     {
+                        if (offset / ProgressEveryKeys != landed / ProgressEveryKeys)
+                        {
+                            Console.WriteLine($"[producer] preseed-progress treeId={treeId} landed={offset}/{count} elapsedMs={sw.Elapsed.TotalMilliseconds:F0}");
+                        }
                         landed = offset;
                         sliceAttempt = 1;
+                        Interlocked.Exchange(ref lastProgressTicks, sw.Elapsed.Ticks);
                     }).WaitAsync(token).ConfigureAwait(false);
-                    Console.WriteLine($"[producer] preseed treeId={treeId} entries={count} payloadBytes={PayloadBytes} method=bulk-append chunkSize={chunkSize} attempts={attempts} elapsedMs={sw.Elapsed.TotalMilliseconds:F0}");
+                    Console.WriteLine($"[producer] preseed treeId={treeId} entries={count} payloadBytes={PayloadBytes} method=bulk-append chunkSize={chunkSize} attempts={attempts} elapsedMs={sw.Elapsed.TotalMilliseconds:F0} segmentStart={startOffset} segmentEntries={count - startOffset}");
                     return;
                 }
                 catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
@@ -206,7 +253,8 @@ internal static class BenchPreseed
                         || WarmUpRetryClassifier.IsTransientPlacementConvergence(ex)
                         || WarmUpRetryClassifier.IsTransientSaturation(ex)
                         || WarmUpRetryClassifier.IsTransientRequestTimeout(ex)
-                        || WarmUpRetryClassifier.IsTransientStorageTimeout(ex)))
+                        || WarmUpRetryClassifier.IsTransientStorageTimeout(ex)
+                        || WarmUpRetryClassifier.IsTransientEtagConflict(ex)))
                 {
                     var backoffMs = WarmUpRetryClassifier.IsTransientSaturation(ex)
                         ? Math.Min(2500 * sliceAttempt, 20000)
@@ -219,7 +267,7 @@ internal static class BenchPreseed
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[producer] ERROR preseed treeId={treeId} entries={count} offset={landed}/{count} attempts={attempts} elapsedMs={sw.Elapsed.TotalMilliseconds:F0} budgetSec={budget.TotalSeconds:F0} FAILED: {ex.GetType().Name}: {ex.Message}");
+            Console.Error.WriteLine($"[producer] ERROR preseed treeId={treeId} entries={count} offset={landed}/{count} attempts={attempts} elapsedMs={sw.Elapsed.TotalMilliseconds:F0} budgetSec={budget.TotalSeconds:F0} stalled={(stalled ? "true" : "false")} FAILED: {ex.GetType().Name}: {ex.Message}");
             throw;
         }
     }

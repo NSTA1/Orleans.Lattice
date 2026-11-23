@@ -45,6 +45,9 @@ public static class BenchWorkloadDispatcher
     /// <param name="treeId">Primary tree id; the cross-tree modes derive the
     /// sibling tree id (<c>{treeId}-b</c>) from it and split each saga's keys
     /// across the two trees. Ignored by the single-tree modes.</param>
+    /// <param name="readLatency">Optional client-side latency recorder. The
+    /// read modes record each successful <c>GetAsync</c> (per key) or
+    /// <c>GetManyAsync</c> (per batch) call into it; other modes ignore it.</param>
     public static async Task<int> DispatchAsync(
         BenchWorkloadMode mode,
         ILattice lattice,
@@ -53,7 +56,8 @@ public static class BenchWorkloadDispatcher
         int parallelism,
         CancellationToken ct,
         IGrainFactory? grainFactory = null,
-        string? treeId = null)
+        string? treeId = null,
+        BenchLatencyRecorder? readLatency = null)
     {
         ArgumentNullException.ThrowIfNull(lattice);
         ArgumentNullException.ThrowIfNull(batch);
@@ -132,7 +136,9 @@ public static class BenchWorkloadDispatcher
                     parallelism,
                     async (kvp, token) =>
                     {
+                        var started = System.Diagnostics.Stopwatch.GetTimestamp();
                         _ = await lattice.GetAsync(kvp.Key, token).ConfigureAwait(false);
+                        readLatency?.RecordSince(started);
                     },
                     ct).ConfigureAwait(false);
                 return batch.Count;
@@ -143,7 +149,9 @@ public static class BenchWorkloadDispatcher
                     // hinted so the List grows zero times on the hot path.
                     var keys = new List<string>(batch.Count);
                     for (var i = 0; i < batch.Count; i++) keys.Add(batch[i].Key);
+                    var started = System.Diagnostics.Stopwatch.GetTimestamp();
                     _ = await lattice.GetManyAsync(keys, ct).ConfigureAwait(false);
+                    readLatency?.RecordSince(started);
                     return batch.Count;
                 }
 

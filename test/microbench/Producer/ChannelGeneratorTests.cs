@@ -10,6 +10,55 @@ namespace Orleans.Lattice.Benchmark.Microbench.Tests.Producer;
 [TestFixture]
 public class ChannelGeneratorTests
 {
+    [Test]
+    public async Task RunAsync_read_key_space_beyond_fleet_reads_across_the_seeded_tree()
+    {
+        const int Fleet = 1000;
+        const int KeySpace = 1_000_000;
+        var generator = new ChannelGenerator(Fleet, parallelism: 4, readKeySpace: KeySpace);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var entries = new List<KeyValuePair<string, byte[]>>();
+        var drain = Task.Run(async () =>
+        {
+            await foreach (var entry in generator.Reader.ReadAllAsync(timeout.Token)) entries.Add(entry);
+        });
+        await generator.RunAsync(tickHz: 1, duration: 1, readOnly: true, timeout.Token);
+        await drain;
+
+        Assert.That(entries, Has.Count.EqualTo(Fleet), "The offered load is still the fleet per tick.");
+        Assert.That(entries.Select(e => e.Key).Distinct().Count(), Is.EqualTo(Fleet));
+        var fleetKeys = Enumerable.Range(0, Fleet).Select(i => new Guid(i, unchecked((short)0xffee), 0x00c0, 0xef, 0xbe, 0xad, 0xde, 0xbe, 0xba, 0xfe, 0xca).ToString("N")).ToHashSet();
+        Assert.That(entries.Count(e => fleetKeys.Contains(e.Key)), Is.LessThan(Fleet / 10), "Reads range beyond the fleet's own keys.");
+        var indices = entries.Select(e => Guid.ParseExact(e.Key, "N").ToByteArray()).Select(b => BitConverter.ToInt32(b, 0)).ToArray();
+        Assert.That(indices, Is.All.InRange(0, KeySpace - 1), "Every read targets a seeded index.");
+        Assert.That(indices.Max() - indices.Min(), Is.GreaterThan(KeySpace / 2), "Reads span the seeded tree.");
+    }
+
+    [Test]
+    public void StridedReadIndex_visits_every_index_once_per_period()
+    {
+        const int KeySpace = 10_007;
+        var seen = new HashSet<int>();
+        for (long s = 0; s < KeySpace; s++) seen.Add(ChannelGenerator.StridedReadIndex(s + (3L << 40), KeySpace));
+        Assert.That(seen, Has.Count.EqualTo(KeySpace));
+    }
+
+    [Test]
+    public async Task RunAsync_read_key_space_not_above_fleet_keeps_fleet_keys()
+    {
+        var generator = new ChannelGenerator(100, parallelism: 2, readKeySpace: 100);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var entries = new List<KeyValuePair<string, byte[]>>();
+        var drain = Task.Run(async () =>
+        {
+            await foreach (var entry in generator.Reader.ReadAllAsync(timeout.Token)) entries.Add(entry);
+        });
+        await generator.RunAsync(tickHz: 1, duration: 1, readOnly: true, timeout.Token);
+        await drain;
+        var expected = Enumerable.Range(0, 100).Select(i => new Guid(i, unchecked((short)0xffee), 0x00c0, 0xef, 0xbe, 0xad, 0xde, 0xbe, 0xba, 0xfe, 0xca).ToString("N"));
+        Assert.That(entries.Select(e => e.Key), Is.EquivalentTo(expected));
+    }
+
     [TestCase(1, 10003, true)]
     [TestCase(4, 10003, true)]
     [TestCase(4, 10003, false)]

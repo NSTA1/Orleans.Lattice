@@ -46,7 +46,7 @@ parameters file. The folder also holds dot-sourced helper modules (`_run-cohort-
 of a Layer 3 cohort, see below) and parameterless self-tests of the grading logic, run with
 `pwsh -File` (`Test-CohortVerdict.ps1`, `Test-Layer3PreseedReport.ps1`,
 `Test-Layer3UnseededRetry.ps1`, `Test-ProducerBoundReport.ps1`, `Test-PerformanceReportHarness.ps1`,
-`Test-Layer3StorageMetrics.ps1`, `Test-Layer3OverlapHarvest.ps1`, `Test-Layer3Chart.ps1`). The Layer 3 sweep itself is
+`Test-Layer3StorageMetrics.ps1`, `Test-Layer3OverlapHarvest.ps1`, `Test-Layer3Chart.ps1`, `Test-TreeSizeReport.ps1`). The Layer 3 sweep itself is
 driven by `benchmark/performance-report.ps1 -Layer 3`, which calls `run-cohort-aca.ps1` per cohort.
 Between cohorts, `Set-AcaSiloCount` (in `aca-common.ps1`) does not return until every superseded
 silo revision has drained (`Wait-AcaRevisionsRetired`), so an old revision's replicas cannot
@@ -324,6 +324,27 @@ same load per silo.
 | `-FreezeWedgeSec <N>` | `60` | Longest tolerated mid-run freeze (cumulative ops not advancing while work is in flight) before the cell is graded `WEDGE` rather than `HEALTHY`; `0` disables the check. |
 | `-WalAccounts <1..8>` | `1` | Storage accounts the cohort's WAL partitions are spread across (`BENCH_WAL_ACCOUNTS` on silos and producer): the primary plus `WalAccounts-1` extra accounts. Fails before anything bills if the rig has fewer (`deploy-aca.ps1 -WalAccountCount`). `-ResetStorage` also empties every extra account. |
 | `-DeferHarvest` | off | Return once the producer has finished and the silos are parked, with `PendingHarvestPath` on the returned object; run `complete-cohort-aca.ps1 -PendingHarvestPath <path>` later to harvest, grade and write the log. The harvest is pinned to the cohort's execution name and silo revision, so its timing changes nothing measured. |
+| `-PreseedKeyCount <N>` / `-PreseedStartOffset <N>` | `0` / `0` | Read modes only: `BENCH_PRESEED_KEY_COUNT` / `BENCH_PRESEED_START_OFFSET` on the producer. Seed `N` keys (`0` = the fleet) starting at key index `offset`, so a cohort extends a tree an earlier cohort seeded (pair with the same `-TreeId`, `-WalTable`, `-GrainStateTable` and `-ResetStorage:$false`, which also suffixes `BENCH_CLUSTER_ID` with a per-cohort stamp). The execution ceiling and the job's `--replica-timeout` widen by the seed's keys over 300 k. |
+| `-PreseedSkip` | off | Read modes only: `BENCH_PRESEED_SKIP=1`, reuse the tree as already seeded to `-PreseedKeyCount` (`[producer] preseed ... method=reuse segmentEntries=0`). |
+| `-PreseedStallSec <0..86400>` / `-PreseedKeysPerSecFloor <10..100000>` | `0` / `1000` | Read modes only. `BENCH_PRESEED_STALL_SEC` on the producer: fail the seed only when no chunk has landed for that long (`0` = off). The execution ceiling and `--replica-timeout` (capped at 86,400 s) are sized for the seed at the rate floor. |
+| `-ReadKeySpace <N>` | `0` | `BENCH_READ_KEY_SPACE`: read modes stride over `N` seeded keys rather than the fleet's own (`0` = the fleet). |
+| `-TreeSizeLadder <csv>` | `''` | Read modes only: `BENCH_TREE_SIZE_LADDER`, strictly ascending tree sizes. One producer execution grows one tree to each size (bulk-appending only new keys) and reads `-DurationSec` over every seeded key after each, on the same warm silos. Supersedes the four preseed/read-space options. Ceiling and `--replica-timeout` widen for the largest seed plus every measurement. |
+
+**Tree-size sweep (`benchmark/tree-size-report.ps1 -NamePrefix <prefix>`).** Runs one
+`run-cohort-aca.ps1 -TreeSizeLadder` cohort per silo count: the 1-silo cohort walks `-Sizes`
+(default 1 M, 3 M, 10 M, 30 M keys), the `-SiloCounts` 2 and 4 cohorts walk `-SiloAxisSizes`
+(1 M, 10 M, 30 M). Measurement is on warm silos by design: re-reading a bulk-loaded tree on a
+freshly started cluster cold-replays the WAL leaf by leaf and grades `WEDGE`. The driver splits
+each cohort log on `[producer] tree-size-rung index=.. rung=.. phase=seed|measure|end` markers;
+each rung's seed line gives seed timing per silo count and size. It
+publishes `docs/lattice/performance-tree-size.md` from the producer's
+`[producer] read-latency-final window=total|steady unit=key|batch count=.. p50Ms=.. p95Ms=.. p99Ms=.. maxMs=..`
+lines (steady preferred) and the seed line's `elapsedMs=.. segmentStart=.. segmentEntries=..`;
+`-DegradeP95Ms` (default 5) marks the largest size whose p95 stays within it.
+`-PreseedStallSec` (900) and `-PreseedKeysPerSecFloor` (250) pass through to each cohort, and
+`-GrainCollectionAgeSec` (60) sets the silos' `BENCH_GRAIN_COLLECTION_AGE_SEC`. State is
+`benchmark/.run/tree-size-report/<prefix>/state.json`; `-Resume`, `-DryRun` and
+`-SkipDocUpdate` behave as on `performance-report.ps1`.
 
 **Transient `az` faults.** `Invoke-Az -TransientRetries N` re-runs a call whose output names a
 transient CLI or service fault (`Test-AzTransientFailure`: the CLI's "unexpected error" crash on a
@@ -535,6 +556,10 @@ rate vars are set for you by `run-cohort.ps1`'s `-Vehicles` / `-TickHz` / `-Dura
 | `BENCH_WARMUP_GATE_SETTLE_SEC` | 5 | Extra delay after the gate opens, absorbing manifest skew between silos. `0` disables. |
 | `BENCH_WARMUP_BUDGET_SEC` | 480 | Producer, Orleans-client mode only: wall-clock ceiling (clamped to 30-3600 s) on the warm-up retry loop, so a warm-up that keeps hitting the response timeout is abandoned rather than billing N silos. `run-cohort-aca.ps1 -WarmUpBudgetSec` sets it (default 400). |
 | `BENCH_PRESEED_BUDGET_SEC` | max(300, keys / 1,000) | Producer, read modes only: wall-clock budget for the Layer 3 read-mode preseed. The default scales with the key count (`BenchPreseed.BudgetFor`), because the keyspace is vehicles per silo x silos while one storage account absorbs the seed; `run-cohort-aca.ps1` widens its execution ceiling by the same excess over 300 s. Set it only to override the scaled default. |
+| `BENCH_PRESEED_KEY_COUNT` / `BENCH_PRESEED_START_OFFSET` | 0 / 0 | Producer, read modes only: seed this many keys (0 = the fleet) starting at this key index, streamed in 16,384-key chunks; a `[producer] preseed-progress` line marks every 1,048,576 keys. `run-cohort-aca.ps1 -PreseedKeyCount` / `-PreseedStartOffset`. |
+| `BENCH_PRESEED_STALL_SEC` | 0 (off) | Producer, read modes only: fail the preseed when no chunk has landed for this many seconds (the ERROR line reports `stalled=true`). With it set and `BENCH_PRESEED_BUDGET_SEC` unset, the wall-clock budget is infinite. `run-cohort-aca.ps1 -PreseedStallSec`. |
+| `BENCH_PRESEED_SKIP` | 0 | Producer, read modes only: `1` skips the seed and reuses the tree as seeded (`method=reuse`). |
+| `BENCH_READ_KEY_SPACE` | 0 (the fleet) | Producer: read modes stride over this many seeded keys, so reads cover a large tree rather than a fleet-sized hot set. |
 | `BENCH_INFLIGHT_TAIL_BUDGET_SEC` | 12 | How long the ingest engine may spend draining in-flight flushes before emitting `FINAL`; work that settles inside it lands in `ops` or `failed`, work still in flight when it expires is reported as `unresolved=`. Layer 2 grades it `WEDGE`, because its rungs are sub-saturation; Layer 3 carries it as data on a cohort that kept completing work (its saturation backlog, outside the completed-ops throughput), as it does failures, and leaves stalled cohorts to the freeze rule. The default fits the VM unit's 30 s systemd stop window, and `run-cohort.ps1` warns above 18; `run-cohort-aca.ps1 -InFlightTailBudgetSec` raises it (default 120), as ACA jobs have no stop window. |
 | `BENCH_REPORT_SEC` | 1 | stdout `ops/sec` report interval (s). |
 | `BENCH_PHASEA_REPORT_SEC` | 10 | Cadence (s) of the Phase A latency-attribution `[phaseA]` diagnostic lines (count, min, p50/p75/p90/p99 and max per instrument/tree/shard/phase/status window). `performance-report.ps1` publishes a cohort's per-call quantiles by merging windows weighted by call count (`Merge-PhaseAWindows`, a piecewise-linear model of each window, since raw samples are not logged): on Layer 2 the windows lying inside the steady-state window, on Layer 3 every window at t>=15s of every silo (their clocks cannot be aligned to the producer's). It used to publish only the last window, which on a 45 s get-many cohort read p50 0.64 ms against 3.70 ms merged. `0` disables. |
@@ -542,6 +567,7 @@ rate vars are set for you by `run-cohort.ps1`'s `-Vehicles` / `-TickHz` / `-Dura
 | `BENCH_GRAIN_TURN_DIAG_MS` | unset (off) | Positive threshold (ms) for a grain-turn occupancy filter on lattice grains: each incoming grain call running at least that long inside its activation prints `[turn-diag] state=done ms=.. grain=.. method=..`, and calls still running are summarised periodically as `state=pending ... count=N`. It times execution, not mailbox queueing, so a long `done` on a non-reentrant grain is the turn that blocked its callers. Diagnostic only. |
 | `LATTICE_BENCH_AWAIT_DIAG_MS` | unset (off) | Library-side positive threshold (ms) for named await regions inside the lattice grains (leaf replay, split and relocate steps, leaf timer arms such as `leaf.timer.coverage-lag arm=..` and `leaf.timer.digest`, shard serial-turn and point-write waits, `tx.terminal-hlc-leaf`). Prints `[await-diag] state=done|pending|suppressed region=.. ms=.. grain=..`; output is rate-limited per region. Read once at process start; diagnostic only. |
 | `BENCH_DISABLE_STORAGE_USAGE_POLLER` | empty | Set to `1` to disable the storage-usage poller for the cohort (`StorageUsagePollInterval = 0`). |
+| `BENCH_GRAIN_COLLECTION_AGE_SEC` | unset (Orleans default, 15 min) | Silo: Orleans `GrainCollectionOptions.CollectionAge` in seconds, with `CollectionQuantum` = clamp(age/4, 5..60 s); logged as `[silo] grain-collection ageSec=N`. The tree-size sweep sets 60 so seeded leaves deactivate rather than each running its periodic timers for the rest of the cohort. Diagnostic: published numbers otherwise use the default. |
 
 ### Multi-silo cluster (Layer 3)
 

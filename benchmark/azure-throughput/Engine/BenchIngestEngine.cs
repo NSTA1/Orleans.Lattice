@@ -287,6 +287,15 @@ internal sealed class BenchIngestEngine(
                         mvLagTag = lag < 0 ? "      mvLag=     n/a" : $" mvLag={lag,8:N0}";
                     }
                     Console.WriteLine($"[silo] t={elapsed,7:0.0}s ops={totalNow,12:N0} ops/sec={rate,10:N0} inFlight={inFlightNow,3}{failedTag}{mvLagTag}");
+                    if (readLatency is not null)
+                    {
+                        if (elapsed >= ReadLatencySteadyFromSec) readLatency.MarkSteady();
+                        var windowLatency = readLatency.DrainWindow();
+                        if (windowLatency.Count > 0)
+                        {
+                            Console.WriteLine(FormattableString.Invariant($"[producer] read-latency t={elapsed:0.0}s {windowLatency.Format()}"));
+                        }
+                    }
                     lastReport = now;
                 }
             }
@@ -623,6 +632,14 @@ internal sealed class BenchIngestEngine(
         var satBackoffSec = Interlocked.Read(ref saturationBackoffMsTotal) / 1000.0;
         var offeredActive = (opsFinal + failedFinal) / Math.Max(0.001, activeElapsed);
         Console.WriteLine($"[silo] FINAL ops={opsFinal:N0} failed={failedFinal:N0} discarded={discardedFinal:N0} elapsed={totalElapsed:0.0}s active={activeElapsed:0.0}s ops/sec (avg)={avgTotal:N0} (active avg)={avgActive:N0} satRetries={satRetries:N0} satRecovered={satRecovered:N0} satExhausted={satExhausted:N0} satBackoff={satBackoffSec:0.0}s offeredPerSec={offeredActive:N0} unresolved={unresolvedEntries:N0} unresolvedFlushes={unresolvedFlushes:N0}");
+        if (readLatency is not null)
+        {
+            // `steady` covers t >= 15s on the reporter clock, `total` the whole
+            // run; the cold-cache share is their difference.
+            var unit = settings.WorkloadMode == BenchWorkloadMode.GetMany ? "batch" : "key";
+            Console.WriteLine($"[producer] read-latency-final window=total unit={unit} {readLatency.Total().Format()}");
+            Console.WriteLine($"[producer] read-latency-final window=steady unit={unit} {readLatency.Steady().Format()}");
+        }
     }
 
     // Sentinel returned by FlushAsync when a SetManyAsync was rejected
@@ -698,6 +715,16 @@ internal sealed class BenchIngestEngine(
     private long saturationRetryTotal;
     private long saturationRecoveredTotal;
     private long saturationExhaustedTotal;
+
+    // Client-side read latency (tree-size benchmark). Null for write modes, so
+    // the write paths pay nothing. Read on the reporter cadence and at FINAL.
+    private readonly BenchLatencyRecorder? readLatency =
+        settings.WorkloadMode is BenchWorkloadMode.GetPoint or BenchWorkloadMode.GetMany
+            ? new BenchLatencyRecorder()
+            : null;
+
+    // Samples before this are the cold window; the report publishes both.
+    private const double ReadLatencySteadyFromSec = 15.0;
     private long saturationBackoffMsTotal;
 
     // FX-029: time window after the most-recently observed Saturated
@@ -825,7 +852,8 @@ internal sealed class BenchIngestEngine(
                     settings.EffectivePointFanOut,
                     ct,
                     grainFactory,
-                    settings.TreeId).ConfigureAwait(false);
+                    settings.TreeId,
+                    readLatency).ConfigureAwait(false);
             }
             catch (BenchPointFanOutException partial)
             {
