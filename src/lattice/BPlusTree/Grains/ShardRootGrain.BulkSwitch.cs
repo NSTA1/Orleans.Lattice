@@ -124,11 +124,14 @@ internal sealed partial class ShardRootGrain
 
         // Heads are exclusive and a hint is an inclusive checkpoint, so every head
         // becomes a hint one below it (issue #5760); a stored or run hint already is.
+        // A run hint read from a partition that was still empty would make every
+        // later chunk's leaves replay that partition from its start, so the heads
+        // are read again instead (issue #6153).
         var hint = !withHint
             ? null
             : stored
                 ?? (fenceHeads is null ? null : BPlusLeafGrain.HeadsAsCheckpoints(fenceHeads))
-                ?? _bulkRunHint
+                ?? (CoversEveryPartition(_bulkRunHint) ? _bulkRunHint : null)
                 ?? BPlusLeafGrain.HeadsAsCheckpoints(await CaptureBulkBirthHeadsAsync());
         var token = BulkHandOffToken(operationId);
         var opened = false;
@@ -193,12 +196,17 @@ internal sealed partial class ShardRootGrain
     /// those leaves never applied is replayed by the new leaf that owns it. With none,
     /// no hint is applied and the new leaves read from the log's start, as in 10.2.0.
     /// </param>
+    /// <param name="applyHint">
+    /// <see langword="false"/> when the caller already applied the hint by
+    /// <see cref="ApplyBulkBirthHintAsync(string, IReadOnlyList{GrainId}, long[])"/>.
+    /// </param>
     private async Task FinishBulkSwitchAsync(
         string operationId,
         IReadOnlyList<GrainId> leaves,
         bool relocated,
         bool closeNow,
-        long[]? readFrontier = null)
+        long[]? readFrontier = null,
+        bool applyHint = true)
     {
         if (!HasHandOffStorage())
         {
@@ -212,13 +220,9 @@ internal sealed partial class ShardRootGrain
             return;
         }
 
-        if (hint is not null && relocated && readFrontier is not null && leaves.Count > 0)
+        if (applyHint && relocated)
         {
-            var applied = CapAtReadFrontier(hint, readFrontier);
-            await BoundedFanOut.ForEachAsync(
-                leaves,
-                BoundedFanOut.DefaultWidth,
-                leafId => grainFactory.GetGrain<IBPlusLeafGrain>(leafId).SetCheckpointOffsetHintsAsync(applied));
+            await ApplyBulkBirthHintAsync(hint, leaves, readFrontier);
         }
 
         if (closeNow)
@@ -460,6 +464,58 @@ internal sealed partial class ShardRootGrain
         }
 
         return capped;
+    }
+
+    /// <summary>
+    /// Applies bulk operation <paramref name="operationId"/>'s stored birth hint, capped at
+    /// <paramref name="readFrontier"/>, to <paramref name="leaves"/>. A bulk append calls it
+    /// before it links the leaves, so a leaf's first coverage tick does not find it starved
+    /// of a checkpoint and replay every partition from its start (issue #6153). A no-op
+    /// when the operation stored no hint. Idempotent.
+    /// </summary>
+    private async Task ApplyBulkBirthHintAsync(string operationId, IReadOnlyList<GrainId> leaves, long[] readFrontier)
+    {
+        if (!HasHandOffStorage())
+        {
+            return;
+        }
+
+        var marker = await LoadHandOffMarkerAsync();
+        marker.BulkBirthHints.TryGetValue(operationId, out var hint);
+        await ApplyBulkBirthHintAsync(hint, leaves, readFrontier);
+    }
+
+    private async Task ApplyBulkBirthHintAsync(long[]? hint, IReadOnlyList<GrainId> leaves, long[]? readFrontier)
+    {
+        if (hint is null || readFrontier is null || leaves.Count == 0)
+        {
+            return;
+        }
+
+        var applied = CapAtReadFrontier(hint, readFrontier);
+        await BoundedFanOut.ForEachAsync(
+            leaves,
+            BoundedFanOut.DefaultWidth,
+            leafId => grainFactory.GetGrain<IBPlusLeafGrain>(leafId).SetCheckpointOffsetHintsAsync(applied));
+    }
+
+    /// <summary>Whether <paramref name="hint"/> holds a read position for every partition.</summary>
+    private static bool CoversEveryPartition(long[]? hint)
+    {
+        if (hint is null)
+        {
+            return false;
+        }
+
+        foreach (var offset in hint)
+        {
+            if (offset < 0)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>
