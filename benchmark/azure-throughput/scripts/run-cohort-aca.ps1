@@ -598,12 +598,10 @@ try {
 		'--set-env-vars') + $prodEnv + @('-o', 'none')) -TransientRetries 3 | Out-Null
 
 	Write-Host '[cohort] starting producer job' -ForegroundColor Cyan
-	$startJson = Invoke-Az @(
-		'containerapp', 'job', 'start',
-		'--name', $ctx.producerJob, '--resource-group', $ctx.resourceGroup,
-		'-o', 'json'
-	)
-	$execName = (($startJson | ConvertFrom-Json).name)
+	# Not Invoke-Az -TransientRetries: a start is not idempotent. A transient
+	# CLI fault is reconciled against the execution list instead (see
+	# Start-AcaJobExecution in aca-common.ps1).
+	$execName = Start-AcaJobExecution -Context $ctx
 	Write-Host "[cohort] execution=$execName" -ForegroundColor DarkGray
 
 	$state = Wait-AcaJobExecution -Context $ctx -ExecutionName $execName -TimeoutSec $executionCeilingSec

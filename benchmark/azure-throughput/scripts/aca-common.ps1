@@ -123,7 +123,9 @@ function Invoke-Az {
 		and growing. Pass it ONLY for idempotent calls: a CLI fault can hide a
 		call the service applied, so retrying `containerapp update` (which
 		mints a revision and would tear down the cluster the cohort just
-		formed) or `job start` (a second execution) is wrong. One transient
+		formed) or `job start` (a second execution) is wrong; those two go
+		through Invoke-AcaSiloUpdate and Start-AcaJobExecution, which
+		reconcile against the service's state instead. One transient
 		`az containerapp job update` fault ("The command failed with an
 		unexpected error ... Expecting property name enclosed in double
 		quotes") cost a Layer 3 cohort before this existed.
@@ -166,7 +168,10 @@ function Test-AzTransientFailure {
 	#>
 	[CmdletBinding()] param([AllowNull()][AllowEmptyCollection()][object[]] $Output)
 	$text = (@($Output) | ForEach-Object { [string]$_ }) -join "`n"
-	return ($text -match 'The command failed with an unexpected error|Connection aborted|ConnectionResetError|RemoteDisconnected|\((TooManyRequests|ServiceUnavailable|InternalServerError|GatewayTimeout|BadGateway)\)|Read timed out|timed out')
+	# 10054 / "forcibly closed" is the Windows form of a connection reset, and
+	# it has been observed inside the CLI's own status poll after the service
+	# had already accepted the request (see Invoke-AcaSiloUpdate).
+	return ($text -match 'The command failed with an unexpected error|Connection aborted|ConnectionResetError|Connection reset|WinError 10054|forcibly closed by the remote host|RemoteDisconnected|IncompleteRead|ChunkedEncodingError|Max retries exceeded|\((TooManyRequests|ServiceUnavailable|InternalServerError|GatewayTimeout|BadGateway)\)|Read timed out|timed out')
 }
 
 function Complete-AzOutput {
@@ -324,7 +329,7 @@ function Get-AcaStaleSiloEnvNames {
 		'--resource-group', $Context.resourceGroup,
 		'--query', 'properties.template.containers[0].env',
 		'-o', 'json'
-	)
+	) -TransientRetries 3
 	$current = @($json | ConvertFrom-Json)
 	$wanted = @{}
 	foreach ($kv in $EnvVars) { $wanted[($kv -split '=', 2)[0]] = $true }
@@ -337,6 +342,350 @@ function Get-AcaStaleSiloEnvNames {
 		$e.name
 	}
 	return @($stale)
+}
+
+function Get-AcaActiveSiloRevisionNames {
+	<#
+	.SYNOPSIS
+		Names of the silo app's active revisions. Fail-closed: throws when the
+		list cannot be read, because "no active revisions" and "the list call
+		failed" are opposite situations (see Set-AcaSiloCount).
+	#>
+	[CmdletBinding()] param(
+		[Parameter(Mandatory)][System.Collections.IDictionary] $Context,
+		[string] $Purpose = 'listing'
+	)
+	for ($attempt = 1; $attempt -le 3; $attempt++) {
+		# The list is a read, so transient faults are retried inside each
+		# attempt as well as across attempts.
+		$tsv = Invoke-Az @(
+			'containerapp', 'revision', 'list',
+			'--name', $Context.siloApp,
+			'--resource-group', $Context.resourceGroup,
+			'--all',
+			'--query', "[?properties.active].name",
+			'-o', 'tsv'
+		) -AllowFailure -TransientRetries 2
+		if ($LASTEXITCODE -eq 0) {
+			return @(([string]$tsv -split "`r?`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+		}
+		Write-Warning "[aca] revision list failed (attempt $attempt/3) while $Purpose $($Context.siloApp); retrying"
+		Start-Sleep -Seconds 5
+	}
+	throw "Could not enumerate active revisions for $($Context.siloApp) while $Purpose. Replicas may still be running and billing; check: az containerapp revision list -n $($Context.siloApp) -g $($Context.resourceGroup) --all"
+}
+
+function Invoke-AcaRevisionDeactivate {
+	<#
+	.SYNOPSIS
+		Deactivate one silo revision, best-effort. Deactivation is idempotent
+		(it mints nothing), so transient faults are retried; a persistent
+		failure is left to the caller's authoritative replica wait.
+	#>
+	[CmdletBinding()] param(
+		[Parameter(Mandatory)][System.Collections.IDictionary] $Context,
+		[Parameter(Mandatory)][string] $Revision
+	)
+	Invoke-Az @(
+		'containerapp', 'revision', 'deactivate',
+		'--name', $Context.siloApp,
+		'--resource-group', $Context.resourceGroup,
+		'--revision', $Revision,
+		'-o', 'none'
+	) -AllowFailure -TransientRetries 2 | Out-Null
+}
+
+function Wait-AcaSiloDrained {
+	<#
+	.SYNOPSIS
+		Block until the silo app reports zero running replicas, re-deactivating
+		any revision that turns active meanwhile, and granting a slow drain
+		extra time once every revision is confirmed inactive.
+	.DESCRIPTION
+		Two observed failures shaped this. A drain outlasted a 300 s deadline
+		with the count still at 1, and the next park saw 0/0 at once, so the
+		replicas were merely slow to stop. And a `containerapp update` that
+		the CLI reported as failed (a connection reset in its status poll) had
+		in fact landed, so its revision could turn active AFTER the park had
+		listed and deactivated everything.
+
+		So every -RevisitEvery polls while replicas remain, the active
+		revisions are re-listed and any still active is deactivated again
+		(idempotent). When -TimeoutSec expires and the latest listing showed
+		no active revision, the deadline is extended once by -DrainGraceSec:
+		nothing is left to do but wait. Otherwise, or when the grace also
+		expires, it throws.
+	#>
+	[CmdletBinding()] param(
+		[Parameter(Mandatory)][System.Collections.IDictionary] $Context,
+		[int] $TimeoutSec = 300,
+		[int] $DrainGraceSec = 300,
+		[ValidateRange(1, 100)][int] $RevisitEvery = 6
+	)
+	$deadline = (Get-Date).AddSeconds($TimeoutSec)
+	$graceGranted = $false
+	$allInactive = $false
+	$lastSeen = -1
+	for ($poll = 1; ; $poll++) {
+		$json = Invoke-Az @(
+			'containerapp', 'replica', 'list',
+			'--name', $Context.siloApp,
+			'--resource-group', $Context.resourceGroup,
+			'-o', 'json'
+		) -AllowFailure
+		$running = -1
+		if ($LASTEXITCODE -eq 0) {
+			$running = 0
+			if ($json -and $json.Trim()) {
+				try {
+					$running = @(($json | ConvertFrom-Json) | Where-Object { $_.properties.runningState -eq 'Running' }).Count
+				} catch { $running = -1 }
+			}
+		}
+		if ($running -ne $lastSeen) {
+			$shown = if ($running -lt 0) { '?' } else { "$running" }
+			Write-Host "[aca]   replicas running: $shown/0" -ForegroundColor DarkGray
+			$lastSeen = $running
+		}
+		if ($running -eq 0) { return }
+
+		if ($poll % $RevisitEvery -eq 0) {
+			try {
+				$late = @(Get-AcaActiveSiloRevisionNames -Context $Context -Purpose 'draining')
+				foreach ($rev in $late) {
+					Write-Warning "[aca] revision $rev is active while parking $($Context.siloApp) (a late-landing update?); deactivating it again"
+					Invoke-AcaRevisionDeactivate -Context $Context -Revision $rev
+				}
+				$allInactive = ($late.Count -eq 0)
+			} catch {
+				Write-Warning "[aca] could not re-check active revisions while draining: $_"
+				$allInactive = $false
+			}
+		}
+
+		if ((Get-Date) -ge $deadline) {
+			if (-not $graceGranted -and $allInactive -and $DrainGraceSec -gt 0) {
+				$graceGranted = $true
+				$deadline = (Get-Date).AddSeconds($DrainGraceSec)
+				Write-Warning "[aca] $($Context.siloApp) still drains $running replica(s) after ${TimeoutSec}s with every revision inactive; waiting up to ${DrainGraceSec}s more"
+			} else {
+				throw "Timed out after ${TimeoutSec}s$(if ($graceGranted) { " (+${DrainGraceSec}s drain grace)" }) waiting for $($Context.siloApp) to report 0 running replicas (last saw $lastSeen)."
+			}
+		}
+		Start-Sleep -Seconds 5
+	}
+}
+
+function Get-AcaSiloUpdateState {
+	<#
+	.SYNOPSIS
+		The silo app's latest revision, provisioning state and pinned replica
+		range - the evidence Invoke-AcaSiloUpdate reconciles against. Returns
+		$null when the read fails (after transient retries).
+	#>
+	[CmdletBinding()] param([Parameter(Mandatory)][System.Collections.IDictionary] $Context)
+	$json = Invoke-Az @(
+		'containerapp', 'show',
+		'--name', $Context.siloApp,
+		'--resource-group', $Context.resourceGroup,
+		'--query', '{rev:properties.latestRevisionName,state:properties.provisioningState,min:properties.template.scale.minReplicas,max:properties.template.scale.maxReplicas}',
+		'-o', 'json'
+	) -AllowFailure -TransientRetries 3
+	if ($LASTEXITCODE -ne 0 -or -not $json -or -not $json.Trim()) { return $null }
+	try { return ($json | ConvertFrom-Json) } catch { return $null }
+}
+
+function Invoke-AcaSiloUpdate {
+	<#
+	.SYNOPSIS
+		Run the cohort's single `az containerapp update`, reconciling a
+		transient CLI fault against the app's state instead of retrying it
+		blindly.
+	.DESCRIPTION
+		The update is not idempotent: every applied call mints a revision, and
+		a second one supersedes the cluster the first one formed (see
+		Set-AcaSiloCount). But a transient fault does not mean the call was
+		not applied. Observed: the PUT was accepted, then a connection reset
+		(WinError 10054) hit the CLI's status poll, so az exited non-zero
+		while revision --0000014 was minted and reached 1 replica. Treating
+		that as failure aborted a healthy cohort; retrying it would have
+		torn the cluster down.
+
+		So on a transient fault this polls the app (Get-AcaSiloUpdateState):
+		- latestRevisionName differs from the pre-update snapshot: the update
+		  landed. Proceed.
+		- provisioning still in progress: keep waiting.
+		- provisioning settled, same revision, for -NotLandedConfirmations
+		  consecutive polls: it did not land. Re-issue, up to -MaxAttempts
+		  calls in total. Exception: a settled app already pinned at -Count
+		  whose latest revision is active is the desired state (an update that
+		  changed nothing mints no revision), so that also proceeds.
+		Anything else - a non-transient failure, an unreadable state, a
+		reconcile that times out - throws rather than guessing.
+	#>
+	[CmdletBinding()] param(
+		[Parameter(Mandatory)][System.Collections.IDictionary] $Context,
+		[Parameter(Mandatory)][string[]] $UpdateArgs,
+		[Parameter(Mandatory)][int] $Count,
+		[ValidateRange(1, 3)][int] $MaxAttempts = 2,
+		[int] $ReconcileTimeoutSec = 600,
+		[ValidateRange(1, 20)][int] $NotLandedConfirmations = 3,
+		[int] $PollSec = 10
+	)
+	$before = Get-AcaSiloUpdateState -Context $Context
+	if ($null -eq $before) {
+		throw "Could not read $($Context.siloApp)'s latest revision before updating it, so a transient update fault could not be reconciled; refusing to update blind. Check: az containerapp show -n $($Context.siloApp) -g $($Context.resourceGroup)"
+	}
+	$beforeRev = [string]$before.rev
+	for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+		$out = Invoke-Az $UpdateArgs -AllowFailure
+		$code = $LASTEXITCODE
+		if ($code -eq 0) { return }
+		if (-not (Test-AzTransientFailure -Output @($out))) {
+			throw "az $($UpdateArgs -join ' ') failed (exit $code): $out"
+		}
+		Write-Warning "[aca] containerapp update failed transiently (exit $code, attempt $attempt/$MaxAttempts); reconciling against latestRevisionName (was $beforeRev) instead of retrying"
+
+		$verdict = $null
+		$settledSame = 0
+		$deadline = (Get-Date).AddSeconds($ReconcileTimeoutSec)
+		while ($null -eq $verdict) {
+			$now = Get-AcaSiloUpdateState -Context $Context
+			if ($null -ne $now) {
+				$state = [string]$now.state
+				$settled = $state -in @('Succeeded', 'Failed', 'Canceled')
+				if ([string]$now.rev -and [string]$now.rev -ne $beforeRev) {
+					$verdict = 'landed'
+					Write-Host "[aca]   update landed despite the fault: latest revision $($now.rev) (state $state, replicas $($now.min)-$($now.max))" -ForegroundColor DarkGray
+				} elseif ($settled) {
+					$settledSame++
+					if ($settledSame -ge $NotLandedConfirmations) {
+						$pinned = ("$($now.min)" -eq "$Count") -and ("$($now.max)" -eq "$Count")
+						if ($state -eq 'Succeeded' -and $pinned -and (Test-AcaRevisionActive -Context $Context -Revision $beforeRev)) {
+							$verdict = 'landed'
+							Write-Host "[aca]   update was a no-op: $beforeRev is active and already pinned at $Count" -ForegroundColor DarkGray
+						} else {
+							$verdict = 'not-landed'
+						}
+					}
+				} else {
+					$settledSame = 0
+				}
+			}
+			if ($null -eq $verdict) {
+				if ((Get-Date) -ge $deadline) {
+					throw "containerapp update of $($Context.siloApp) failed transiently and its outcome could not be determined within ${ReconcileTimeoutSec}s (latest revision still $beforeRev, last state $(if ($now) { $now.state } else { 'unreadable' })). Not retrying blind; check: az containerapp revision list -n $($Context.siloApp) -g $($Context.resourceGroup) --all"
+				}
+				Start-Sleep -Seconds $PollSec
+			}
+		}
+		if ($verdict -eq 'landed') { return }
+		Write-Warning "[aca] update provably did not land ($beforeRev still latest, provisioning settled); re-issuing"
+	}
+	throw "containerapp update of $($Context.siloApp) did not land after $MaxAttempts attempt(s), each failing transiently."
+}
+
+function Test-AcaRevisionActive {
+	[CmdletBinding()] param(
+		[Parameter(Mandatory)][System.Collections.IDictionary] $Context,
+		[Parameter(Mandatory)][string] $Revision
+	)
+	$r = Invoke-Az @(
+		'containerapp', 'revision', 'show',
+		'--name', $Context.siloApp,
+		'--resource-group', $Context.resourceGroup,
+		'--revision', $Revision,
+		'--query', 'properties.active',
+		'-o', 'tsv'
+	) -AllowFailure -TransientRetries 2
+	return ($LASTEXITCODE -eq 0 -and ([string]$r).Trim() -eq 'true')
+}
+
+function Get-AcaJobExecutionNames {
+	<#
+	.SYNOPSIS
+		Names of the producer job's executions, or $null when the list cannot
+		be read (after transient retries).
+	#>
+	[CmdletBinding()] param([Parameter(Mandatory)][System.Collections.IDictionary] $Context)
+	$tsv = Invoke-Az @(
+		'containerapp', 'job', 'execution', 'list',
+		'--name', $Context.producerJob,
+		'--resource-group', $Context.resourceGroup,
+		'--query', '[].name',
+		'-o', 'tsv'
+	) -AllowFailure -TransientRetries 3
+	if ($LASTEXITCODE -ne 0) { return $null }
+	# The comma keeps an empty list (a job never run) from unrolling to $null,
+	# which would read as an unreadable list.
+	return , @(([string]$tsv -split "`r?`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+}
+
+function Start-AcaJobExecution {
+	<#
+	.SYNOPSIS
+		Start the producer job and return the execution name, reconciling a
+		transient CLI fault against the execution list instead of retrying it.
+	.DESCRIPTION
+		`job start` is not idempotent: a blind retry after a hidden success
+		runs a second producer against the same cluster. On a transient fault
+		(or an unparseable success) this polls the execution list for a name
+		that was not there before the start. Exactly one new execution: it
+		started; return it. More than one: ambiguous, throw. None within
+		-ReconcileTimeoutSec: it did not start; re-issue, up to -MaxAttempts
+		calls in total.
+	#>
+	[CmdletBinding()] param(
+		[Parameter(Mandatory)][System.Collections.IDictionary] $Context,
+		[ValidateRange(1, 3)][int] $MaxAttempts = 2,
+		[int] $ReconcileTimeoutSec = 180,
+		[int] $PollSec = 10
+	)
+	$before = Get-AcaJobExecutionNames -Context $Context
+	if ($null -eq $before) {
+		throw "Could not list $($Context.producerJob)'s executions before starting it, so a transient start fault could not be reconciled; refusing to start blind."
+	}
+	for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+		$out = Invoke-Az @(
+			'containerapp', 'job', 'start',
+			'--name', $Context.producerJob,
+			'--resource-group', $Context.resourceGroup,
+			'-o', 'json'
+		) -AllowFailure
+		$code = $LASTEXITCODE
+		if ($code -eq 0) {
+			$name = $null
+			try { $name = [string](($out | ConvertFrom-Json).name) } catch { $name = $null }
+			if ($name) { return $name }
+			Write-Warning "[aca] job start succeeded but its output named no execution; reconciling against the execution list"
+		} elseif (-not (Test-AzTransientFailure -Output @($out))) {
+			throw "az containerapp job start --name $($Context.producerJob) failed (exit $code): $out"
+		} else {
+			Write-Warning "[aca] job start failed transiently (exit $code, attempt $attempt/$MaxAttempts); reconciling against the execution list instead of retrying"
+		}
+
+		$deadline = (Get-Date).AddSeconds($ReconcileTimeoutSec)
+		while ($true) {
+			$now = Get-AcaJobExecutionNames -Context $Context
+			if ($null -ne $now) {
+				$new = @($now | Where-Object { $_ -notin $before })
+				if ($new.Count -eq 1) {
+					Write-Host "[aca]   job start landed despite the fault: execution $($new[0])" -ForegroundColor DarkGray
+					return $new[0]
+				}
+				if ($new.Count -gt 1) {
+					throw "job start of $($Context.producerJob) is ambiguous after a transient fault: $($new.Count) new executions ($($new -join ', ')). Stop the extras before rerunning."
+				}
+			}
+			if ((Get-Date) -ge $deadline) { break }
+			Start-Sleep -Seconds $PollSec
+		}
+		if ($code -eq 0) {
+			throw "job start of $($Context.producerJob) reported success but no new execution appeared within ${ReconcileTimeoutSec}s."
+		}
+		Write-Warning "[aca] job start provably did not land (no new execution within ${ReconcileTimeoutSec}s); re-issuing"
+	}
+	throw "job start of $($Context.producerJob) did not land after $MaxAttempts attempt(s), each failing transiently."
 }
 
 function Set-AcaSiloCount {
@@ -392,44 +741,24 @@ function Set-AcaSiloCount {
 		# So distinguish them by asking the platform for the replica count,
 		# and only treat an empty active-revision list as success when the app
 		# genuinely has no replicas.
-		$active = @()
-		$listOk = $false
-		for ($attempt = 1; $attempt -le 3 -and -not $listOk; $attempt++) {
-			$tsv = Invoke-Az @(
-				'containerapp', 'revision', 'list',
-				'--name', $Context.siloApp,
-				'--resource-group', $Context.resourceGroup,
-				'--all',
-				'--query', "[?properties.active].name",
-				'-o', 'tsv'
-			) -AllowFailure
-			if ($LASTEXITCODE -eq 0) {
-				$listOk = $true
-				$active = @(($tsv -split "`r?`n") | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-			} else {
-				Write-Warning "[aca] revision list failed (attempt $attempt/3) while parking $($Context.siloApp); retrying"
-				Start-Sleep -Seconds 5
-			}
-		}
-		if (-not $listOk) {
-			throw "Could not enumerate active revisions for $($Context.siloApp) while parking it at zero. Replicas may still be running and billing; check: az containerapp revision list -n $($Context.siloApp) -g $($Context.resourceGroup) --all"
-		}
-
+		$active = @(Get-AcaActiveSiloRevisionNames -Context $Context -Purpose 'parking')
 		foreach ($rev in $active) {
 			Write-Host "[aca]   deactivating revision $rev" -ForegroundColor DarkGray
-			Invoke-Az @(
-				'containerapp', 'revision', 'deactivate',
-				'--name', $Context.siloApp,
-				'--resource-group', $Context.resourceGroup,
-				'--revision', $rev,
-				'-o', 'none'
-			) -AllowFailure | Out-Null
+			Invoke-AcaRevisionDeactivate -Context $Context -Revision $rev
 		}
 		if ($active.Count -eq 0) {
 			Write-Host "[aca]   no active revisions to deactivate" -ForegroundColor DarkGray
 		}
-		Wait-AcaSiloReplicas -Context $Context -Expected 0 -TimeoutSec $TimeoutSec | Out-Null
-		# Wait-AcaSiloReplicas lists replicas WITHOUT --revision, so it only
+		# Wait for zero replicas. A drain has been observed to outlast 300 s
+		# with the count still reading 1 (the next cohort's park then saw 0/0
+		# at once), so a fixed deadline turned a slow drain into a failed
+		# park. Wait-AcaSiloDrained re-deactivates any revision that turns
+		# active while it waits - an update that landed behind a transient CLI
+		# fault mints exactly such a late revision - and grants the drain
+		# -DrainGraceSec more once every revision is confirmed inactive,
+		# because then nothing is left to do but wait.
+		Wait-AcaSiloDrained -Context $Context -TimeoutSec $TimeoutSec -DrainGraceSec $TimeoutSec
+		# Wait-AcaSiloDrained lists replicas WITHOUT --revision, so it only
 		# sees the latest revision. A deactivated revision keeps its replicas
 		# draining for 30-60 s after that check passes, and those replicas
 		# would overlap the next cohort's warm-up (#3588). Block until every
@@ -483,7 +812,9 @@ function Set-AcaSiloCount {
 		}
 	}
 	$updateArgs += @('--min-replicas', "$Count", '--max-replicas', "$Count", '-o', 'none')
-	Invoke-Az $updateArgs | Out-Null
+	# Not Invoke-Az -TransientRetries: the update is not idempotent (see
+	# Invoke-AcaSiloUpdate, which reconciles a transient fault instead).
+	Invoke-AcaSiloUpdate -Context $Context -UpdateArgs $updateArgs -Count $Count
 
 	$replicas = Wait-AcaSiloReplicas -Context $Context -Expected $Count -TimeoutSec $TimeoutSec
 
@@ -619,7 +950,7 @@ function Set-AcaSiloMultipleRevisionMode {
 		'--query', 'properties.configuration.activeRevisionsMode',
 		'-o', 'tsv'
 	)
-	$mode = "$(Invoke-Az $query -AllowFailure)".Trim()
+	$mode = "$(Invoke-Az $query -AllowFailure -TransientRetries 3)".Trim()
 	if ($mode -ieq 'Multiple') { return }
 
 	Write-Host "[aca]   switching $($Context.siloApp) from '$mode' to Multiple revision mode (a Single-mode update reactivates the parked revision)" -ForegroundColor DarkGray
@@ -629,8 +960,8 @@ function Set-AcaSiloMultipleRevisionMode {
 		'--resource-group', $Context.resourceGroup,
 		'--mode', 'multiple',
 		'-o', 'none'
-	) | Out-Null
-	$mode = "$(Invoke-Az $query -AllowFailure)".Trim()
+	) -TransientRetries 3 | Out-Null
+	$mode = "$(Invoke-Az $query -AllowFailure -TransientRetries 3)".Trim()
 	if ($mode -ine 'Multiple') {
 		throw "Could not put $($Context.siloApp) in Multiple revision mode (reads '$mode'). A Single-mode update would reactivate the parked revision against deleted tables, so the cohort is not run."
 	}
@@ -770,7 +1101,7 @@ function Get-AcaActiveSiloRevision {
 		'--resource-group', $Context.resourceGroup,
 		'--query', "[?properties.active].{name:name,created:properties.createdTime}",
 		'-o', 'json'
-	) -AllowFailure
+	) -AllowFailure -TransientRetries 3
 	if ($LASTEXITCODE -ne 0 -or -not $json -or -not $json.Trim()) { return $null }
 	try { $rows = @($json | ConvertFrom-Json) } catch { return $null }
 	$active = @($rows | Where-Object { $_ -and $_.name } | ForEach-Object {
