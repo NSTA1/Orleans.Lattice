@@ -19,7 +19,7 @@
 (*  - Begin: in the shard root's serial turn, store the birth hint and    *)
 (*    open the switch's marker token in one write. The hint is the stored *)
 (*    one of an earlier attempt, else the heads of a fence that folds the *)
-(*    run's completed switches, else the run's hint, else the heads now.  *)
+(*    run's completed switches, else the heads now (#6160).               *)
 (*  - Create: N is created holding the bulk entry, and the graft intent is *)
 (*    persisted. N reads from the log's start until Finish.               *)
 (*  - Narrow: O drains the commits it admitted (#5706), narrows its bound  *)
@@ -57,11 +57,11 @@ EXTENDS Integers, FiniteSets
 
 (***************************************************************************)
 (* Instance. WithRun: the shard holds a completed switch of an earlier     *)
-(* chunk of the run, and possibly the run's hint. WithCrash: the shard     *)
-(* root may die once, before or during the graft. WithTimeout: O's drain   *)
-(* may miss its deadline. NeverWritten = 1 (WithSkip): the shard has no   *)
-(* root when the load begins (#5812, B2); O exists only if a batch write  *)
-(* seeds it.                                                               *)
+(* chunk of the run, possibly begun by this activation. WithCrash: the    *)
+(* shard root may die once, before or during the graft. WithTimeout: O's  *)
+(* drain may miss its deadline. NeverWritten = 1 (WithSkip): the shard    *)
+(* has no root when the load begins (#5812, B2); O exists only if a batch *)
+(* write seeds it.                                                         *)
 (***************************************************************************)
 CONSTANTS WithRun, WithCrash, WithTimeout, NeverWritten
 
@@ -99,7 +99,7 @@ VARIABLES
     tokOpen,    \* the current operation's switch token is open on the marker
     prevOpen,   \* the run's earlier, completed switch is open (WithRun)
     prevHint,   \* its stored hint; Null when absent
-    runHint,    \* the shard root activation's run hint; Null when absent
+    runActive,  \* the shard root activation has begun a switch since the run closed
     bulkAt,     \* the head when the bulk entry was stamped; Null before Begin
     copied,     \* the rows the narrow handed back, in the shard root's memory
     relocOk,    \* the narrow moved every row of the range
@@ -120,7 +120,7 @@ VARIABLES
     aborted     \* the operation has been abandoned once before publication
 
 vars == <<next, author, rowsO, rpO, fO, narrowed, cst, cCounted, phase, hint, tokOpen, prevOpen,
-          prevHint, runHint, bulkAt, copied, relocOk, nUp, heldN, rpN, crashed,
+          prevHint, runActive, bulkAt, copied, relocOk, nUp, heldN, rpN, crashed,
           oUp, midLoad, skip, published, seedSt, seedGen, gen, wm, closeHead, seedUnder, aborted>>
 
 seedVars == <<oUp, midLoad, skip, published, seedSt, seedGen, gen, wm, closeHead, seedUnder, aborted>>
@@ -141,7 +141,7 @@ TypeOK ==
     /\ tokOpen \in BOOLEAN
     /\ prevOpen \in BOOLEAN
     /\ prevHint \in {Null, 0}
-    /\ runHint \in {Null} \cup 0..MaxOff
+    /\ runActive \in BOOLEAN
     /\ bulkAt \in {Null} \cup 0..MaxOff
     /\ copied \subseteq Offs
     /\ relocOk \in BOOLEAN
@@ -162,8 +162,8 @@ TypeOK ==
     /\ aborted \in BOOLEAN
 
 (* WithRun: an earlier chunk's switch is open with its stored hint (heads  *)
-(* read at the run's start, 0 here), and the activation may still hold the *)
-(* run's hint or, after a restart, not.                                    *)
+(* read at the run's start, 0 here), and the activation may have begun    *)
+(* the run or, after a restart, not.                                       *)
 Init ==
     /\ next = 0
     /\ author = [o \in Offs |-> NoAuthor]
@@ -178,7 +178,7 @@ Init ==
     /\ tokOpen = FALSE
     /\ prevOpen = WithRun
     /\ prevHint = IF WithRun THEN 0 ELSE Null
-    /\ runHint \in IF WithRun THEN {Null, 0} ELSE {Null}
+    /\ runActive \in IF WithRun THEN BOOLEAN ELSE {FALSE}
     /\ bulkAt = Null
     /\ copied = {}
     /\ relocOk = FALSE
@@ -217,7 +217,7 @@ PreWrite ==
     /\ \A o \in Offs : author[o] # "p"
     /\ Alloc("p")
     /\ rowsO' = rowsO \cup {next}
-    /\ UNCHANGED <<rpO, fO, narrowed, cst, cCounted, phase, hint, tokOpen, prevOpen, prevHint, runHint,
+    /\ UNCHANGED <<rpO, fO, narrowed, cst, cCounted, phase, hint, tokOpen, prevOpen, prevHint, runActive,
                    bulkAt, copied, relocOk, nUp, heldN, rpN, crashed>>
     /\ UNCHANGED seedVars
 
@@ -231,7 +231,7 @@ CommitAlloc ==
     /\ Alloc("c")
     /\ cst' = "flight"
     /\ cCounted' = TRUE
-    /\ UNCHANGED <<rowsO, rpO, fO, narrowed, phase, hint, tokOpen, prevOpen, prevHint, runHint,
+    /\ UNCHANGED <<rowsO, rpO, fO, narrowed, phase, hint, tokOpen, prevOpen, prevHint, runActive,
                    bulkAt, copied, relocOk, nUp, heldN, rpN, crashed>>
     /\ UNCHANGED seedVars
 
@@ -242,7 +242,7 @@ CommitStore ==
     /\ cst' = "stored"
     /\ rowsO' = rowsO \cup {CHOOSE o \in Offs : author[o] = "c"}
     /\ UNCHANGED <<next, author, rpO, fO, narrowed, cCounted, phase, hint, tokOpen, prevOpen, prevHint,
-                   runHint, bulkAt, copied, relocOk, nUp, heldN, rpN, crashed>>
+                   runActive, bulkAt, copied, relocOk, nUp, heldN, rpN, crashed>>
     /\ UNCHANGED seedVars
 
 (* ReplayO: O replays the next record. While it declares K's range it    *)
@@ -255,7 +255,7 @@ ReplayO ==
     /\ rpO' = rpO + 1
     /\ rowsO' = IF author[rpO + 1] \in {"f", "s"} /\ ~narrowed THEN rowsO \cup {rpO + 1} ELSE rowsO
     /\ UNCHANGED <<next, author, fO, narrowed, cst, cCounted, phase, hint, tokOpen, prevOpen, prevHint,
-                   runHint, bulkAt, copied, relocOk, nUp, heldN, rpN, crashed>>
+                   runActive, bulkAt, copied, relocOk, nUp, heldN, rpN, crashed>>
     /\ UNCHANGED seedVars
 
 (* ForeignAlloc: a record of K's range by another author (a hand-off      *)
@@ -264,7 +264,7 @@ ReplayO ==
 ForeignAlloc ==
     /\ \A o \in Offs : author[o] # "f"
     /\ Alloc("f")
-    /\ UNCHANGED <<rowsO, rpO, fO, narrowed, cst, cCounted, phase, hint, tokOpen, prevOpen, prevHint, runHint,
+    /\ UNCHANGED <<rowsO, rpO, fO, narrowed, cst, cCounted, phase, hint, tokOpen, prevOpen, prevHint, runActive,
                    bulkAt, copied, relocOk, nUp, heldN, rpN, crashed>>
     /\ UNCHANGED seedVars
 
@@ -274,24 +274,24 @@ ForeignAlloc ==
 
 (* Begin (ShardRootGrain.BeginBulkSwitchAsync). The run's completed switch *)
 (* is folded by one fence when the cadence is reached (any time, here) or  *)
-(* when the activation holds neither a stored nor a run hint; the fence's  *)
-(* heads are then the hint. The hint and the open token are one write.     *)
+(* when the activation holds no stored hint and has begun no run; the     *)
+(* fence's heads are then the hint. The hint and the open token are one   *)
+(* write.                                                                 *)
 Begin ==
     /\ phase \in {"pre", "retry"}
     /\ IF WithSkip /\ ~oUp /\ ~tokOpen
        THEN \* #5812, B2: a never-written shard opens no token and stores no hint.
             /\ skip' = TRUE
-            /\ UNCHANGED <<hint, tokOpen, runHint, prevOpen, prevHint, gen, closeHead>>
+            /\ UNCHANGED <<hint, tokOpen, runActive, prevOpen, prevHint, gen, closeHead>>
        ELSE /\ skip' = FALSE
             /\ \E cadence \in BOOLEAN :
-                LET fold == prevOpen /\ (cadence \/ (hint = Null /\ runHint = Null))
-                    h == IF hint # Null THEN hint
-                         ELSE IF fold THEN next
-                         ELSE IF runHint # Null THEN runHint
-                         ELSE next
+                LET fold == prevOpen /\ (cadence \/ (hint = Null /\ ~runActive))
+                    \* #6160: no earlier chunk's hint is reused; the fold's fence
+                    \* heads and a fresh head read are both the head now.
+                    h == IF hint # Null THEN hint ELSE next
                 IN /\ hint' = h
                    /\ tokOpen' = TRUE
-                   /\ runHint' = h
+                   /\ runActive' = TRUE
                    /\ prevOpen' = (prevOpen /\ ~fold)
                    /\ prevHint' = IF fold THEN Null ELSE prevHint
                    \* The fold's fence re-claims the generation at every partition.
@@ -314,7 +314,7 @@ Create ==
     \* never-written path seeds unstamped.
     /\ seedGen' = IF tokOpen THEN gen ELSE 0
     /\ UNCHANGED <<next, author, rowsO, rpO, fO, narrowed, cst, cCounted, hint, tokOpen, prevOpen, prevHint,
-                   runHint, bulkAt, copied, relocOk, heldN, rpN, crashed, oUp, midLoad, skip, published, gen, wm,
+                   runActive, bulkAt, copied, relocOk, heldN, rpN, crashed, oUp, midLoad, skip, published, gen, wm,
                    closeHead, seedUnder, aborted>>
 
 (* SeedAlloc (BPlusLeafGrain.MergeBulkSeedAsync, WalShardGrain's bulk-seed *)
@@ -331,7 +331,7 @@ SeedAlloc ==
     /\ seedUnder' = [seedUnder EXCEPT ![next] =
                         IF seedGen = 0 THEN "reported" ELSE IF tokOpen THEN "open" ELSE "none"]
     /\ seedSt' = "done"
-    /\ UNCHANGED <<rowsO, rpO, fO, narrowed, cst, cCounted, phase, hint, tokOpen, prevOpen, prevHint, runHint,
+    /\ UNCHANGED <<rowsO, rpO, fO, narrowed, cst, cCounted, phase, hint, tokOpen, prevOpen, prevHint, runActive,
                    bulkAt, copied, relocOk, nUp, rpN, crashed, oUp, midLoad, skip, published, seedGen, gen,
                    closeHead, aborted>>
 
@@ -343,7 +343,7 @@ SeedRefused ==
     /\ seedGen < gen
     /\ seedSt' = "none"
     /\ UNCHANGED <<next, author, rowsO, rpO, fO, narrowed, cst, cCounted, phase, hint, tokOpen, prevOpen,
-                   prevHint, runHint, bulkAt, copied, relocOk, nUp, heldN, rpN, crashed, oUp, midLoad, skip,
+                   prevHint, runActive, bulkAt, copied, relocOk, nUp, heldN, rpN, crashed, oUp, midLoad, skip,
                    published, seedGen, gen, wm, closeHead, seedUnder, aborted>>
 
 (* BatchMidLoad (WithSkip; ShardRootGrain.EnsureRootSlowAsync under a      *)
@@ -358,7 +358,7 @@ BatchMidLoad ==
     /\ oUp' = TRUE
     /\ midLoad' = TRUE
     /\ rowsO' = {next}
-    /\ UNCHANGED <<rpO, fO, narrowed, cst, cCounted, phase, hint, tokOpen, prevOpen, prevHint, runHint,
+    /\ UNCHANGED <<rpO, fO, narrowed, cst, cCounted, phase, hint, tokOpen, prevOpen, prevHint, runActive,
                    bulkAt, copied, relocOk, nUp, heldN, rpN, crashed, skip, published, seedSt, seedGen, gen, wm,
                    closeHead, seedUnder, aborted>>
 
@@ -378,7 +378,7 @@ Publish ==
        ELSE /\ tokOpen' = TRUE
             /\ skip' = FALSE
             /\ UNCHANGED <<published, phase>>
-    /\ UNCHANGED <<next, author, rowsO, rpO, fO, narrowed, cst, cCounted, hint, prevOpen, prevHint, runHint,
+    /\ UNCHANGED <<next, author, rowsO, rpO, fO, narrowed, cst, cCounted, hint, prevOpen, prevHint, runActive,
                    bulkAt, copied, relocOk, nUp, heldN, rpN, crashed, oUp, midLoad, seedSt, seedGen, gen, wm,
                    closeHead, seedUnder, aborted>>
 
@@ -391,7 +391,7 @@ Abort ==
     /\ aborted' = TRUE
     /\ phase' = "retry"
     /\ UNCHANGED <<next, author, rowsO, rpO, fO, narrowed, cst, cCounted, hint, tokOpen, prevOpen, prevHint,
-                   runHint, bulkAt, copied, relocOk, nUp, heldN, rpN, crashed, oUp, midLoad, skip, published,
+                   runActive, bulkAt, copied, relocOk, nUp, heldN, rpN, crashed, oUp, midLoad, skip, published,
                    seedSt, seedGen, gen, wm, closeHead, seedUnder>>
 
 (* Narrow (BPlusLeafGrain.NarrowHighKeyAsync): drain the counted commits   *)
@@ -411,7 +411,7 @@ Narrow ==
     /\ relocOk' = ~narrowed
     /\ fO' = rpO
     /\ phase' = "narrowed"
-    /\ UNCHANGED <<next, author, rowsO, rpO, cst, cCounted, hint, tokOpen, prevOpen, prevHint, runHint,
+    /\ UNCHANGED <<next, author, rowsO, rpO, cst, cCounted, hint, tokOpen, prevOpen, prevHint, runActive,
                    bulkAt, nUp, heldN, rpN, crashed>>
     /\ published' = TRUE
     /\ UNCHANGED <<oUp, midLoad, skip, seedSt, seedGen, gen, wm, closeHead, seedUnder, aborted>>
@@ -429,7 +429,7 @@ NarrowTimeout ==
     /\ relocOk' = FALSE
     /\ phase' = "dropped"
     /\ UNCHANGED <<next, author, rowsO, rpO, fO, narrowed, cst, cCounted, hint, tokOpen, prevOpen, prevHint,
-                   runHint, bulkAt, copied, nUp, heldN, rpN, crashed>>
+                   runActive, bulkAt, copied, nUp, heldN, rpN, crashed>>
     /\ published' = TRUE
     /\ UNCHANGED <<oUp, midLoad, skip, seedSt, seedGen, gen, wm, closeHead, seedUnder, aborted>>
 
@@ -440,7 +440,7 @@ Deliver ==
     /\ heldN' = heldN \cup copied
     /\ phase' = "delivered"
     /\ UNCHANGED <<next, author, rowsO, rpO, fO, narrowed, cst, cCounted, hint, tokOpen, prevOpen, prevHint,
-                   runHint, bulkAt, copied, relocOk, nUp, rpN, crashed>>
+                   runActive, bulkAt, copied, relocOk, nUp, rpN, crashed>>
     /\ UNCHANGED seedVars
 
 (* Drop (BPlusLeafGrain.DropRelocatedRowsAsync): only once delivered, O    *)
@@ -450,7 +450,7 @@ Drop ==
     /\ rowsO' = rowsO \ copied
     /\ phase' = "dropped"
     /\ UNCHANGED <<next, author, rpO, fO, narrowed, cst, cCounted, hint, tokOpen, prevOpen, prevHint,
-                   runHint, bulkAt, copied, relocOk, nUp, heldN, rpN, crashed>>
+                   runActive, bulkAt, copied, relocOk, nUp, heldN, rpN, crashed>>
     /\ UNCHANGED seedVars
 
 (* Finish (ShardRootGrain.FinishBulkSwitchAsync): N's read position        *)
@@ -463,7 +463,7 @@ Finish ==
     /\ phase' = "finished"
     /\ rpN' = IF relocOk /\ hint # Null THEN Min2(hint - 1, fO) ELSE rpN
     /\ UNCHANGED <<next, author, rowsO, rpO, fO, narrowed, cst, cCounted, hint, tokOpen, prevOpen, prevHint,
-                   runHint, bulkAt, copied, relocOk, nUp, heldN, crashed>>
+                   runActive, bulkAt, copied, relocOk, nUp, heldN, crashed>>
     /\ UNCHANGED seedVars
 
 (* Close (ShardRootGrain.CloseBulkSwitchesAsync): one fence closes every   *)
@@ -476,7 +476,7 @@ Close ==
     /\ prevHint' = Null
     /\ tokOpen' = (tokOpen /\ Pending)
     /\ hint' = IF Pending THEN hint ELSE Null
-    /\ runHint' = Null
+    /\ runActive' = FALSE
     /\ UNCHANGED <<next, author, rowsO, rpO, fO, narrowed, cst, cCounted, phase, bulkAt, copied, relocOk,
                    nUp, heldN, rpN, crashed>>
     \* Every close re-claims the generation at every partition (C1), refusing a
@@ -486,14 +486,14 @@ Close ==
     /\ UNCHANGED <<oUp, midLoad, skip, published, seedSt, seedGen, wm, seedUnder, aborted>>
 
 (* Crash (WithCrash): the shard root dies once. Its memory goes (the run   *)
-(* hint, the copy). Before the graft intent the client retries the        *)
+(* run, the copy). Before the graft intent the client retries the         *)
 (* operation from Begin; after it the graft resumes from the narrow.       *)
 Crash ==
     /\ WithCrash
     /\ ~crashed
     /\ phase \in {"begun", "narrowed", "delivered", "dropped"}
     /\ crashed' = TRUE
-    /\ runHint' = Null
+    /\ runActive' = FALSE
     /\ copied' = {}
     /\ phase' = IF phase = "begun" THEN "retry" ELSE "created"
     /\ UNCHANGED <<next, author, rowsO, rpO, fO, narrowed, cst, cCounted, hint, tokOpen, prevOpen, prevHint,
@@ -507,7 +507,7 @@ Replay ==
     /\ rpN' = rpN + 1
     /\ heldN' = heldN \cup {rpN + 1}
     /\ UNCHANGED <<next, author, rowsO, rpO, fO, narrowed, cst, cCounted, phase, hint, tokOpen, prevOpen,
-                   prevHint, runHint, bulkAt, copied, relocOk, nUp, crashed>>
+                   prevHint, runActive, bulkAt, copied, relocOk, nUp, crashed>>
     /\ UNCHANGED seedVars
 
 (* A behaviour may stop anywhere: this is a safety model.                  *)

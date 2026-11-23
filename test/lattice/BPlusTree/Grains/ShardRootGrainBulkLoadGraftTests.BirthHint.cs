@@ -317,7 +317,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
     }
 
     [Test]
-    public async Task A_bulk_load_applies_its_hint_to_every_leaf_after_draining_the_replaced_root()
+    public async Task A_bulk_load_applies_its_hint_to_every_leaf_before_its_seed_and_after_draining_the_replaced_root()
     {
         var rig = CreateHintRig();
         var seeded = rig.H.AddLeaf();
@@ -336,10 +336,16 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         Assert.That(loaded, Has.Count.EqualTo(3), "every loaded leaf reads from the hint");
         Assert.That(loaded.SelectMany(l => HintAppliedTo(l)!), Is.All.EqualTo(BirthHint));
 
-        // The replaced root's rows are merged into the loaded tree before any loaded
-        // leaf's read position moves past them.
+        // Issue #6160: each loaded leaf reads from the hint before its first row lands,
+        // capped at the replaced root's read frontier, so it is never starved of a
+        // checkpoint while the load runs. The replaced root is drained afterwards and the
+        // hint applied again once the loaded leaves are linked.
         Received.InOrder(() =>
         {
+            seededLeaf.CopyRowsForBulkLoadAsync();
+            loaded[0].InitializeSiblingAsync(Arg.Any<SiblingInitialization>());
+            loaded[0].SetCheckpointOffsetHintsAsync(Arg.Any<long[]>());
+            loaded[0].MergeBulkSeedAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>(), Arg.Any<WalRoutingStamp>());
             seededLeaf.CopyRowsForBulkLoadAsync();
             loaded[0].SetCheckpointOffsetHintsAsync(Arg.Any<long[]>());
         });
@@ -437,26 +443,81 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         rig.Wal.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(IWalShardGrain.ClaimRoutingGenerationAsync));
 
     [Test]
-    public async Task The_next_chunk_of_a_run_reuses_the_runs_hint_and_reads_no_heads()
+    public async Task The_next_chunk_of_a_run_reads_fresh_heads_rather_than_reusing_the_runs_hint()
     {
-        // Review C1 of #5702. The reused hint was read before this chunk began, so it is
-        // no higher than the heads at its first leaf's birth: it never lies above a record
-        // the chunk's leaves have not applied, it only lengthens their replay.
+        // Issue #6160 (superseding review C1 of #5702): a hint reused from the run's first
+        // chunk is valid but stale, so each later chunk's leaves replayed every record the
+        // run appended before them - a replay that grows with the run. Each chunk now takes
+        // the heads at its own begin, which are no higher than its first leaf's birth.
         var rig = CreateHintRig(advancingHeads: true);
         var first = await rig.H.Grain.BeginBulkSwitchForTestingAsync("chunk-1", "a");
         var readsAfterFirst = HeadReads(rig);
 
         var second = await rig.H.Grain.BeginBulkSwitchForTestingAsync("chunk-2", "m");
+        var readsAfterSecond = HeadReads(rig);
 
         var headNow = await rig.Coordinator.GetHeadOffsetAsync(CancellationToken.None);
         Assert.Multiple(() =>
         {
             Assert.That(readsAfterFirst, Is.GreaterThan(0), "precondition: the run's first chunk read the heads");
-            Assert.That(HeadReads(rig) - readsAfterFirst, Is.EqualTo(1), "the second chunk read no heads (one read is this test's own)");
-            Assert.That(second, Is.EqualTo(first), "the second chunk reuses the run's hint");
-            Assert.That(second, Is.All.LessThan(headNow), "the reused hint is below the heads at the chunk's begin");
+            Assert.That(readsAfterSecond, Is.GreaterThan(readsAfterFirst), "the second chunk read the heads again");
+            Assert.That(second!.Zip(first!, (s, f) => s > f), Is.All.True, "the second chunk's hint is past the first's");
+            Assert.That(second, Is.All.LessThan(headNow), "the hint is below the heads after the chunk's begin");
             Assert.That(Claims(rig), Is.Zero, "no fence ran");
         });
+    }
+
+    [Test]
+    public async Task A_bulk_load_caps_its_leaves_seed_hint_at_the_replaced_roots_read_frontier()
+    {
+        // Issue #6160: the seed-time hint is applied before the replaced root is drained,
+        // so a leaf must not read past a record the replaced root has not yet applied.
+        var rig = CreateHintRig();
+        var seeded = rig.H.AddLeaf();
+        var seededLeaf = rig.H.Leaf(seeded);
+        rig.H.State.State.RootNodeId = seeded;
+        rig.H.State.State.RootIsLeaf = true;
+        var frontier = Enumerable.Repeat(BirthHint - 5, 64).ToArray();
+        seededLeaf.CopyRowsForBulkLoadAsync().Returns(CopiedForLoad([], frontier));
+
+        await rig.H.Grain.BulkLoadRawAsync("load", RawEntries(5));
+
+        var seedHints = rig.H.Leaves.Values
+            .Where(l => l != seededLeaf)
+            .Select(l => l.ReceivedCalls()
+                .Where(c => c.GetMethodInfo().Name == nameof(IBPlusLeafGrain.SetCheckpointOffsetHintsAsync))
+                .Select(c => (long[])c.GetArguments()[0]!)
+                .FirstOrDefault())
+            .Where(h => h is not null)
+            .ToList();
+        Assert.That(seedHints, Is.Not.Empty, "the loaded leaves receive a hint at their seed");
+        Assert.That(seedHints.SelectMany(h => h!), Is.All.EqualTo(BirthHint - 5), "the hint is capped at the frontier");
+    }
+
+    [Test]
+    public async Task A_bulk_load_whose_replaced_root_reports_no_frontier_applies_no_seed_hint()
+    {
+        var rig = CreateHintRig();
+        var seeded = rig.H.AddLeaf();
+        var seededLeaf = rig.H.Leaf(seeded);
+        rig.H.State.State.RootNodeId = seeded;
+        rig.H.State.State.RootIsLeaf = true;
+        seededLeaf.CopyRowsForBulkLoadAsync().Returns(Task.FromResult(new LeafNarrowResult { Rows = [], ReadFrontier = null }));
+
+        await rig.H.Grain.BulkLoadRawAsync("load", RawEntries(5));
+
+        foreach (var leaf in rig.H.Leaves.Values.Where(l => l != seededLeaf))
+        {
+            var calls = leaf.ReceivedCalls().Select(c => c.GetMethodInfo().Name).ToList();
+            var seed = calls.IndexOf(nameof(IBPlusLeafGrain.MergeBulkSeedAsync));
+            if (seed < 0)
+            {
+                continue;
+            }
+
+            Assert.That(calls.Take(seed), Has.No.Member(nameof(IBPlusLeafGrain.SetCheckpointOffsetHintsAsync)),
+                "with no frontier to cap it, no hint is applied before the seed");
+        }
     }
 
     [Test]
@@ -634,7 +695,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         });
 
         var third = await rig.H.Grain.BeginBulkSwitchForTestingAsync("chunk-3", "t");
-        Assert.That(third, Is.EqualTo(second), "a run hint that is a checkpoint is reused");
+        Assert.That(third, Is.EqualTo(second), "the third chunk reads the heads again, which have not moved");
     }
 
     [Test]

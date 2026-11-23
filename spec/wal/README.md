@@ -18,7 +18,7 @@ cores in the product assembly, and a Coyote model that executes those cores.
 | [`WalAppendEpoch.tla`](WalAppendEpoch.tla) | The append-epoch fence of the fenced live checkpoint advance (epic #5605): one leaf's activations claiming an epoch at a WAL partition in three steps - the epoch row's conditional write, the durable entry's max-merge and the in-memory raise that returns the claim head - the bump on a refusal, and the shard refusing a superseded or retired activation's append, against a WAL shard restart, another leaf's retirement and the leaf's three-step clear. The first module promoted from the design draft below. See [below](#walappendepoch). |
 | [`WalHandOffFence.tla`](WalHandOffFence.tla) | The hand-off fence of the fenced live checkpoint advance (epic #5605): a foreign author's writes to a range the owner leaf owns - opened under the owner's durable marker, stamped at admission, and closed by a fence that re-claims the initiator's generation and records the allocator head - with point and batch writes, another shard's range-delete walk and rule 3's re-stamp, a WAL shard restart, and a hand-off in flight across the fence gate's opening. The second module promoted from the design draft. See [below](#walhandofffence). |
 | [`WalRoutingFloor.tla`](WalRoutingFloor.tla) | The routing floor of the fenced live checkpoint advance (epic #5605): a tree's purge and re-creation keeping every write the purged incarnation admitted below the close the re-created incarnation's first initialisation records, and every live shard root's routing generation above its own floor - the per-initiator floors in the row and at the WAL, the claim where a floor is checked, the seam retry that never re-stamps (#5705), and the re-seed catch-up after a purge that finished on 10.2.0 (#5716). The third module promoted from the design draft. See [below](#walroutingfloor). |
-| [`WalBulkSwitch.tla`](WalBulkSwitch.tla) | The bulk switch of the fenced live checkpoint advance: a bulk append's leaf born from the old rightmost leaf's range - the birth hint stored with the switch's open token, the run's hint and the fence that folds its completed switches, the drain before the narrow, and the relocation of the rows the range held (copy, deliver, drop) - against a crash of the shard root, a drain past its deadline and a foreign record of the range the old leaf replays, with the hint capped at its read frontier. See [below](#walbulkswitch). |
+| [`WalBulkSwitch.tla`](WalBulkSwitch.tla) | The bulk switch of the fenced live checkpoint advance: a bulk append's leaf born from the old rightmost leaf's range - the birth hint stored with the switch's open token, the heads each chunk reads and the fence that folds its completed switches, the drain before the narrow, and the relocation of the rows the range held (copy, deliver, drop) - against a crash of the shard root, a drain past its deadline and a foreign record of the range the old leaf replays, with the hint capped at its read frontier. See [below](#walbulkswitch). |
 | [`WalLiveAdvanceCore.tla`](WalLiveAdvanceCore.tla) | The core of the same live advance: when a leaf's activation is armed to advance its read position over its own applied appends without reading the WAL - its raised claim, its replay to the claim head and to the last close's heads, no open or uninitialised marker, every reported unstamped append read, every own append applied - and the shared snapshot and GC trim that follow, with the other promoted modules' guarantees as environment constraints. The sink of their assume-guarantee graph. See [below](#walliveadvancecore). |
 | [`WalLiveAdvanceComposite.tla`](WalLiveAdvanceComposite.tla) | The interface check of the five promoted modules: every producer guarantee, copied from its module, as a step constraint, and every assumption the hand-off, routing-floor and core modules make of it as an edge invariant, over the contract's vocabulary at minimal constants. A step the guarantees allow and an assumption forbids is an interface mismatch. See [below](#walliveadvancecomposite). |
 
@@ -56,7 +56,7 @@ and its mutations as the record each module took its own from.
 | `WalAppendEpoch` | 5 | 0 | 17 | 23 | 20 | 150,706 |
 | `WalHandOffFence` | 6 | 1 | 37 | 48 | 42 | 8,826 |
 | `WalRoutingFloor` | 3 | 1 | 14 | 21 | 16 | 28,956 |
-| `WalBulkSwitch` | 6 | 1 | 21 | 28 | 26 | 1,047,630 |
+| `WalBulkSwitch` | 6 | 1 | 21 | 28 | 26 | 952,198 |
 | `WalLiveAdvanceCore` | 18 | 2 | 59 | 138 | 77 | 2,021,047 |
 | `WalLiveAdvanceComposite` | 16 | 0 | 19 | 36 | 18 | 402,394 |
 
@@ -637,7 +637,8 @@ java -cp C:\path\to\tla2tools.jar tlc2.TLC -workers 2 -config WalRoutingFloor.Wi
 bulk append's leaf is born from the old rightmost leaf's range. The operation stores
 its birth hint and opens its switch token in one write before its first appended leaf
 is born, reusing a stored hint on a retry, the heads of a fence that folds the run's
-completed switches, or the run's hint, and reading the heads otherwise. The graft
+completed switches, and reading the heads otherwise - a later chunk of a run never
+reuses an earlier chunk's hint (#6160). The graft
 narrows the old leaf, which first drains the commits it admitted, relocates the rows
 the range held into the appended leaf and only then drops them, and the switch ends by
 making the leaf's read position the hint capped at the old leaf's read frontier when it

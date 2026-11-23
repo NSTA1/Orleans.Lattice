@@ -18,13 +18,14 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// window it covers.
 /// </para>
 /// <para>
-/// <b>The hint of a run (review C1 of #5702).</b> A hint may be any head read before the
-/// operation's first leaf is born: a lower hint is never above a record the leaf has not
-/// applied, it only lengthens the replay. So a chunk reuses the previous chunk's hint, or
-/// the heads of the fence it folds, and reads the partitions' heads only when the shard
-/// holds neither - the first chunk of a run. The reuse is bounded by the fence cadence,
-/// and the replay it adds is paid only by a leaf rehydrated before its checkpoint has
-/// advanced past it.
+/// <b>Each chunk reads its own heads (issue #6160).</b> A hint may be any head read before
+/// the operation's first leaf is born: a lower hint is never above a record the leaf has
+/// not applied, it only lengthens the replay. Review C1 of #5702 therefore let a chunk
+/// reuse the previous chunk's hint. But the replay that adds is every record the run has
+/// appended since that hint, so a seed of many chunks hands each later chunk's leaves a
+/// longer replay, and the seed's cost grows with the size of the log. A chunk therefore
+/// takes the heads of the fence it folds, or reads the partitions' heads itself - one
+/// head read per partition, which costs no claim and no row write.
 /// </para>
 /// <para>
 /// <b>Why the hint is applied only at the switch's end.</b> A leaf whose checkpoint is
@@ -71,10 +72,11 @@ internal sealed partial class ShardRootGrain
     internal static readonly TimeSpan BulkSwitchIdleClose = TimeSpan.FromSeconds(5);
 
     /// <summary>
-    /// The hint the current run of bulk chunks reuses; <see langword="null"/> between runs
-    /// and on a fresh activation, when the next chunk reads the heads or folds a fence.
+    /// Whether this activation has begun a bulk switch since the run last closed;
+    /// <see langword="false"/> between runs and on a fresh activation, when a completed
+    /// switch on the marker is one an earlier activation abandoned (review N1 of #5702).
     /// </summary>
-    private long[]? _bulkRunHint;
+    private bool _bulkRunActive;
 
     /// <summary>The one-shot timer that ends a run; registered once, re-armed per chunk.</summary>
     private IGrainTimer? _bulkIdleCloseTimer;
@@ -86,9 +88,9 @@ internal sealed partial class ShardRootGrain
     /// Begins bulk operation <paramref name="operationId"/>'s switch while the append-fence
     /// gate is open: stores its birth hint and opens its marker over
     /// <c>[<paramref name="lowInclusive"/>, open)</c>, in one write. The hint is the one a
-    /// previous attempt stored, else the heads of the fence this call folds, else the run's,
-    /// else the partitions' heads read now. When <see cref="BulkSwitchesPerFence"/> completed
-    /// switches are open, or any are and the activation holds no run hint, they are closed
+    /// previous attempt stored, else the heads of the fence this call folds, else the
+    /// partitions' heads read now (issue #6160). When <see cref="BulkSwitchesPerFence"/> completed
+    /// switches are open, or any are and the activation has begun no run, they are closed
     /// by one fence and the close lands in the same write as the open. Called in the
     /// operation's serial turn, before it creates its first leaf. Returns the stored hint,
     /// or <see langword="null"/> while the gate is closed or the silo provides no marker
@@ -112,26 +114,24 @@ internal sealed partial class ShardRootGrain
         marker.BulkBirthHints.TryGetValue(operationId, out var stored);
 
         // Review N1 of #5702: an abandoned switch counts here, so a fresh activation,
-        // which holds no run hint, closes it before it opens anything.
+        // which has begun no run, closes it before it opens anything.
         var completed = CountCompletedBulkSwitches(marker, operationId);
         List<string>? closing = null;
         long[]? fenceHeads = null;
-        if (completed >= BulkSwitchesPerFence || (completed > 0 && stored is null && _bulkRunHint is null))
+        if (completed >= BulkSwitchesPerFence || (completed > 0 && stored is null && !_bulkRunActive))
         {
             closing = CollectCompletedBulkSwitches(marker, operationId);
             fenceHeads = await FenceBulkSwitchesAsync(drainBatchWrites: true);
         }
 
         // Heads are exclusive and a hint is an inclusive checkpoint, so every head
-        // becomes a hint one below it (issue #5760); a stored or run hint already is.
-        // A run hint read from a partition that was still empty would make every
-        // later chunk's leaves replay that partition from its start, so the heads
-        // are read again instead (issue #6153).
+        // becomes a hint one below it (issue #5760); a stored hint already is. No
+        // earlier chunk's hint is reused: its leaves would replay every record the run
+        // appended since (issue #6160).
         var hint = !withHint
             ? null
             : stored
                 ?? (fenceHeads is null ? null : BPlusLeafGrain.HeadsAsCheckpoints(fenceHeads))
-                ?? (CoversEveryPartition(_bulkRunHint) ? _bulkRunHint : null)
                 ?? BPlusLeafGrain.HeadsAsCheckpoints(await CaptureBulkBirthHeadsAsync());
         var token = BulkHandOffToken(operationId);
         var opened = false;
@@ -165,7 +165,7 @@ internal sealed partial class ShardRootGrain
 
         // A stored array is never mutated once stored (review C2), so none is cloned.
         var durable = updated.BulkBirthHints.TryGetValue(operationId, out var d) ? d : null;
-        _bulkRunHint = durable;
+        _bulkRunActive = true;
         return durable;
     }
 
@@ -249,7 +249,7 @@ internal sealed partial class ShardRootGrain
     /// </param>
     private async Task CloseBulkSwitchesAsync(bool drainBatchWrites)
     {
-        _bulkRunHint = null;
+        _bulkRunActive = false;
         if (!HasHandOffStorage())
         {
             return;
@@ -497,25 +497,6 @@ internal sealed partial class ShardRootGrain
             leaves,
             BoundedFanOut.DefaultWidth,
             leafId => grainFactory.GetGrain<IBPlusLeafGrain>(leafId).SetCheckpointOffsetHintsAsync(applied));
-    }
-
-    /// <summary>Whether <paramref name="hint"/> holds a read position for every partition.</summary>
-    private static bool CoversEveryPartition(long[]? hint)
-    {
-        if (hint is null)
-        {
-            return false;
-        }
-
-        foreach (var offset in hint)
-        {
-            if (offset < 0)
-            {
-                return false;
-            }
-        }
-
-        return true;
     }
 
     /// <summary>

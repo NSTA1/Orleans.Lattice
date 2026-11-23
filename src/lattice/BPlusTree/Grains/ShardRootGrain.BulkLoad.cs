@@ -269,12 +269,13 @@ internal sealed partial class ShardRootGrain
     {
         var switched = seededRoot is not null || state.State.RootNodeId is not null;
         var seedRouting = WalRoutingStamp.Unstamped;
+        long[]? switchHint = null;
         if (switched)
         {
             // Epic #5605, member 3: the switch's birth hint and its marker, stored before
             // the first leaf is created; the seed is stamped only after the marker is
             // durably open (review C1).
-            await BeginBulkSwitchAsync(operationId, null);
+            switchHint = await BeginBulkSwitchAsync(operationId, null);
             seedRouting = await BulkSeedRoutingAsync(operationId);
         }
 
@@ -282,6 +283,15 @@ internal sealed partial class ShardRootGrain
         // replay floor once the root is published, so a reactivation replays only the
         // tail written after the load rather than the whole partition.
         var birthHeads = switched ? null : await CaptureBulkBirthHeadsAsync();
+
+        // Issue #6160: a switched load's leaves take their hint as they are born, before
+        // their rows, so no coverage tick finds a loaded leaf holding live data with no
+        // checkpoint and replays its partitions from the log's start.
+        var seedHint = switchHint is not null && (state.State.RootNodeId ?? seededRoot) is { } replacedRoot
+            ? await EarlyBulkBirthHintAsync(
+                switchHint,
+                await CollectReplacedLeavesAsync(replacedRoot, state.State.RootNodeId is null || state.State.RootIsLeaf))
+            : null;
 
         RecordWrite(entryCount);
 
@@ -291,7 +301,7 @@ internal sealed partial class ShardRootGrain
         var maxChildren = options.MaxInternalChildren;
 
         var (leafIds, separators) = PlanBulkLoadLeaves(shardKey, operationId, planPrefix, maxLeafKeys, entryCount, keyAt);
-        await SeedBulkLoadLeavesAsync(leafIds, separators, maxLeafKeys, entryCount, seedRouting, buildBatch);
+        await SeedBulkLoadLeavesAsync(leafIds, separators, maxLeafKeys, entryCount, seedRouting, buildBatch, seedHint);
 
         var (root, rootIsLeaf) = await BuildBulkLoadRootAsync(operationId, leafIds, separators, maxChildren);
         if (!switched)
@@ -540,6 +550,63 @@ internal sealed partial class ShardRootGrain
     }
 
     /// <summary>
+    /// The hint the leaves a switched bulk load creates take as they are born
+    /// (issue #6160): <paramref name="hint"/>, the load's stored birth hint, capped per
+    /// partition at the lowest replay frontier of <paramref name="sourceLeaves"/>, the
+    /// replaced root's leaves, read now. <see langword="null"/>, applying nothing, when
+    /// no hint is stored, there is no source leaf, or any of them cannot report a
+    /// frontier.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Without it the hint landed only after the retire relocated the replaced rows. A
+    /// loaded leaf that ticked in between held live data with no checkpoint, took the
+    /// starved arm and replayed every partition from the log's start.
+    /// </para>
+    /// <para>
+    /// Reading the frontier this early is safe because the retire relocates every row
+    /// of every replaced leaf unconditionally. A leaf's frontier only rises, so this one
+    /// is at or below the one the retire reads later. A record a replaced leaf has not
+    /// applied lies above it and is replayed by the loaded leaf that owns it, and a row
+    /// it applies after this read is relocated at the retire. The later hint only ever
+    /// raises this one.
+    /// </para>
+    /// <para>
+    /// A bulk append does not use it. Its narrow of the old rightmost leaf may fail or
+    /// time out, leaving that leaf's rows unrelocated, and then the appended leaves must
+    /// replay from the log's start; a hint applied before the narrow would skip them.
+    /// </para>
+    /// </remarks>
+    private async Task<long[]?> EarlyBulkBirthHintAsync(long[]? hint, IReadOnlyList<GrainId> sourceLeaves)
+    {
+        if (hint is null || sourceLeaves.Count == 0 || !BulkGraftSeamsAvailable)
+            return null;
+
+        long[]? frontier = null;
+        foreach (var leafId in sourceLeaves)
+        {
+            LeafNarrowResult copied;
+            try
+            {
+                copied = await grainFactory.GetGrain<IBPlusLeafGrain>(leafId).CopyRowsForBulkLoadAsync();
+            }
+            catch (Exception ex) when (WalAppendFenceMethodProbe.IsDefiniteMethodUnknown(ex))
+            {
+                return null;
+            }
+
+            if (copied.ReadFrontier is not { } leafFrontier)
+                return null;
+            if (frontier is null)
+                frontier = (long[])leafFrontier.Clone();
+            else
+                MinPerPartitionInPlace(frontier, leafFrontier);
+        }
+
+        return frontier is null ? null : CapAtReadFrontier(hint, frontier);
+    }
+
+    /// <summary>
     /// Reads a leaf of the root a bulk load replaced: its rows, and, while every silo
     /// serves <see cref="IBPlusLeafGrain.CopyRowsForBulkLoadAsync"/>, its replay
     /// frontier read before them, in one call (issue #5766). An older silo answers that
@@ -731,7 +798,8 @@ internal sealed partial class ShardRootGrain
         int maxLeafKeys,
         int entryCount,
         WalRoutingStamp seedRouting,
-        Func<int, int, Dictionary<string, LwwValue<byte[]>>> buildBatch)
+        Func<int, int, Dictionary<string, LwwValue<byte[]>>> buildBatch,
+        long[]? seedHint = null)
     {
         var slots = new int[leafIds.Count];
         for (int i = 0; i < slots.Length; i++)
@@ -761,6 +829,11 @@ internal sealed partial class ShardRootGrain
                     PrevSibling = slot > 0 ? leafIds[slot - 1] : null,
                     NextSibling = slot + 1 < leafIds.Count ? leafIds[slot + 1] : null,
                 });
+
+                if (seedHint is not null)
+                {
+                    await leaf.SetCheckpointOffsetHintsAsync(seedHint);
+                }
 
                 var start = slot * maxLeafKeys;
                 var count = Math.Min(maxLeafKeys, entryCount - start);
@@ -969,6 +1042,25 @@ internal sealed partial class ShardRootGrain
         // GetAppendTailAsync and NarrowHighKeyAsync are new leaf methods, so while an
         // older silo may host the leaf the append takes the 10.2.0 path: fill by count,
         // graft without narrowing, relocate nothing. See BulkGraftSeamsAvailable.
+        // Issue #6160: the appended leaves start at the old rightmost leaf's read
+        // frontier (NarrowHighKeyAsync caps the switch's hint there), so a rightmost
+        // leaf that has not replayed what the WAL already holds makes every leaf this
+        // chunk grafts replay that backlog cold on its first activation, and the
+        // backlog - and so each chunk's cost - grows with the run. One drive here
+        // brings the leaf to the head before the tail is read, so the right edge and
+        // the below-edge split see the rows it applies. It runs before the switch
+        // opens and outside the narrow: a catch-up inside the narrow reorders the
+        // frontier read against the rows it relocates. Best effort - a leaf that
+        // cannot be driven now (saturated, or awaiting a rebuild) leaves the append
+        // exactly as it was before this drive, starting at its lagging frontier.
+        try
+        {
+            await rightmostLeaf.DriveStarvedCheckpointAsync();
+        }
+        catch (Exception ex) when (ex is LatticeSaturatedException or LeafProjectionStaleException)
+        {
+        }
+
         var (graftSeams, existingCount, rightEdge) = await ReadAppendTailAsync(rightmostLeaf);
 
         // Entries the right edge cannot take: at or below the shard's highest key,

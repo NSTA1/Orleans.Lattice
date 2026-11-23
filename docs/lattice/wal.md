@@ -1975,11 +1975,12 @@ unchanged; range-delete records are fenced, never clipped.
 **The bulk birth hint.** A bulk load or bulk append records a **birth hint** - one below
 a head of every WAL partition read before its first leaf is born - in the shard's marker row,
 in the same write that opens its marker and before it creates its first leaf; a resume
-of the same operation reuses the stored hint. A lower hint is never above a record the
-leaf has not applied, it only lengthens the replay, so the consecutive chunks of a
-streaming import - a **run** - share one: the run's first chunk reads the heads, and
-each later chunk reuses the previous chunk's hint, or the heads of the fence it folds
-(below). Once the switch has moved into its new leaves every row the shard held
+of the same operation reuses the stored hint. Each chunk of a streaming import - a
+**run** - reads the heads afresh, or takes the heads of the fence it folds (below): a
+lower hint is never above a record the leaf has not applied, but it lengthens the
+replay, and a hint reused across a run would make each later chunk's leaves replay
+everything the run had appended before it
+([#6160](https://github.com/NSTA1/Orleans.Lattice/issues/6160)). Once the switch has moved into its new leaves every row the shard held
 in their range before it - the old rightmost leaf's rows for an append, the rows a
 batch write stored on the replaced root for a load (see
 [Bulk Loading](bulk-loading.md#rows-the-append-meets)) - each new leaf's projection
@@ -1988,6 +1989,10 @@ than from its start. Every row such a leaf owns was then appended after the hint
 that cannot be shown - the old rightmost leaf is hosted by an older build or the gate
 was closed, so its rows were not moved, or a load crashed after publishing its root -
 the hint is not applied and the new leaves replay from the log's start, as before. A
+bulk load's leaves take the hint as they are born, capped as described below, rather
+than once the switch completes, so no leaf holding loaded rows meets a checkpoint tick
+with no checkpoint (#6160); an append's leaves take it only after the narrow has moved
+the old leaf's rows, since a narrow that fails moves none. A
 load into a never-written shard opens no switch and stores no hint, but it reads the
 same heads before its first leaf is born and sets each leaf's checkpoint to them once
 its root is published
@@ -2037,7 +2042,12 @@ of the heads and its donor's checkpoint, read before the division's intent is pe
 the lower of the birth hint and the lowest checkpoint of the leaves of the root the load
 replaced, each read in the same call that copies that leaf's rows into the loaded tree
 ([#5766](https://github.com/NSTA1/Orleans.Lattice/issues/5766)); a load that replaced no
-root, or whose replaced leaf is hosted by an older build, applies no hint. The checkpoint is
+root, or whose replaced leaf is hosted by an older build, applies no hint. Because that
+cap holds a new leaf at wherever the old leaf last replayed, which for a leaf serving
+only live writes can be far behind the head, the old rightmost leaf of an append is
+driven to the head before the append reads its tail, and each replaced leaf of a load
+before it reports its checkpoint (#6160). The drive is best effort: a leaf that cannot
+be driven keeps its lower checkpoint, which is only a longer replay. The checkpoint is
 inclusive - a leaf replays every record above it - so it is taken as it is: one above
 it is exactly the first record the old leaf had not applied. Before the narrow the old
 leaf still declares the whole range, so its replay applies such records rather than

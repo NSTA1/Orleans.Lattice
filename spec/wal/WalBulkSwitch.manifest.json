@@ -8,7 +8,7 @@
     "actions": 21,
     "mutations": 28,
     "behaviourRows": 26,
-    "distinctStates": 1047630
+    "distinctStates": 952198
   },
   "variants": {
     "Skip": { "distinctStates": 197156 }

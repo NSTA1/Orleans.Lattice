@@ -3073,6 +3073,7 @@ internal sealed partial class BPlusLeafGrain(
         await AwaitReplayBarrierAsync();
         EnsureInternalOrigin(LatticeOperation.RangeRead);
         var partitionCount = Math.Max(1, (await GetOptionsAsync()).WalPartitions);
+        await CatchUpBeforeFrontierReadAsync();
 
         // Issue #5766: the frontier and the rows are read in one synchronous step,
         // frontier first, so every record at or below it is in the rows and every
@@ -3082,6 +3083,42 @@ internal sealed partial class BPlusLeafGrain(
             frontier[p] = GetCurrentCheckpointForPartition(p);
 
         return new LeafNarrowResult { Rows = CopyRowsAtOrAbove(string.Empty), ReadFrontier = frontier };
+    }
+
+    /// <summary>
+    /// Replays this leaf up to the WAL head before a bulk load reads its rows and
+    /// frontier (issue #6160), so the leaves the load births start near the head
+    /// rather than at this leaf's stale checkpoint. A bulk append gets the same
+    /// catch-up from the shard root, which drives the rightmost leaf before it
+    /// reads the append tail; it is never run inside NarrowHighKeyAsync, where it
+    /// would reorder the frontier read against the rows the narrow relocates.
+    /// </summary>
+    /// <remarks>
+    /// The graft caps the birth hint at this frontier (issues #5752, #5766): a
+    /// record of the relocated range that this leaf has not applied must lie
+    /// above it, or no leaf ever applies it. Without a catch-up the frontier is
+    /// wherever this leaf last replayed, which for a leaf that serves only live
+    /// writes is far behind the head, and the cap then holds every born leaf
+    /// there, so the cold replay each one owes grows with the WAL. Catching up
+    /// first bounds that replay by what the WAL gained during the load itself.
+    /// <para>
+    /// This reuses the starvation drive, which is permit-gated, budget-bounded and
+    /// idempotent, and keeps the frontier's meaning: every record the replay
+    /// reached is applied, and the checkpoint stays clamped behind unresolved
+    /// prepares. It is best-effort. A drive that is refused, times out, is already
+    /// running or finds the projection stale leaves the frontier where it was,
+    /// which is the conservative cap this method only ever raises.
+    /// </para>
+    /// </remarks>
+    private async Task CatchUpBeforeFrontierReadAsync()
+    {
+        try
+        {
+            await DriveStarvedCheckpointAsync(StarvationDriveOrigin.WalGcSweep);
+        }
+        catch (LeafProjectionStaleException)
+        {
+        }
     }
 
     private bool WouldNarrowHighKey(string highKeyExclusive) =>
