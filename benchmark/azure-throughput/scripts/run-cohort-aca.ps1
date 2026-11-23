@@ -319,6 +319,11 @@ param(
 	# all in one execution, so the silos stay warm between rungs. Supersedes
 	# -PreseedKeyCount, -PreseedStartOffset, -PreseedSkip and -ReadKeySpace.
 	[string] $TreeSizeLadder = '',
+	# Fail a preseed only when no chunk lands for this long (BENCH_PRESEED_STALL_SEC);
+	# 0 keeps the scaled wall-clock budget. With it set, the execution ceiling
+	# assumes the seed sustains at least -PreseedKeysPerSecFloor keys/s.
+	[ValidateRange(0, 86400)][int] $PreseedStallSec = 0,
+	[ValidateRange(10, 100000)][int] $PreseedKeysPerSecFloor = 1000,
 	[switch] $DeferHarvest
 )
 
@@ -549,7 +554,8 @@ try {
 		"BENCH_PRESEED_START_OFFSET=$PreseedStartOffset",
 		"BENCH_PRESEED_SKIP=$(if ($PreseedSkip) { '1' } else { '0' })",
 		"BENCH_READ_KEY_SPACE=$ReadKeySpace",
-		"BENCH_TREE_SIZE_LADDER=$ladderEnv"
+		"BENCH_TREE_SIZE_LADDER=$ladderEnv",
+		"BENCH_PRESEED_STALL_SEC=$PreseedStallSec"
 	)
 	if ($walExtraAccounts.Count -gt 0) {
 		$prodEnv += "BENCH_WAL_EXTRA_ACCOUNT_URIS=$(@($walExtraAccounts | ForEach-Object { [string]$_.tableUri }) -join ';')"
@@ -569,7 +575,7 @@ try {
 	$preseedExtraSec = 0
 	if ($WorkloadMode -in @('get-point', 'get-many') -and -not $PreseedSkip) {
 		$seedKeys = if ($PreseedKeyCount -gt 0) { [math]::Max(0, $PreseedKeyCount - $PreseedStartOffset) } else { $VehicleCount }
-		$preseedExtraSec = [math]::Max(0, [math]::Ceiling($seedKeys / 1000.0) - 300)
+		$preseedExtraSec = [math]::Max(0, [math]::Ceiling($seedKeys / [double]$PreseedKeysPerSecFloor) - 300)
 	}
 	$executionCeilingSec = $DurationSec + $WarmUpBudgetSec + $ResponseTimeoutSec + $InFlightTailBudgetSec + 300 + $preseedExtraSec
 	if ($ladderRungs.Count -gt 0) {
@@ -578,7 +584,7 @@ try {
 		$ladderSec = 0
 		$prev = 0
 		foreach ($rung in $ladderRungs) {
-			$ladderSec += [math]::Max(300, [math]::Ceiling(($rung - $prev) / 1000.0)) + $DurationSec + $InFlightTailBudgetSec + 120
+			$ladderSec += [math]::Max(300, [math]::Ceiling(($rung - $prev) / [double]$PreseedKeysPerSecFloor)) + $DurationSec + $InFlightTailBudgetSec + 120
 			$prev = $rung
 		}
 		$executionCeilingSec = $WarmUpBudgetSec + $ResponseTimeoutSec + 300 + $ladderSec
@@ -588,7 +594,7 @@ try {
 		'--name', $ctx.producerJob, '--resource-group', $ctx.resourceGroup,
 		# The job's replica timeout must cover the ceiling, or a long tree-size
 		# seed is killed by the platform before the harness gives up on it.
-		'--replica-timeout', [string][math]::Max(3600, $executionCeilingSec),
+		'--replica-timeout', [string][math]::Min(86400, [math]::Max(3600, $executionCeilingSec)),
 		'--set-env-vars') + $prodEnv + @('-o', 'none')) -TransientRetries 3 | Out-Null
 
 	Write-Host '[cohort] starting producer job' -ForegroundColor Cyan

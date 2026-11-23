@@ -635,10 +635,17 @@ static async Task PreseedWithRetryAsync(ILattice lattice, IngestSettings setting
     // Matches the cohort runner's preseed allowance, independently of the
     // warm-up, response and measurement budgets. BENCH_PRESEED_BUDGET_SEC
     // overrides the default, which scales with the segment being written.
+    // BENCH_PRESEED_STALL_SEC > 0 fails the seed only when no chunk lands for
+    // that long; the scaled budget then no longer applies unless overridden,
+    // because a large tree's seed rate cannot be predicted from its size.
     var overrideSec = ReadIntAllowZero("BENCH_PRESEED_BUDGET_SEC", 0);
-    var budget = overrideSec > 0 ? TimeSpan.FromSeconds(overrideSec) : BenchPreseed.BudgetFor(settings.PreseedKeyCount - startOffset);
+    var stallSec = ReadIntAllowZero("BENCH_PRESEED_STALL_SEC", 0);
+    var budget = overrideSec > 0 ? TimeSpan.FromSeconds(overrideSec)
+        : stallSec > 0 ? Timeout.InfiniteTimeSpan
+        : BenchPreseed.BudgetFor(settings.PreseedKeyCount - startOffset);
+    TimeSpan? stall = stallSec > 0 ? TimeSpan.FromSeconds(stallSec) : null;
     await BenchPreseed.SeedWithRetryAsync(lattice, settings.PreseedKeyCount,
-        BenchPreseed.ChunkSize, settings.TreeId, budget, ct, startOffset).ConfigureAwait(false);
+        BenchPreseed.ChunkSize, settings.TreeId, budget, ct, startOffset, stall).ConfigureAwait(false);
 }
 static async Task SubmitAndWaitForReshardAsync(ILattice lattice, string treeId, int shardCount, CancellationToken ct)
 {

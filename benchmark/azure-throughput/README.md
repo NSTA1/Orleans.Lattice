@@ -586,6 +586,7 @@ before that step and leaves it to `complete-cohort-aca.ps1 -PendingHarvestPath <
 | `-DeferHarvest` | off | Return once the producer has finished and the silos are parked; the harvest, storage metrics and grading run later through `complete-cohort-aca.ps1`. |
 | `-PreseedKeyCount`, `-PreseedStartOffset` | `0`, `0` | Read modes only (`BENCH_PRESEED_KEY_COUNT` / `BENCH_PRESEED_START_OFFSET`). The tree size the producer seeds, decoupled from the fleet (`0` = the fleet), and the key index the seed starts at, so a cohort can extend a tree an earlier cohort seeded. See [Tree-size sweep](#tree-size-sweep). |
 | `-PreseedSkip` | off | Read modes only (`BENCH_PRESEED_SKIP=1`): reuse the tree as already seeded to `-PreseedKeyCount`; the producer logs `method=reuse`. |
+| `-PreseedStallSec`, `-PreseedKeysPerSecFloor` | `0`, `1000` | Read modes only. `-PreseedStallSec` (`BENCH_PRESEED_STALL_SEC`) fails the seed only when no chunk has landed for that many seconds, and without `BENCH_PRESEED_BUDGET_SEC` lifts the wall-clock budget, so a multi-hour seed is bounded by progress rather than a rate guess (`0` = off). `-PreseedKeysPerSecFloor` is the seed rate the execution ceiling and the job's `--replica-timeout` (capped at 86,400 s) are sized for. |
 | `-ReadKeySpace` | `0` | `BENCH_READ_KEY_SPACE`: reads stride over this many seeded keys instead of the fleet's own (`0` = the fleet), so a large tree is read across its whole keyspace rather than a fleet-sized hot set. |
 | `-TreeSizeLadder` | none | Read modes only (`BENCH_TREE_SIZE_LADDER`): a comma-separated, strictly ascending list of tree sizes. In one producer execution the producer grows one tree to each size in turn (bulk-appending only the new keys) and runs a `-DurationSec` read measurement over every seeded key after each, so the silos stay warm between rungs. Supersedes the four options above. The execution ceiling and `--replica-timeout` widen to cover the largest rung's seed plus every measurement. See [Tree-size sweep](#tree-size-sweep). |
 
@@ -635,7 +636,12 @@ measurement), and the page marks the largest size whose p95 stays within
 `-DegradeP95Ms` (default 5 ms). The seed success line adds
 `elapsedMs=.. segmentStart=.. segmentEntries=..`, and a long seed logs a
 `[producer] preseed-progress` line every 1,048,576 keys. A silo count whose cohort
-leaves rungs unusable is retried once; the better attempt is kept.
+leaves rungs unusable is retried once; the better attempt is kept. A multi-hour seed
+is bounded by progress, not by a rate guess: `-PreseedStallSec` (default 900) fails it
+only when no chunk lands for that long, and `-PreseedKeysPerSecFloor` (default 250)
+sizes the execution ceiling. `-GrainCollectionAgeSec` (default 60) sets the silos'
+`BENCH_GRAIN_COLLECTION_AGE_SEC`, so leaves the seed has passed deactivate instead of
+each running its periodic timers on the silo for the rest of the cohort.
 
 ```powershell
 ./scripts/deploy-aca.ps1 -NamePrefix latsz1

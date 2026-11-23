@@ -259,6 +259,36 @@ public class BenchPreseedTests
     }
 
     [Test]
+    public void SeedWithRetryAsync_stall_timeout_fails_a_seed_with_no_progress_under_an_infinite_budget()
+    {
+        var lattice = Substitute.For<ILattice>();
+        var pending = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        lattice.BulkAppendChunkAsync(Arg.Any<string>(), Arg.Any<IReadOnlyList<KeyValuePair<string, byte[]>>>(), Arg.Any<CancellationToken>())
+            .Returns(pending.Task);
+
+        try
+        {
+            Assert.CatchAsync<OperationCanceledException>(() =>
+                BenchPreseed.SeedWithRetryAsync(lattice, 1, 1, "test", Timeout.InfiniteTimeSpan, CancellationToken.None,
+                    stallTimeout: TimeSpan.FromMilliseconds(200)));
+        }
+        finally { pending.SetResult(0); }
+    }
+
+    [Test]
+    public async Task SeedWithRetryAsync_stall_timeout_does_not_fail_a_seed_that_keeps_landing_chunks()
+    {
+        var lattice = Substitute.For<ILattice>();
+        lattice.BulkAppendChunkAsync(Arg.Any<string>(), Arg.Any<IReadOnlyList<KeyValuePair<string, byte[]>>>(), Arg.Any<CancellationToken>())
+            .Returns(async _ => { await Task.Delay(50); return 1; });
+
+        await BenchPreseed.SeedWithRetryAsync(lattice, 10, 1, "test", Timeout.InfiniteTimeSpan, CancellationToken.None,
+            stallTimeout: TimeSpan.FromMilliseconds(300));
+
+        await lattice.Received(10).BulkAppendChunkAsync(Arg.Any<string>(), Arg.Any<IReadOnlyList<KeyValuePair<string, byte[]>>>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public void SeedWithRetryAsync_terminal_fault_is_not_retried()
     {
         var lattice = Substitute.For<ILattice>();

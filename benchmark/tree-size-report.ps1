@@ -43,6 +43,14 @@ param(
 	[int] $TickHz = 5,
 	[double] $DegradeP95Ms = 5.0,
 	[string] $WorkloadMode = 'get-point',
+	# Silo grain collection age (BENCH_GRAIN_COLLECTION_AGE_SEC). Every seeded leaf
+	# stays activated, running its periodic timers, until Orleans collects it;
+	# at the default age a multi-million-key seed is CPU-bound on idle leaves.
+	[int] $GrainCollectionAgeSec = 60,
+	# Fail a rung's seed only when no chunk lands for this long.
+	[int] $PreseedStallSec = 900,
+	# Seed rate the execution ceiling assumes (keys/s).
+	[int] $PreseedKeysPerSecFloor = 250,
 	[string] $DocPath,
 	[switch] $Resume,
 	[switch] $DryRun,
@@ -312,6 +320,9 @@ function New-TreeSizeBaseMeta {
 	$m['tickHz'] = "$($State.tickHz)"
 	$m['durationSec'] = "$($State.durationSec)"
 	$m['payloadBytes'] = '245'
+	if ($State.PSObject.Properties['grainCollectionAgeSec'] -and $State.grainCollectionAgeSec) {
+		$m['grainCollectionAgeSec'] = "$($State.grainCollectionAgeSec)"
+	}
 	return $m
 }
 
@@ -518,7 +529,7 @@ if ($null -eq $state) {
 		gitSha = (& git -C $repoRoot rev-parse --short HEAD).Trim()
 		measuredDate = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
 		workloadMode = $WorkloadMode; vehiclesPerSilo = $VehiclesPerSilo; tickHz = $TickHz; durationSec = $DurationSec
-		degradeP95Ms = $DegradeP95Ms; sizes = $Sizes; siloAxisSizes = $SiloAxisSizes; siloCounts = $SiloCounts
+		grainCollectionAgeSec = $GrainCollectionAgeSec; degradeP95Ms = $DegradeP95Ms; sizes = $Sizes; siloAxisSizes = $SiloAxisSizes; siloCounts = $SiloCounts
 		cohorts = [ordered]@{}
 	}
 }
@@ -543,7 +554,9 @@ foreach ($s in @($SiloCounts | Sort-Object)) {
 		try {
 			& $runCohort -NamePrefix $NamePrefix -SiloCount $s -WorkloadMode $WorkloadMode `
 				-DurationSec $DurationSec -VehiclesPerSilo $VehiclesPerSilo -TickHz $TickHz `
-				-CohortTag $tag -TreeSizeLadder ($ladder -join ',') | Out-Host
+				-CohortTag $tag -TreeSizeLadder ($ladder -join ',') ``
+				-PreseedStallSec $PreseedStallSec -PreseedKeysPerSecFloor $PreseedKeysPerSecFloor ``
+				-ExtraSiloEnv @("BENCH_GRAIN_COLLECTION_AGE_SEC=$GrainCollectionAgeSec") | Out-Host
 		} catch {
 			Write-Warning "[tree-size] $key attempt $attempt threw: $($_.Exception.Message)"
 		}

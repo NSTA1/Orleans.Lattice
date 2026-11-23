@@ -193,8 +193,12 @@ internal static class BenchPreseed
     /// chunk operation ids use absolute offsets, so a segment never collides
     /// with an earlier one.
     /// </summary>
+    private static TimeSpan StallCheckPeriod(TimeSpan stall) =>
+        TimeSpan.FromTicks(Math.Clamp(stall.Ticks / 4, TimeSpan.FromMilliseconds(10).Ticks, TimeSpan.FromSeconds(5).Ticks));
+
     internal static async Task SeedWithRetryAsync(
-        ILattice lattice, int count, int chunkSize, string treeId, TimeSpan budget, CancellationToken ct, int startOffset = 0)
+        ILattice lattice, int count, int chunkSize, string treeId, TimeSpan budget, CancellationToken ct, int startOffset = 0,
+        TimeSpan? stallTimeout = null)
     {
         const int MaxAttemptsPerSlice = 8;
         const int ProgressEveryKeys = 1_048_576;
@@ -207,6 +211,20 @@ internal static class BenchPreseed
         var attempts = 0;
         var sliceAttempt = 1;
         var sw = Stopwatch.StartNew();
+        // A multi-hour seed cannot be bounded by a rate guess, so a stall
+        // timeout fails the seed only when no chunk has landed for that long.
+        var lastProgressTicks = sw.Elapsed.Ticks;
+        var stalled = false;
+        using var stallTimer = stallTimeout is { } stall && stall > TimeSpan.Zero
+            ? new Timer(_ =>
+            {
+                if (sw.Elapsed.Ticks - Interlocked.Read(ref lastProgressTicks) > stall.Ticks)
+                {
+                    stalled = true;
+                    try { deadline.Cancel(); } catch (ObjectDisposedException) { }
+                }
+            }, null, StallCheckPeriod(stall), StallCheckPeriod(stall))
+            : null;
         try
         {
             while (true)
@@ -223,6 +241,7 @@ internal static class BenchPreseed
                         }
                         landed = offset;
                         sliceAttempt = 1;
+                        Interlocked.Exchange(ref lastProgressTicks, sw.Elapsed.Ticks);
                     }).WaitAsync(token).ConfigureAwait(false);
                     Console.WriteLine($"[producer] preseed treeId={treeId} entries={count} payloadBytes={PayloadBytes} method=bulk-append chunkSize={chunkSize} attempts={attempts} elapsedMs={sw.Elapsed.TotalMilliseconds:F0} segmentStart={startOffset} segmentEntries={count - startOffset}");
                     return;
@@ -248,7 +267,7 @@ internal static class BenchPreseed
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[producer] ERROR preseed treeId={treeId} entries={count} offset={landed}/{count} attempts={attempts} elapsedMs={sw.Elapsed.TotalMilliseconds:F0} budgetSec={budget.TotalSeconds:F0} FAILED: {ex.GetType().Name}: {ex.Message}");
+            Console.Error.WriteLine($"[producer] ERROR preseed treeId={treeId} entries={count} offset={landed}/{count} attempts={attempts} elapsedMs={sw.Elapsed.TotalMilliseconds:F0} budgetSec={budget.TotalSeconds:F0} stalled={(stalled ? "true" : "false")} FAILED: {ex.GetType().Name}: {ex.Message}");
             throw;
         }
     }

@@ -652,6 +652,23 @@ builder.UseOrleans(silo =>
         o.ResponseTimeout = TimeSpan.FromSeconds(responseTimeoutSec);
     });
 
+    // Tree-size seed lever (BENCH_GRAIN_COLLECTION_AGE_SEC). A bulk-append seed
+    // touches each packed leaf once and never again, but the leaf stays active
+    // for the Orleans collection age (15 min by default) and runs its periodic
+    // coverage-lag timer, so silo CPU and memory grow with the seeded key count.
+    // A short age lets idle seeded leaves deactivate. 0 (the default) keeps the
+    // Orleans default.
+    var grainCollectionAgeSec = ReadIntAllowZero("BENCH_GRAIN_COLLECTION_AGE_SEC", 0);
+    if (grainCollectionAgeSec > 0)
+    {
+        silo.Configure<GrainCollectionOptions>(o =>
+        {
+            o.CollectionAge = TimeSpan.FromSeconds(grainCollectionAgeSec);
+            o.CollectionQuantum = TimeSpan.FromSeconds(Math.Max(5, Math.Min(60, grainCollectionAgeSec / 4)));
+        });
+        Console.WriteLine($"[silo] grain-collection ageSec={grainCollectionAgeSec}");
+    }
+
     // Diagnostic-only grain-turn occupancy filter (BENCH_GRAIN_TURN_DIAG_MS).
     var grainTurnDiagMs = VehicleFleetSimulator.AzureThroughput.Silo.GrainTurnDiagnosticsFilter.ParseThresholdMs(
         Environment.GetEnvironmentVariable("BENCH_GRAIN_TURN_DIAG_MS"));
