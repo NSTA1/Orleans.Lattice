@@ -1988,6 +1988,11 @@ than from its start. Every row such a leaf owns was then appended after the hint
 that cannot be shown - the old rightmost leaf is hosted by an older build or the gate
 was closed, so its rows were not moved, or a load crashed after publishing its root -
 the hint is not applied and the new leaves replay from the log's start, as before. A
+load into a never-written shard opens no switch and stores no hint, but it reads the
+same heads before its first leaf is born and sets each leaf's checkpoint to them once
+its root is published
+([#6152](https://github.com/NSTA1/Orleans.Lattice/issues/6152)): a write reaches a
+leaf only after the shard has a root, so no row of that shard lies below them. A
 bulk load then closes its switch by fence, removing the hint in the same write. A bulk
 append leaves its switch open for the run, which only holds its leaves on the
 replay-based advance longer: a close per chunk would cost a claim per partition and

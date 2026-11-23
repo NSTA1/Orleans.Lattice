@@ -653,10 +653,11 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
     }
 
     [Test]
-    public async Task A_bulk_load_with_no_replaced_root_applies_no_hint()
+    public async Task A_bulk_load_with_no_replaced_root_hints_its_leaves_with_the_pre_seed_heads()
     {
-        // No leaf declared the range before the load, so none can say how far it had
-        // replayed: the loaded leaves read from the log's start, as in 10.2.0.
+        // Issue #6152: a never-written shard holds no row below the heads read before its
+        // first leaf is born, so its loaded leaves bank those heads rather than replaying
+        // the whole log on every reactivation.
         var rig = CreateHintRig();
 
         await rig.H.Grain.BulkLoadRawAsync("load", RawEntries(5));
@@ -664,7 +665,7 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         Assert.That(rig.H.Leaves.Values, Is.Not.Empty, "precondition: the load created leaves");
         foreach (var leaf in rig.H.Leaves.Values)
         {
-            Assert.That(HintAppliedTo(leaf), Is.Null);
+            Assert.That(HintAppliedTo(leaf), Is.Not.Null.And.All.EqualTo(BirthHint));
         }
 
         Assert.That((await ShardMarkerAsync(rig)).Open, Is.Empty, "the switch still closes");
