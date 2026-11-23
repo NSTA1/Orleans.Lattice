@@ -10,7 +10,8 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// switch the seed carries the shard root's routing generation, read after the
 /// switch's marker opened (review C1), so the WAL shard admits it as the bulk-seed
 /// class; a never-written shard opens no switch, stores no hint and seeds unstamped
-/// (B2). A same-operation retry after an aborted switched load accepts the root that
+/// (B2), handing its leaves the pre-seed heads only after publish (issue #6152). A
+/// same-operation retry after an aborted switched load accepts the root that
 /// replayed the aborted attempt's seeds and relocates it (review of the design).
 /// </summary>
 public sealed partial class ShardRootGrainBulkLoadGraftTests
@@ -62,7 +63,6 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
             var marker = await ShardMarkerAsync(rig);
             Assert.That(marker.Open, Is.Empty, "no switch token was opened");
             Assert.That(marker.BulkBirthHints, Is.Empty, "no birth hint was stored");
-            await rig.Coordinator.DidNotReceive().GetHeadOffsetAsync(Arg.Any<CancellationToken>());
             await rig.Wal.DidNotReceive().ClaimRoutingGenerationAsync(
                 Arg.Any<WalRoutingInitiator>(), Arg.Any<long>(), Arg.Any<CancellationToken>());
             Assert.That(rig.H.State.State.LastCompletedBulkOperationId, Is.EqualTo("load"));

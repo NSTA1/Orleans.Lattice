@@ -41,7 +41,7 @@ public sealed partial class LiveCheckpointAdvanceIntegrationTests(bool eagerClai
     private const string UnstampedTree = "live-advance-unstamped";
     private const string OrphanTree = "live-advance-orphan";
     private const string BulkTree = "live-advance-bulk";
-    private static readonly string[] Trees = [LatencyTree, DuplicateTree, UnstampedTree, OrphanTree, BulkTree, BulkRawTree, BulkGraftTree];
+    private static readonly string[] Trees = [LatencyTree, DuplicateTree, UnstampedTree, OrphanTree, BulkTree, BulkRawTree, BulkGraftTree, BulkCheckpointAppendTree, BulkCheckpointRawTree];
     private static readonly TimeSpan Budget = TimeSpan.FromSeconds(45);
     private TestCluster _cluster = null!;
 
@@ -62,7 +62,10 @@ public sealed partial class LiveCheckpointAdvanceIntegrationTests(bool eagerClai
         var registry = _cluster.Client.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         foreach (var tree in Trees)
         {
-            await registry.RegisterAsync(tree, new TreeRegistryEntry { ShardCount = 1, MaxLeafKeys = 128, WalPartitions = 1 });
+            // The raw bulk-checkpoint tree has a second shard so that a write can put rows
+            // in the shared WAL partition while the loaded shard is still never written.
+            var shardCount = tree == BulkCheckpointRawTree ? 2 : 1;
+            await registry.RegisterAsync(tree, new TreeRegistryEntry { ShardCount = shardCount, MaxLeafKeys = 128, WalPartitions = 1 });
         }
     }
 

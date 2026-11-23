@@ -242,9 +242,14 @@ internal sealed partial class ShardRootGrain
     /// <para>
     /// <b>Never written (#5812, B2).</b> A shard with no root has no leaf, so it holds
     /// no row for a switch to protect and no write in flight to drain. It opens no
-    /// marker, captures no hint and runs no fence: its leaves are seeded unstamped,
-    /// which every partition admits and reports, and they read from the log's start as
-    /// a fresh shard's leaves already do. The skip is decided at publish (review Q2):
+    /// marker and runs no fence: its leaves are seeded unstamped, which every partition
+    /// admits and reports. It reads every partition's head before the first leaf is
+    /// born and, once its root is published, hands those heads to the leaves as their
+    /// checkpoint hint (issue #6152). A write reaches a leaf only after the shard has a
+    /// root, so no row of this shard lies below those heads, and a reactivation replays
+    /// only the tail written after the load instead of the whole partition. A crash
+    /// before the hint lands leaves the leaves reading from the log's start, which is
+    /// slower but complete. The skip is decided at publish (review Q2):
     /// with the root-seed gate held, the publish checks that the shard still has no
     /// root and swaps its own in, in one synchronous segment, so a batch write that
     /// seeds a root afterwards finds the loaded one, and one that seeded a root first
@@ -273,6 +278,11 @@ internal sealed partial class ShardRootGrain
             seedRouting = await BulkSeedRoutingAsync(operationId);
         }
 
+        // Issue #6152: a never-written shard's leaves bank the pre-seed heads as their
+        // replay floor once the root is published, so a reactivation replays only the
+        // tail written after the load rather than the whole partition.
+        var birthHeads = switched ? null : await CaptureBulkBirthHeadsAsync();
+
         RecordWrite(entryCount);
 
         var shardKey = context.GrainId.Key.ToString()!;
@@ -288,6 +298,11 @@ internal sealed partial class ShardRootGrain
         {
             if (await TryPublishNeverWrittenAsync(operationId, root, rootIsLeaf))
             {
+                var hint = BPlusLeafGrain.HeadsAsCheckpoints(birthHeads!);
+                await BoundedFanOut.ForEachAsync(
+                    leafIds,
+                    BoundedFanOut.DefaultWidth,
+                    leafId => grainFactory.GetGrain<IBPlusLeafGrain>(leafId).SetCheckpointOffsetHintsAsync(hint));
                 return;
             }
 
