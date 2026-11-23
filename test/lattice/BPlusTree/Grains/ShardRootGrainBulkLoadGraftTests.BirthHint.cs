@@ -576,6 +576,68 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
     }
 
     [Test]
+    public async Task A_bulk_append_applies_its_hint_to_each_appended_leaf_before_linking_it_into_its_parent()
+    {
+        // Issue #6153: an appended leaf arms its coverage-lag timer when it is born. A
+        // tick before the hint lands finds no durable checkpoint and replays every
+        // partition from the log's start, and the hint that lands afterwards is ignored.
+        // Linking the leaves is the long part of the graft, so the hint must not wait
+        // for it.
+        var rig = CreateHintRig();
+        var existing = rig.H.AddLeaf();
+        rig.H.Leaf(existing).GetAppendTailAsync().Returns((2, "a"));
+        var root = rig.H.AddInternal(childrenAreLeaves: true, child: existing);
+        rig.H.State.State.RootNodeId = root;
+        rig.H.State.State.RootIsLeaf = false;
+
+        var unhintedAtLink = new List<GrainId>();
+        rig.H.Internal(root).AcceptSplitAsync(Arg.Any<string>(), Arg.Any<GrainId>())
+            .Returns(call =>
+            {
+                var child = call.ArgAt<GrainId>(1);
+                if (HintAppliedTo(rig.H.Leaf(child)) is null)
+                    unhintedAtLink.Add(child);
+                return Task.FromResult<SplitResult?>(null);
+            });
+
+        await rig.H.Grain.BulkAppendAsync("op-hint", Pairs(5));
+
+        await rig.H.Internal(root).Received().AcceptSplitAsync(Arg.Any<string>(), Arg.Any<GrainId>());
+        Assert.That(unhintedAtLink, Is.Empty, "every appended leaf reads from the hint before it is linked");
+        foreach (var (low, leaf) in LeavesByBirthLow(rig.H))
+        {
+            var applies = leaf.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(IBPlusLeafGrain.SetCheckpointOffsetHintsAsync));
+            Assert.That(applies, Is.EqualTo(1), $"the appended leaf at {low} is handed the hint once");
+        }
+    }
+
+    [Test]
+    public async Task The_next_chunk_of_a_run_does_not_reuse_a_hint_read_from_an_empty_partition()
+    {
+        // Issue #6153: a hint below zero is no checkpoint, so a leaf handed one stays
+        // starved and replays the partition from the log's start. A run whose first
+        // chunk read an empty partition must read the heads again rather than hand
+        // every later chunk of the run that same nothing.
+        var rig = CreateHintRig();
+        var head = 0L;
+        rig.Coordinator.GetHeadOffsetAsync(Arg.Any<CancellationToken>()).Returns(_ => Task.FromResult(head));
+
+        var first = await rig.H.Grain.BeginBulkSwitchForTestingAsync("chunk-1", "a");
+        head = BirthHead;
+        var second = await rig.H.Grain.BeginBulkSwitchForTestingAsync("chunk-2", "m");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(first, Is.Not.Empty.And.All.EqualTo(-1), "precondition: the first chunk read empty partitions");
+            Assert.That(second, Is.All.EqualTo(BirthHint), "the second chunk reads the heads the log has now");
+            Assert.That(Claims(rig), Is.Zero, "no fence ran");
+        });
+
+        var third = await rig.H.Grain.BeginBulkSwitchForTestingAsync("chunk-3", "t");
+        Assert.That(third, Is.EqualTo(second), "a run hint that is a checkpoint is reused");
+    }
+
+    [Test]
     public async Task A_graft_whose_old_leaf_reports_no_frontier_applies_no_hint()
     {
         // An old leaf an earlier attempt narrowed cannot say how far it had replayed

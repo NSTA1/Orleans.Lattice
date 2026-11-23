@@ -1271,6 +1271,17 @@ internal sealed partial class ShardRootGrain
         // with the gate closed, so it never abandons rows a first attempt stranded.
         var readFrontier = await NarrowAndRelocateAsync(graft, existingLeaf);
 
+        // The appended leaves were born, armed their coverage timers, and are about to
+        // wait out the link loop; their read position is set before it, so no first
+        // tick finds them starved and replays every partition from its start (#6153).
+        var newLeafIds = new GrainId[graft.NewLeaves.Count];
+        for (var i = 0; i < newLeafIds.Length; i++)
+            newLeafIds[i] = graft.NewLeaves[i].LeafId;
+        if (readFrontier is not null)
+        {
+            await ApplyBulkBirthHintAsync(graft.OperationId, newLeafIds, readFrontier);
+        }
+
         // Re-asserts the link for the 10.2.0 path and for a graft resumed after the
         // narrow; a no-op persist-wise once the narrow linked it.
         await existingLeaf.SetNextSiblingAsync(graft.NewLeaves[0].LeafId);
@@ -1386,13 +1397,10 @@ internal sealed partial class ShardRootGrain
             }
         }
 
-        // The appended leaves are routable. Their read position becomes the birth hint
-        // only when the relocation above moved every row they own whose records predate
-        // it; the switch is left for the run's fence (epic #5605, member 3).
-        var newLeafIds = new GrainId[graft.NewLeaves.Count];
-        for (var i = 0; i < newLeafIds.Length; i++)
-            newLeafIds[i] = graft.NewLeaves[i].LeafId;
-        await FinishBulkSwitchAsync(graft.OperationId, newLeafIds, relocated: readFrontier is not null, closeNow: false, readFrontier);
+        // The appended leaves are routable, and already read from the birth hint when the
+        // relocation above moved every row they own whose records predate it; the switch
+        // is left for the run's fence (epic #5605, member 3).
+        await FinishBulkSwitchAsync(graft.OperationId, newLeafIds, relocated: readFrontier is not null, closeNow: false, readFrontier, applyHint: false);
 
         NoteStructuralRoutingChange(); // #5876
         state.State.PendingBulkGraft = null;
