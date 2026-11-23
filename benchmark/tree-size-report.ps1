@@ -553,7 +553,10 @@ foreach ($s in @($SiloCounts | Sort-Object -Descending)) {
 		if (Test-Path $log) { Remove-Item $log -Force }
 		Write-Host "[tree-size] $key attempt $attempt (silos=$s, ladder=$(($ladder | ForEach-Object { Format-SizeTag $_ }) -join ','))" -ForegroundColor Cyan
 		$started = Get-Date
-		$siloEnv = if ($GrainCollectionAgeSec -gt 0) { @("BENCH_GRAIN_COLLECTION_AGE_SEC=$GrainCollectionAgeSec") } else { @() }
+		# Latency comes from the producer's read-latency-final line, so the silos' [phaseA] lines are
+		# unused here; over an hours-long seed they reached ~266k rows and stalled the log harvest.
+		$siloEnv = @('BENCH_PHASEA_REPORT_SEC=0')
+		if ($GrainCollectionAgeSec -gt 0) { $siloEnv += "BENCH_GRAIN_COLLECTION_AGE_SEC=$GrainCollectionAgeSec" }
 		try {
 			& $runCohort -NamePrefix $NamePrefix -SiloCount $s -WorkloadMode $WorkloadMode `
 				-DurationSec $DurationSec -VehiclesPerSilo $VehiclesPerSilo -TickHz $TickHz `
