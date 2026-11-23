@@ -12,9 +12,10 @@ as an Orleans client, separate from the silos, so every latency below is what
 a client sees, network hop included.
 
 The other performance pages read a small keyspace that sizes with the offered
-load. Here the keyspace is the whole tree: one tree is grown in segments to
-30 million keys, and after each segment the cluster reads uniformly over every
-key it holds.
+load. Here the keyspace is the whole tree: one tree is grown in segments,
+and after each segment the cluster reads uniformly over every key it holds.
+The design ladder runs to 30 million keys; the published run
+stops at 3 million, for the reasons in [Where the ladder stops](#where-the-ladder-stops).
 
 See also [Performance: single silo](performance-single-silo.md),
 [Performance: multi-silo scaling](performance-multi-silo.md) and
@@ -22,7 +23,16 @@ See also [Performance: single silo](performance-single-silo.md),
 
 ## The short answer
 
-TREE-SIZE-SHORT-ANSWER
+At 1 M keys a warm cluster serves uniform point reads at about 3-4 ms P50
+and 11-14 ms P95, whether it runs on 1, 2 or 4 silos. That P95 is already
+above the 5 ms budget, so no size measured here is within it: the budget
+sits below the client-to-silo round trip and per-read overhead at this offered
+load, not at a point the tree size crosses.
+
+The run did not find the size where reads degrade. One silo reached 3 M keys
+but could not serve reads at that size. Its read phase froze, and the cause
+lies in how a bulk-loaded tree recovers, not in lookup depth. Two open
+defects stop larger runs; see [Where the ladder stops](#where-the-ladder-stops).
 
 ## How it is measured
 
@@ -53,10 +63,47 @@ One silo replica (4 vCPU, 8 GiB), 64 shards, 16 WAL partitions, default
 options. "Seed segment" is the number of keys appended to reach the size and
 "Seed time" how long that append took.
 
-<!-- perf-table:treesize:start -->
+<!-- perf-table:treesize:start
+  schema=v1
+  cohortN=1
+  degradeP95Ms=5
+  dotnet=10.0
+  durationSec=60
+  gitSha=06ea85767
+  host=Azure Container Apps (Consumption)
+  payloadBytes=245
+  region=westus3
+  rowsMeasured=2026-11-23
+  shardCount=64
+  siloSize=4 vCPU / 8 GiB
+  sizes=1m,3m
+  tickHz=5
+  vehiclesPerSilo=1000
+  walPartitions=16
+  workload=get-point
+  methodology=one producer execution grows a fresh tree on one silo rung by rung with bulk-append seeding of only the new keys, then reads uniformly over every seeded key on the same warm cluster; read latency is the producer-side per-key GetAsync latency over t>=15s of each rung, quantiles are histogram bucket upper edges
+  DO-NOT-HAND-EDIT-BETWEEN-MARKERS
+-->
+
+| Tree size | Seed segment | Seed time | Seed rate (keys/s) | Read p50 | Read p95 | Read p99 | Reads measured | Within p95 budget |
+|----------:|-------------:|----------:|-------------------:|---------:|---------:|---------:|---------------:|:-----------------:|
+| 1 M | 1 M | 10 min 09 s | 1,641 | 2.90 ms | 10.6 ms | 23.2 ms | 225,730 | no |
+| 3 M | 2 M | 48 min 55 s | 681 | _not measured_ | _not measured_ | _not measured_ | - | - |
+
+One silo exceeded the 5.00 ms read P95 budget at the smallest size measured, 1 M keys.
+
 <!-- perf-table:treesize:end -->
 
-TREE-SIZE-READING-LADDER
+> Measured 2026-11-23 on Azure Container Apps (Consumption) in westus3 (.NET 10.0) at git sha 06ea85767, n=1 rungs of one ladder cohort. Each rung offers 1000 vehicles x 5 Hz of point reads for 60 s on the warm silo that seeded it.
+
+**Reading the table.** The 1 M row is a warm-cluster read of a tree the same
+silo just seeded: P95 10.6 ms against a 5 ms budget, so the "no" reflects the
+budget rather than degradation with size. The 3 M row seeded in full (2 M keys
+appended in about 49 minutes) but has no read figures. Both read attempts at
+that size graded `WEDGE`: the first saw P95 near 11 s, and the second stopped
+completing reads for 94 s mid-run. Seed rate also fell, from 1,641 keys/s for
+the first million to 681 keys/s for the next two. Both effects are tracked as
+defects below; neither is a measurement of lookup cost at 3 M keys.
 
 ## Adding silos
 
@@ -64,10 +111,42 @@ The same ladder run on clusters of 1, 2 and 4 silos at the same per-silo
 offered load; each silo count grows its own tree. Each cell is read P95 with
 P50 in brackets.
 
-<!-- perf-table:treesize-silos:start -->
+<!-- perf-table:treesize-silos:start
+  schema=v1
+  cohortN=3
+  dotnet=10.0
+  durationSec=60
+  gitSha=06ea85767
+  host=Azure Container Apps (Consumption)
+  payloadBytes=245
+  region=westus3
+  rowsMeasured=2026-11-23
+  shardCount=64
+  siloCounts=1,2,4
+  siloSize=4 vCPU / 8 GiB
+  sizes=1m
+  tickHz=5
+  vehiclesPerSilo=1000
+  walPartitions=16
+  workload=get-point
+  methodology=one ladder cohort per silo count, each growing its own fresh tree and measuring on its own warm cluster at the same per-silo offered load; cells show read p95 with p50 in parentheses
+  DO-NOT-HAND-EDIT-BETWEEN-MARKERS
+-->
+
+| Tree size | 1 silo p95 (p50) | 2 silos p95 (p50) | 4 silos p95 (p50) |
+|----------:|---------------:|---------------:|---------------:|
+| 1 M | 10.6 ms (2.90 ms) | 13.8 ms (3.75 ms) | 11.6 ms (3.75 ms) |
+
 <!-- perf-table:treesize-silos:end -->
 
-TREE-SIZE-READING-SILOS
+> Measured 2026-11-23 on Azure Container Apps (Consumption) in westus3 (.NET 10.0) at git sha 06ea85767, n=3 cells, silo counts 1,2,4, one ladder cohort per silo count. Offered load scales with the silo count; all silo counts share one Azure Storage account.
+
+**Reading the table.** At 1 M keys adding silos does not move read latency:
+P95 stays between 10.6 and 13.8 ms and P50 between 2.9 and 3.75 ms. Each silo
+count offers the same load per silo, so every silo holds fewer keys as the
+count rises, and latency at this size is set by the per-read path, not by how
+much of the tree each silo holds. Larger sizes on 2 and 4 silos were not run,
+because the 1-silo ladder could not get past 3 M.
 
 ## Seed time by silo count
 
@@ -76,10 +155,61 @@ is the cumulative seed time from an empty tree with the average keys/s in
 brackets. The seed runs through the same Orleans-client producer and writes
 to one Azure Storage account.
 
-<!-- perf-table:treesize-seed:start -->
+<!-- perf-table:treesize-seed:start
+  schema=v1
+  chunkSize=16384
+  cohortN=3
+  dotnet=10.0
+  gitSha=06ea85767
+  host=Azure Container Apps (Consumption)
+  payloadBytes=245
+  region=westus3
+  rowsMeasured=2026-11-23
+  shardCount=64
+  siloCounts=1,2,4
+  siloSize=4 vCPU / 8 GiB
+  sizes=1m
+  walPartitions=16
+  workload=get-point
+  methodology=cumulative wall clock of the bulk-append seed segments that grew each silo count's fresh tree from empty to the size shown (ILattice.BulkAppendChunkAsync over ordinally sorted keys from the Orleans-client producer); cells show the time with the average keys/s in parentheses
+  DO-NOT-HAND-EDIT-BETWEEN-MARKERS
+-->
+
+| Silos | Seed to 1 M |
+|------:|----------------:|
+| 1 | 10 min 09 s (1,641) |
+| 2 | 9 min 02 s (1,846) |
+| 4 | 6 min 26 s (2,591) |
+
 <!-- perf-table:treesize-seed:end -->
 
-TREE-SIZE-READING-SEED
+> Measured 2026-11-23 on Azure Container Apps (Consumption) in westus3 (.NET 10.0) at git sha 06ea85767, n=3 cells, silo counts 1,2,4; every silo count seeded its own fresh tree on one Azure Storage account.
+
+**Reading the table.** Seeding 1 M keys takes about 10 minutes on one silo
+and 6.5 minutes on four, so seed throughput rises with silo count but well
+short of linearly (1.6x for 4x the silos): every silo count writes to one
+storage account. Seed time does not grow linearly with size either. On one
+silo the segment from 1 M to 3 M ran at 681 keys/s, less than half the rate
+of the first million ([#6153](https://github.com/NSTA1/Orleans.Lattice/issues/6153)).
+
+## Where the ladder stops
+
+Two defects cap this run at 3 M keys. Both are open, and the 10 M and 30 M
+rungs will be re-run once they are fixed.
+
+- **Bulk-loaded leaves carry no checkpoint ([#6152](https://github.com/NSTA1/Orleans.Lattice/issues/6152)).** A leaf filled by
+  `BulkAppendChunkAsync` writes its entries to the write-ahead log but never
+  persists a grain-state checkpoint. Whenever that leaf reactivates, because
+  of idle collection, a silo restart or rebalancing, it replays its log
+  before it can answer. At 3 M keys, reads that land on reactivating leaves
+  queue behind replay, which is the freeze the 3 M read attempts saw. An
+  earlier 10 M attempt failed at about 7.4 M keys with
+  `LatticeSaturatedException` from the same backlog.
+- **Seed throughput falls as the tree grows ([#6153](https://github.com/NSTA1/Orleans.Lattice/issues/6153)).** The bulk-append seed
+  slows as the key count rises. The storage account's transaction rate fell
+  from about 229,000 to about 80,000 per minute over the 3 M seed, so a 30 M
+  seed would run for many hours. The cause is under investigation; per-leaf
+  timer work that scales with the number of leaves is suspected.
 
 ## What these numbers do not tell you
 
