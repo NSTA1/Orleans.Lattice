@@ -3130,7 +3130,7 @@ internal sealed partial class BPlusLeafGrain
         }
 
         _fastStallEvidenceSpent = true;
-        await DispatchTimerDriveAsync(partitionCount, "arm=stalled-drive-fast");
+        await DispatchTimerDriveAsync(partitionCount, "arm=stalled-drive-fast", cutFirst: true);
     }
 
     /// <summary>
@@ -3318,7 +3318,7 @@ internal sealed partial class BPlusLeafGrain
                 return;
             }
 
-            await DispatchTimerDriveAsync(starvationPartitionCount, "arm=stalled-drive");
+            await DispatchTimerDriveAsync(starvationPartitionCount, "arm=stalled-drive", cutFirst: true);
             return;
         }
 

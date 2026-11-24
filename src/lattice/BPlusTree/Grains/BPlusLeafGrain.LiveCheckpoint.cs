@@ -225,7 +225,20 @@ internal sealed partial class BPlusLeafGrain
     private bool IsLiveAdvanceQuiescent(bool withinDrive) =>
         DrainRefusedUnallocatedAppends()
         && _liveOwnHigh is not null
-        && state.State.TreeId is { Length: > 0 }
+        && IsAdvanceQuiescentCore(withinDrive);
+
+    /// <summary>
+    /// <see cref="IsLiveAdvanceQuiescent"/> without requiring an own append (#6166): what
+    /// an advance to a consistent cut's head needs, since it vouches for every own append
+    /// below the head only once each is applied.
+    /// </summary>
+    private bool IsCutAdvanceQuiescent() =>
+        DrainRefusedUnallocatedAppends()
+        && IsAdvanceQuiescentCore(withinDrive: false);
+
+    /// <summary>The quiescence both advances share: <see cref="LeafLiveAdvanceCore.IsQuiescent"/> over this activation.</summary>
+    private bool IsAdvanceQuiescentCore(bool withinDrive) =>
+        state.State.TreeId is { Length: > 0 }
         && LeafLiveAdvanceCore.IsQuiescent(
             poisoned: _liveAdvancePoisoned,
             unappliedAppends: _liveAppendsUnapplied,
@@ -320,9 +333,7 @@ internal sealed partial class BPlusLeafGrain
                 }
 
                 var claimRaised = fence.TryGetArmingView(p, out var claimHead, out var unstampedSeen);
-                var closeHead = Math.Max(
-                    HandOffMarkerCore.RequiredHead(handOff.LeafMarker, low, high, p),
-                    HandOffMarkerCore.HeadAt(handOff.ShardCloseHeads, p));
+                var closeHead = LiveAdvanceCloseHead(handOff, low, high, p);
                 var hasReport = false;
                 var reportedBound = -1L;
                 if (!claimRaised)
@@ -392,11 +403,7 @@ internal sealed partial class BPlusLeafGrain
                     continue;
                 }
 
-                var stampedFrom = GetCurrentCheckpointForPartition(p);
-                _liveAdvanceStamp = (p, target);
-                await StampCheckpointHintAsync(p, target);
-                _liveAdvanceStamp = null;
-                _checkpointLiveAdvancedSinceStallCheck += Math.Max(0, GetCurrentCheckpointForPartition(p) - stampedFrom);
+                await StampAdvanceAsync(p, target, live: true);
                 advanced = true;
             }
 

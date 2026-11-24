@@ -31,16 +31,26 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </para>
 /// <para>
 /// K6: the table is written in the append's existing allocation step under
-/// <see cref="_stateGate"/>, with no call and no allocation once its two arrays exist;
+/// <see cref="_stateGate"/>, with no call and no allocation once its three arrays exist;
 /// it is read only by <see cref="IWalShardGrain.GetSplitCutAsync"/>.
+/// </para>
+/// <para>
+/// Runs (#6166): once the table is full, a key-local record whose key ascends past the
+/// previous record of the same batch extends that record's slot into a run, which spans
+/// the first key to the last and holds the highest offset, rather than folding the oldest
+/// slot into the floor. A reader owning any key of the run intersects that span, so it is
+/// still bounded by every record of the run (K2); one owning none of the span is not. A
+/// sorted batch wider than the table - a bulk append filling the shard's rightmost leaf -
+/// then costs one slot, and no longer folds a leaf behind it out of the table.
 /// </para>
 /// </remarks>
 internal sealed partial class WalShardGrain
 {
-    /// <summary>How many key-local unstamped records one shard activation tables before folding the oldest into the floor.</summary>
+    /// <summary>How many key-local unstamped records, or sorted runs of them, one shard activation tables before folding the oldest into the floor.</summary>
     internal const int UnstampedKeyTableCapacity = 256;
 
     private string?[]? _unstampedKeys;
+    private string?[]? _unstampedKeyHighs;
     private long[]? _unstampedKeyOffsets;
     private int _unstampedKeyNext;
     private int _unstampedKeyCount;
@@ -55,6 +65,7 @@ internal sealed partial class WalShardGrain
         if (_unstampedKeys is not null)
         {
             Array.Clear(_unstampedKeys);
+            Array.Clear(_unstampedKeyHighs!);
         }
 
         _unstampedKeyNext = 0;
@@ -65,18 +76,33 @@ internal sealed partial class WalShardGrain
     /// <summary>
     /// Records an append at <paramref name="offset"/> that raised the global unstamped
     /// watermark: tabled by its key when it is key-local (K3), else folded into the floor.
-    /// Called under <see cref="_stateGate"/>.
+    /// With <paramref name="continueRun"/>, the previous record of the same batch was tabled,
+    /// and while the table is full a key above that slot's span extends the slot rather than
+    /// folding the oldest one. Returns whether the record was tabled. Called under
+    /// <see cref="_stateGate"/>.
     /// </summary>
-    private void NoteUnstampedKeyLocked(in WalRecord entry, long offset)
+    private bool NoteUnstampedKeyLocked(in WalRecord entry, long offset, bool continueRun = false)
     {
         if (!IsKeyLocalUnstamped(in entry))
         {
             _unstampedKeyFloor = Math.Max(_unstampedKeyFloor, offset);
-            return;
+            return false;
         }
 
         _unstampedKeys ??= new string?[UnstampedKeyTableCapacity];
+        _unstampedKeyHighs ??= new string?[UnstampedKeyTableCapacity];
         _unstampedKeyOffsets ??= new long[UnstampedKeyTableCapacity];
+        if (continueRun && _unstampedKeyCount == UnstampedKeyTableCapacity)
+        {
+            var last = (_unstampedKeyNext + UnstampedKeyTableCapacity - 1) % UnstampedKeyTableCapacity;
+            if (string.CompareOrdinal(entry.Key, _unstampedKeyHighs[last] ?? _unstampedKeys[last]) > 0)
+            {
+                _unstampedKeyHighs[last] = entry.Key;
+                _unstampedKeyOffsets[last] = offset;
+                return true;
+            }
+        }
+
         if (_unstampedKeyCount == UnstampedKeyTableCapacity)
         {
             // Offsets are tabled in allocation order, so the slot overwritten is the oldest (K1).
@@ -88,20 +114,27 @@ internal sealed partial class WalShardGrain
         }
 
         _unstampedKeys[_unstampedKeyNext] = entry.Key;
+        _unstampedKeyHighs[_unstampedKeyNext] = null;
         _unstampedKeyOffsets[_unstampedKeyNext] = offset;
         _unstampedKeyNext = (_unstampedKeyNext + 1) % UnstampedKeyTableCapacity;
+        return true;
     }
 
     /// <summary>
     /// The unstamped high a reader owning <c>[low, high)</c> must replay past (K2): the
-    /// floor, and every tabled record whose key it owns. Called under <see cref="_stateGate"/>.
+    /// floor, and every tabled record or run whose span intersects the range. Called under
+    /// <see cref="_stateGate"/>.
     /// </summary>
     private long UnstampedHighForRangeLocked(string? lowInclusive, string? highExclusive)
     {
         var high = _unstampedKeyFloor;
         for (var i = 0; i < _unstampedKeyCount; i++)
         {
-            if (_unstampedKeyOffsets![i] > high && SplitBoundary.Owns(_unstampedKeys![i]!, lowInclusive, highExclusive))
+            if (_unstampedKeyOffsets![i] > high
+                && (_unstampedKeyHighs![i] is { } runHigh
+                    ? (highExclusive is null || string.CompareOrdinal(_unstampedKeys![i], highExclusive) < 0)
+                        && (lowInclusive is null || string.CompareOrdinal(runHigh, lowInclusive) >= 0)
+                    : SplitBoundary.Owns(_unstampedKeys![i]!, lowInclusive, highExclusive)))
             {
                 high = _unstampedKeyOffsets[i];
             }

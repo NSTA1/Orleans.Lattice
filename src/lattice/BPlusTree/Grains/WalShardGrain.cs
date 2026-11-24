@@ -1145,6 +1145,10 @@ internal sealed partial class WalShardGrain(
         var batchRegistered = false;
         var terminalMisuses = 0;
         var generationLoadTried = false;
+
+        // #6166: whether the batch's previous entry was tabled, so a sorted batch extends one
+        // slot once the table is full.
+        var unstampedRun = false;
         try
         {
             for (var i = 0; i < count; i++)
@@ -1241,7 +1245,7 @@ internal sealed partial class WalShardGrain(
                         if (RaisesUnstampedWatermark(TShape.Stamped, in stamp, entries[i]))
                         {
                             _unstampedWatermark = offset;
-                            NoteUnstampedKeyLocked(entries[i], offset);
+                            unstampedRun = NoteUnstampedKeyLocked(entries[i], offset, unstampedRun);
                             if (TShape.Stamped && stamp.IsCoordinatorTerminal)
                             {
                                 terminalMisuses++;

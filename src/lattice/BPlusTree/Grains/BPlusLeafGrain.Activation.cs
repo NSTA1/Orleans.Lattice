@@ -2769,7 +2769,7 @@ internal sealed partial class BPlusLeafGrain
     /// together - do not come back together. A drive that is admitted resets it.
     /// </para>
     /// </summary>
-    private async Task DriveStarvedCheckpointFromTimerAsync(int partitionCount)
+    private async Task DriveStarvedCheckpointFromTimerAsync(int partitionCount, bool cutFirst = false)
     {
         // #5851, N1: a drive that never ran its replay re-arms the reported-bound catch-up.
         var replayed = false;
@@ -2790,6 +2790,18 @@ internal sealed partial class BPlusLeafGrain
             if (await ProbePhysicalTreeRetentionAsync() != PhysicalTreeRetention.Live)
             {
                 StandDownRetiredTreeLeaf();
+                return;
+            }
+
+            // Issue #6166: a stalled leaf that its consistent cut lets pass the span its
+            // replay would read - a leaf behind a sorted bulk append's right edge, that
+            // applies nothing there - takes the cut head instead, and only banks it. A
+            // partition the cut does not pass is replayed by the drive, as before.
+            if (cutFirst && await TryAdvanceCheckpointFromCutAsync(partitionCount))
+            {
+                replayed = true;
+                _consecutiveTimerDriveRefusals = 0;
+                await BankDurablePinCoreAsync(partitionCount, flushPendingCheckpoint: true, CancellationToken.None);
                 return;
             }
 
@@ -2874,7 +2886,7 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     /// <param name="partitionCount">The tree's WAL partition count.</param>
     /// <param name="arm">The diagnostic label of the arm that requested the drive.</param>
-    internal async Task DispatchTimerDriveAsync(int partitionCount, string arm)
+    internal async Task DispatchTimerDriveAsync(int partitionCount, string arm, bool cutFirst = false)
     {
         if (_interleavedTimerDrive is not null)
         {
@@ -2886,7 +2898,7 @@ internal sealed partial class BPlusLeafGrain
             // The callback cannot run before this assignment: it is queued on
             // the activation and the current turn does not yield before it.
             _interleavedTimerDrive = this.RegisterGrainTimer(
-                _ => RunInterleavedTimerDriveAsync(partitionCount, arm),
+                _ => RunInterleavedTimerDriveAsync(partitionCount, arm, cutFirst),
                 new GrainTimerCreationOptions(TimeSpan.Zero, Timeout.InfiniteTimeSpan) { Interleave = true });
         }
         catch
@@ -2894,18 +2906,18 @@ internal sealed partial class BPlusLeafGrain
             _interleavedTimerDrive = null;
             using (AwaitDiagnostics.Begin("leaf.timer.coverage-lag", context.GrainId, arm))
             {
-                await DriveStarvedCheckpointFromTimerAsync(partitionCount);
+                await DriveStarvedCheckpointFromTimerAsync(partitionCount, cutFirst);
             }
         }
     }
 
-    private async Task RunInterleavedTimerDriveAsync(int partitionCount, string arm)
+    private async Task RunInterleavedTimerDriveAsync(int partitionCount, string arm, bool cutFirst)
     {
         try
         {
             using (AwaitDiagnostics.Begin("leaf.timer.coverage-lag.interleaved", context.GrainId, arm))
             {
-                await DriveStarvedCheckpointFromTimerAsync(partitionCount);
+                await DriveStarvedCheckpointFromTimerAsync(partitionCount, cutFirst);
             }
         }
         finally
