@@ -2837,6 +2837,11 @@ internal sealed partial class BPlusLeafGrain
                 if (outcome == LeafStarvationDriveOutcome.AdmissionRefused)
                 {
                     BackOffRefusedTimerDrive();
+
+                    // #6166: nothing was read on this evidence either, so the fast stall
+                    // check may act on it again once the back-off's deferrals are spent,
+                    // rather than leave the leaf to the full pass, minutes away.
+                    _fastStallEvidenceSpent = false;
                     return;
                 }
 
