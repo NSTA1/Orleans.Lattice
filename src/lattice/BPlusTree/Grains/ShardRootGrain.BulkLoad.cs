@@ -376,11 +376,15 @@ internal sealed partial class ShardRootGrain
     {
         await EnsureRoutingGenerationAsync();
         var routing = AdmissionRoutingStamp();
-        return routing.IsSet
-            && HasHandOffStorage()
-            && (await LoadHandOffMarkerAsync()).Open.ContainsKey(BulkHandOffToken(operationId))
-            ? routing
-            : WalRoutingStamp.Unstamped;
+        if (!routing.IsSet || !HasHandOffStorage())
+        {
+            AwaitDiagnostics.Count(!routing.IsSet ? "bulk.seed-routing.gate-closed" : "bulk.seed-routing.no-storage");
+            return WalRoutingStamp.Unstamped;
+        }
+
+        var open = (await LoadHandOffMarkerAsync()).Open.ContainsKey(BulkHandOffToken(operationId));
+        AwaitDiagnostics.Count(open ? "bulk.seed-routing.routed" : "bulk.seed-routing.token-not-open");
+        return open ? routing : WalRoutingStamp.Unstamped;
     }
 
     /// <summary>
@@ -1093,6 +1097,7 @@ internal sealed partial class ShardRootGrain
                 clock = HybridLogicalClock.Tick(clock);
                 batch[sortedEntries[idx].Key] = LwwValue<byte[]>.Create(sortedEntries[idx].Value, clock);
             }
+            AwaitDiagnostics.Count("bulk.fill");
             await WalFenceSeamRetry.RunAsync(
                 () => rightmostLeaf.MergeEntriesAsync(batch), WalFenceSeamRetry.CallerShardCoordinator, TreeId);
             CollectMirroredRows(mirrored, batch);

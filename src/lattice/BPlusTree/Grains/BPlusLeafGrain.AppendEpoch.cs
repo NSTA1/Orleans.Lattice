@@ -166,6 +166,9 @@ internal sealed partial class BPlusLeafGrain
         try
         {
             var verdict = await LiveAdvanceShardRoot(treeId, shardIndex).GetDescentVerdictAsync(context.GrainId, state.State.LowKeyInclusive);
+            AwaitDiagnostics.Count(verdict == DescentVerdict.Undecided ? "leaf.reachability-proof.undecided"
+                : verdict == DescentVerdict.Reachable ? "leaf.reachability-proof.reachable"
+                : "leaf.reachability-proof.unreachable");
             if (verdict == DescentVerdict.Undecided)
             {
                 // #5876, D2: the descent overlapped a routing-structure mutation, so it is no

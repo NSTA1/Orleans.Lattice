@@ -45,6 +45,7 @@ internal sealed class BulkSeedAppendFence : ILeafAppendFence
         _stamp = routing.IsSet && routing.Initiator.Kind == WalRoutingInitiatorKind.ShardRoot && routing.Generation > 0
             ? WalAppendStamp.BulkSeed(routing.Initiator, routing.Generation)
             : null;
+        AwaitDiagnostics.Count(_stamp is null ? "bulk.seed.unrouted" : "bulk.seed.routed");
     }
 
     /// <summary>Whether this fence stamps its seed; test seam.</summary>
@@ -76,10 +77,18 @@ internal sealed class BulkSeedAppendFence : ILeafAppendFence
     public LeafRetiredException? OnAdmitted(long admissionMark) => null;
 
     /// <inheritdoc />
-    public void OnStampedMethodUnknown() => _unstamped = true;
+    public void OnStampedMethodUnknown()
+    {
+        AwaitDiagnostics.Count("bulk.seed.method-unknown");
+        _unstamped = true;
+    }
 
     /// <inheritdoc />
-    public void OnClaimsExhausted() => _unstamped = true;
+    public void OnClaimsExhausted()
+    {
+        AwaitDiagnostics.Count("bulk.seed.claims-exhausted");
+        _unstamped = true;
+    }
 
     /// <inheritdoc />
     public void OnRefusedUnallocated() => _owner?.OnRefusedUnallocated();

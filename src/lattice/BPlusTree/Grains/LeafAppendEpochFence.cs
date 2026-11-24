@@ -304,6 +304,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
 
             if (!IsGateOpenLocked())
             {
+                CountUnstampedReason();
                 return new ValueTask<WalAppendStamp?>((WalAppendStamp?)null);
             }
 
@@ -1286,6 +1287,26 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     /// <summary>Whether this activation is deferred and may stamp pre-arm now (D1, D2).</summary>
     private bool IsDeferredStampingLocked() =>
         _reachability == ReachabilityDeferred && !_stale && IsGateViewOpenLocked() && _gate.IsPreArmOpen;
+
+    /// <summary>
+    /// Counts, on the benchmark census (#6166), why this activation's append goes
+    /// unstamped: the gate closed, its view closed after a claim failure, or its
+    /// reachability not proven (undecided, or never asked). Called under the lock.
+    /// </summary>
+    private void CountUnstampedReason()
+    {
+        if (!AwaitDiagnostics.Enabled)
+        {
+            return;
+        }
+
+        AwaitDiagnostics.Count(
+            !_gate.IsOpen ? "leaf.stamp.none.gate-closed"
+            : !IsGateViewOpenLocked() ? "leaf.stamp.none.gate-view-closed"
+            : _reachability == ReachabilityUnreachable ? "leaf.stamp.none.unreachable"
+            : _reachability == ReachabilityUnproven ? "leaf.stamp.none.reachability-unproven"
+            : "leaf.stamp.none.reachability-other");
+    }
 
     private bool IsGateViewOpenLocked() =>
         (_gateClosedUntilTicks == 0 || Environment.TickCount64 >= _gateClosedUntilTicks) && _gate.IsOpen;
