@@ -23,7 +23,7 @@ namespace Orleans.Lattice.Explorer.EndToEnd.Tests.Estate;
 internal sealed class JourneyPrometheus : IAsyncDisposable
 {
     /// <summary>The Prometheus image the harness starts, pinned.</summary>
-    public const string Image = "prom/prometheus:v3.1.0";
+    public const string Image = "prom/prometheus:v3.16.0";
 
     /// <summary>A Prometheus binary (the version <see cref="Image"/> pins) to run as a process instead of the container.</summary>
     public const string BinaryVariable = "LATTICE_E2E_PROMETHEUS_BINARY";

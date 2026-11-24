@@ -17,6 +17,11 @@
 	  law-<prefix>                 Log Analytics for the environment
 	  cae-<prefix>                 internal-only workload-profiles environment
 	  job-<prefix>                 event-triggered Container Apps Job
+	  id-<prefix>-refresh          user-assigned identity: Contributor on
+	                               acr<prefix> and on job-<prefix>
+	  job-<prefix>-refresh         scheduled (weekly) Job that rebuilds the
+	                               image without cache from -RefreshBranch and
+	                               repoints job-<prefix> (refresh-image.sh)
 
 	The topology follows benchmark/azure-throughput's -PrivateNetwork shape, for
 	subscriptions whose policy blocks public IPs on workloads and requires
@@ -67,6 +72,10 @@ param(
 	[string] $RunnerMemory = '13Gi',
 	[ValidateRange(600, 86400)] [int] $ReplicaTimeoutSec = 10800,
 	[ValidateRange(10, 300)] [int] $PollingIntervalSec = 20,
+	# The weekly image refresh (job-<prefix>-refresh; cron in UTC) and the branch
+	# it clones and builds.
+	[string] $RefreshCron = '0 3 * * 0',
+	[string] $RefreshBranch = 'main',
 	[switch] $SkipImageBuild
 )
 
@@ -121,6 +130,8 @@ $names = @{
 	Workspace = "law-$NamePrefix"
 	Env       = "cae-$NamePrefix"
 	Job       = "job-$NamePrefix"
+	RefreshId = "id-$NamePrefix-refresh"
+	RefreshJob = "job-$NamePrefix-refresh"
 }
 
 # The image is built from a staged context, not the repository root: the root
@@ -381,6 +392,71 @@ try {
 	}
 } finally {
 	Remove-Item $yamlPath -Force -ErrorAction SilentlyContinue
+}
+
+# ---------------------------------------------------------------------------
+# 5. The weekly image refresh. A separate identity, so the runners themselves
+#    can never push an image or repoint their own Job; the refresh never sees
+#    the GitHub App key. It clones the public repository and runs
+#    tools/ci-runners/refresh-image.sh from -RefreshBranch.
+# ---------------------------------------------------------------------------
+if (-not (Test-AzShow @('identity', 'show', '-g', $names.Rg, '-n', $names.RefreshId))) {
+	Invoke-AzCli @('identity', 'create', '-g', $names.Rg, '-n', $names.RefreshId, '-l', $Location, '-o', 'none') | Out-Null
+}
+$refreshIdentity = Invoke-AzCli @('identity', 'show', '-g', $names.Rg, '-n', $names.RefreshId, '-o', 'json') | ConvertFrom-Json
+$jobId = (Invoke-AzCli @('containerapp', 'job', 'show', '-g', $names.Rg, '-n', $names.Job, '--query', 'id', '-o', 'tsv')).Trim()
+Grant-Role -PrincipalId $refreshIdentity.principalId -Role 'Contributor' -Scope $acr.id
+Grant-Role -PrincipalId $refreshIdentity.principalId -Role 'Contributor' -Scope $jobId
+
+$refreshYaml = @"
+location: $Location
+identity:
+  type: UserAssigned
+  userAssignedIdentities:
+    $($refreshIdentity.id): {}
+properties:
+  environmentId: $envId
+  workloadProfileName: Consumption
+  configuration:
+    triggerType: Schedule
+    replicaTimeout: 7200
+    replicaRetryLimit: 0
+    scheduleTriggerConfig:
+      cronExpression: '$RefreshCron'
+      parallelism: 1
+      replicaCompletionCount: 1
+  template:
+    containers:
+    - name: refresh
+      image: mcr.microsoft.com/azure-cli:latest
+      command: [ "/bin/bash", "-c" ]
+      args: [ "git clone --depth 1 --branch \"`$REPO_BRANCH\" \"https://github.com/`$REPOSITORY.git\" /tmp/src && cd /tmp/src && exec bash tools/ci-runners/refresh-image.sh" ]
+      resources:
+        cpu: 0.5
+        memory: 1Gi
+      env:
+      - name: AZURE_CLIENT_ID
+        value: '$($refreshIdentity.clientId)'
+      - name: RESOURCE_GROUP
+        value: $($names.Rg)
+      - name: REGISTRY
+        value: $($names.Acr)
+      - name: RUNNER_JOB
+        value: $($names.Job)
+      - name: REPOSITORY
+        value: $Repository
+      - name: REPO_BRANCH
+        value: '$RefreshBranch'
+"@
+
+$refreshYamlPath = Join-Path ([System.IO.Path]::GetTempPath()) "job-$NamePrefix-refresh-$([guid]::NewGuid().ToString('N')).yaml"
+try {
+	[System.IO.File]::WriteAllText($refreshYamlPath, $refreshYaml)
+	$verb = if (Test-AzShow @('containerapp', 'job', 'show', '-g', $names.Rg, '-n', $names.RefreshJob)) { 'update' } else { 'create' }
+	Write-Host "[runners] $($verb)ing $($names.RefreshJob) ($RefreshCron UTC, branch $RefreshBranch)" -ForegroundColor Cyan
+	Invoke-AzCli @('containerapp', 'job', $verb, '-g', $names.Rg, '-n', $names.RefreshJob, '--yaml', $refreshYamlPath, '-o', 'none') | Out-Null
+} finally {
+	Remove-Item $refreshYamlPath -Force -ErrorAction SilentlyContinue
 }
 
 Write-Host ''
