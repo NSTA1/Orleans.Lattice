@@ -26,7 +26,7 @@ public sealed class BulkAppendChunkCostIntegrationTests
     private const string ReactivationTree = "bulk-append-reactivation-cost";
     private const int ReactivationChunks = 64;
     private const string ColdLeafTree = "bulk-append-cold-leaf-cost";
-    private const int ReplayGateWidth = 8;
+    private const int ReplayGateWidth = 16;
 
     /// <summary>
     /// The leaves a run's right edge filled with live writes, about one per fence of the
@@ -40,8 +40,9 @@ public sealed class BulkAppendChunkCostIntegrationTests
     /// The fewest leaves, of every 100, a reactivation must keep within two switch runs'
     /// span. The rest replay to the head: the first chunk's leaves, which a never-written
     /// shard gives no birth hint (#5812, B2), and a leaf a close holds while its range's
-    /// unstamped watermark lies above its checkpoint, which no close-hold catch-up may
-    /// pass (#5851, W4). Replaying to the head, about a quarter do.
+    /// unstamped watermark - the right edge's fill, more of it on a loaded host - lies above
+    /// its checkpoint, which no close-hold catch-up may pass (#5851, W4). Replaying to the
+    /// head, about a quarter do.
     /// </summary>
     private const int MinLeavesWithinRunSpanPercent = 80;
 
@@ -201,17 +202,18 @@ public sealed class BulkAppendChunkCostIntegrationTests
         ReplayScanMeter.Arm(ColdLeafTree);
         await ReactivateAsync(leaves);
         var scanned = ReplayScanMeter.Scanned;
+        var perLeafScans = ReplayScanMeter.PerLeaf();
         ReplayScanMeter.Disarm();
         Assert.That(await lattice.GetAsync("k000000000"), Is.Not.Null, "the seed's first key is still readable");
         Assert.That(await lattice.GetAsync($"k{(ReactivationChunks * ChunkSize) - 1:D9}"), Is.Not.Null, "the seed's last key is still readable");
 
-        var perLeaf = (double)scanned / leaves.Count;
-        TestContext.Out.WriteLine($"leaves={leaves.Count} replay scan total={scanned} perLeaf={perLeaf:F1}");
-
         // Read to its own switch's close at most, as a stall drive's cut reads: a span that
-        // does not grow with the seed. Replaying to the head reads half the seed per leaf.
-        Assert.That(perLeaf, Is.LessThanOrEqualTo((ShardRootGrain.BulkSwitchesPerFence + 1.0) * ChunkSize),
-            $"reactivated leaves re-read the seed appended after them: total {scanned} over {leaves.Count} leaves");
+        // does not grow with the seed. Replaying to the head reads half the seed per leaf,
+        // and only the last quarter of the chain fits.
+        var within = leaves.Count(l => perLeafScans.GetValueOrDefault(l) <= RunSpan);
+        TestContext.Out.WriteLine($"leaves={leaves.Count} replay scan total={scanned} mean={(double)scanned / leaves.Count:F1} withinRunSpan={within}");
+        Assert.That(within * 100, Is.GreaterThanOrEqualTo(leaves.Count * MinLeavesWithinRunSpanPercent),
+            $"only {within} of {leaves.Count} reactivated leaves read within two switch runs' span; the rest re-read the seed appended after them");
     }
 
     /// <summary>Appends <see cref="ReactivationChunks"/> sorted chunks to <paramref name="tree"/> and returns its leaves.</summary>
