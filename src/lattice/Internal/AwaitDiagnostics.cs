@@ -37,6 +37,7 @@ internal static class AwaitDiagnostics
 
     private static readonly ConcurrentDictionary<long, Pending> InFlight = new();
     private static readonly ConcurrentDictionary<string, RegionStats> Regions = new(StringComparer.Ordinal);
+    private static readonly ConcurrentDictionary<string, long[]> Census = new(StringComparer.Ordinal);
     private static long _nextId;
     private static Timer? _watchdog;
 
@@ -71,6 +72,21 @@ internal static class AwaitDiagnostics
             return task;
 
         return TimeSlowAsync(task, region, grain, detail);
+    }
+
+    /// <summary>
+    /// Counts one occurrence of <paramref name="name"/>, whatever its duration; the watchdog
+    /// reports every name's cumulative count on a <c>state=census</c> line each period, so a
+    /// decision that never runs long is visible too. A no-op when the diagnostic is disabled.
+    /// Pass a constant: the name is the key.
+    /// </summary>
+    internal static void Count(string name)
+    {
+        if (!Enabled)
+            return;
+
+        EnsureWatchdog();
+        Interlocked.Increment(ref Census.GetOrAdd(name, static _ => new long[1])[0]);
     }
 
     private static async Task<T> TimeSlowAsync<T>(Task<T> task, string region, GrainId grain, string? detail)
@@ -158,6 +174,16 @@ internal static class AwaitDiagnostics
                         null,
                         string.Create(CultureInfo.InvariantCulture, $"count={suppressed}")));
                 }
+            }
+
+            foreach (var (name, count) in Census)
+            {
+                Write(FormatLine(
+                    "census",
+                    name,
+                    0,
+                    null,
+                    string.Create(CultureInfo.InvariantCulture, $"count={Interlocked.Read(ref count[0])}")));
             }
         }
         catch

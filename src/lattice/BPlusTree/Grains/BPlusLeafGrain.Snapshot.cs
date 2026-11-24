@@ -3266,6 +3266,12 @@ internal sealed partial class BPlusLeafGrain
 
         if (IsStarvedOfDurableCheckpoint(starvationPartitionCount))
         {
+            if (IsAwaitingBirthHint())
+            {
+                // #6166: the hint its creator is about to apply supplies the checkpoint.
+                return;
+            }
+
             ObserveDriverDecline(LatticeMetrics.DriverDeclineRecheckNoDurableCheckpoint);
 
             // The drive runs MaybeRunPeriodicSnapshotRecheckAsync itself, after

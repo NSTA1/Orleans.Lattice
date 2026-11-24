@@ -26,6 +26,7 @@ public sealed class BulkAppendChunkCostIntegrationTests
     private const string ReactivationTree = "bulk-append-reactivation-cost";
     private const int ReactivationChunks = 64;
     private const string ColdLeafTree = "bulk-append-cold-leaf-cost";
+    private const int ReplayGateWidth = 8;
 
     /// <summary>
     /// The leaves a run's right edge filled with live writes, about one per fence of the
@@ -102,6 +103,16 @@ public sealed class BulkAppendChunkCostIntegrationTests
             var before = ReplayScanMeter.Scanned;
             await lattice.BulkAppendChunkAsync($"chunk-{c}", chunk);
             scanned[c] = ReplayScanMeter.Scanned - before;
+            if (c == SettleChunks - 1)
+            {
+                // A leaf the first chunk created on a never-written shard holds no birth
+                // hint (#5812, B2), so its first drive reads the log from the start: once,
+                // whenever a sweep or a stall check reaches it. Paid here, between chunks.
+                foreach (var leaf in await ListLeavesAsync(Tree))
+                {
+                    await _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(leaf.GetGuidKey()).DriveStarvedCheckpointAsync();
+                }
+            }
         }
 
         ReplayScanMeter.Disarm();
@@ -109,14 +120,9 @@ public sealed class BulkAppendChunkCostIntegrationTests
 
         // A chunk legitimately re-reads the few chunks of WAL behind the shard's
         // right edge, so its steady-state scan is a small constant multiple of
-        // the chunk size, and the steady state's total is linear in the chunk count.
-        // A leaf that replays from the start of the log on every chunk instead scans
-        // a span proportional to the chunk index, so the total grows with its square,
-        // which is what #6164 was. A one-off whole-log read - a leaf the first chunk
-        // created with no birth hint (#5812, B2), or one a coverage tick drives before
-        // its hint lands - is a constant, not a growth, so the bound is on the total.
-        // The first chunks are excluded: a held, uncovered birth hint is re-read once
-        // before its covering capture lands.
+        // the chunk size. A leaf that replays from the start of the log instead
+        // scans a span proportional to the chunk index, which is what #6164 was.
+        // The first chunks are excluded: they create the leaves the drive above settles.
         var steadyState = scanned.Skip(SettleChunks).ToArray();
         Assert.That(steadyState.Sum(), Is.LessThanOrEqualTo(4L * ChunkSize * steadyState.Length),
             $"per-chunk replay scan grew with the chunk index: {string.Join(", ", scanned)}");
@@ -224,6 +230,14 @@ public sealed class BulkAppendChunkCostIntegrationTests
             await lattice.BulkAppendChunkAsync($"chunk-{c}", chunk);
         }
 
+        var leaves = await ListLeavesAsync(tree);
+        Assert.That(leaves, Has.Count.GreaterThan(ReactivationChunks), "precondition: the seed created many leaves");
+        return leaves;
+    }
+
+    /// <summary>Every leaf of <paramref name="tree"/>, by each shard's chain.</summary>
+    private async Task<List<GrainId>> ListLeavesAsync(string tree)
+    {
         var leaves = new List<GrainId>();
         for (var s = 0; s < 2; s++)
         {
@@ -236,7 +250,6 @@ public sealed class BulkAppendChunkCostIntegrationTests
             }
         }
 
-        Assert.That(leaves, Has.Count.GreaterThan(ReactivationChunks), "precondition: the seed created many leaves");
         return leaves;
     }
 

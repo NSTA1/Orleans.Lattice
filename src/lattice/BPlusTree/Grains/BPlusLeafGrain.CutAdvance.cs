@@ -225,6 +225,12 @@ internal sealed partial class BPlusLeafGrain
             || !IsPreArmGateOpen()
             || state.State.TreeId is not { Length: > 0 } treeId)
         {
+            _cutDecline = _liveAdvanceInFlight ? "in-flight"
+                : !IsCutAdvanceQuiescent(atActivation) ? "not-quiescent"
+                : _appendFence is null ? "no-fence"
+                : !IsLiveAdvanceOverlapExcluded() ? "overlap-not-excluded"
+                : !IsPreArmGateOpen() ? "pre-arm-gate-closed"
+                : "no-tree";
             return CutAdvanceOutcome.NotTaken;
         }
 
@@ -240,6 +246,7 @@ internal sealed partial class BPlusLeafGrain
 
         if (!anyCheckpointed)
         {
+            _cutDecline = "never-checkpointed";
             return CutAdvanceOutcome.NotTaken;
         }
 
@@ -255,6 +262,7 @@ internal sealed partial class BPlusLeafGrain
 
             if (!fence.TryGetCutReader(out var reader))
             {
+                _cutDecline = "no-reader";
                 return CutAdvanceOutcome.NotTaken;
             }
 
@@ -282,6 +290,7 @@ internal sealed partial class BPlusLeafGrain
                     ex,
                     "Leaf {LeafId}: could not read a consistent cut; its checkpoint advances by replay (#6166).",
                     context.GrainId);
+                _cutDecline = "cut-read-failed";
                 return CutAdvanceOutcome.NotTaken;
             }
 
@@ -289,6 +298,10 @@ internal sealed partial class BPlusLeafGrain
             var view = await ReadLiveAdvanceHandOffAsync();
             if (!IsCutUsable(view, in reader, out var handOff))
             {
+                _cutDecline = view is null ? (_handOffViewTransient ? "view-transient" : "view-unreachable")
+                    : view.Value.ShardHeldOpen ? "shard-held-open"
+                    : !view.Value.Clear ? "view-not-clear"
+                    : "closes-not-carried";
                 return view is { ShardHeldOpen: true } || (view is null && _handOffViewTransient)
                     ? CutAdvanceOutcome.Deferred
                     : CutAdvanceOutcome.NotTaken;
@@ -299,6 +312,7 @@ internal sealed partial class BPlusLeafGrain
             var bounds = _cutCatchUpBounds!;
             var reached = true;
             var boundedOnly = true;
+            string? heldBy = null;
             for (var p = 0; p < partitions; p++)
             {
                 bounds[p] = -1;
@@ -308,6 +322,7 @@ internal sealed partial class BPlusLeafGrain
                 // applied before the head is passed.
                 if (!IsCutAdvanceQuiescent(atActivation))
                 {
+                    _cutDecline = "not-quiescent-mid-cut";
                     return CutAdvanceOutcome.NotTaken;
                 }
 
@@ -316,6 +331,7 @@ internal sealed partial class BPlusLeafGrain
                 {
                     reached = false;
                     boundedOnly = false;
+                    heldBy ??= "partition-uncheckpointed";
                     continue;
                 }
 
@@ -325,6 +341,13 @@ internal sealed partial class BPlusLeafGrain
                     reached = false;
                     bounds[p] = catchUp;
                     boundedOnly &= catchUp > current;
+                    if (heldBy is null && AwaitDiagnostics.Enabled)
+                    {
+                        var closeHead = LiveAdvanceCloseHead(handOff, low, high, p);
+                        heldBy = (catchUp > current ? "catch-up-" : "unbounded-")
+                            + (current < closeHead - 1 ? "close" : current < cut[p].ForeignHigh ? "foreign" : "watermark");
+                    }
+
                     continue;
                 }
 
@@ -335,6 +358,7 @@ internal sealed partial class BPlusLeafGrain
                 }
             }
 
+            _cutDecline = heldBy ?? "reached";
             return reached ? CutAdvanceOutcome.Reached
                 : boundedOnly ? CutAdvanceOutcome.CatchUp
                 : CutAdvanceOutcome.NotTaken;
@@ -355,7 +379,7 @@ internal sealed partial class BPlusLeafGrain
     /// Runs only where it saves calls: the backlog the sweep probed, read in slices of
     /// <paramref name="sliceBudget"/>, must take more reads than the cut makes (one per
     /// partition and the hand-off view's two). A single-partition tree probes no head, so it
-    /// never runs. Allocates one array of starts, and only where it runs.
+    /// never runs. Allocates nothing; the replay resumes from each partition's current checkpoint, which the cut's stamps raise.
     /// </para>
     /// </summary>
     /// <param name="sweep">The replay's sweep order, with the heads it probed.</param>
@@ -366,11 +390,8 @@ internal sealed partial class BPlusLeafGrain
     /// (<see cref="_replayReadCap"/>), as a stall drive's does; the caller then takes the cut
     /// again once the capped read is done.
     /// </param>
-    /// <returns>
-    /// Per partition, the read position the cut stamped, or -1 where it stamped none;
-    /// <see langword="null"/> where it stamped nothing.
-    /// </returns>
-    private async Task<long[]?> TryAdvanceActivationFromCutAsync(
+    /// <returns>Whether the cut stamped any partition.</returns>
+    private async Task<bool> TryAdvanceActivationFromCutAsync(
         List<(int Partition, long? ProbedHead)> sweep,
         int partitions,
         int sliceBudget,
@@ -378,7 +399,8 @@ internal sealed partial class BPlusLeafGrain
     {
         if (partitions <= 1)
         {
-            return null;
+            CountCut(allowCatchUp, "single-partition");
+            return false;
         }
 
         long backlog = 0;
@@ -393,34 +415,70 @@ internal sealed partial class BPlusLeafGrain
 
         if (backlog <= (long)Math.Max(1, sliceBudget) * (partitions + 2))
         {
-            return null;
+            CountCut(allowCatchUp, "backlog-under-gate");
+            return false;
         }
 
         // The fence exists once the writer is resolved; the cut is read for its closes.
         ResolveCommitLogWriter();
-        var starts = new long[partitions];
-        for (var p = 0; p < partitions; p++)
-        {
-            starts[p] = GetCurrentCheckpointForPartition(p);
-        }
-
+        var before = SumCurrentCheckpoints(partitions);
         using (AwaitDiagnostics.Begin("leaf.replay.cut", context.GrainId))
         {
             var outcome = await TryAdvanceCheckpointFromCutAsync(partitions, atActivation: true);
+            CountCut(allowCatchUp, outcome, _cutDecline);
             if (outcome == CutAdvanceOutcome.CatchUp && allowCatchUp)
             {
                 _replayReadCap = _cutCatchUpBounds;
             }
         }
 
-        var stamped = false;
+        // A checkpoint only moves forward, so the sum rises exactly where one was stamped.
+        return SumCurrentCheckpoints(partitions) > before;
+    }
+
+    /// <summary>The sum of every partition's current checkpoint.</summary>
+    private long SumCurrentCheckpoints(int partitions)
+    {
+        long sum = 0;
         for (var p = 0; p < partitions; p++)
         {
-            var current = GetCurrentCheckpointForPartition(p);
-            stamped |= current > starts[p];
-            starts[p] = current > starts[p] ? current : -1;
+            sum += GetCurrentCheckpointForPartition(p);
         }
 
-        return stamped ? starts : null;
+        return sum;
+    }
+
+    /// <summary>
+    /// Why the latest <see cref="TryAdvanceCheckpointFromCutAsync"/> ended as it did, for the
+    /// benchmark census (<see cref="AwaitDiagnostics.Count"/>); a constant, never allocated.
+    /// </summary>
+    private string _cutDecline = string.Empty;
+
+    /// <summary>Counts an activation cut declined before it ran, on the benchmark census.</summary>
+    private static void CountCut(bool firstPass, string reason)
+    {
+        if (AwaitDiagnostics.Enabled)
+        {
+            AwaitDiagnostics.Count(string.Concat(firstPass ? "leaf.replay.cut.first." : "leaf.replay.cut.final.", reason));
+        }
+    }
+
+    /// <summary>Counts an activation cut's outcome and its reason on the benchmark census.</summary>
+    private static void CountCut(bool firstPass, CutAdvanceOutcome outcome, string reason)
+    {
+        if (AwaitDiagnostics.Enabled)
+        {
+            AwaitDiagnostics.Count(string.Concat(
+                firstPass ? "leaf.replay.cut.first." : "leaf.replay.cut.final.", outcome.ToString(), ".", reason));
+        }
+    }
+
+    /// <summary>Counts a stall drive's cut outcome and its reason on the benchmark census.</summary>
+    private void CountDriveCut(CutAdvanceOutcome outcome)
+    {
+        if (AwaitDiagnostics.Enabled)
+        {
+            AwaitDiagnostics.Count(string.Concat("leaf.drive.cut.", outcome.ToString(), ".", _cutDecline));
+        }
     }
 }

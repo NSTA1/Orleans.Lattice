@@ -3375,6 +3375,8 @@ internal sealed partial class BPlusLeafGrain(
             NoteHintAtUncoveredPartition(p, offsetsByPartition[p]);
             await ApplyCheckpointHintAsync(p, offsetsByPartition[p]);
         }
+
+        _birthHintAwaitedUntil = 0;
     }
 
     public async Task InitializeSiblingAsync(SiblingInitialization init)
@@ -3571,6 +3573,12 @@ internal sealed partial class BPlusLeafGrain(
         // no-op rather than seeding against an empty consumer id.
         if (state.State.TreeId is not null)
         {
+            if (bornHere && GetCurrentCheckpointForPartition(0) < 0)
+            {
+                // #6166: the creator applies the birth hint after this call returns.
+                _birthHintAwaitedUntil = Stopwatch.GetTimestamp() + (long)(BirthHintGrace.TotalSeconds * Stopwatch.Frequency);
+            }
+
             await SeedDurableMaterialiserBlockPinAsync(init.WalHeadsAtBirth);
             await EnsureCoverageLagTimerAsync();
         }

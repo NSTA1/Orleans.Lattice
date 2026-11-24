@@ -112,6 +112,9 @@ public partial class BPlusLeafGrainTests
                 break;
             case WarmRescueDeclineReason.UnknownPartition:
                 stale = false;
+                // A record the activation has not read, so the drive's replay reads past
+                // the checkpoint it resumes from (#6166) and meets the refusal.
+                wal.GrowTo(4);
                 wal.OnRead = () => throw new LeafProjectionStaleException("read refused");
                 break;
             case WarmRescueDeclineReason.CheckpointUnproven:
