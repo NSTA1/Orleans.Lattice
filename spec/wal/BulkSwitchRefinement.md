@@ -233,8 +233,10 @@ at its properties and re-anchored on its text.
   range, the operation appends one leaf, and the run's earlier chunk appears only as one
   completed switch with a hint read at the run's start. Keys that fill the old leaf's free
   space, below-edge runs and their re-delivery skip, several appended leaves and their
-  ranges, and the descent that links them are not modelled.
-  Production symbols: `ShardRootGrain.RelocateIntoGraftedLeavesAsync`, `ShardRootGrain.CompleteBulkGraftAsync`.
+  ranges, and the descent that links them are not modelled. The fill is the old leaf's own
+  write, routed under the shard root's generation, so it is attributed to that leaf and
+  raises no other leaf's unstamped watermark (#6166).
+  Production symbols: `ShardRootGrain.RelocateIntoGraftedLeavesAsync`, `ShardRootGrain.CompleteBulkGraftAsync`, `ShardRootGrain.FillRightmostLeafAsync`, `BPlusLeafGrain.MergeEntriesStampedAsync`.
 - **The bulk entry is held by every reader.** N and every WAL reader hold the bulk entry,
   whose version is fixed between the records allocated before Begin and those after; the
   appended leaf's own records, the relocation's re-appends and writes forwarded to it

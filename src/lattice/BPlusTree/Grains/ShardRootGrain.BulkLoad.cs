@@ -1099,7 +1099,7 @@ internal sealed partial class ShardRootGrain
             }
             AwaitDiagnostics.Count("bulk.fill");
             await WalFenceSeamRetry.RunAsync(
-                () => rightmostLeaf.MergeEntriesAsync(batch), WalFenceSeamRetry.CallerShardCoordinator, TreeId);
+                () => FillRightmostLeafAsync(rightmostLeaf, batch), WalFenceSeamRetry.CallerShardCoordinator, TreeId);
             CollectMirroredRows(mirrored, batch);
 
             // Issue #6164: the fill is live writes the drive above did not see,
@@ -1193,6 +1193,40 @@ internal sealed partial class ShardRootGrain
 
         await CompleteBulkGraftAsync();
         await MirrorBulkAppendAsync(mirrored, sortedEntries);
+    }
+
+    /// <summary>
+    /// Fills <paramref name="rightmostLeaf"/>'s free space with <paramref name="batch"/>
+    /// as the leaf's own routed write (#6166). Sent unrouted, the fill was admitted
+    /// unstamped (C4) and raised the partition's unstamped watermark over its keys, which
+    /// on a tree of many shards lie in every shard's leaf ranges: each leaf's consistent
+    /// cut then owed a read to the newest fill, near the head. A re-claimed generation is
+    /// retried under the current one, and a leaf on an earlier build fills unrouted.
+    /// </summary>
+    private async Task FillRightmostLeafAsync(IBPlusLeafGrain rightmostLeaf, Dictionary<string, LwwValue<byte[]>> batch)
+    {
+        await EnsureRoutingGenerationAsync();
+        var routing = AdmissionRoutingStamp();
+        WalFenceSeamRetry? fenceRetry = null;
+        while (!routing.ForcesUnstamped)
+        {
+            try
+            {
+                await rightmostLeaf.MergeEntriesStampedAsync(batch, routing);
+                return;
+            }
+            catch (WalRoutingGenerationStaleException stale)
+            {
+                fenceRetry = await NextRoutingRetryAsync(fenceRetry, stale);
+                routing = AdmissionRoutingStamp();
+            }
+            catch (Exception ex) when (WalAppendFenceMethodProbe.IsDefiniteMethodUnknown(ex))
+            {
+                break;
+            }
+        }
+
+        await rightmostLeaf.MergeEntriesAsync(batch);
     }
 
     /// <summary>
