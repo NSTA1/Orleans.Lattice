@@ -91,6 +91,13 @@ The image is the GitHub runner base (Ubuntu 24.04) plus what hosted runners prov
 the test legs use: the .NET 10 SDK, Python, jq, PowerShell, the Docker CLI with compose v2
 (for `docker compose config`; no daemon), and Node with Azurite.
 
+The build applies the Ubuntu security updates (`apt-get upgrade`), pins npm, and replaces
+every `uuid` copy in Azurite's dependency tree with a patched major, failing the build if
+a stale copy remains. It removes the npm the runner bundles under `externals/`: the runner
+only executes JavaScript actions with node, and that npm carried vulnerable `tar` and
+`minimatch` copies. The weekly refresh job (see "Weekly image refresh") rebuilds it so
+OS and .NET runtime patches land without a manual redeploy.
+
 For the Explorer journey legs it also carries what they would otherwise take from Docker
 or apt: a Prometheus binary (`/opt/prometheus/prometheus`, the version
 `JourneyPrometheus.Image` pins, which the harness runs when
@@ -183,6 +190,38 @@ spend pool compute up to the replica timeout; keep an Azure budget alert on the 
   <name>`, then `gh api -X DELETE repos/NSTA1/Orleans.Lattice/actions/runners/<id>`.
 - **Labels:** a JIT config's labels are the runner's complete set, so `mint-jit.py`
   always adds `self-hosted`, `linux` and `x64` to the configured ones.
+
+## Weekly image refresh
+
+`deploy.ps1` also provisions `job-<prefix>-refresh`, a scheduled Container Apps Job
+(`-RefreshCron`, default `0 3 * * 0`, Sunday 03:00 UTC). It runs the
+`mcr.microsoft.com/azure-cli` image (Azure Linux, which ships without git), so each run
+first installs git with `tdnf` - that install needs about 2 GiB, hence the job's 1 CPU /
+2 GiB sizing; at 1 GiB it is OOM-killed. It then clones `-RefreshBranch`
+(default `main`) and runs `tools/ci-runners/refresh-image.sh`, which:
+
+1. stages the same build context `deploy.ps1` does and runs `az acr build`, whose
+   ephemeral build agents keep no layer cache, so the apt upgrade, the .NET runtime and
+   the npm tree are fetched fresh;
+2. tags the image `<commit>-<UTC timestamp>` - the content-hash tag would repeat for an
+   unchanged tree, and a node could serve its cached, unpatched copy;
+3. PATCHes `job-<prefix>`'s template so both containers use the new image, and verifies
+   it took;
+4. purges all but the newest four `lattice-ci-runner` images.
+
+Active runners are not disturbed: an execution keeps the template it started with, so a
+running job finishes on its original image and only executions started afterwards use the
+new one. The scale rule and secrets are untouched, so queued jobs keep being picked up.
+
+The refresh runs as `id-<prefix>-refresh`, which holds Contributor on the registry and on
+the runner Job only; it never sees the GitHub App key, and the runners' own identity still
+holds only `AcrPull`. Whatever is on `-RefreshBranch` is what it builds and runs, so keep
+that branch protected.
+
+- **Run it now:** `az containerapp job start -g rg-latrun -n job-latrun-refresh`
+- **History:** `az containerapp job execution list -g rg-latrun -n job-latrun-refresh -o table`
+
+A later `deploy.ps1` run reverts to the content-hash tag until the next refresh.
 
 ## Cost
 

@@ -442,7 +442,7 @@ jobs:
       # version tools/ci-runners/Dockerfile bakes in for pool legs).
       - name: Pull Prometheus
         if: ${{ !matrix.pool }}
-        run: docker pull prom/prometheus:v3.1.0
+        run: docker pull prom/prometheus:v3.16.0
 
       - name: Check the pool image's Prometheus
         if: ${{ matrix.pool }}
@@ -736,7 +736,7 @@ jobs:
       # start (their ports are allocated per run), so the lane only pulls it once.
       # The tag is JourneyPrometheus.Image; change the two together.
       - name: Pull Prometheus
-        run: docker pull prom/prometheus:v3.1.0
+        run: docker pull prom/prometheus:v3.16.0
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v5

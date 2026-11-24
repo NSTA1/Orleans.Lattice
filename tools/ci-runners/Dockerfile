@@ -32,7 +32,10 @@ RUN dotnet restore Orleans.Lattice.slnx --packages /nuget-snapshot
 FROM ghcr.io/actions/actions-runner:latest
 
 USER root
+# Upgrade the base image's packages too, so a rebuild picks up Ubuntu security
+# fixes the upstream runner image has not yet been rebuilt with.
 RUN apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get upgrade -y --no-install-recommends \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       ca-certificates curl git jq procps unzip zip python3 python3-jwt python3-cryptography libicu-dev \
  && rm -rf /var/lib/apt/lists/*
@@ -48,10 +51,25 @@ RUN . /etc/os-release \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends powershell docker-ce-cli docker-compose-plugin \
  && rm -rf /var/lib/apt/lists/*
 
-# Node 22 and Azurite, pinned to the version the workflows' service uses.
+# Node 22 and Azurite, pinned to the version the workflows' service uses. npm is
+# upgraded past the copy NodeSource bundles (its tar and minimatch carry known
+# vulnerabilities), and every uuid 8 copy in Azurite's tree (its own and those
+# nested under @azure/ms-rest-js and sequelize) is replaced with uuid 11, which
+# keeps the CommonJS v1/v4 exports they call.
+ARG NPM_VERSION=11.21.2
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nodejs \
+ && npm install -g "npm@${NPM_VERSION}" \
  && npm install -g azurite@3.36.0 \
+ && cd /usr/lib/node_modules/azurite \
+ && npm install --no-save --omit=dev --no-package-lock --no-fund --no-audit "uuid@^11.1.1" \
+ && test "$(node -p "require('uuid/package.json').version.split('.')[0]")" -ge 11 \
+ && find node_modules -mindepth 3 -type d -path '*/node_modules/uuid' -prune \
+      -exec rm -rf {} \; -exec cp -r node_modules/uuid {} \; \
+ && for f in $(find . -type f -path '*/node_modules/uuid/package.json'); do \
+      test "$(node -p "require('$f').version.split('.')[0]")" -ge 11 || { echo "stale $f"; exit 1; }; \
+    done \
+ && cd / \
  && npm cache clean --force \
  && rm -rf /var/lib/apt/lists/*
 
@@ -59,8 +77,8 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 # runs this binary where it cannot run the prom/prometheus container
 # (LATTICE_E2E_PROMETHEUS_BINARY). The version is JourneyPrometheus.Image's in
 # test/lattice.explorer.e2e; change the two together.
-ARG PROMETHEUS_VERSION=3.1.0
-ARG PROMETHEUS_SHA256=9a9d1e115d1745826b13aec3f1409780b9fcf1d4206746cb4faee46ca5add70c
+ARG PROMETHEUS_VERSION=3.16.0
+ARG PROMETHEUS_SHA256=68727009472a2c02e1ff7f062fd5b3e637285bffc8fc2d340c76fb449d6e0f34
 RUN curl -fsSL "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz" -o /tmp/prometheus.tgz \
  && echo "${PROMETHEUS_SHA256}  /tmp/prometheus.tgz" | sha256sum -c - \
  && install -d /opt/prometheus \
@@ -95,7 +113,12 @@ RUN curl -fsSL https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
  && chown -R runner:runner /usr/share/dotnet
 
 COPY tools/ci-runners/mint-jit.py tools/ci-runners/runner-entrypoint.sh /opt/ci-runner/
-RUN chmod 0755 /opt/ci-runner/runner-entrypoint.sh \
+# The runner's bundled Node externals ship their own npm, which the runner never
+# calls (it only executes node for JavaScript actions) and which carries
+# vulnerable tar and minimatch copies, so it is removed.
+RUN rm -rf /home/runner/externals/node*/lib/node_modules/npm \
+           /home/runner/externals/node*/bin/npm /home/runner/externals/node*/bin/npx \
+ && chmod 0755 /opt/ci-runner/runner-entrypoint.sh \
  && install -d -o runner -g runner /home/runner/.nuget
 COPY --from=nuget --chown=runner:runner /nuget-snapshot /home/runner/.nuget/packages
 
