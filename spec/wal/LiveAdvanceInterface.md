@@ -58,7 +58,11 @@ design change, not a modelling choice.
   heads as a close. It is a maximum, not the last close's heads: production
   max-merges every retained close with the compacted heads of evicted ones
   (`HandOffMarkerCore.RequiredHead`). A purge discards the marker, so `closedAt`
-  starts again from nothing in the re-created incarnation.
+  starts again from nothing in the re-created incarnation. A bulk-born leaf whose
+  own marker holds its switch's close (#6166, `HandOffMarkerCore.RecordBulkBirthClose`)
+  reads that close in place of the shard's bulk-switch closes and their compacted
+  heads (`ShardHandOffState.CompactedBulkHeads`); `WalBulkSwitch`'s `BirthCloseHeld`
+  keeps its `closedAt` at or above that close.
 - **Per activation**, `claimHead[a]` is the head a's claim returned, and
   `seenU[a]` is the highest unstamped offset reported to `a`.
 
