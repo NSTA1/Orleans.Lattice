@@ -194,11 +194,15 @@ spend pool compute up to the replica timeout; keep an Azure budget alert on the 
 ## Weekly image refresh
 
 `deploy.ps1` also provisions `job-<prefix>-refresh`, a scheduled Container Apps Job
-(`-RefreshCron`, default `0 3 * * 0`, Sunday 03:00 UTC). Each run clones `-RefreshBranch`
+(`-RefreshCron`, default `0 3 * * 0`, Sunday 03:00 UTC). It runs the
+`mcr.microsoft.com/azure-cli` image (Azure Linux, which ships without git), so each run
+first installs git with `tdnf` - that install needs about 2 GiB, hence the job's 1 CPU /
+2 GiB sizing; at 1 GiB it is OOM-killed. It then clones `-RefreshBranch`
 (default `main`) and runs `tools/ci-runners/refresh-image.sh`, which:
 
-1. stages the same build context `deploy.ps1` does and runs `az acr build --no-cache`, so
-   the apt upgrade, the .NET runtime and the npm tree are fetched fresh;
+1. stages the same build context `deploy.ps1` does and runs `az acr build`, whose
+   ephemeral build agents keep no layer cache, so the apt upgrade, the .NET runtime and
+   the npm tree are fetched fresh;
 2. tags the image `<commit>-<UTC timestamp>` - the content-hash tag would repeat for an
    unchanged tree, and a node could serve its cached, unpatched copy;
 3. PATCHes `job-<prefix>`'s template so both containers use the new image, and verifies

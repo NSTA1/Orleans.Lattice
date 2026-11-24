@@ -39,8 +39,11 @@ login_server="$(az acr show -g "$RESOURCE_GROUP" -n "$REGISTRY" --query loginSer
 image="$login_server/$tag"
 
 log "building $image from $(git rev-parse HEAD) ($count restore inputs)"
+# az acr build has no cache switch: quick-task builds run on ephemeral agents
+# with no persisted layer cache, so every layer (apt upgrade, runtimes, npm) is
+# rebuilt from fresh upstream content.
 az acr build --registry "$REGISTRY" --image "$tag" --file tools/ci-runners/Dockerfile \
-	--platform linux/amd64 --no-cache "$context"
+	--platform linux/amd64 "$context"
 
 # Repoint both the init container and the runner container. A PATCH of
 # properties.template leaves the configuration (secrets, scale rule) alone.

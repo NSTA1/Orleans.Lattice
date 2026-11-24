@@ -432,8 +432,8 @@ properties:
       command: [ "/bin/bash", "-c" ]
       args: [ "tdnf install -y -q git >/dev/null && git clone --depth 1 --branch \"`$REPO_BRANCH\" \"https://github.com/`$REPOSITORY.git\" /tmp/src && cd /tmp/src && exec bash tools/ci-runners/refresh-image.sh" ]
       resources:
-        cpu: 0.5
-        memory: 1Gi
+        cpu: 1
+        memory: 2Gi
       env:
       - name: AZURE_CLIENT_ID
         value: '$($refreshIdentity.clientId)'
