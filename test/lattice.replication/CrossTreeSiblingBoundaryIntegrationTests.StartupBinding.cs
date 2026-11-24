@@ -172,8 +172,8 @@ public partial class CrossTreeSiblingBoundaryIntegrationTests
                 Assert.That(removedReturned, Is.True, "the drained region's Removed write should reach the origin");
                 Assert.That(eastWriteArrived, Is.True, "the origin-to-peer write should converge on the sibling tree");
                 Assert.That(westWriteArrived, Is.True, "the peer-to-origin write should converge on the sibling tree");
-                Assert.That(stable, Does.Contain($"{tree}:A=Idle,B=LiveIncremental"));
-                Assert.That(stable, Does.Contain($"{sibling}:A=Idle,B=LiveIncremental"));
+                Assert.That(IsDrainSettled(stable, tree), Is.True, stable);
+                Assert.That(IsDrainSettled(stable, sibling), Is.True, stable);
                 Assert.That(healthyLinks, Has.Length.EqualTo(4), string.Join(Environment.NewLine, healthyLinks));
                 Assert.That(healthyLinks, Is.All.Contains("healthy=True"), string.Join(Environment.NewLine, healthyLinks));
             });
