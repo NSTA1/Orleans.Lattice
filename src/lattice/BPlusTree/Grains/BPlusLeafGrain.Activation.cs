@@ -4054,7 +4054,7 @@ internal sealed partial class BPlusLeafGrain
                 context.GrainId,
                 AwaitDiagnostics.Enabled ? (replayCheckpointOverride == -1L ? "cold" : "warm") : null))
             {
-                advanced = await ReplayWalSinceCheckpointAsync(replayCheckpointOverride, cancellationToken);
+                advanced = await ReplayWalSinceCheckpointAsync(replayCheckpointOverride, cancellationToken, atActivation: true);
             }
 
             // The replay read the whole window to head, so a cold rebuild has
@@ -4881,14 +4881,29 @@ internal sealed partial class BPlusLeafGrain
     /// than by density.
     /// </para>
     /// </remarks>
-    private async Task<bool> ReplayWalSinceCheckpointAsync(long? checkpointOverride, CancellationToken cancellationToken)
+    /// <param name="atActivation">
+    /// The activation's own replay (#6166): a warm one first passes, by the consistent cut,
+    /// what the cut proves holds nothing it has not read. Where the cut owes a read to the
+    /// leaf's own close first, that read runs capped and the cut is taken again after it.
+    /// </param>
+    private async Task<bool> ReplayWalSinceCheckpointAsync(long? checkpointOverride, CancellationToken cancellationToken, bool atActivation = false)
     {
         _warmCacheReplaysInFlight++;
         if (_warmCacheReplaysInFlight != 1)
             _warmCacheReplayFailed = true;
         try
         {
-            return await ReplayWalSinceCheckpointCoreAsync(checkpointOverride, cancellationToken);
+            var advanced = await ReplayWalSinceCheckpointCoreAsync(
+                checkpointOverride, cancellationToken, atActivation ? ActivationCut.CatchUpAllowed : ActivationCut.None);
+            if (atActivation && _replayReadCap is not null)
+            {
+                // The capped catch-up read to the leaf's own close is done: the cut again,
+                // then the tail past it, never a second catch-up.
+                _replayReadCap = null;
+                advanced |= await ReplayWalSinceCheckpointCoreAsync(checkpointOverride, cancellationToken, ActivationCut.Final);
+            }
+
+            return advanced;
         }
         catch (OperationCanceledException)
         {
@@ -4949,7 +4964,24 @@ internal sealed partial class BPlusLeafGrain
         finally
         {
             _warmCacheReplaysInFlight--;
+            if (atActivation)
+            {
+                _replayReadCap = null;
+            }
         }
+    }
+
+    /// <summary>What the activation's consistent cut may do in one replay pass (#6166).</summary>
+    private enum ActivationCut
+    {
+        /// <summary>Not the activation's replay: no cut.</summary>
+        None,
+
+        /// <summary>The first pass: the cut, and a capped catch-up read where it owes one.</summary>
+        CatchUpAllowed,
+
+        /// <summary>The pass after a catch-up: the cut alone.</summary>
+        Final,
     }
 
     /// <summary>
@@ -5036,7 +5068,7 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <inheritdoc cref="ReplayWalSinceCheckpointAsync"/>
-    private async Task<bool> ReplayWalSinceCheckpointCoreAsync(long? checkpointOverride, CancellationToken cancellationToken)
+    private async Task<bool> ReplayWalSinceCheckpointCoreAsync(long? checkpointOverride, CancellationToken cancellationToken, ActivationCut activationCut)
     {
         var treeId = state.State.TreeId;
         if (string.IsNullOrEmpty(treeId))
@@ -5127,6 +5159,18 @@ internal sealed partial class BPlusLeafGrain
         var sweep = await BuildPassOneSweepOrderAsync(
             treeId, partitionCount, checkpointOverride, cancellationToken);
 
+        // Issue #6166. A warm activation first passes, by the consistent cut, the span
+        // behind its checkpoint the cut proves holds nothing it has not read, where the
+        // backlog the sweep just probed is worth the cut's calls; each partition the cut
+        // advanced then replays from there, and where the cut owes a read to the leaf's own
+        // close first, this pass reads only to it. Never on a cold rebuild, which re-reads
+        // the window to rebuild the cache.
+        var cutStarts = checkpointOverride is null && activationCut != ActivationCut.None
+            ? await TryAdvanceActivationFromCutAsync(
+                sweep, partitionCount, resolvedOptions.WalReplaySliceBudget, activationCut == ActivationCut.CatchUpAllowed)
+            : null;
+        anyAdvanced |= cutStarts is not null;
+
         // Issue #2165. Reconstruct the deferred work a previous activation
         // recorded durably, BEFORE pass 1 reads anything. This is what makes
         // the checkpoint advance that recorded it safe: the prepares go back
@@ -5149,7 +5193,14 @@ internal sealed partial class BPlusLeafGrain
             // window of every partition.
             long persistedCheckpoint = GetPersistedCheckpointForPartition(partition);
             var checkpoint = checkpointOverride ?? persistedCheckpoint;
+            // The cut's stamp is a read position as a scan's is, so the start it replaces
+            // still proves the warm cache (#6166).
             warmReplayProven &= CanProveWarmReplayStart(partition, checkpoint);
+            if (cutStarts is { } cutStart && cutStart[partition] > checkpoint)
+            {
+                checkpoint = cutStart[partition];
+            }
+
             perPartitionMaxScanned[partition] = checkpoint;
 
             // Durable-frontier fall-off guard (issue #945: silent durable data

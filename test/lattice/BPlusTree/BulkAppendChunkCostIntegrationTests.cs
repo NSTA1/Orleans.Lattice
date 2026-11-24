@@ -25,7 +25,7 @@ public sealed class BulkAppendChunkCostIntegrationTests
     private const int SettleChunks = 8;
     private const string ReactivationTree = "bulk-append-reactivation-cost";
     private const int ReactivationChunks = 64;
-    private const int ReplayGateWidth = 16;
+    private const string ColdLeafTree = "bulk-append-cold-leaf-cost";
 
     /// <summary>
     /// The leaves a run's right edge filled with live writes, about one per fence of the
@@ -68,6 +68,7 @@ public sealed class BulkAppendChunkCostIntegrationTests
         var registry = _cluster.GrainFactory.GetGrain<ILatticeRegistry>(LatticeConstants.RegistryTreeId);
         await registry.RegisterAsync(Tree, new TreeRegistryEntry { ShardCount = 2, MaxLeafKeys = 128, WalPartitions = 1 });
         await registry.RegisterAsync(ReactivationTree, new TreeRegistryEntry { ShardCount = 2, MaxLeafKeys = 128, WalPartitions = 1 });
+        await registry.RegisterAsync(ColdLeafTree, new TreeRegistryEntry { ShardCount = 2, MaxLeafKeys = 128, WalPartitions = 2 });
     }
 
     [OneTimeTearDown]
@@ -128,31 +129,7 @@ public sealed class BulkAppendChunkCostIntegrationTests
         // stall checks that follow it, and a reactivation of every leaf.
         ReplayScanMeter.Arm(ReactivationTree);
         var lattice = _cluster.GrainFactory.GetGrain<ILattice>(ReactivationTree);
-        for (var c = 0; c < ReactivationChunks; c++)
-        {
-            var chunk = new List<KeyValuePair<string, byte[]>>(ChunkSize);
-            for (var i = 0; i < ChunkSize; i++)
-            {
-                var n = c * ChunkSize + i;
-                chunk.Add(new KeyValuePair<string, byte[]>($"k{n:D9}", Encoding.UTF8.GetBytes($"v{n}")));
-            }
-
-            await lattice.BulkAppendChunkAsync($"chunk-{c}", chunk);
-        }
-
-        var leaves = new List<GrainId>();
-        for (var s = 0; s < 2; s++)
-        {
-            var shard = _cluster.GrainFactory.GetGrain<IShardRootGrain>($"{ReactivationTree}/{s}");
-            GrainId? id = await shard.GetLeftmostLeafIdAsync();
-            while (id is { } current)
-            {
-                leaves.Add(current);
-                id = (await _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(current.GetGuidKey()).GetKeyRangeAndNextSiblingAsync()).NextSibling;
-            }
-        }
-
-        Assert.That(leaves, Has.Count.GreaterThan(ReactivationChunks), "precondition: the seed created many leaves");
+        var leaves = await SeedAsync(ReactivationTree);
 
         // The stall checks bring the durable checkpoint of every leaf behind the right edge
         // to the head: by replay, or by taking the head without one.
@@ -181,17 +158,7 @@ public sealed class BulkAppendChunkCostIntegrationTests
         Assert.That(settled, Is.True,
             $"{behind.Count} of {leaves.Count} leaves' durable checkpoints stayed behind the head {head}: {string.Join(", ", behind.Take(20))}");
 
-        foreach (var leaf in leaves)
-        {
-            await _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(leaf.GetGuidKey()).ForceDeactivateAsync();
-        }
-
-        await Task.Delay(500);
-        foreach (var leaf in leaves)
-        {
-            await _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(leaf.GetGuidKey()).GetKeyRangeAndNextSiblingAsync();
-        }
-
+        await ReactivateAsync(leaves);
         Assert.That(await lattice.GetAsync("k000000000"), Is.Not.Null, "the seed is still readable");
         var scanned = ReplayScanMeter.Scanned;
         var perLeafScans = ReplayScanMeter.PerLeaf();
@@ -208,6 +175,86 @@ public sealed class BulkAppendChunkCostIntegrationTests
             $"only {within} of {leaves.Count} leaves read within two switch runs' span; the rest re-read the log appended after them");
     }
 
+    [Test]
+    public async Task A_bulk_born_leaf_reactivated_at_its_birth_checkpoint_does_not_replay_the_seed_appended_after_it()
+    {
+        // The rig's 3M read wedge (#6166): a leaf born by a sorted append and deactivated
+        // before any stall drive advanced it holds its birth checkpoint, so its first read
+        // after the seed replayed every chunk appended after its birth, behind a replay
+        // permit. The stall checks are off here, so only the activation can pass that span.
+        var lattice = _cluster.GrainFactory.GetGrain<ILattice>(ColdLeafTree);
+        var leaves = await SeedAsync(ColdLeafTree);
+
+        // Past the idle close, so no switch is open over any leaf at its reactivation.
+        await Task.Delay(ShardRootGrain.BulkSwitchIdleClose + TimeSpan.FromSeconds(2));
+        foreach (var leaf in leaves)
+        {
+            await _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(leaf.GetGuidKey()).ForceDeactivateAsync();
+        }
+
+        ReplayScanMeter.Arm(ColdLeafTree);
+        await ReactivateAsync(leaves);
+        var scanned = ReplayScanMeter.Scanned;
+        ReplayScanMeter.Disarm();
+        Assert.That(await lattice.GetAsync("k000000000"), Is.Not.Null, "the seed's first key is still readable");
+        Assert.That(await lattice.GetAsync($"k{(ReactivationChunks * ChunkSize) - 1:D9}"), Is.Not.Null, "the seed's last key is still readable");
+
+        var perLeaf = (double)scanned / leaves.Count;
+        TestContext.Out.WriteLine($"leaves={leaves.Count} replay scan total={scanned} perLeaf={perLeaf:F1}");
+
+        // Read to its own switch's close at most, as a stall drive's cut reads: a span that
+        // does not grow with the seed. Replaying to the head reads half the seed per leaf.
+        Assert.That(perLeaf, Is.LessThanOrEqualTo((ShardRootGrain.BulkSwitchesPerFence + 1.0) * ChunkSize),
+            $"reactivated leaves re-read the seed appended after them: total {scanned} over {leaves.Count} leaves");
+    }
+
+    /// <summary>Appends <see cref="ReactivationChunks"/> sorted chunks to <paramref name="tree"/> and returns its leaves.</summary>
+    private async Task<List<GrainId>> SeedAsync(string tree)
+    {
+        var lattice = _cluster.GrainFactory.GetGrain<ILattice>(tree);
+        for (var c = 0; c < ReactivationChunks; c++)
+        {
+            var chunk = new List<KeyValuePair<string, byte[]>>(ChunkSize);
+            for (var i = 0; i < ChunkSize; i++)
+            {
+                var n = c * ChunkSize + i;
+                chunk.Add(new KeyValuePair<string, byte[]>($"k{n:D9}", Encoding.UTF8.GetBytes($"v{n}")));
+            }
+
+            await lattice.BulkAppendChunkAsync($"chunk-{c}", chunk);
+        }
+
+        var leaves = new List<GrainId>();
+        for (var s = 0; s < 2; s++)
+        {
+            var shard = _cluster.GrainFactory.GetGrain<IShardRootGrain>($"{tree}/{s}");
+            GrainId? id = await shard.GetLeftmostLeafIdAsync();
+            while (id is { } current)
+            {
+                leaves.Add(current);
+                id = (await _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(current.GetGuidKey()).GetKeyRangeAndNextSiblingAsync()).NextSibling;
+            }
+        }
+
+        Assert.That(leaves, Has.Count.GreaterThan(ReactivationChunks), "precondition: the seed created many leaves");
+        return leaves;
+    }
+
+    /// <summary>Deactivates every one of <paramref name="leaves"/>, then activates each again.</summary>
+    private async Task ReactivateAsync(List<GrainId> leaves)
+    {
+        foreach (var leaf in leaves)
+        {
+            await _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(leaf.GetGuidKey()).ForceDeactivateAsync();
+        }
+
+        await Task.Delay(500);
+        foreach (var leaf in leaves)
+        {
+            await _cluster.GrainFactory.GetGrain<IBPlusLeafGrain>(leaf.GetGuidKey()).GetKeyRangeAndNextSiblingAsync();
+        }
+    }
+
     private sealed class SiloConfigurator : ISiloConfigurator
     {
         public void Configure(ISiloBuilder siloBuilder)
@@ -220,6 +267,11 @@ public sealed class BulkAppendChunkCostIntegrationTests
             {
                 options.WalPartitions = 1;
                 options.LeafCheckpointStallCheckIntervalSeconds = 1;
+            });
+            siloBuilder.ConfigureLattice(ColdLeafTree, options =>
+            {
+                options.WalPartitions = 2;
+                options.LeafCheckpointStallCheckIntervalSeconds = 3_600;
             });
             siloBuilder.Services.AddSingleton<IIncomingGrainCallFilter, ReplayScanFilter>();
         }

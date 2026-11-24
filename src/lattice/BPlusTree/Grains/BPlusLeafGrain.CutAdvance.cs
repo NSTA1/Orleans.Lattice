@@ -23,7 +23,9 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// raises its sibling's hint, and its own read position, to that head. The stall drive
 /// now does the same before it replays: the same cut read, the same view, the same guard
 /// (<see cref="CutAdvanceTarget"/>), so where the cut lets the leaf pass the span it
-/// replays nothing. Where it does not, the drive runs as before.
+/// replays nothing. Where it does not, the drive runs as before. A warm activation does
+/// the same before its replay (<see cref="TryAdvanceActivationFromCutAsync"/>), since a
+/// leaf deactivated during the seed runs no drive.
 /// </para>
 /// <para>
 /// Cost: the cut is one call per partition, made only where a drive was about to make
@@ -208,11 +210,16 @@ internal sealed partial class BPlusLeafGrain
     /// write; a never-checkpointed partition is left to the starvation drive.
     /// </summary>
     /// <param name="partitions">The tree's WAL partition count.</param>
+    /// <param name="atActivation">
+    /// The caller is the activation's replay (<see cref="TryAdvanceActivationFromCutAsync"/>):
+    /// the cache holds no record an earlier activation appended above the checkpoint, so the
+    /// cut is read for no activation, and every activation's records bound it.
+    /// </param>
     /// <returns>What the drive that asked should do next.</returns>
-    internal async Task<CutAdvanceOutcome> TryAdvanceCheckpointFromCutAsync(int partitions)
+    internal async Task<CutAdvanceOutcome> TryAdvanceCheckpointFromCutAsync(int partitions, bool atActivation = false)
     {
         if (_liveAdvanceInFlight
-            || !IsCutAdvanceQuiescent()
+            || !IsCutAdvanceQuiescent(atActivation)
             || _appendFence is not { } fence
             || !IsLiveAdvanceOverlapExcluded()
             || !IsPreArmGateOpen()
@@ -249,6 +256,13 @@ internal sealed partial class BPlusLeafGrain
             if (!fence.TryGetCutReader(out var reader))
             {
                 return CutAdvanceOutcome.NotTaken;
+            }
+
+            if (atActivation)
+            {
+                // No activation token: every activation's records are foreign to it, as a
+                // resumed close reads them (#5837, rule R).
+                reader = reader with { Activation = Guid.Empty };
             }
 
             if (_cutAdvanceScratch is not { } cut || cut.Length != partitions)
@@ -292,7 +306,7 @@ internal sealed partial class BPlusLeafGrain
                 // Re-checked per partition: a stamp may await a persist, and a write or a
                 // prepare can interleave with it; an own append below the head must be
                 // applied before the head is passed.
-                if (!IsCutAdvanceQuiescent())
+                if (!IsCutAdvanceQuiescent(atActivation))
                 {
                     return CutAdvanceOutcome.NotTaken;
                 }
@@ -329,5 +343,84 @@ internal sealed partial class BPlusLeafGrain
         {
             _liveAdvanceInFlight = false;
         }
+    }
+
+    /// <summary>
+    /// At a warm activation, advances each checkpointed partition the consistent cut proves
+    /// past (#6166) before the replay reads it. A leaf that applies no writes of its own and
+    /// was deactivated during a long bulk seed otherwise re-read the whole seed behind its
+    /// checkpoint before serving its first read, holding a replay permit throughout; the
+    /// stall drive's cut never reached it, since a deactivated leaf runs no drive.
+    /// <para>
+    /// Runs only where it saves calls: the backlog the sweep probed, read in slices of
+    /// <paramref name="sliceBudget"/>, must take more reads than the cut makes (one per
+    /// partition and the hand-off view's two). A single-partition tree probes no head, so it
+    /// never runs. Allocates one array of starts, and only where it runs.
+    /// </para>
+    /// </summary>
+    /// <param name="sweep">The replay's sweep order, with the heads it probed.</param>
+    /// <param name="partitions">The tree's WAL partition count.</param>
+    /// <param name="sliceBudget">The replay's slice width.</param>
+    /// <param name="allowCatchUp">
+    /// Whether a catch-up the cut owes may cap this replay at its targets
+    /// (<see cref="_replayReadCap"/>), as a stall drive's does; the caller then takes the cut
+    /// again once the capped read is done.
+    /// </param>
+    /// <returns>
+    /// Per partition, the read position the cut stamped, or -1 where it stamped none;
+    /// <see langword="null"/> where it stamped nothing.
+    /// </returns>
+    private async Task<long[]?> TryAdvanceActivationFromCutAsync(
+        List<(int Partition, long? ProbedHead)> sweep,
+        int partitions,
+        int sliceBudget,
+        bool allowCatchUp)
+    {
+        if (partitions <= 1)
+        {
+            return null;
+        }
+
+        long backlog = 0;
+        foreach (var (partition, probedHead) in sweep)
+        {
+            var checkpoint = GetCurrentCheckpointForPartition(partition);
+            if (probedHead is { } head && checkpoint >= 0 && head - 1 > checkpoint)
+            {
+                backlog += head - 1 - checkpoint;
+            }
+        }
+
+        if (backlog <= (long)Math.Max(1, sliceBudget) * (partitions + 2))
+        {
+            return null;
+        }
+
+        // The fence exists once the writer is resolved; the cut is read for its closes.
+        ResolveCommitLogWriter();
+        var starts = new long[partitions];
+        for (var p = 0; p < partitions; p++)
+        {
+            starts[p] = GetCurrentCheckpointForPartition(p);
+        }
+
+        using (AwaitDiagnostics.Begin("leaf.replay.cut", context.GrainId))
+        {
+            var outcome = await TryAdvanceCheckpointFromCutAsync(partitions, atActivation: true);
+            if (outcome == CutAdvanceOutcome.CatchUp && allowCatchUp)
+            {
+                _replayReadCap = _cutCatchUpBounds;
+            }
+        }
+
+        var stamped = false;
+        for (var p = 0; p < partitions; p++)
+        {
+            var current = GetCurrentCheckpointForPartition(p);
+            stamped |= current > starts[p];
+            starts[p] = current > starts[p] ? current : -1;
+        }
+
+        return stamped ? starts : null;
     }
 }
