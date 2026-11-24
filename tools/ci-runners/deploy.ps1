@@ -430,7 +430,7 @@ properties:
     - name: refresh
       image: mcr.microsoft.com/azure-cli:latest
       command: [ "/bin/bash", "-c" ]
-      args: [ "git clone --depth 1 --branch \"`$REPO_BRANCH\" \"https://github.com/`$REPOSITORY.git\" /tmp/src && cd /tmp/src && exec bash tools/ci-runners/refresh-image.sh" ]
+      args: [ "tdnf install -y -q git >/dev/null && git clone --depth 1 --branch \"`$REPO_BRANCH\" \"https://github.com/`$REPOSITORY.git\" /tmp/src && cd /tmp/src && exec bash tools/ci-runners/refresh-image.sh" ]
       resources:
         cpu: 0.5
         memory: 1Gi
@@ -453,7 +453,7 @@ $refreshYamlPath = Join-Path ([System.IO.Path]::GetTempPath()) "job-$NamePrefix-
 try {
 	[System.IO.File]::WriteAllText($refreshYamlPath, $refreshYaml)
 	$verb = if (Test-AzShow @('containerapp', 'job', 'show', '-g', $names.Rg, '-n', $names.RefreshJob)) { 'update' } else { 'create' }
-	Write-Host "[runners] $($verb)ing $($names.RefreshJob) ($RefreshCron UTC, branch $RefreshBranch)" -ForegroundColor Cyan
+	Write-Host "[runners] $($verb) $($names.RefreshJob) ($RefreshCron UTC, branch $RefreshBranch)" -ForegroundColor Cyan
 	Invoke-AzCli @('containerapp', 'job', $verb, '-g', $names.Rg, '-n', $names.RefreshJob, '--yaml', $refreshYamlPath, '-o', 'none') | Out-Null
 } finally {
 	Remove-Item $refreshYamlPath -Force -ErrorAction SilentlyContinue
