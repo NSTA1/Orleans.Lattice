@@ -125,7 +125,7 @@ public sealed class BulkAppendChunkCostIntegrationTests
         // scans a span proportional to the chunk index, which is what #6164 was.
         // The first chunks are excluded: they create the leaves the drive above settles.
         var steadyState = scanned.Skip(SettleChunks).ToArray();
-        Assert.That(steadyState.Sum(), Is.LessThanOrEqualTo(4L * ChunkSize * steadyState.Length),
+        Assert.That(steadyState, Has.All.LessThanOrEqualTo(4L * ChunkSize),
             $"per-chunk replay scan grew with the chunk index: {string.Join(", ", scanned)}");
     }
 

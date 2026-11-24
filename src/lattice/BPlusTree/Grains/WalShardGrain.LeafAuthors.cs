@@ -63,7 +63,14 @@ internal sealed partial class WalShardGrain
                 bound = Math.Max(bound, StaleHighLocked(reader.Close2, reader.LeafId));
             }
 
-            return Task.FromResult(new WalSplitCut(DurableContiguousTailOffset(), bound, UnstampedHighForRangeLocked(lowInclusive, highExclusive)));
+            var watermark = UnstampedHighForRangeLocked(lowInclusive, highExclusive);
+            if (AwaitDiagnostics.Enabled)
+            {
+                // #6166: whether the range's bound is the shared floor or a tabled record.
+                AwaitDiagnostics.Count(watermark <= _unstampedKeyFloor ? "wal.cut.watermark.floor" : "wal.cut.watermark.tabled");
+            }
+
+            return Task.FromResult(new WalSplitCut(DurableContiguousTailOffset(), bound, watermark));
         }
     }
 

@@ -1243,18 +1243,6 @@ internal interface IBPlusLeafGrain : IGrainWithGuidKey
     Task MergeEntriesAsync([Immutable] Dictionary<string, LwwValue<byte[]>> entries);
 
     /// <summary>
-    /// <see cref="MergeEntriesAsync"/> appended under the shard root's routing,
-    /// <paramref name="routing"/>, as the leaf's own write (#6166): a routed record is
-    /// attributed to this leaf, where an unrouted one raises the partition's unstamped
-    /// watermark and holds every leaf whose range it falls in. A stale generation fails
-    /// before anything is applied, so the caller retries under the current one. The same
-    /// caller contract as <see cref="MergeEntriesAsync"/> applies to <paramref name="entries"/>.
-    /// </summary>
-    /// <param name="entries">The rows to merge.</param>
-    /// <param name="routing">The shard root's admission routing.</param>
-    Task MergeEntriesStampedAsync([Immutable] Dictionary<string, LwwValue<byte[]>> entries, Grains.WalRoutingStamp routing);
-
-    /// <summary>
     /// Seeds <paramref name="entries"/> into a leaf a bulk operation has created and not
     /// yet published (#5812): <see cref="MergeEntriesAsync"/>, except that the appends
     /// claim no append epoch for this activation. Under an open bulk switch they carry

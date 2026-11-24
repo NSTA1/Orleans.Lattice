@@ -71,6 +71,7 @@ internal sealed partial class WalShardGrain
         _unstampedKeyNext = 0;
         _unstampedKeyCount = 0;
         _unstampedKeyFloor = recoveredNextOffset - 1;
+        AwaitDiagnostics.Count("wal.unstamped.key.restart-floor");
     }
 
     /// <summary>
@@ -85,6 +86,7 @@ internal sealed partial class WalShardGrain
     {
         if (!IsKeyLocalUnstamped(in entry))
         {
+            AwaitDiagnostics.Count("wal.unstamped.key.floor-not-key-local");
             _unstampedKeyFloor = Math.Max(_unstampedKeyFloor, offset);
             return false;
         }
@@ -97,6 +99,7 @@ internal sealed partial class WalShardGrain
             var last = (_unstampedKeyNext + UnstampedKeyTableCapacity - 1) % UnstampedKeyTableCapacity;
             if (string.CompareOrdinal(entry.Key, _unstampedKeyHighs[last] ?? _unstampedKeys[last]) > 0)
             {
+                AwaitDiagnostics.Count("wal.unstamped.key.run-extended");
                 _unstampedKeyHighs[last] = entry.Key;
                 _unstampedKeyOffsets[last] = offset;
                 return true;
@@ -106,6 +109,7 @@ internal sealed partial class WalShardGrain
         if (_unstampedKeyCount == UnstampedKeyTableCapacity)
         {
             // Offsets are tabled in allocation order, so the slot overwritten is the oldest (K1).
+            AwaitDiagnostics.Count("wal.unstamped.key.floor-evicted");
             _unstampedKeyFloor = Math.Max(_unstampedKeyFloor, _unstampedKeyOffsets[_unstampedKeyNext]);
         }
         else
@@ -141,6 +145,25 @@ internal sealed partial class WalShardGrain
         }
 
         return high;
+    }
+
+    /// <summary>
+    /// Counts, on the benchmark census (#6166), what raised the unstamped watermark: an
+    /// unstamped append, a pre-arm one with no routing generation (C4), or a record sent
+    /// under the coordinator-terminal class; each a merge (a bulk seed, a fill, a
+    /// relocation) or a foreground write. A no-op unless the diagnostic is enabled.
+    /// </summary>
+    private static void CountUnstampedSource(bool stamped, in WalAppendStamp stamp, in WalRecord entry)
+    {
+        if (!AwaitDiagnostics.Enabled)
+        {
+            return;
+        }
+
+        AwaitDiagnostics.Count(!stamped
+            ? (entry.IsMerge ? "wal.unstamped.source.unstamped.merge" : "wal.unstamped.source.unstamped.write")
+            : stamp.IsCoordinatorTerminal ? "wal.unstamped.source.terminal-class"
+            : entry.IsMerge ? "wal.unstamped.source.pre-arm-unrouted.merge" : "wal.unstamped.source.pre-arm-unrouted.write");
     }
 
     private static bool IsKeyLocalUnstamped(in WalRecord entry) =>

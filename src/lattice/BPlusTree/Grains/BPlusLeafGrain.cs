@@ -4116,14 +4116,7 @@ internal sealed partial class BPlusLeafGrain(
         };
     }
 
-    public Task MergeEntriesAsync(Dictionary<string, LwwValue<byte[]>> entries) =>
-        MergeEntriesCoreAsync(entries, default);
-
-    /// <inheritdoc />
-    public Task MergeEntriesStampedAsync(Dictionary<string, LwwValue<byte[]>> entries, WalRoutingStamp routing) =>
-        MergeEntriesCoreAsync(entries, StampedRouting(routing));
-
-    private async Task MergeEntriesCoreAsync(Dictionary<string, LwwValue<byte[]>> entries, WalRoutingStamp routing)
+    public async Task MergeEntriesAsync(Dictionary<string, LwwValue<byte[]>> entries)
     {
         using var routingMutation = EnterLeafRoutingMutation();
         await AwaitReplayBarrierAsync();
@@ -4271,13 +4264,6 @@ internal sealed partial class BPlusLeafGrain(
                         // 1); only a refresh that fails appends the transfer unstamped.
                         mergeOffsets = await AppendTransferAfterStaleAsync(writer!, segment, walEntries!, walCount, stale);
                     }
-                }
-                else if (routing != default)
-                {
-                    // #6166: a shard root's routed merge is this leaf's own append, attributed
-                    // to it alone, rather than an unrouted one every leaf of the partition
-                    // must read past (C4).
-                    mergeOffsets = await AppendManyRoutedAsync(writer!, segment, routing);
                 }
                 else
                 {
