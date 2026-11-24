@@ -632,8 +632,8 @@ public partial class CrossTreeSiblingBoundaryIntegrationTests
             Assert.That(removedReturned, Is.True, "the drained region's Removed write should reach the origin");
             Assert.That(eastWriteArrived, Is.True, "the origin-to-peer write should converge on the sibling tree");
             Assert.That(westWriteArrived, Is.True, "the peer-to-origin write should converge on the sibling tree");
-            Assert.That(stable, Does.Contain($"{tree}:A=Idle,B=LiveIncremental"));
-            Assert.That(stable, Does.Contain($"{sibling}:A=Idle,B=LiveIncremental"));
+            Assert.That(IsDrainSettled(stable, tree), Is.True, stable);
+            Assert.That(IsDrainSettled(stable, sibling), Is.True, stable);
             Assert.That(healthyLinks, Has.Length.EqualTo(4), string.Join(Environment.NewLine, healthyLinks));
             Assert.That(healthyLinks, Is.All.Contains("healthy=True"), string.Join(Environment.NewLine, healthyLinks));
         });
@@ -677,8 +677,7 @@ public partial class CrossTreeSiblingBoundaryIntegrationTests
         while (true)
         {
             var state = await CaptureDrainStateAsync(tree, sibling);
-            if ((state.Contains($"{tree}:A=Idle,B=LiveIncremental", StringComparison.Ordinal)
-                    && state.Contains($"{sibling}:A=Idle,B=LiveIncremental", StringComparison.Ordinal))
+            if ((IsDrainSettled(state, tree) && IsDrainSettled(state, sibling))
                 || Environment.TickCount64 >= deadline)
             {
                 return state;
@@ -687,6 +686,14 @@ public partial class CrossTreeSiblingBoundaryIntegrationTests
             await Task.Delay(250);
         }
     }
+
+    // Site B's import ends in LiveIncremental. Site A is normally Idle, but when the cutover
+    // trims the new physical log before B's reverse shipper registers, B legitimately asks A
+    // for a re-seed and A's coordinator completes a reverse bootstrap, ending in its terminal
+    // LiveIncremental phase. Both are settled; any in-progress phase is not.
+    private static bool IsDrainSettled(string state, string treeName) =>
+        state.Contains($"{treeName}:A=Idle,B=LiveIncremental,", StringComparison.Ordinal)
+        || state.Contains($"{treeName}:A=LiveIncremental,B=LiveIncremental,", StringComparison.Ordinal);
 
     private async Task<string> CaptureDrainStateAsync(string tree, string sibling)
     {
