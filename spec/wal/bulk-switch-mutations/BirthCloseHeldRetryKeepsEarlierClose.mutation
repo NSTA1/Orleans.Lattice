@@ -1,0 +1,15 @@
+# #6166. Pairs with BirthCloseHeld: a retried operation's fence records its close on
+# its leaves idempotently, keeping the close an earlier attempt left there, so the
+# leaf is held below the heads the retry's close recorded.
+MODULE: BirthCloseHeldRetryKeepsEarlierClose
+TARGET: BirthCloseHeld
+CLASS: Invariant
+SUMMARY: a re-close keeps the leaf's earlier, lower birth close instead of max-merging
+PERTURBS: Close
+
+--- FIND
+    /\ leafClose' = IF closeHead' # closeHead /\ ~WithSkip THEN MaxN(leafClose, closeHead') ELSE leafClose
+--- REPLACE
+\* MUTATION: the first close recorded on the leaf is kept.
+    /\ leafClose' = IF closeHead' # closeHead /\ ~WithSkip /\ leafClose = Null THEN closeHead' ELSE leafClose
+--- END

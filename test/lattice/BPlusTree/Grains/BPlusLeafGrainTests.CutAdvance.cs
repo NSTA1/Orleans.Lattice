@@ -16,7 +16,7 @@ public partial class BPlusLeafGrainTests
 {
     private const long CutAdvanceCheckpoint = 5;
 
-    private static async Task<(BPlusLeafGrain Grain, LiveAdvanceRig Rig)> IdleCutLeafAsync(WalSplitCut cut, Action<LiveAdvanceRig>? configure = null)
+    private static async Task<(BPlusLeafGrain Grain, LiveAdvanceRig Rig)> IdleCutLeafAsync(WalSplitCut cut, Action<LiveAdvanceRig>? configure = null, string? highKey = null)
     {
         var rig = PreArmRig();
         rig.Shard.GetSplitCutAsync(Arg.Any<WalAppendStamp>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult(cut));
@@ -24,6 +24,7 @@ public partial class BPlusLeafGrainTests
         var state = new FakePersistentState<LeafNodeState>();
         state.State.ProjectionCheckpointOffset = CutAdvanceCheckpoint;
         state.State.ProjectionCheckpointOffsetAssigned = true;
+        state.State.HighKeyExclusive = highKey;
         var grain = CreateGrain(
             state,
             liveAdvance: rig,
@@ -44,7 +45,7 @@ public partial class BPlusLeafGrainTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(reached, Is.True, "a leaf past every bound did not reach its cut head");
+            Assert.That(reached, Is.EqualTo(BPlusLeafGrain.CutAdvanceOutcome.Reached), "a leaf past every bound did not reach its cut head");
             Assert.That(grain.GetCurrentCheckpointForPartition(0), Is.EqualTo(39L), "the checkpoint is not one below the cut head");
         });
     }
@@ -59,7 +60,8 @@ public partial class BPlusLeafGrainTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(reached, Is.False);
+            Assert.That(reached, Is.EqualTo(BPlusLeafGrain.CutAdvanceOutcome.CatchUp), "a leaf held only by a known read was not sent to read to it, and no further");
+            Assert.That(grain.CutCatchUpBoundsForReplay, Is.EqualTo(new long[] { 12 }));
             Assert.That(grain.GetCurrentCheckpointForPartition(0), Is.EqualTo(CutAdvanceCheckpoint), "the advance passed a record it had not read");
             Assert.That(grain.PendingCatchUpTargetForTest(0), Is.EqualTo(12L), "the held leaf owes no catch-up to the bound");
         });
@@ -79,7 +81,8 @@ public partial class BPlusLeafGrainTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(reached, Is.False);
+            Assert.That(reached, Is.EqualTo(BPlusLeafGrain.CutAdvanceOutcome.CatchUp));
+            Assert.That(grain.CutCatchUpBoundsForReplay, Is.EqualTo(new long[] { 19 }), "the catch-up does not read to one below the close head");
             Assert.That(grain.GetCurrentCheckpointForPartition(0), Is.EqualTo(CutAdvanceCheckpoint), "the advance passed a close head it had not read to");
         });
     }
@@ -108,6 +111,42 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
+    public async Task CutAdvance_a_shard_hand_off_open_over_the_leaf_defers_the_drive()
+    {
+        var (grain, rig) = await IdleCutLeafAsync(new WalSplitCut(Head: 40, ForeignHigh: -1, UnstampedWatermark: -1));
+        HandOffMarkerCore.Open(rig.ShardMarker, "bulk:open", null, null);
+
+        var outcome = await grain.TryAdvanceCheckpointFromCutAsync(partitions: 1);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(outcome, Is.EqualTo(BPlusLeafGrain.CutAdvanceOutcome.Deferred),
+                "a leaf an open switch holds was sent to replay what it must read again past the switch's close");
+            Assert.That(grain.GetCurrentCheckpointForPartition(0), Is.EqualTo(CutAdvanceCheckpoint));
+        });
+    }
+
+    [TestCase(true, 39L)]
+    [TestCase(false, CutAdvanceCheckpoint)]
+    public async Task CutAdvance_a_leaf_holding_its_own_birth_close_is_not_held_by_the_shards_bulk_closes(bool birthCloseRecorded, long expected)
+    {
+        // #6166 (EvictionSparesBirthClose): a later fence of the run, which the shard marker's
+        // retention folds into heads bearing on every bulk-born leaf, holds only a leaf whose
+        // own marker holds no birth close; one that does is held by that close alone.
+        var (grain, rig) = await IdleCutLeafAsync(new WalSplitCut(Head: 40, ForeignHigh: -1, UnstampedWatermark: -1), highKey: "m");
+        HandOffMarkerCore.Open(rig.ShardMarker, "bulk:later", null, null);
+        HandOffMarkerCore.Close(rig.ShardMarker, "bulk:later", [30]);
+        if (birthCloseRecorded)
+        {
+            await rig.SetLeafMarkerAsync(m => HandOffMarkerCore.RecordBulkBirthClose(m, "bulk:birth", [3]));
+        }
+
+        await grain.TryAdvanceCheckpointFromCutAsync(partitions: 1);
+
+        Assert.That(grain.GetCurrentCheckpointForPartition(0), Is.EqualTo(expected));
+    }
+
+    [Test]
     public async Task CutAdvance_a_never_checkpointed_leaf_is_left_to_the_starvation_drive()
     {
         var rig = PreArmRig();
@@ -121,7 +160,7 @@ public partial class BPlusLeafGrainTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(reached, Is.False);
+            Assert.That(reached, Is.EqualTo(BPlusLeafGrain.CutAdvanceOutcome.NotTaken));
             Assert.That(grain.GetCurrentCheckpointForPartition(0), Is.EqualTo(-1L));
         });
         await rig.Shard.DidNotReceive().GetSplitCutAsync(Arg.Any<WalAppendStamp>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());

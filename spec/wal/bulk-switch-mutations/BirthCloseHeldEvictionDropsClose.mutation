@@ -1,0 +1,17 @@
+# #6166. Pairs with BirthCloseHeld: the shard marker's retention drops an evicted
+# bulk-switch close instead of folding its heads into the compacted bulk heads, so a
+# leaf whose own marker holds no birth close - here the never-written load's, which
+# stores no leaf count - is released below its switch's close.
+MODULE: BirthCloseHeldEvictionDropsClose
+TARGET: BirthCloseHeld
+CLASS: Invariant
+SUMMARY: an evicted bulk-switch close is dropped rather than folded into the compacted bulk heads
+PERTURBS: Evict
+BOUNDS: NeverWritten = 1
+
+--- FIND
+    /\ compactBulk' = MaxN(compactBulk, closeHead)
+--- REPLACE
+\* MUTATION: the evicted close is dropped.
+    /\ compactBulk' = compactBulk
+--- END

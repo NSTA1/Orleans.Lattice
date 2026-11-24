@@ -1241,7 +1241,7 @@ internal sealed partial class BPlusLeafGrain
         {
             // W2: every cap is read from this cut and this view, in this turn; a catch-up
             // that passed an earlier value of one is never remembered as passing it now.
-            var raised = CutAdvanceTarget(p, hints.Length, GetCurrentCheckpointForPartition(p), in cut[p], handOff, low, high);
+            var raised = CutAdvanceTarget(p, hints.Length, GetCurrentCheckpointForPartition(p), in cut[p], handOff, low, high, out _);
             if (raised >= 0)
             {
                 hints[p] = Math.Max(hints[p], raised);

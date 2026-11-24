@@ -103,7 +103,7 @@ internal sealed partial class ShardRootGrain
     /// never-written fallback of #5812): no hint is stored or applied, so they read from
     /// the log's start, and only the marker opens.
     /// </param>
-    private async Task<long[]?> BeginBulkSwitchAsync(string operationId, string? lowInclusive, bool withHint = true)
+    private async Task<long[]?> BeginBulkSwitchAsync(string operationId, string? lowInclusive, bool withHint = true, int bornLeaves = 0)
     {
         if (!IsAppendFenceGateOpen() || !HasHandOffStorage())
         {
@@ -122,6 +122,7 @@ internal sealed partial class ShardRootGrain
         {
             closing = CollectCompletedBulkSwitches(marker, operationId);
             fenceHeads = await FenceBulkSwitchesAsync(drainBatchWrites: true);
+            await RecordBulkBirthClosesAsync(marker, closing, fenceHeads);
         }
 
         // Heads are exclusive and a hint is an inclusive checkpoint, so every head
@@ -149,12 +150,18 @@ internal sealed partial class ShardRootGrain
                     }
 
                     changed |= m.BulkBirthHints.Remove(op);
+                    changed |= m.BulkLeafCounts.Remove(op);
                 }
             }
 
             if (hint is not null)
             {
                 changed |= m.BulkBirthHints.TryAdd(operationId, hint);
+            }
+
+            if (bornLeaves > 0)
+            {
+                changed |= m.BulkLeafCounts.TryAdd(operationId, bornLeaves);
             }
 
             opened = HandOffMarkerCore.Open(m, token, lowInclusive, null);
@@ -263,6 +270,7 @@ internal sealed partial class ShardRootGrain
 
         var closing = CollectCompletedBulkSwitches(marker, currentOperationId: null);
         var heads = await FenceBulkSwitchesAsync(drainBatchWrites);
+        await RecordBulkBirthClosesAsync(marker, closing, heads);
         var closed = 0;
         await UpdateHandOffMarkerAsync(m =>
         {
@@ -275,12 +283,63 @@ internal sealed partial class ShardRootGrain
                 }
 
                 changed |= m.BulkBirthHints.Remove(op);
+                changed |= m.BulkLeafCounts.Remove(op);
             }
 
             return changed | closed > 0;
         });
 
         RecordBulkSwitchMarkers(0, closed);
+    }
+
+    /// <summary>
+    /// How many leaf markers a fence writes a bulk birth close to at once (#6166): the
+    /// writes are independent rows, so they overlap, bounded so one fence never holds more
+    /// than this many storage calls in flight.
+    /// </summary>
+    internal const int BulkBirthCloseWriteConcurrency = 32;
+
+    /// <summary>
+    /// Records the fence's <paramref name="heads"/> on the marker of every leaf each bulk
+    /// append in <paramref name="closing"/> created (#6166), before the shard marker's close
+    /// of the same switches is written: until then the switch's open token holds those
+    /// leaves. A leaf is then held by its own copy of the close, which the shard marker's
+    /// retention never folds into a later fence's heads. The leaves' keys are derived from
+    /// the operation, as the append derived them, so only their count is stored. A write
+    /// that fails fails the fence, and the switches stay open for the next one.
+    /// </summary>
+    private async Task RecordBulkBirthClosesAsync(ShardHandOffState marker, List<string> closing, long[] heads)
+    {
+        if (!HasHandOffStorage())
+        {
+            return;
+        }
+
+        var storage = HandOffStorage();
+        var shardKey = context.GrainId.Key.ToString()!;
+        Task[]? writes = null;
+        foreach (var op in closing)
+        {
+            if (!marker.BulkLeafCounts.TryGetValue(op, out var count) || count <= 0)
+            {
+                continue;
+            }
+
+            var token = BulkHandOffToken(op);
+            writes ??= new Task[Math.Min(BulkBirthCloseWriteConcurrency, count)];
+            for (var start = 0; start < count; start += writes.Length)
+            {
+                var batch = Math.Min(writes.Length, count - start);
+                for (var j = 0; j < batch; j++)
+                {
+                    var leaf = DeterministicGuid($"{shardKey}/append/{op}/leaf/{start + j}");
+                    writes[j] = HandOffMarkerRows.UpdateLeafAsync(storage, leaf, m => HandOffMarkerCore.RecordBulkBirthClose(m, token, heads));
+                }
+
+                await Task.WhenAll(new ReadOnlySpan<Task>(writes, 0, batch));
+                Array.Clear(writes);
+            }
+        }
     }
 
     /// <summary>

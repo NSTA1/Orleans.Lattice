@@ -3,14 +3,14 @@
   "refinement": "BulkSwitchRefinement.md",
   "nonBehaviouralActions": ["Stutter"],
   "counts": {
-    "invariants": 6,
+    "invariants": 8,
     "properties": 1,
-    "actions": 21,
-    "mutations": 28,
-    "behaviourRows": 26,
-    "distinctStates": 952198
+    "actions": 23,
+    "mutations": 32,
+    "behaviourRows": 30,
+    "distinctStates": 4624752
   },
   "variants": {
-    "Skip": { "distinctStates": 197156 }
+    "Skip": { "distinctStates": 650328 }
   }
 }

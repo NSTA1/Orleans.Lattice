@@ -3386,7 +3386,7 @@ internal sealed partial class BPlusLeafGrain
         // drive's replay sets the checkpoint only to what it contiguously read (W1).
         if (TakeReportedBoundCatchUp())
         {
-            await DispatchTimerDriveAsync(starvationPartitionCount, "arm=reported-bound-catch-up");
+            await DispatchTimerDriveAsync(starvationPartitionCount, "arm=reported-bound-catch-up", cutFirst: true);
         }
     }
 

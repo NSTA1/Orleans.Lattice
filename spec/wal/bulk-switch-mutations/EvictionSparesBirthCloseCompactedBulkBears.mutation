@@ -1,0 +1,16 @@
+# #6166. Pairs with EvictionSparesBirthClose, the eviction harm: the run's later fence,
+# folded by the shard marker's retention, still reaches a leaf whose own marker holds
+# its birth close, as the range-less compacted heads reached every leaf before #6166,
+# so an old leaf of a long seed is held to the run's newest folded fence.
+MODULE: EvictionSparesBirthCloseCompactedBulkBears
+TARGET: EvictionSparesBirthClose
+CLASS: Invariant
+SUMMARY: a later fence folded into the shard's compacted heads holds a leaf that holds its own birth close
+PERTURBS: LaterFence
+
+--- FIND
+    /\ leafClose' = leafClose
+--- REPLACE
+\* MUTATION: the fold bears on the leaf too.
+    /\ leafClose' = MaxN(leafClose, compactBulk')
+--- END

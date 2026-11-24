@@ -74,4 +74,21 @@ internal sealed class ShardHandOffState : ILatticeBinaryPersistedState, Orleans.
     /// </summary>
     [Id(7)]
     public Guid? ReseedLineage { get; set; }
+
+    /// <summary>
+    /// The per-partition maximum of the heads of every bulk-switch close evicted from
+    /// <see cref="Closes"/> (#6166). Kept apart from <see cref="CompactedHeads"/>: a leaf whose
+    /// bulk birth close is recorded on its own marker is held by that close, not by these,
+    /// so folding a run's later fences never holds it past the switch that bore it.
+    /// </summary>
+    [Id(8)]
+    public long[] CompactedBulkHeads { get; set; } = [];
+
+    /// <summary>
+    /// How many leaves each bulk append still open on the marker created, by operation id
+    /// (#6166): their keys are derived from the operation, so the fence that closes the
+    /// switch records its heads on each leaf's own marker. Removed with the switch's hint.
+    /// </summary>
+    [Id(9)]
+    public Dictionary<string, int> BulkLeafCounts { get; set; } = new(StringComparer.Ordinal);
 }

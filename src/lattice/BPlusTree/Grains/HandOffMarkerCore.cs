@@ -30,7 +30,18 @@ internal static class HandOffMarkerCore
     /// <summary>How many closes a marker retains with their ranges before folding the oldest into its compacted heads.</summary>
     public const int MaxRetainedCloses = 32;
 
-    /// <summary>Opens <paramref name="token"/> over <c>[low, high)</c>; returns whether the marker changed.</summary>
+    /// <summary>The token prefix of a bulk switch's hand-off (<c>ShardRootGrain.BulkHandOffToken</c>).</summary>
+    public const string BulkTokenPrefix = "bulk:";
+
+    /// <summary>Whether <paramref name="token"/> is a bulk switch's.</summary>
+    public static bool IsBulkToken(string? token) =>
+        token is not null && token.StartsWith(BulkTokenPrefix, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Opens <paramref name="token"/> over <c>[low, high)</c>; returns whether the marker changed.
+    /// On a leaf's marker it also revokes any bulk birth close for good (#6166): a hand-off
+    /// onto the leaf may widen it past the range its birth close covers.
+    /// </summary>
     public static bool Open(IHandOffMarker marker, string token, string? lowInclusive, string? highExclusive)
     {
         ArgumentNullException.ThrowIfNull(marker);
@@ -42,7 +53,64 @@ internal static class HandOffMarkerCore
 
         marker.Open[token] = new HandOffMarkerRange { Token = token, LowInclusive = lowInclusive, HighExclusive = highExclusive };
         marker.Sequence++;
+        if (marker is LeafHandOffState leaf)
+        {
+            leaf.BulkBirthClose = LeafHandOffState.BulkBirthCloseRevoked;
+        }
+
         return true;
+    }
+
+    /// <summary>
+    /// Records bulk switch <paramref name="token"/>'s close on the marker of a leaf it bore
+    /// (#6166), with the heads of the fence that closed it, and marks it the leaf's birth
+    /// close unless a hand-off has opened onto the leaf since its birth. A close an earlier
+    /// attempt of the same operation recorded there is raised to these heads, never kept
+    /// below them: the leaf reads no shard bulk close once its own is recorded, so its own
+    /// must cover the latest fence of its switch. Returns whether the marker changed.
+    /// </summary>
+    public static bool RecordBulkBirthClose(LeafHandOffState marker, string token, long[] heads)
+    {
+        ArgumentNullException.ThrowIfNull(marker);
+        ArgumentNullException.ThrowIfNull(heads);
+        if (!IsBulkToken(token))
+        {
+            throw new ArgumentException("A bulk birth close names a bulk switch's token.", nameof(token));
+        }
+
+        var changed = false;
+        HandOffClose? recorded = null;
+        foreach (var close in marker.Closes)
+        {
+            if (string.Equals(close.Token, token, StringComparison.Ordinal))
+            {
+                recorded = close;
+                break;
+            }
+        }
+
+        if (recorded is not null)
+        {
+            var raised = MaxHeads(recorded.Heads, heads);
+            if (!raised.AsSpan().SequenceEqual(recorded.Heads))
+            {
+                recorded.Heads = raised;
+                marker.Sequence++;
+                changed = true;
+            }
+        }
+        else
+        {
+            changed = Close(marker, token, heads);
+        }
+
+        if (marker.BulkBirthClose == LeafHandOffState.BulkBirthCloseNone && marker.Open.Count == 0)
+        {
+            marker.BulkBirthClose = LeafHandOffState.BulkBirthCloseRecorded;
+            changed = true;
+        }
+
+        return changed;
     }
 
     /// <summary>
@@ -542,7 +610,17 @@ internal static class HandOffMarkerCore
 
             if (!IsDeferredAnywhere(close))
             {
-                marker.CompactedHeads = MaxHeads(marker.CompactedHeads, close.Heads);
+                if (marker is ShardHandOffState shard && IsBulkToken(close.Token))
+                {
+                    // #6166: a leaf the switch bore is held by its own marker's copy of this
+                    // close, so the fold is kept apart where that leaf does not read it.
+                    shard.CompactedBulkHeads = MaxHeads(shard.CompactedBulkHeads, close.Heads);
+                }
+                else
+                {
+                    marker.CompactedHeads = MaxHeads(marker.CompactedHeads, close.Heads);
+                }
+
                 marker.Closes.RemoveAt(i);
                 return;
             }
@@ -600,13 +678,26 @@ internal static class HandOffMarkerCore
     /// before it may re-arm: the maximum over every retained close whose range
     /// overlaps the owner, and the compacted heads of every evicted close.
     /// </summary>
-    public static long[] RequiredHeads(IHandOffMarker marker, string? ownerLowInclusive, string? ownerHighExclusive)
+    /// <param name="marker">The marker.</param>
+    /// <param name="ownerLowInclusive">The owner's low bound.</param>
+    /// <param name="ownerHighExclusive">The owner's high bound.</param>
+    /// <param name="excludeBulk">
+    /// Leave out every bulk-switch close and the shard's compacted bulk heads (#6166): for a
+    /// leaf whose own marker holds its bulk birth close.
+    /// </param>
+    public static long[] RequiredHeads(IHandOffMarker marker, string? ownerLowInclusive, string? ownerHighExclusive, bool excludeBulk = false)
     {
         ArgumentNullException.ThrowIfNull(marker);
         var heads = marker.CompactedHeads;
+        if (!excludeBulk && marker is ShardHandOffState { CompactedBulkHeads.Length: > 0 } shard)
+        {
+            heads = MaxHeads(heads, shard.CompactedBulkHeads);
+        }
+
         foreach (var close in marker.Closes)
         {
-            if (Overlaps(close.LowInclusive, close.HighExclusive, ownerLowInclusive, ownerHighExclusive))
+            if ((!excludeBulk || !IsBulkToken(close.Token))
+                && Overlaps(close.LowInclusive, close.HighExclusive, ownerLowInclusive, ownerHighExclusive))
             {
                 heads = MaxHeads(heads, close.Heads);
             }
@@ -624,6 +715,11 @@ internal static class HandOffMarkerCore
     {
         ArgumentNullException.ThrowIfNull(marker);
         var head = HeadAt(marker.CompactedHeads, partition);
+        if (marker is ShardHandOffState shard)
+        {
+            head = Math.Max(head, HeadAt(shard.CompactedBulkHeads, partition));
+        }
+
         foreach (var close in marker.Closes)
         {
             if (Overlaps(close.LowInclusive, close.HighExclusive, ownerLowInclusive, ownerHighExclusive))
@@ -640,19 +736,50 @@ internal static class HandOffMarkerCore
     /// no head at any partition, so a marker with nothing bearing on the owner costs no
     /// array.
     /// </summary>
-    public static long[]? RequiredHeadsOrNull(IHandOffMarker marker, string? ownerLowInclusive, string? ownerHighExclusive)
+    /// <param name="marker">The marker.</param>
+    /// <param name="ownerLowInclusive">The owner's low bound.</param>
+    /// <param name="ownerHighExclusive">The owner's high bound.</param>
+    /// <param name="excludeBulk">As for <see cref="RequiredHeads"/>.</param>
+    public static long[]? RequiredHeadsOrNull(IHandOffMarker marker, string? ownerLowInclusive, string? ownerHighExclusive, bool excludeBulk = false)
     {
         ArgumentNullException.ThrowIfNull(marker);
-        var any = AnyAtOrAbove(marker.CompactedHeads, 0);
+        var any = AnyAtOrAbove(marker.CompactedHeads, 0)
+            || (!excludeBulk && marker is ShardHandOffState shard && AnyAtOrAbove(shard.CompactedBulkHeads, 0));
         foreach (var close in marker.Closes)
         {
-            if (!any && Overlaps(close.LowInclusive, close.HighExclusive, ownerLowInclusive, ownerHighExclusive))
+            if (!any
+                && (!excludeBulk || !IsBulkToken(close.Token))
+                && Overlaps(close.LowInclusive, close.HighExclusive, ownerLowInclusive, ownerHighExclusive))
             {
                 any = AnyAtOrAbove(close.Heads, 0);
             }
         }
 
-        return any ? RequiredHeads(marker, ownerLowInclusive, ownerHighExclusive) : null;
+        return any ? RequiredHeads(marker, ownerLowInclusive, ownerHighExclusive, excludeBulk) : null;
+    }
+
+    /// <summary>
+    /// Whether any bulk-switch close, retained or compacted, on <paramref name="marker"/>
+    /// overlaps the owner of <c>[low, high)</c> (#6166): when none does, the owner's required
+    /// heads with and without them are the same.
+    /// </summary>
+    public static bool AnyBulkCloseBears(ShardHandOffState marker, string? ownerLowInclusive, string? ownerHighExclusive)
+    {
+        ArgumentNullException.ThrowIfNull(marker);
+        if (AnyAtOrAbove(marker.CompactedBulkHeads, 0))
+        {
+            return true;
+        }
+
+        foreach (var close in marker.Closes)
+        {
+            if (IsBulkToken(close.Token) && Overlaps(close.LowInclusive, close.HighExclusive, ownerLowInclusive, ownerHighExclusive))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>The head at <paramref name="partition"/>, or <c>-1</c> when <paramref name="heads"/> is shorter.</summary>

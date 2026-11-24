@@ -56,7 +56,7 @@ and its mutations as the record each module took its own from.
 | `WalAppendEpoch` | 5 | 0 | 17 | 23 | 20 | 150,706 |
 | `WalHandOffFence` | 6 | 1 | 37 | 48 | 42 | 8,826 |
 | `WalRoutingFloor` | 3 | 1 | 14 | 21 | 16 | 28,956 |
-| `WalBulkSwitch` | 6 | 1 | 21 | 28 | 26 | 952,198 |
+| `WalBulkSwitch` | 8 | 1 | 23 | 32 | 30 | 4,624,752 |
 | `WalLiveAdvanceCore` | 18 | 2 | 59 | 138 | 77 | 2,021,047 |
 | `WalLiveAdvanceComposite` | 16 | 0 | 19 | 36 | 18 | 402,394 |
 
@@ -85,8 +85,8 @@ find 4,680,662 (`Free`), 2,386,428 (`FreeKeyMove`), 3,562,343 (`FreeSplitHint`),
 (`FreeReforward`), 1,993,821 (`FreeChainEvict`), 3,045,174 (`FreeOrphanEvict`), 1,032,584
 (`FreeForwardIn`), 712,124 (`FreeEpochOnly`), 1,159,405 (`FreeSplitView`), 1,056,232
 (`FreeOtherLinkRaise`), 8,791 (`FreeKeyFilter`) and 24,397 (`FreeReportFetch`).
-`WalBulkSwitch` searches to depth 29, and its `Skip` variant finds 197,156 distinct
-states to depth 30.
+`WalBulkSwitch` searches to depth 31, and its `Skip` variant finds 650,328 distinct
+states to depth 32.
 `WalLiveAdvanceComposite`'s actions are non-behavioural interface steps, which the five
 modules map to production, except the three WAL shard checks its edges rest on.
 

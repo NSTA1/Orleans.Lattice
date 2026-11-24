@@ -97,6 +97,7 @@ internal sealed partial class BPlusLeafGrain
     /// noting the catch-up read owed where the cut's bounds or concrete close heads alone
     /// hold it (#5851, W1-W5), which the coverage-lag tick dispatches.
     /// </summary>
+    /// <param name="catchUp">The catch-up read's target when one is owed; otherwise -1.</param>
     private long CutAdvanceTarget(
         int partition,
         int partitions,
@@ -104,21 +105,24 @@ internal sealed partial class BPlusLeafGrain
         in WalSplitCut cut,
         LiveAdvanceHandOff handOff,
         string? low,
-        string? high)
+        string? high,
+        out long catchUp)
     {
         var closeHead = LiveAdvanceCloseHead(handOff, low, high, partition);
         if (current >= closeHead - 1 && current >= Math.Max(cut.ForeignHigh, cut.UnstampedWatermark))
         {
+            catchUp = -1;
             return cut.Head - 1;
         }
 
-        NoteReportedBoundCatchUp(partition, partitions, LeafLiveAdvanceCore.SplitCatchUpTarget(
+        catchUp = LeafLiveAdvanceCore.SplitCatchUpTarget(
             current: current,
             closeHead: closeHead,
             closesConcrete: AreCloseHeadsConcrete(handOff, low, high),
             boundPending: HandOffMarkerCore.HasPendingDonorBound(handOff.LeafMarker, low, high),
             foreignHigh: cut.ForeignHigh,
-            watermark: cut.UnstampedWatermark));
+            watermark: cut.UnstampedWatermark);
+        NoteReportedBoundCatchUp(partition, partitions, catchUp);
         return -1;
     }
 
@@ -149,16 +153,63 @@ internal sealed partial class BPlusLeafGrain
         }
     }
 
+    /// <summary>What a stall drive does after <see cref="TryAdvanceCheckpointFromCutAsync"/> (#6166).</summary>
+    internal enum CutAdvanceOutcome
+    {
+        /// <summary>The cut could not be used: the drive replays to the head, as before.</summary>
+        NotTaken,
+
+        /// <summary>Every checkpointed partition stands at or above its cut head minus one: nothing is left to replay.</summary>
+        Reached,
+
+        /// <summary>
+        /// A hand-off open on the shard's marker overlaps the leaf, or the hand-off view could
+        /// not be read for a reason that clears on its own (an undecided descent while a bulk
+        /// graft moves the shard's routing, a failed read). A replay now would be read again
+        /// past what holds it, so the drive waits for the next stall check.
+        /// </summary>
+        Deferred,
+
+        /// <summary>
+        /// Every partition not at its cut head is held only by a read to a known target
+        /// (<see cref="CutCatchUpBoundsForReplay"/>): the drive replays to those targets, never
+        /// to the head, and the next stall check takes the cut.
+        /// </summary>
+        CatchUp,
+    }
+
+    /// <summary>The per-partition catch-up targets the latest cut advance found; per activation, reused; -1 where none.</summary>
+    private long[]? _cutCatchUpBounds;
+
+    /// <summary>
+    /// Inclusive per-partition caps a drive's replay reads no further than (#6166), set for
+    /// the duration of one capped catch-up; <see langword="null"/> otherwise. A cap only
+    /// shortens the read, and the checkpoint moves only to what it read, so it never passes
+    /// a record it did not read.
+    /// </summary>
+    private long[]? _replayReadCap;
+
+    /// <summary>The catch-up targets <see cref="CutAdvanceOutcome.CatchUp"/> reported.</summary>
+    internal long[]? CutCatchUpBoundsForReplay => _cutCatchUpBounds;
+
+    /// <summary>
+    /// The exclusive head a replay of <paramref name="partition"/> reads to: <paramref name="head"/>,
+    /// or one past the capped catch-up target while <see cref="_replayReadCap"/> is set.
+    /// </summary>
+    private long CapReplayHead(int partition, long head) =>
+        _replayReadCap is { } cap && partition < cap.Length && cap[partition] >= 0 && cap[partition] + 1 < head
+            ? cap[partition] + 1
+            : head;
+
     /// <summary>
     /// Advances each checkpointed partition to its consistent cut's head where the cut and
     /// a view read after it prove the leaf has read every record below the head it could
-    /// own (issue #6166); the guard is the split's (<see cref="CutAdvanceTarget"/>). Returns
-    /// whether every checkpointed partition now stands at or above its cut head minus one,
-    /// so a drive would find nothing the cut did not already pass. Never on a write; a
-    /// never-checkpointed partition is left to the starvation drive.
+    /// own (issue #6166); the guard is the split's (<see cref="CutAdvanceTarget"/>). Never on a
+    /// write; a never-checkpointed partition is left to the starvation drive.
     /// </summary>
     /// <param name="partitions">The tree's WAL partition count.</param>
-    internal async Task<bool> TryAdvanceCheckpointFromCutAsync(int partitions)
+    /// <returns>What the drive that asked should do next.</returns>
+    internal async Task<CutAdvanceOutcome> TryAdvanceCheckpointFromCutAsync(int partitions)
     {
         if (_liveAdvanceInFlight
             || !IsCutAdvanceQuiescent()
@@ -167,7 +218,7 @@ internal sealed partial class BPlusLeafGrain
             || !IsPreArmGateOpen()
             || state.State.TreeId is not { Length: > 0 } treeId)
         {
-            return false;
+            return CutAdvanceOutcome.NotTaken;
         }
 
         var anyCheckpointed = false;
@@ -182,7 +233,7 @@ internal sealed partial class BPlusLeafGrain
 
         if (!anyCheckpointed)
         {
-            return false;
+            return CutAdvanceOutcome.NotTaken;
         }
 
         _liveAdvanceInFlight = true;
@@ -197,13 +248,14 @@ internal sealed partial class BPlusLeafGrain
 
             if (!fence.TryGetCutReader(out var reader))
             {
-                return false;
+                return CutAdvanceOutcome.NotTaken;
             }
 
             if (_cutAdvanceScratch is not { } cut || cut.Length != partitions)
             {
                 cut = _cutAdvanceScratch = new WalSplitCut[partitions];
                 _cutAdvanceReads = new Task<WalSplitCut>[partitions];
+                _cutCatchUpBounds = new long[partitions];
             }
 
             try
@@ -216,50 +268,62 @@ internal sealed partial class BPlusLeafGrain
                     ex,
                     "Leaf {LeafId}: could not read a consistent cut; its checkpoint advances by replay (#6166).",
                     context.GrainId);
-                return false;
+                return CutAdvanceOutcome.NotTaken;
             }
 
             // Read after the cut, so every record the cut's heads pass predates the view.
-            if (!IsCutUsable(await ReadLiveAdvanceHandOffAsync(), in reader, out var handOff))
+            var view = await ReadLiveAdvanceHandOffAsync();
+            if (!IsCutUsable(view, in reader, out var handOff))
             {
-                return false;
+                return view is { ShardHeldOpen: true } || (view is null && _handOffViewTransient)
+                    ? CutAdvanceOutcome.Deferred
+                    : CutAdvanceOutcome.NotTaken;
             }
 
             var low = state.State.LowKeyInclusive;
             var high = state.State.HighKeyExclusive;
+            var bounds = _cutCatchUpBounds!;
             var reached = true;
+            var boundedOnly = true;
             for (var p = 0; p < partitions; p++)
             {
+                bounds[p] = -1;
+
                 // Re-checked per partition: a stamp may await a persist, and a write or a
                 // prepare can interleave with it; an own append below the head must be
                 // applied before the head is passed.
                 if (!IsCutAdvanceQuiescent())
                 {
-                    return false;
+                    return CutAdvanceOutcome.NotTaken;
                 }
 
                 var current = GetCurrentCheckpointForPartition(p);
                 if (current < 0 || IsPartitionStaleLatched(p))
                 {
                     reached = false;
+                    boundedOnly = false;
                     continue;
                 }
 
-                var target = CutAdvanceTarget(p, partitions, current, in cut[p], handOff, low, high);
+                var target = CutAdvanceTarget(p, partitions, current, in cut[p], handOff, low, high, out var catchUp);
                 if (target < 0)
                 {
                     reached = false;
+                    bounds[p] = catchUp;
+                    boundedOnly &= catchUp > current;
                     continue;
                 }
 
+                bounds[p] = target > current ? target : current;
                 if (target > current)
                 {
                     await StampAdvanceAsync(p, target, live: false);
                 }
-
             }
 
-            return reached;
+            return reached ? CutAdvanceOutcome.Reached
+                : boundedOnly ? CutAdvanceOutcome.CatchUp
+                : CutAdvanceOutcome.NotTaken;
         }
         finally
         {

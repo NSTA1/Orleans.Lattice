@@ -62,4 +62,23 @@ internal sealed class LeafHandOffState : ILatticeBinaryPersistedState, Orleans.L
     /// <summary>The shard root whose raise <see cref="SiblingLinkedGeneration"/> witnesses (A1); meaningful only while that is above 0.</summary>
     [Id(6)]
     public int SiblingLinkedShard { get; set; }
+
+    /// <summary>
+    /// Whether the leaf's bulk birth close is on this marker (#6166): <see cref="BulkBirthCloseRecorded"/>
+    /// once the fence that closed the bulk switch that bore the leaf recorded its heads here,
+    /// <see cref="BulkBirthCloseRevoked"/> once any hand-off opened onto the leaf, which may
+    /// widen it; <see cref="BulkBirthCloseNone"/> otherwise. While recorded and the leaf's range
+    /// is bounded, the shard marker's bulk-switch closes do not bear on it: this close does.
+    /// </summary>
+    [Id(7)]
+    public int BulkBirthClose { get; set; }
+
+    /// <summary>No bulk birth close is recorded on the marker.</summary>
+    public const int BulkBirthCloseNone = 0;
+
+    /// <summary>The bulk birth close is recorded and the leaf has received no hand-off since its birth.</summary>
+    public const int BulkBirthCloseRecorded = 1;
+
+    /// <summary>A hand-off opened onto the leaf; the shard's bulk-switch closes bear on it again, for good.</summary>
+    public const int BulkBirthCloseRevoked = 2;
 }

@@ -122,6 +122,7 @@ internal static class HandOffMarkerRows
             Sequence = marker.Sequence,
             SiblingLinkedGeneration = marker.SiblingLinkedGeneration,
             SiblingLinkedShard = marker.SiblingLinkedShard,
+            BulkBirthClose = marker.BulkBirthClose,
         };
         foreach (var (token, range) in marker.Open)
         {

@@ -2795,19 +2795,44 @@ internal sealed partial class BPlusLeafGrain
 
             // Issue #6166: a stalled leaf that its consistent cut lets pass the span its
             // replay would read - a leaf behind a sorted bulk append's right edge, that
-            // applies nothing there - takes the cut head instead, and only banks it. A
-            // partition the cut does not pass is replayed by the drive, as before.
-            if (cutFirst && await TryAdvanceCheckpointFromCutAsync(partitionCount))
+            // applies nothing there - takes the cut head instead, and only banks it. One the
+            // cut holds only by a known read replays to that read, never to the head, and
+            // the next stall check takes the cut; one a shard hand-off holds open waits for
+            // its close, past which a replay now would be read again. Otherwise the drive
+            // replays to the head, as before.
+            var cut = cutFirst ? await TryAdvanceCheckpointFromCutAsync(partitionCount) : CutAdvanceOutcome.NotTaken;
+            if (cut is CutAdvanceOutcome.Reached or CutAdvanceOutcome.Deferred)
             {
                 replayed = true;
                 _consecutiveTimerDriveRefusals = 0;
-                await BankDurablePinCoreAsync(partitionCount, flushPendingCheckpoint: true, CancellationToken.None);
+                if (cut == CutAdvanceOutcome.Reached)
+                {
+                    await BankDurablePinCoreAsync(partitionCount, flushPendingCheckpoint: true, CancellationToken.None);
+                }
+                else
+                {
+                    // Nothing was read on this evidence, so the fast stall check may act on
+                    // it again once the hand-off closes, rather than wait for a full pass.
+                    _fastStallEvidenceSpent = false;
+                }
+
                 return;
             }
 
             try
             {
-                var outcome = await DriveStarvedCheckpointAsync(StarvationDriveOrigin.CoverageLagTimer);
+                _replayReadCap = cut == CutAdvanceOutcome.CatchUp ? _cutCatchUpBounds : null;
+                LeafStarvationDriveOutcome outcome;
+                try
+                {
+                    outcome = await DriveStarvedCheckpointAsync(StarvationDriveOrigin.CoverageLagTimer);
+                }
+                finally
+                {
+                    _replayReadCap = null;
+                }
+
+
                 replayed = outcome is LeafStarvationDriveOutcome.Lifted or LeafStarvationDriveOutcome.NoAdvance;
                 if (outcome == LeafStarvationDriveOutcome.AdmissionRefused)
                 {
@@ -7711,8 +7736,8 @@ internal sealed partial class BPlusLeafGrain
         // Every step below is a coordinator call; skip them all once the
         // coordinator type is gone from a stopping cluster (issue #5100).
         ThrowIfReplayCoordinatorWithdrawn();
-        var head = probedHead ?? await ReplaySliceReader.AwaitProviderReadAsync(
-            coordinator.GetHeadOffsetAsync(cancellationToken), cancellationToken);
+        var head = CapReplayHead(partition, probedHead ?? await ReplaySliceReader.AwaitProviderReadAsync(
+            coordinator.GetHeadOffsetAsync(cancellationToken), cancellationToken));
 
         // The offset of the NEWEST entry that actually exists on this partition
         // (issue #2668). These two quantities are measured from different
