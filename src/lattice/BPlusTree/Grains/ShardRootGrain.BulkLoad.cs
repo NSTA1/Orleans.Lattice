@@ -1053,13 +1053,7 @@ internal sealed partial class ShardRootGrain
         // frontier read against the rows it relocates. Best effort - a leaf that
         // cannot be driven now (saturated, or awaiting a rebuild) leaves the append
         // exactly as it was before this drive, starting at its lagging frontier.
-        try
-        {
-            await rightmostLeaf.DriveStarvedCheckpointAsync();
-        }
-        catch (Exception ex) when (ex is LatticeSaturatedException or LeafProjectionStaleException)
-        {
-        }
+        await CatchUpRightmostLeafAsync(rightmostLeaf);
 
         var (graftSeams, existingCount, rightEdge) = await ReadAppendTailAsync(rightmostLeaf);
 
@@ -1102,6 +1096,16 @@ internal sealed partial class ShardRootGrain
             await WalFenceSeamRetry.RunAsync(
                 () => rightmostLeaf.MergeEntriesAsync(batch), WalFenceSeamRetry.CallerShardCoordinator, TreeId);
             CollectMirroredRows(mirrored, batch);
+
+            // Issue #6164: the fill is live writes the drive above did not see,
+            // so the frontier the narrow reads would stay where the drive left it
+            // - at -1 on a fresh tree, where the cap then drops the birth hint and
+            // every leaf this chunk grafts replays the whole WAL later. Banking
+            // the fill here keeps the frontier at the head.
+            if (idx < sortedEntries.Count)
+            {
+                await CatchUpRightmostLeafAsync(rightmostLeaf);
+            }
         }
 
         if (idx >= sortedEntries.Count)
@@ -1182,6 +1186,23 @@ internal sealed partial class ShardRootGrain
 
         await CompleteBulkGraftAsync();
         await MirrorBulkAppendAsync(mirrored, sortedEntries);
+    }
+
+    /// <summary>
+    /// Drives <paramref name="rightmostLeaf"/> to the WAL head (issues #6160,
+    /// #6164). Best effort: a leaf that cannot be driven now (saturated, or
+    /// awaiting a rebuild) keeps its lagging frontier, which only makes the
+    /// graft's cap more conservative.
+    /// </summary>
+    private static async Task CatchUpRightmostLeafAsync(IBPlusLeafGrain rightmostLeaf)
+    {
+        try
+        {
+            await rightmostLeaf.DriveStarvedCheckpointAsync();
+        }
+        catch (Exception ex) when (ex is LatticeSaturatedException or LeafProjectionStaleException)
+        {
+        }
     }
 
     /// <summary>
