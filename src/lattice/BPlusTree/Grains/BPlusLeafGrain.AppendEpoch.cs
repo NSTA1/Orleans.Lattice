@@ -264,7 +264,7 @@ internal sealed partial class BPlusLeafGrain
                 ex,
                 "Leaf {LeafId}: could not prove it is reachable by descent; it appends unstamped and tries again after a backoff (epic #5605, #5709).",
                 context.GrainId);
-            fence.OnReachabilityUndecided();
+            fence.OnReachabilityUndecided("leaf.gate-view.close.proof-failed");
         }
     }
 

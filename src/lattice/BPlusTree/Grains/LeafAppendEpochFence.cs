@@ -1236,7 +1236,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     {
         lock (_sync)
         {
-            CloseGateViewLocked(MethodUnknownBackoff);
+            CloseGateViewLocked(MethodUnknownBackoff, "leaf.gate-view.close.method-unknown");
         }
     }
 
@@ -1245,7 +1245,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     {
         lock (_sync)
         {
-            CloseGateViewLocked(ClaimFailureBackoffForTesting);
+            CloseGateViewLocked(ClaimFailureBackoffForTesting, "leaf.gate-view.close.claims-exhausted");
         }
     }
 
@@ -1277,8 +1277,12 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
         }
     }
 
-    private void CloseGateViewLocked(TimeSpan backoff) =>
+    private void CloseGateViewLocked(TimeSpan backoff, string censusReason)
+    {
+        // #6166: which backoff sends this activation's appends unstamped, on the census.
+        AwaitDiagnostics.Count(censusReason);
         _gateClosedUntilTicks = Environment.TickCount64 + (long)backoff.TotalMilliseconds;
+    }
 
     private bool IsGateOpenLocked() =>
         IsGateViewOpenLocked()
@@ -1451,11 +1455,11 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     /// The proof could not be decided (the shard root could not be asked): the activation
     /// appends unstamped for a backoff, then proves again.
     /// </summary>
-    internal void OnReachabilityUndecided()
+    internal void OnReachabilityUndecided(string censusReason = "leaf.gate-view.close.proof-undecided")
     {
         lock (_sync)
         {
-            CloseGateViewLocked(ClaimFailureBackoffForTesting);
+            CloseGateViewLocked(ClaimFailureBackoffForTesting, censusReason);
         }
     }
 
@@ -1500,7 +1504,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
                 _markerChecked = false;
             }
 
-            CloseGateViewLocked(ClaimFailureBackoffForTesting);
+            CloseGateViewLocked(ClaimFailureBackoffForTesting, "leaf.gate-view.close.unreachable-suspected");
             return false;
         }
     }

@@ -788,7 +788,7 @@ internal sealed partial class BPlusLeafGrain
                 // #5876, D2: an undecided descent is no verdict - no latch, no proof, no
                 // promotion, and at the split cut no hint; the leaf appends unstamped for a
                 // backoff (R1).
-                _appendFence?.OnReachabilityUndecided();
+                _appendFence?.OnReachabilityUndecided("leaf.gate-view.close.live-view-undecided");
                 _handOffViewTransient = true;
                 return null;
             }
