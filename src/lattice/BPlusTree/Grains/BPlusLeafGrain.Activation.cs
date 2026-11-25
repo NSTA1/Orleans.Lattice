@@ -661,6 +661,7 @@ internal sealed partial class BPlusLeafGrain
             _replayConcurrencyGate = null;
             _replayConcurrencyCeiling = 0;
             Volatile.Write(ref _starvationReplayPermits, 0);
+            Volatile.Write(ref _timerCutDrives, 0);
             Volatile.Write(ref _sweepDriveRefusedAt, 0);
             Volatile.Write(ref _withheldReplayPermits, 0);
             _serviceWithheldReplayPermits = 0;
@@ -2429,6 +2430,47 @@ internal sealed partial class BPlusLeafGrain
         Interlocked.Decrement(ref _starvationReplayPermits);
     }
 
+    /// <summary>Process-wide count of coverage-lag timer drives reading their consistent cut (#6166).</summary>
+    private static int _timerCutDrives;
+
+    /// <summary>
+    /// Admits a coverage-lag timer drive to read its consistent cut (#6166): at most as many
+    /// at once on this silo as a timer drive may hold of the replay gate's GC share
+    /// (<see cref="StarvationReplayLimit"/>), never queueing. Unbounded, every resident
+    /// leaf's stall drive read its cut together, so the background load grew with the tree.
+    /// Holds no replay permit: a cut reads no WAL. Before the gate is sized no replay has run
+    /// here, and the drive is admitted. The caller decrements <see cref="_timerCutDrives"/>.
+    /// </summary>
+    private static bool TryEnterTimerCutDrive()
+    {
+        var ceiling = Volatile.Read(ref _replayConcurrencyCeiling);
+        if (ceiling <= 0)
+        {
+            Interlocked.Increment(ref _timerCutDrives);
+            return true;
+        }
+
+        var limit = StarvationReplayLimit(
+            CirculatingReplayPermits(ceiling, Volatile.Read(ref _withheldReplayPermits)),
+            StarvationDriveOrigin.CoverageLagTimer);
+        while (true)
+        {
+            var held = Volatile.Read(ref _timerCutDrives);
+            if (held >= limit)
+            {
+                return false;
+            }
+
+            if (Interlocked.CompareExchange(ref _timerCutDrives, held + 1, held) == held)
+            {
+                return true;
+            }
+        }
+    }
+
+    /// <summary>Holds <paramref name="count"/> timer cut-drive slots, or releases them when negative; test seam.</summary>
+    internal static void AdjustTimerCutDrivesForTest(int count) => Interlocked.Add(ref _timerCutDrives, count);
+
     /// <summary>
     /// Whether a WAL GC sweep drive was refused within
     /// <see cref="SweepDriveRefusalTimerYield"/> and no sweep drive has been
@@ -2784,6 +2826,11 @@ internal sealed partial class BPlusLeafGrain
             {
                 _timerDriveDeferrals--;
                 ObserveDriverDecline(LatticeMetrics.DriverDeclineRecheckDriveDeferred);
+
+                // #6166: a deferred opportunity reads nothing, as a refused one does, so the
+                // fast stall check may act on the same evidence again; spent, the leaf was
+                // left to the full pass, minutes away, though its backoff had a tick to run.
+                _fastStallEvidenceSpent = false;
                 return;
             }
 
@@ -2800,11 +2847,36 @@ internal sealed partial class BPlusLeafGrain
             // the next stall check takes the cut; one a shard hand-off holds open waits for
             // its close, past which a replay now would be read again. Otherwise the drive
             // replays to the head, as before.
-            var cut = cutFirst ? await TryAdvanceCheckpointFromCutAsync(partitionCount) : CutAdvanceOutcome.NotTaken;
+            var cut = CutAdvanceOutcome.NotTaken;
             if (cutFirst)
             {
+                // #6166: a cut drive is admitted to the replay gate's timer share, as the
+                // replay drive below is, and holds it only while it reads the cut. Unadmitted,
+                // every resident leaf's stall drive read the cut at once, so the background
+                // load grew with the tree - on the rig it crowded a bulk seed off the WAL
+                // shards and storage it appends to. Counted against the timer's share of the
+                // replay gate's width, as its replay is, but holding no replay permit: a cut
+                // reads no WAL, so it must not crowd out a replay or count as one.
+                if (!TryEnterTimerCutDrive())
+                {
+                    AwaitDiagnostics.Count("leaf.drive.cut.admission-refused");
+                    BackOffRefusedTimerDrive();
+                    _fastStallEvidenceSpent = false;
+                    return;
+                }
+
+                try
+                {
+                    cut = await TryAdvanceCheckpointFromCutAsync(partitionCount);
+                }
+                finally
+                {
+                    Interlocked.Decrement(ref _timerCutDrives);
+                }
+
                 CountDriveCut(cut);
             }
+
             if (cut is CutAdvanceOutcome.Reached or CutAdvanceOutcome.Deferred)
             {
                 replayed = true;

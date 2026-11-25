@@ -66,6 +66,7 @@ internal sealed partial class WalShardGrain
             var watermark = UnstampedHighForRangeLocked(lowInclusive, highExclusive);
             if (AwaitDiagnostics.Enabled)
             {
+                CountCutForeignSource(reader, bound);
                 // #6166: whether the range's bound is the shared floor - left at a restart's
                 // recovered head, or raised since - a tabled record, or nothing at all.
                 AwaitDiagnostics.Count(watermark < 0 ? "wal.cut.watermark.none"
@@ -107,6 +108,40 @@ internal sealed partial class WalShardGrain
         AwaitDiagnostics.Count(string.Concat("wal.cut.head.lag.", reason));
         AwaitDiagnostics.Add("wal.cut.head.lag-offsets", lag);
         AwaitDiagnostics.Count(string.Concat("wal.cut.head.lag.log2-", (64 - System.Numerics.BitOperations.LeadingZeroCount((ulong)lag)).ToString(System.Globalization.CultureInfo.InvariantCulture)));
+    }
+
+    /// <summary>
+    /// Counts, on the benchmark census (#6166), what set a cut's foreign high: nothing, the
+    /// restart floor (everything below the recovered head is unattributed, K5), the reader's
+    /// eviction bucket floor (a fold dropped some leaf of its bucket, O2b), the reader's own
+    /// table entry, or a donor close. Called under <see cref="_stateGate"/>, only when the
+    /// diagnostic is enabled.
+    /// </summary>
+    private void CountCutForeignSource(in WalAppendStamp reader, long bound)
+    {
+        if (bound < 0)
+        {
+            AwaitDiagnostics.Count("wal.cut.foreign.none");
+            return;
+        }
+
+        if (reader.LeafId == Guid.Empty)
+        {
+            AwaitDiagnostics.Count("wal.cut.foreign.no-leaf");
+            return;
+        }
+
+        var tableHigh = _leafAuthors is not null && _leafAuthors.TryGetValue(reader.LeafId, out var authors)
+            ? authors.ForeignHigh(reader.Activation, reader.ReaderTag)
+            : -1;
+        var bucketFloor = _leafAuthorBucketFloors is { } floors
+            ? floors[LeafAuthorBucket(reader.LeafId, floors.Length)]
+            : -1;
+        AwaitDiagnostics.Count(
+            tableHigh >= bound ? "wal.cut.foreign.table"
+            : bucketFloor >= bound && bucketFloor > _leafAuthorsRestartFloor ? "wal.cut.foreign.bucket-floor"
+            : _leafAuthorsRestartFloor >= bound ? (_leafAuthorsRestartFloor > 0 ? "wal.cut.foreign.restart-floor" : "wal.cut.foreign.fresh-floor")
+            : "wal.cut.foreign.close");
     }
 
     /// <summary>The most leaves whose authors one shard activation tracks before it folds them into the floor.</summary>
@@ -342,6 +377,7 @@ internal sealed partial class WalShardGrain
         }
 
         LeafAuthorFoldsForTesting++;
+        AwaitDiagnostics.Count("wal.leaf-authors.fold");
         var highs = ArrayPool<long>.Shared.Rent(count);
         try
         {
@@ -368,6 +404,7 @@ internal sealed partial class WalShardGrain
 
                     _leafAuthorsFloor = Math.Max(_leafAuthorsFloor, entry.AllHigh);
                     authors.Remove(leaf);
+                    AwaitDiagnostics.Count("wal.leaf-authors.evicted");
                 }
             }
         }

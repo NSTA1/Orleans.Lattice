@@ -201,4 +201,38 @@ public partial class BPlusLeafGrainTests
         });
         await rig.Shard.DidNotReceive().GetSplitCutAsync(Arg.Any<WalAppendStamp>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
     }
+
+    [Test]
+    [NonParallelizable]
+    public async Task CutAdvance_a_timer_drive_takes_the_cut_only_inside_the_timer_share()
+    {
+        // #6166: every resident leaf's stall drive read its cut unadmitted, so the
+        // background load grew with the tree and crowded a bulk seed off the WAL shards.
+        // The cut is now admitted against the timer's share of the replay gate's width,
+        // as the replay drive is, holding no replay permit.
+        BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
+        BPlusLeafGrain.SeedReplayAdmissionStateForTest(ceiling: TimerAdmissionCeiling, queued: 0);
+        var (grain, rig) = await IdleCutLeafAsync(new WalSplitCut(Head: 40, ForeignHigh: -1, UnstampedWatermark: -1));
+        var held = 0;
+        try
+        {
+            await grain.DispatchTimerDriveAsync(1, "arm=test", cutFirst: true);
+            Assert.That(grain.GetCurrentCheckpointForPartition(0), Is.EqualTo(39L), "precondition: an admitted cut drive takes the cut head");
+
+            // A four-permit gate leaves the timer one slot of its two-slot share; it is taken.
+            BPlusLeafGrain.AdjustTimerCutDrivesForTest(held = 1);
+            rig.Shard.ClearReceivedCalls();
+            rig.Shard.GetSplitCutAsync(Arg.Any<WalAppendStamp>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new WalSplitCut(Head: 80, ForeignHigh: -1, UnstampedWatermark: -1)));
+            await grain.DispatchTimerDriveAsync(1, "arm=test", cutFirst: true);
+
+            Assert.That(grain.GetCurrentCheckpointForPartition(0), Is.EqualTo(39L), "a cut drive refused the timer share advanced");
+            await rig.Shard.DidNotReceive().GetSplitCutAsync(Arg.Any<WalAppendStamp>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            BPlusLeafGrain.AdjustTimerCutDrivesForTest(-held);
+            BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
+        }
+    }
 }
