@@ -287,6 +287,8 @@ static async Task RunOrleansClientProducerAsync(string[] args)
     };
 
     Console.WriteLine($"[producer] mode=orleans-client vehicles={vehicleCount} tickHz={tickHz} duration={duration}s clients={clientCount}");
+
+    Console.WriteLine(BenchHostIdentity.Describe("producer"));
     Console.WriteLine($"[producer] settings treeId={settings.TreeId} tcpPort={settings.TcpPort} batch={settings.BatchSize} flushMs={settings.FlushInterval.TotalMilliseconds:F0} flushConcurrency={settings.FlushConcurrency} pointFanOut={settings.EffectivePointFanOut} walPartitions={settings.WalPartitions} walMaxPending={settings.WalMaxPendingBatches} shardCountOverride={settings.ShardCountOverride} responseTimeoutSec={settings.ResponseTimeoutSec} workloadMode={BenchWorkloadMetadata.FormatWorkloadMode(settings.WorkloadMode)} atomicBatchSize={settings.AtomicBatchSize} preseedKeyCount={settings.PreseedKeyCount} preseedStartOffset={preseedStartOffset} preseedSkip={(preseedSkip ? 1 : 0)} readKeySpace={readKeySpace} walAccounts={settings.WalAccounts} walAccountsRequested={walAccountsRequested} walExtraAccounts={walExtraAccountUris.Length} clusteringTable={clusteringTable}");
 
     // One IClusterClient reaches exactly one silo for this workload. Orleans
