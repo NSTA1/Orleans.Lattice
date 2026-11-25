@@ -156,7 +156,18 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
             Assert.That(marker.Closes.Single(c => c.Token == "bulk:op-hint").Heads, Is.Not.Empty.And.All.EqualTo(CloseHead),
                 "the close records the heads the routing-generation re-claim returned");
             Assert.That(marker.BulkBirthHints, Does.Not.ContainKey("op-hint"), "the hint is removed with the close");
+            Assert.That(marker.BulkNarrowedLeaves, Does.Not.ContainKey("op-hint"), "the narrowed leaf is removed with the close");
             Assert.That(marker.RoutingGeneration, Is.GreaterThan(0), "the close raised the routing generation");
+        });
+
+        // #6166: the narrowed leaf, which no bulk append bore, is held by the switch's own
+        // close rather than by the shard's folded bulk closes.
+        var narrowedMarker = (await HandOffMarkerRows.ReadLeafAsync(rig.Storage, existing.GetGuidKey())).State;
+        Assert.Multiple(() =>
+        {
+            Assert.That(narrowedMarker.BulkBirthClose, Is.EqualTo(LeafHandOffState.BulkBirthCloseRecorded),
+                "the leaf the switch narrowed kept reading the shard's folded bulk closes");
+            Assert.That(narrowedMarker.Closes.Single(c => c.Token == "bulk:op-hint").Heads, Is.Not.Empty.And.All.EqualTo(CloseHead));
         });
 
         Assert.That(hintedAtClose, Is.EqualTo(appended.Count), "the hint is applied before the fence closes the switch");
