@@ -52,6 +52,26 @@ internal sealed partial class BPlusLeafGrain
             HandOffMarkerCore.HeadAt(handOff.ShardCloseHeads, partition));
 
     /// <summary>
+    /// For the benchmark census (#6166), which close holds a cut at <paramref name="partition"/>:
+    /// the leaf's own marker or the shard's bulk-switch closes, with the leaf's birth-close
+    /// state and whether its range is still open at the tail - the two cases in which a leaf
+    /// reads the shard's closes, which a later fence of the run may have raised to near the
+    /// head. Called only when the diagnostic is enabled.
+    /// </summary>
+    private static string CloseHoldSource(LiveAdvanceHandOff handOff, string? low, string? high, int partition)
+    {
+        var fromShard = HandOffMarkerCore.HeadAt(handOff.ShardCloseHeads, partition)
+            >= HandOffMarkerCore.RequiredHead(handOff.LeafMarker, low, high, partition);
+        var birth = handOff.LeafMarker.BulkBirthClose switch
+        {
+            LeafHandOffState.BulkBirthCloseRecorded => "birth-recorded",
+            LeafHandOffState.BulkBirthCloseRevoked => "birth-revoked",
+            _ => "birth-none",
+        };
+        return string.Concat(fromShard ? ".shard." : ".leaf.", birth, high is null ? ".open-high" : ".bounded");
+    }
+
+    /// <summary>
     /// Stamps <paramref name="target"/> as partition <paramref name="partition"/>'s
     /// checkpoint. A <paramref name="live"/> stamp records the live advance's origin and
     /// is not counted as replay progress by the stall check; any other stamp is a read
@@ -345,7 +365,7 @@ internal sealed partial class BPlusLeafGrain
                     {
                         var closeHead = LiveAdvanceCloseHead(handOff, low, high, p);
                         heldBy = (catchUp > current ? "catch-up-" : "unbounded-")
-                            + (current < closeHead - 1 ? "close" : current < cut[p].ForeignHigh ? "foreign" : "watermark");
+                            + (current < closeHead - 1 ? "close" + CloseHoldSource(handOff, low, high, p) : current < cut[p].ForeignHigh ? "foreign" : "watermark");
                     }
 
                     continue;
