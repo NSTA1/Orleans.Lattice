@@ -1134,7 +1134,7 @@ internal sealed partial class ShardRootGrain
         // leaves the append creates rides the same write, so the fence that closes the
         // switch can record its heads on each of them.
         var newLeafCount = 1 + (sortedEntries.Count - idx - 1) / maxLeafKeys;
-        await BeginBulkSwitchAsync(operationId, sortedEntries[idx].Key, bornLeaves: newLeafCount);
+        await BeginBulkSwitchAsync(operationId, sortedEntries[idx].Key, bornLeaves: newLeafCount, narrowedLeaf: rightmostLeafId.GetGuidKey());
 
         // #5812: the appended leaves are seeded under the open switch with the bulk-seed
         // class, so the seed claims no append epoch for a leaf not yet grafted.

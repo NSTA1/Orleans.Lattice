@@ -103,7 +103,7 @@ internal sealed partial class ShardRootGrain
     /// never-written fallback of #5812): no hint is stored or applied, so they read from
     /// the log's start, and only the marker opens.
     /// </param>
-    private async Task<long[]?> BeginBulkSwitchAsync(string operationId, string? lowInclusive, bool withHint = true, int bornLeaves = 0)
+    private async Task<long[]?> BeginBulkSwitchAsync(string operationId, string? lowInclusive, bool withHint = true, int bornLeaves = 0, Guid narrowedLeaf = default)
     {
         if (!IsAppendFenceGateOpen() || !HasHandOffStorage())
         {
@@ -151,6 +151,7 @@ internal sealed partial class ShardRootGrain
 
                     changed |= m.BulkBirthHints.Remove(op);
                     changed |= m.BulkLeafCounts.Remove(op);
+                    changed |= m.BulkNarrowedLeaves.Remove(op);
                 }
             }
 
@@ -162,6 +163,11 @@ internal sealed partial class ShardRootGrain
             if (bornLeaves > 0)
             {
                 changed |= m.BulkLeafCounts.TryAdd(operationId, bornLeaves);
+            }
+
+            if (narrowedLeaf != Guid.Empty)
+            {
+                changed |= m.BulkNarrowedLeaves.TryAdd(operationId, narrowedLeaf);
             }
 
             opened = HandOffMarkerCore.Open(m, token, lowInclusive, null);
@@ -284,6 +290,7 @@ internal sealed partial class ShardRootGrain
 
                 changed |= m.BulkBirthHints.Remove(op);
                 changed |= m.BulkLeafCounts.Remove(op);
+                changed |= m.BulkNarrowedLeaves.Remove(op);
             }
 
             return changed | closed > 0;
@@ -320,12 +327,18 @@ internal sealed partial class ShardRootGrain
         Task[]? writes = null;
         foreach (var op in closing)
         {
+            var token = BulkHandOffToken(op);
+            if (marker.BulkNarrowedLeaves.TryGetValue(op, out var narrowed))
+            {
+                // The leaf the switch narrowed, unless a bulk append bore it (#6166).
+                await HandOffMarkerRows.UpdateLeafAsync(storage, narrowed, m => HandOffMarkerCore.RecordNarrowedBirthClose(m, token, heads));
+            }
+
             if (!marker.BulkLeafCounts.TryGetValue(op, out var count) || count <= 0)
             {
                 continue;
             }
 
-            var token = BulkHandOffToken(op);
             writes ??= new Task[Math.Min(BulkBirthCloseWriteConcurrency, count)];
             for (var start = 0; start < count; start += writes.Length)
             {

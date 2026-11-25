@@ -119,6 +119,34 @@ public sealed class HandOffMarkerBulkBirthCloseTests
     }
 
     [Test]
+    public void A_narrowed_leaf_takes_the_switch_close_only_when_no_bulk_append_bore_it_and_nothing_opened_onto_it()
+    {
+        // #6166: a leaf no bulk append bore - the shard's first - narrowed below a switch,
+        // reads that switch's close as its own rather than the shard's folded bulk closes.
+        var unborn = new LeafHandOffState();
+        var born = new LeafHandOffState();
+        HandOffMarkerCore.RecordBulkBirthClose(born, "bulk:birth", [5]);
+        var opened = new LeafHandOffState();
+        HandOffMarkerCore.Open(opened, "reclaim:x", null, null);
+        HandOffMarkerCore.Close(opened, "reclaim:x", [4]);
+
+        var recorded = HandOffMarkerCore.RecordNarrowedBirthClose(unborn, "bulk:narrow", [9]);
+        var bornChanged = HandOffMarkerCore.RecordNarrowedBirthClose(born, "bulk:narrow", [9]);
+        var openedChanged = HandOffMarkerCore.RecordNarrowedBirthClose(opened, "bulk:narrow", [9]);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(recorded, Is.True);
+            Assert.That(unborn.BulkBirthClose, Is.EqualTo(LeafHandOffState.BulkBirthCloseRecorded));
+            Assert.That(HandOffMarkerCore.RequiredHead(unborn, "a", "k", 0), Is.EqualTo(9L), "the narrowing switch's close does not hold the leaf");
+            Assert.That(bornChanged, Is.False, "a later narrow raised a bulk-born leaf's own close past its switch's");
+            Assert.That(HandOffMarkerCore.RequiredHead(born, "a", "k", 0), Is.EqualTo(5L));
+            Assert.That(openedChanged, Is.False, "a leaf a hand-off opened onto, which may be widened, stopped reading the shard's bulk closes");
+            Assert.That(opened.BulkBirthClose, Is.EqualTo(LeafHandOffState.BulkBirthCloseRevoked));
+        });
+    }
+
+    [Test]
     public void Only_a_bulk_switch_token_records_a_bulk_birth_close()
     {
         Assert.Throws<ArgumentException>(() => HandOffMarkerCore.RecordBulkBirthClose(new LeafHandOffState(), "split:d", [1]));

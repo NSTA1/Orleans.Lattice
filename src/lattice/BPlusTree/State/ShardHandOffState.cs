@@ -91,4 +91,15 @@ internal sealed class ShardHandOffState : ILatticeBinaryPersistedState, Orleans.
     /// </summary>
     [Id(9)]
     public Dictionary<string, int> BulkLeafCounts { get; set; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// The rightmost leaf each bulk append still open on the marker narrows, by operation id
+    /// (#6166): a leaf no bulk append bore - the shard's first leaf, or a bulk load's last -
+    /// whose own marker holds no birth close otherwise reads the shard's folded bulk closes,
+    /// to the run's newest fence, though every later switch lies to the right of its range.
+    /// The fence that closes the switch records its heads on that leaf's marker too.
+    /// Removed with the switch's hint.
+    /// </summary>
+    [Id(10)]
+    public Dictionary<string, Guid> BulkNarrowedLeaves { get; set; } = new(StringComparer.Ordinal);
 }

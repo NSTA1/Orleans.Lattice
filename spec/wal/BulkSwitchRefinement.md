@@ -148,7 +148,7 @@ design model ([`LiveAdvanceInterface.md`](LiveAdvanceInterface.md)).
 | `closeHead` | The heads the operation's token's last close recorded | The close heads `HandOffMarkerCore.Close` records on the shard marker. |
 | `seedUnder` | How each seed record was admitted: under an open token, reported, or neither | Modelling device for `SeedCovered`. |
 | `aborted` | Environment budget: the operation abandoned once before publication | Modelling device; the caller's retry of the same operation id. |
-| `leafClose` | The close head N's own hand-off marker records for its switch (#6166) | `HandOffMarkerCore.RecordBulkBirthClose` on `LeafHandOffState`, with `LeafHandOffState.BulkBirthClose`, written by `ShardRootGrain.RecordBulkBirthClosesAsync` for every leaf `ShardHandOffState.BulkLeafCounts` records. |
+| `leafClose` | The close head N's own hand-off marker records for its switch (#6166) | `HandOffMarkerCore.RecordBulkBirthClose` on `LeafHandOffState`, with `LeafHandOffState.BulkBirthClose`, written by `ShardRootGrain.RecordBulkBirthClosesAsync` for every leaf `ShardHandOffState.BulkLeafCounts` records. The leaf the switch narrows takes the same close only when no bulk append bore it (`HandOffMarkerCore.RecordNarrowedBirthClose`, `ShardHandOffState.BulkNarrowedLeaves`); see the gap on the narrowed leaf's own close. |
 | `shardClose`, `compactBulk` | The shard marker's retained close of the switch, and the compacted heads its retention folds bulk-switch closes into (#6166) | `ShardHandOffState.Closes` and `ShardHandOffState.CompactedBulkHeads`, folded by `HandOffMarkerCore.EvictOldestClose`; a leaf holding its own birth close reads neither (`LeafLiveAdvanceView.NonBulkCloseHeads`). |
 | `laterFenced` | Environment budget: one later fence of the run folded into the compacted bulk heads | Modelling device. |
 
@@ -262,6 +262,22 @@ at its properties and re-anchored on its text.
   Production symbols: `BPlusLeafGrain.MergeBulkSeedAsync`, `BulkSeedAppendFence`, `ShardRootGrain.BulkSeedRoutingAsync`.
 - **Shadow markers move with the relocation, outside the model.** The model has no sagas or reshard migration, so it does not check that a relocated row keeps its read gate. Production now moves them with the graft (#5755): before the narrow hands its rows back, the old leaf installs on each appended leaf a shadow marker for every saga still isolating a key relocated there, prepared and not yet terminal or a migrated row, as a split and a span forward do. Tests pin it: `BPlusLeafGrainTests.Graft_narrow_moves_shadow_markers_to_the_appended_leaf_each_row_relocates_to` and `BPlusLeafGrainTests.Graft_narrow_moves_locally_prepared_saga_buckets_for_relocated_keys`.
   Production symbols: `BPlusLeafGrain.TransferShadowMarkersToGraftAsync`, `BPlusLeafGrain.TransferShadowMarkersToSiblingAsync`, `BPlusLeafGrain.NarrowHighKeyAsync`.
+- **The narrowed leaf's own close is not modelled (#6166).** O's read position is
+  modelled only as far as N relies on it; what O must read before it passes a record
+  without reading is not. After `Narrow` O declares only keys below K: `ReplayO` holds no
+  record of K, and no seed, relocation or later switch's record lies in its range, since
+  every later switch opens above the then-rightmost leaf. So no bulk close bears on O
+  past its narrow. A leaf no bulk append bore (the shard's first, or a bulk load's last)
+  would otherwise read the shard's folded bulk closes, to the run's newest fence, as no
+  close of its own is recorded; on the 3M rig that was one leaf per shard replaying a
+  segment on every partition. The fence records the narrowing switch's close on that
+  leaf's marker as its birth close, which is conservative: every earlier close bearing on
+  it - its bulk load's, or an earlier switch it straddled after a narrow that timed out -
+  was fenced earlier, so its heads lie below this one's. A leaf a bulk append bore keeps
+  its own switch's close, and a leaf a hand-off opened onto keeps reading the shard's.
+  Pinned by `HandOffMarkerBulkBirthCloseTests.A_narrowed_leaf_takes_the_switch_close_only_when_no_bulk_append_bore_it_and_nothing_opened_onto_it`
+  and `ShardRootGrainBulkLoadGraftTests.A_bulk_append_applies_its_hint_to_every_appended_leaf_and_the_runs_close_closes_its_marker_by_fence`.
+  Production symbols: `HandOffMarkerCore.RecordNarrowedBirthClose`, `ShardRootGrain.RecordBulkBirthClosesAsync`, `ShardHandOffState.BulkNarrowedLeaves`.
 - **The persisted drop.** The old leaf persists its drop, so a reloaded snapshot cannot
   bring the relocated rows back outside its span; the model has no snapshot of the old
   leaf, and its counts are not modelled.

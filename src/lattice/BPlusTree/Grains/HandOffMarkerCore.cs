@@ -114,6 +114,23 @@ internal static class HandOffMarkerCore
     }
 
     /// <summary>
+    /// Records bulk switch <paramref name="token"/>'s close on the marker of the leaf the
+    /// switch narrowed (#6166), as its birth close, only when that leaf holds no birth close
+    /// and no hand-off has ever opened onto it: a leaf no bulk append bore. Narrowed below
+    /// the switch's range, it owns no record that switch or any later one appends, and
+    /// every earlier close bearing on it lies below this fence's heads, so it may read this
+    /// close in place of the shard's folded bulk closes. A bulk-born leaf keeps its own
+    /// switch's close, which a later narrow never raises. Returns whether the marker changed.
+    /// </summary>
+    public static bool RecordNarrowedBirthClose(LeafHandOffState marker, string token, long[] heads)
+    {
+        ArgumentNullException.ThrowIfNull(marker);
+        return marker.BulkBirthClose == LeafHandOffState.BulkBirthCloseNone
+            && marker.Open.Count == 0
+            && RecordBulkBirthClose(marker, token, heads);
+    }
+
+    /// <summary>
     /// Records the close of <paramref name="token"/> with the heads its fence
     /// returned, and removes it from the open hand-offs. Returns whether the marker
     /// changed: a close already recorded is a no-op. A close of a token that was
