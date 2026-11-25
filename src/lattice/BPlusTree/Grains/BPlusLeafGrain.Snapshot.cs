@@ -3130,7 +3130,7 @@ internal sealed partial class BPlusLeafGrain
         }
 
         _fastStallEvidenceSpent = true;
-        await DispatchTimerDriveAsync(partitionCount, "arm=stalled-drive-fast");
+        await DispatchTimerDriveAsync(partitionCount, "arm=stalled-drive-fast", cutFirst: true);
     }
 
     /// <summary>
@@ -3318,7 +3318,7 @@ internal sealed partial class BPlusLeafGrain
                 return;
             }
 
-            await DispatchTimerDriveAsync(starvationPartitionCount, "arm=stalled-drive");
+            await DispatchTimerDriveAsync(starvationPartitionCount, "arm=stalled-drive", cutFirst: true);
             return;
         }
 
@@ -3386,7 +3386,7 @@ internal sealed partial class BPlusLeafGrain
         // drive's replay sets the checkpoint only to what it contiguously read (W1).
         if (TakeReportedBoundCatchUp())
         {
-            await DispatchTimerDriveAsync(starvationPartitionCount, "arm=reported-bound-catch-up");
+            await DispatchTimerDriveAsync(starvationPartitionCount, "arm=reported-bound-catch-up", cutFirst: true);
         }
     }
 

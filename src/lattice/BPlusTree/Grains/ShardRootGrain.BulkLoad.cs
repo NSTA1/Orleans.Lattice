@@ -1118,15 +1118,17 @@ internal sealed partial class ShardRootGrain
 
         // Epic #5605, member 3: the switch's birth hint and its marker, stored before
         // the first appended leaf is created. The marker covers the appended range
-        // only; the old rightmost leaf is narrowed to its low bound.
-        await BeginBulkSwitchAsync(operationId, sortedEntries[idx].Key);
+        // only; the old rightmost leaf is narrowed to its low bound. #6166: the count of
+        // leaves the append creates rides the same write, so the fence that closes the
+        // switch can record its heads on each of them.
+        var newLeafCount = 1 + (sortedEntries.Count - idx - 1) / maxLeafKeys;
+        await BeginBulkSwitchAsync(operationId, sortedEntries[idx].Key, bornLeaves: newLeafCount);
 
         // #5812: the appended leaves are seeded under the open switch with the bulk-seed
         // class, so the seed claims no append epoch for a leaf not yet grafted.
         var seedRouting = await BulkSeedRoutingAsync(operationId);
 
         var graftEntries = new List<GraftEntry>();
-        var newLeafCount = 1 + (sortedEntries.Count - idx - 1) / maxLeafKeys;
         var newLeafIds = new GrainId[newLeafCount];
         for (var i = 0; i < newLeafCount; i++)
         {

@@ -2769,7 +2769,7 @@ internal sealed partial class BPlusLeafGrain
     /// together - do not come back together. A drive that is admitted resets it.
     /// </para>
     /// </summary>
-    private async Task DriveStarvedCheckpointFromTimerAsync(int partitionCount)
+    private async Task DriveStarvedCheckpointFromTimerAsync(int partitionCount, bool cutFirst = false)
     {
         // #5851, N1: a drive that never ran its replay re-arms the reported-bound catch-up.
         var replayed = false;
@@ -2793,13 +2793,55 @@ internal sealed partial class BPlusLeafGrain
                 return;
             }
 
+            // Issue #6166: a stalled leaf that its consistent cut lets pass the span its
+            // replay would read - a leaf behind a sorted bulk append's right edge, that
+            // applies nothing there - takes the cut head instead, and only banks it. One the
+            // cut holds only by a known read replays to that read, never to the head, and
+            // the next stall check takes the cut; one a shard hand-off holds open waits for
+            // its close, past which a replay now would be read again. Otherwise the drive
+            // replays to the head, as before.
+            var cut = cutFirst ? await TryAdvanceCheckpointFromCutAsync(partitionCount) : CutAdvanceOutcome.NotTaken;
+            if (cut is CutAdvanceOutcome.Reached or CutAdvanceOutcome.Deferred)
+            {
+                replayed = true;
+                _consecutiveTimerDriveRefusals = 0;
+                if (cut == CutAdvanceOutcome.Reached)
+                {
+                    await BankDurablePinCoreAsync(partitionCount, flushPendingCheckpoint: true, CancellationToken.None);
+                }
+                else
+                {
+                    // Nothing was read on this evidence, so the fast stall check may act on
+                    // it again once the hand-off closes, rather than wait for a full pass.
+                    _fastStallEvidenceSpent = false;
+                }
+
+                return;
+            }
+
             try
             {
-                var outcome = await DriveStarvedCheckpointAsync(StarvationDriveOrigin.CoverageLagTimer);
+                _replayReadCap = cut == CutAdvanceOutcome.CatchUp ? _cutCatchUpBounds : null;
+                LeafStarvationDriveOutcome outcome;
+                try
+                {
+                    outcome = await DriveStarvedCheckpointAsync(StarvationDriveOrigin.CoverageLagTimer);
+                }
+                finally
+                {
+                    _replayReadCap = null;
+                }
+
+
                 replayed = outcome is LeafStarvationDriveOutcome.Lifted or LeafStarvationDriveOutcome.NoAdvance;
                 if (outcome == LeafStarvationDriveOutcome.AdmissionRefused)
                 {
                     BackOffRefusedTimerDrive();
+
+                    // #6166: nothing was read on this evidence either, so the fast stall
+                    // check may act on it again once the back-off's deferrals are spent,
+                    // rather than leave the leaf to the full pass, minutes away.
+                    _fastStallEvidenceSpent = false;
                     return;
                 }
 
@@ -2874,7 +2916,7 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     /// <param name="partitionCount">The tree's WAL partition count.</param>
     /// <param name="arm">The diagnostic label of the arm that requested the drive.</param>
-    internal async Task DispatchTimerDriveAsync(int partitionCount, string arm)
+    internal async Task DispatchTimerDriveAsync(int partitionCount, string arm, bool cutFirst = false)
     {
         if (_interleavedTimerDrive is not null)
         {
@@ -2886,7 +2928,7 @@ internal sealed partial class BPlusLeafGrain
             // The callback cannot run before this assignment: it is queued on
             // the activation and the current turn does not yield before it.
             _interleavedTimerDrive = this.RegisterGrainTimer(
-                _ => RunInterleavedTimerDriveAsync(partitionCount, arm),
+                _ => RunInterleavedTimerDriveAsync(partitionCount, arm, cutFirst),
                 new GrainTimerCreationOptions(TimeSpan.Zero, Timeout.InfiniteTimeSpan) { Interleave = true });
         }
         catch
@@ -2894,18 +2936,18 @@ internal sealed partial class BPlusLeafGrain
             _interleavedTimerDrive = null;
             using (AwaitDiagnostics.Begin("leaf.timer.coverage-lag", context.GrainId, arm))
             {
-                await DriveStarvedCheckpointFromTimerAsync(partitionCount);
+                await DriveStarvedCheckpointFromTimerAsync(partitionCount, cutFirst);
             }
         }
     }
 
-    private async Task RunInterleavedTimerDriveAsync(int partitionCount, string arm)
+    private async Task RunInterleavedTimerDriveAsync(int partitionCount, string arm, bool cutFirst)
     {
         try
         {
             using (AwaitDiagnostics.Begin("leaf.timer.coverage-lag.interleaved", context.GrainId, arm))
             {
-                await DriveStarvedCheckpointFromTimerAsync(partitionCount);
+                await DriveStarvedCheckpointFromTimerAsync(partitionCount, cutFirst);
             }
         }
         finally
@@ -7699,8 +7741,8 @@ internal sealed partial class BPlusLeafGrain
         // Every step below is a coordinator call; skip them all once the
         // coordinator type is gone from a stopping cluster (issue #5100).
         ThrowIfReplayCoordinatorWithdrawn();
-        var head = probedHead ?? await ReplaySliceReader.AwaitProviderReadAsync(
-            coordinator.GetHeadOffsetAsync(cancellationToken), cancellationToken);
+        var head = CapReplayHead(partition, probedHead ?? await ReplaySliceReader.AwaitProviderReadAsync(
+            coordinator.GetHeadOffsetAsync(cancellationToken), cancellationToken));
 
         // The offset of the NEWEST entry that actually exists on this partition
         // (issue #2668). These two quantities are measured from different

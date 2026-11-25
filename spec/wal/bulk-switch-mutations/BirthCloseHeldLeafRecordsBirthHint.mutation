@@ -1,0 +1,16 @@
+# #6166. Pairs with BirthCloseHeld: the fence records on the leaf's marker the
+# switch's stored birth hint rather than its own heads, so the leaf, which reads no
+# shard bulk close once its own is recorded, may pass a record allocated between the
+# switch's begin and its close without reading it.
+MODULE: BirthCloseHeldLeafRecordsBirthHint
+TARGET: BirthCloseHeld
+CLASS: Invariant
+SUMMARY: the leaf's own close records the birth hint instead of the fence's heads
+PERTURBS: Close
+
+--- FIND
+    /\ leafClose' = IF closeHead' # closeHead /\ ~WithSkip THEN MaxN(leafClose, closeHead') ELSE leafClose
+--- REPLACE
+\* MUTATION: the stored birth hint, not the fence's heads.
+    /\ leafClose' = IF closeHead' # closeHead /\ ~WithSkip THEN MaxN(leafClose, hint) ELSE leafClose
+--- END

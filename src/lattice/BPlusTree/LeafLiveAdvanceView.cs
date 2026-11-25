@@ -29,6 +29,15 @@ namespace Orleans.Lattice.BPlusTree;
 /// shard's routing structure (#5876), so <paramref name="Reachable"/> is no verdict; the
 /// leaf neither latches nor proves on it.
 /// </param>
+/// <param name="NonBulkCloseHeads">
+/// <paramref name="CloseHeads"/> without the shard's bulk-switch closes and compacted bulk
+/// heads (#6166), for a leaf whose own marker holds its bulk birth close; the same array
+/// when no bulk close bears on the leaf.
+/// </param>
+/// <param name="BulkSeparated">
+/// Whether <paramref name="NonBulkCloseHeads"/> was computed; <see langword="false"/> from a
+/// build that does not send it, when a leaf reads <paramref name="CloseHeads"/> whatever its marker holds.
+/// </param>
 [GenerateSerializer]
 [Immutable]
 [Alias(TypeAliases.LeafLiveAdvanceView)]
@@ -39,7 +48,9 @@ internal readonly record struct LeafLiveAdvanceView(
     [property: Id(3)] bool Reachable,
     [property: Id(4)] bool OrphanRepairInProgress,
     [property: Id(5)] long RoutingGeneration = 0,
-    [property: Id(6)] bool ReachabilityUndecided = false)
+    [property: Id(6)] bool ReachabilityUndecided = false,
+    [property: Id(7)] long[]? NonBulkCloseHeads = null,
+    [property: Id(8)] bool BulkSeparated = false)
 {
     /// <summary>Projects <paramref name="marker"/> onto a leaf owning <c>[low, high)</c>.</summary>
     /// <param name="marker">The shard's hand-off marker.</param>
@@ -58,13 +69,19 @@ internal readonly record struct LeafLiveAdvanceView(
         bool reachabilityUndecided = false)
     {
         ArgumentNullException.ThrowIfNull(marker);
+        var closeHeads = HandOffMarkerCore.RequiredHeadsOrNull(marker, lowInclusive, highExclusive);
+        var nonBulkCloseHeads = HandOffMarkerCore.AnyBulkCloseBears(marker, lowInclusive, highExclusive)
+            ? HandOffMarkerCore.RequiredHeadsOrNull(marker, lowInclusive, highExclusive, excludeBulk: true)
+            : closeHeads;
         return new LeafLiveAdvanceView(
             marker.Initialised,
             HandOffMarkerCore.IsHeldOpen(marker, lowInclusive, highExclusive),
-            HandOffMarkerCore.RequiredHeadsOrNull(marker, lowInclusive, highExclusive),
+            closeHeads,
             reachable,
             orphanRepairInProgress,
             marker.RoutingGeneration,
-            reachabilityUndecided);
+            reachabilityUndecided,
+            nonBulkCloseHeads,
+            BulkSeparated: true);
     }
 }

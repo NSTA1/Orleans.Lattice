@@ -225,7 +225,20 @@ internal sealed partial class BPlusLeafGrain
     private bool IsLiveAdvanceQuiescent(bool withinDrive) =>
         DrainRefusedUnallocatedAppends()
         && _liveOwnHigh is not null
-        && state.State.TreeId is { Length: > 0 }
+        && IsAdvanceQuiescentCore(withinDrive);
+
+    /// <summary>
+    /// <see cref="IsLiveAdvanceQuiescent"/> without requiring an own append (#6166): what
+    /// an advance to a consistent cut's head needs, since it vouches for every own append
+    /// below the head only once each is applied.
+    /// </summary>
+    private bool IsCutAdvanceQuiescent() =>
+        DrainRefusedUnallocatedAppends()
+        && IsAdvanceQuiescentCore(withinDrive: false);
+
+    /// <summary>The quiescence both advances share: <see cref="LeafLiveAdvanceCore.IsQuiescent"/> over this activation.</summary>
+    private bool IsAdvanceQuiescentCore(bool withinDrive) =>
+        state.State.TreeId is { Length: > 0 }
         && LeafLiveAdvanceCore.IsQuiescent(
             poisoned: _liveAdvancePoisoned,
             unappliedAppends: _liveAppendsUnapplied,
@@ -320,9 +333,7 @@ internal sealed partial class BPlusLeafGrain
                 }
 
                 var claimRaised = fence.TryGetArmingView(p, out var claimHead, out var unstampedSeen);
-                var closeHead = Math.Max(
-                    HandOffMarkerCore.RequiredHead(handOff.LeafMarker, low, high, p),
-                    HandOffMarkerCore.HeadAt(handOff.ShardCloseHeads, p));
+                var closeHead = LiveAdvanceCloseHead(handOff, low, high, p);
                 var hasReport = false;
                 var reportedBound = -1L;
                 if (!claimRaised)
@@ -392,11 +403,7 @@ internal sealed partial class BPlusLeafGrain
                     continue;
                 }
 
-                var stampedFrom = GetCurrentCheckpointForPartition(p);
-                _liveAdvanceStamp = (p, target);
-                await StampCheckpointHintAsync(p, target);
-                _liveAdvanceStamp = null;
-                _checkpointLiveAdvancedSinceStallCheck += Math.Max(0, GetCurrentCheckpointForPartition(p) - stampedFrom);
+                await StampAdvanceAsync(p, target, live: true);
                 advanced = true;
             }
 
@@ -760,6 +767,7 @@ internal sealed partial class BPlusLeafGrain
             return null;
         }
 
+        _handOffViewTransient = false;
         try
         {
             var leafKey = context.GrainId.GetGuidKey();
@@ -774,6 +782,7 @@ internal sealed partial class BPlusLeafGrain
                 // promotion, and at the split cut no hint; the leaf appends unstamped for a
                 // backoff (R1).
                 _appendFence?.OnReachabilityUndecided();
+                _handOffViewTransient = true;
                 return null;
             }
 
@@ -849,10 +858,20 @@ internal sealed partial class BPlusLeafGrain
                 }
             }
 
-            return new LiveAdvanceHandOff(clear, leafMarker, view.CloseHeads);
+            // #6166: a leaf whose own marker holds its bulk birth close, and whose range is
+            // still bounded and unwidened, is held by that close rather than by the shard's
+            // bulk-switch closes, which past the marker's retention fold every switch of a
+            // run together.
+            var shardCloseHeads = view.BulkSeparated
+                && leafMarker.BulkBirthClose == LeafHandOffState.BulkBirthCloseRecorded
+                && high is not null
+                    ? view.NonBulkCloseHeads
+                    : view.CloseHeads;
+            return new LiveAdvanceHandOff(clear, leafMarker, shardCloseHeads, view.HeldOpen);
         }
         catch (Exception ex)
         {
+            _handOffViewTransient = true;
             ResolveLogger()?.LogDebug(
                 ex,
                 "Leaf {LeafId}: could not read its hand-off state; its checkpoint advances by replay this tick (epic #5605).",
@@ -883,11 +902,19 @@ internal sealed partial class BPlusLeafGrain
     /// <summary>Reused by each advance tick's marker read to collect the pending donor closes (#5837).</summary>
     private List<WalPendingClose>? _pendingDonorClosesScratch;
 
+    /// <summary>
+    /// Set by <see cref="ReadLiveAdvanceHandOffAsync"/> when it returned no view for a
+    /// reason that clears on its own (#6166): a descent undecided while the shard's routing
+    /// moved (#5876), or a read that failed. Not set for an unreachable verdict.
+    /// </summary>
+    private bool _handOffViewTransient;
+
     /// <summary>The hand-off conditions one advance tick read.</summary>
     /// <param name="Clear">The marker state is initialised and nothing overlapping the leaf is open.</param>
     /// <param name="LeafMarker">The leaf's own marker, whose closes bound the replay per partition.</param>
     /// <param name="ShardCloseHeads">The shard marker's close heads bearing on the leaf; <see langword="null"/> when none.</param>
-    private readonly record struct LiveAdvanceHandOff(bool Clear, LeafHandOffState LeafMarker, long[]? ShardCloseHeads);
+    /// <param name="ShardHeldOpen">A token open on the shard's marker overlaps the leaf (#6166).</param>
+    private readonly record struct LiveAdvanceHandOff(bool Clear, LeafHandOffState LeafMarker, long[]? ShardCloseHeads, bool ShardHeldOpen = false);
 
     /// <summary>
     /// Releases the counted appends the writer reported refused without allocating

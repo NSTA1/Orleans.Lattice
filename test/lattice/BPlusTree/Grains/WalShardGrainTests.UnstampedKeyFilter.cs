@@ -82,6 +82,37 @@ public partial class WalShardGrainTests
     }
 
     [Test]
+    public async Task UnstampedSortedBatchTakesOneSlot()
+    {
+        // #6166: a sorted unstamped batch wider than the table - a bulk append filling the
+        // rightmost leaf - extends its last slot into a run once the table is full, so it
+        // neither folds a record behind it out of the table nor raises the floor; a reader
+        // owning any key in the run's span is still bounded by the whole run.
+        var grain = await CreateFencedGrainAsync(new EnumerableMemoryGrainStorage());
+        var behind = await grain.AppendAsync(MakeEntry("b"), CancellationToken.None);
+        var entries = new WalRecord[2 * WalShardGrain.UnstampedKeyTableCapacity];
+        for (var i = 0; i < entries.Length; i++)
+        {
+            entries[i] = MakeEntry($"m{i:D4}");
+        }
+
+        var run = await grain.AppendBatchAsync(entries, CancellationToken.None);
+
+        var below = await CutForAsync(grain, "a", "c");
+        var tabled = await CutForAsync(grain, "m0001", "m0002");
+        var inRun = await CutForAsync(grain, "m0400", "m0401");
+        var above = await CutForAsync(grain, "x", null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(below.UnstampedWatermark, Is.EqualTo(behind), "a sorted batch folded a record behind it out of the table");
+            Assert.That(tabled.UnstampedWatermark, Is.EqualTo(run[1]), "a record tabled before the table filled lost its own slot");
+            Assert.That(inRun.UnstampedWatermark, Is.EqualTo(run[^1]), "a reader inside the run was not bounded by every record of it");
+            Assert.That(above.UnstampedWatermark, Is.LessThan(behind), "a run bounded a reader owning none of its span");
+        });
+    }
+
+    [Test]
     public async Task UnstampedTableOverflowFoldsIntoFloor()
     {
         // K1: past the table's capacity the oldest record's offset folds into the floor,

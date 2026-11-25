@@ -1092,7 +1092,7 @@ internal sealed partial class BPlusLeafGrain
             walHeadsAtSplit = CapAtOwnReadFrontier(HeadsAsCheckpoints(walHeadsAtSplit));
             if (cut is not null && cutView is not null)
             {
-                UpliftSplitHintsFromCut(walHeadsAtSplit, heads, cut, cutReader, await cutView);
+                UpliftSplitHintsFromCut(walHeadsAtSplit, cut, cutReader, await cutView);
             }
         }
 
@@ -1197,18 +1197,8 @@ internal sealed partial class BPlusLeafGrain
             try
             {
                 var partitions = Math.Max(1, (await GetOptionsAsync()).WalPartitions);
-                var reads = new Task<WalSplitCut>[partitions];
-
-                // K2, K4 (#5851): the range this leaf owns now, read in the same turn as the
-                // cut: the whole pre-split range, which both halves' hints are taken over.
-                var low = state.State.LowKeyInclusive;
-                var high = state.State.HighKeyExclusive;
-                for (var p = 0; p < partitions; p++)
-                {
-                    reads[p] = grainFactory.GetGrain<IWalShardGrain>($"{treeId}/{p}").GetSplitCutAsync(reader, low, high, CancellationToken.None);
-                }
-
-                var cut = await Task.WhenAll(reads);
+                var cut = new WalSplitCut[partitions];
+                await ReadConsistentCutAsync(treeId, reader, cut, new Task<WalSplitCut>[partitions]);
                 var heads = new long[partitions];
                 for (var p = 0; p < partitions; p++)
                 {
@@ -1238,12 +1228,9 @@ internal sealed partial class BPlusLeafGrain
     /// raised while a hand-off is open on the leaf, or when the view shows a donor close
     /// the cut's reader did not carry.
     /// </summary>
-    private void UpliftSplitHintsFromCut(long[] hints, long[] heads, WalSplitCut[] cut, WalAppendStamp reader, LiveAdvanceHandOff? view)
+    private void UpliftSplitHintsFromCut(long[] hints, WalSplitCut[] cut, WalAppendStamp reader, LiveAdvanceHandOff? view)
     {
-        if (view is not { Clear: true } handOff
-            || _appendFence is not { } fence
-            || !fence.CarriesEveryPendingClose(in reader)
-            || hints.Length != cut.Length)
+        if (!IsCutUsable(view, in reader, out var handOff) || hints.Length != cut.Length)
         {
             return;
         }
@@ -1254,27 +1241,11 @@ internal sealed partial class BPlusLeafGrain
         {
             // W2: every cap is read from this cut and this view, in this turn; a catch-up
             // that passed an earlier value of one is never remembered as passing it now.
-            var current = GetCurrentCheckpointForPartition(p);
-            var closeHead = Math.Max(
-                HandOffMarkerCore.RequiredHead(handOff.LeafMarker, low, high, p),
-                HandOffMarkerCore.HeadAt(handOff.ShardCloseHeads, p));
-            var reported = Math.Max(cut[p].ForeignHigh, cut[p].UnstampedWatermark);
-            if (current >= closeHead - 1 && current >= reported)
+            var raised = CutAdvanceTarget(p, hints.Length, GetCurrentCheckpointForPartition(p), in cut[p], handOff, low, high, out _);
+            if (raised >= 0)
             {
-                hints[p] = Math.Max(hints[p], heads[p] - 1);
-                continue;
+                hints[p] = Math.Max(hints[p], raised);
             }
-
-            // #5851, ruling 2 widened (W1-W5): capped only by the cut's reported bounds, or
-            // by its foreign high and concrete close heads alone, the donor owes a catch-up
-            // read so its next split can take the hint; dispatched by the tick.
-            NoteReportedBoundCatchUp(p, hints.Length, LeafLiveAdvanceCore.SplitCatchUpTarget(
-                current: current,
-                closeHead: closeHead,
-                closesConcrete: AreCloseHeadsConcrete(handOff, low, high),
-                boundPending: HandOffMarkerCore.HasPendingDonorBound(handOff.LeafMarker, low, high),
-                foreignHigh: cut[p].ForeignHigh,
-                watermark: cut[p].UnstampedWatermark));
         }
     }
 
@@ -1291,13 +1262,7 @@ internal sealed partial class BPlusLeafGrain
             return hints;
         }
 
-        var heads = new long[cut.Length];
-        for (var p = 0; p < heads.Length; p++)
-        {
-            heads[p] = cut[p].Head;
-        }
-
-        UpliftSplitHintsFromCut(hints, heads, cut, reader, await ReadLiveAdvanceHandOffAsync());
+        UpliftSplitHintsFromCut(hints, cut, reader, await ReadLiveAdvanceHandOffAsync());
         return hints;
     }
 
