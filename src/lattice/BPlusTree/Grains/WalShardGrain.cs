@@ -905,6 +905,7 @@ internal sealed partial class WalShardGrain(
                 if (RaisesUnstampedWatermark(TShape.Stamped, in stamp, in entry))
                 {
                     _unstampedWatermark = offset;
+                    CountUnstampedSource(TShape.Stamped, in stamp, in entry);
                     NoteUnstampedKeyLocked(in entry, offset);
                     terminalMisuse = TShape.Stamped && stamp.IsCoordinatorTerminal;
                 }
@@ -1245,6 +1246,7 @@ internal sealed partial class WalShardGrain(
                         if (RaisesUnstampedWatermark(TShape.Stamped, in stamp, entries[i]))
                         {
                             _unstampedWatermark = offset;
+                            CountUnstampedSource(TShape.Stamped, in stamp, entries[i]);
                             unstampedRun = NoteUnstampedKeyLocked(entries[i], offset, unstampedRun);
                             if (TShape.Stamped && stamp.IsCoordinatorTerminal)
                             {

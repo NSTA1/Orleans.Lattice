@@ -377,6 +377,29 @@ internal sealed partial class BPlusLeafGrain
     private HashSet<int>? _hintedUncoveredPartitions;
 
     /// <summary>
+    /// How long a leaf born in this activation waits for the birth hint its creator applies
+    /// after the birth (#6166) before its coverage-lag tick drives it as starved: a split's
+    /// sibling, or a bulk append's leaf, whose hint follows the graft's narrow.
+    /// </summary>
+    internal static readonly TimeSpan BirthHintGrace = TimeSpan.FromSeconds(60);
+
+    /// <summary>
+    /// The <see cref="Stopwatch"/> timestamp until which this activation awaits its birth hint
+    /// (<see cref="BirthHintGrace"/>); 0 when it awaits none.
+    /// </summary>
+    private long _birthHintAwaitedUntil;
+
+    /// <summary>
+    /// Whether this leaf, born in this activation, still awaits the birth hint its creator
+    /// applies after the birth (#6166). Its rows came with the birth, so a starvation drive
+    /// before the hint lands replays every partition from its start for nothing: under load
+    /// the hint follows the birth by the shard root's whole serial turn, and a born leaf's
+    /// first coverage tick, jittered across the coverage-lag period, can land in between.
+    /// </summary>
+    private bool IsAwaitingBirthHint() =>
+        _birthHintAwaitedUntil != 0 && Stopwatch.GetTimestamp() < _birthHintAwaitedUntil;
+
+    /// <summary>
     /// Marks <paramref name="partition"/> when a hint delivered to this leaf - a split
     /// sibling's birth hint from its donor, or a bulk switch's - would give it its first
     /// checkpoint while no durable snapshot covers it (#5877). The leaf's own split
@@ -809,6 +832,13 @@ internal sealed partial class BPlusLeafGrain
         }
 
         var held = HoldBackUncoveredHints(pending);
+        if (held is not null)
+        {
+            // #6166: this activation ends with a checkpoint no capture covered, so its next
+            // activation replays that partition from its persisted start.
+            AwaitDiagnostics.Count("leaf.deactivate.hint-left-unpersisted");
+        }
+
         if (pending.Count == 0)
         {
             _pendingCheckpointOffsetsByPartition = held;

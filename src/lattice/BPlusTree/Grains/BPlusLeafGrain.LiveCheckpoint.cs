@@ -232,12 +232,18 @@ internal sealed partial class BPlusLeafGrain
     /// an advance to a consistent cut's head needs, since it vouches for every own append
     /// below the head only once each is applied.
     /// </summary>
-    private bool IsCutAdvanceQuiescent() =>
+    /// <param name="inActivationReplay">
+    /// The caller is the activation's own replay (#6166): the barrier it runs inside holds
+    /// every data operation back, so nothing it would wait for can interleave, and a saga's
+    /// deferred work recorded durably is not yet restored, so its presence alone refuses.
+    /// </param>
+    private bool IsCutAdvanceQuiescent(bool inActivationReplay = false) =>
         DrainRefusedUnallocatedAppends()
-        && IsAdvanceQuiescentCore(withinDrive: false);
+        && (!inActivationReplay || state.State.UnresolvedReplayWork is not { Count: > 0 })
+        && IsAdvanceQuiescentCore(withinDrive: false, inActivationReplay);
 
     /// <summary>The quiescence both advances share: <see cref="LeafLiveAdvanceCore.IsQuiescent"/> over this activation.</summary>
-    private bool IsAdvanceQuiescentCore(bool withinDrive) =>
+    private bool IsAdvanceQuiescentCore(bool withinDrive, bool inActivationReplay = false) =>
         state.State.TreeId is { Length: > 0 }
         && LeafLiveAdvanceCore.IsQuiescent(
             poisoned: _liveAdvancePoisoned,
@@ -246,8 +252,9 @@ internal sealed partial class BPlusLeafGrain
             // completed, or none was ever armed - in a silo the activation hook
             // always arms one, so the second case is a directly constructed grain.
             // AwaitReplayBarrierAsync applies the same rule; a retired barrier is
-            // not treated as clear here.
-            replayBarrierClear: (_replayBarrierSatisfied || !_replayBarrierArmed) && !_replayBarrierRetired,
+            // not treated as clear here. The activation's replay is the barrier's
+            // own work, so it counts as clear there.
+            replayBarrierClear: (_replayBarrierSatisfied || !_replayBarrierArmed || inActivationReplay) && !_replayBarrierRetired,
             replayInFlight: (!withinDrive && _starvationDriveInFlight) || _warmRescueInFlight,
             sagaPending: (_pendingTx is not null && _pendingTx.Count != 0)
                 || (_pendingTxDeltas is not null && _pendingTxDeltas.Count != 0));
@@ -780,8 +787,8 @@ internal sealed partial class BPlusLeafGrain
             {
                 // #5876, D2: an undecided descent is no verdict - no latch, no proof, no
                 // promotion, and at the split cut no hint; the leaf appends unstamped for a
-                // backoff (R1).
-                _appendFence?.OnReachabilityUndecided();
+                // backoff (R1), unless it is not yet proven (#6166).
+                _appendFence?.OnLiveViewUndecided();
                 _handOffViewTransient = true;
                 return null;
             }

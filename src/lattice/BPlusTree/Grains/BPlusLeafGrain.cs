@@ -72,6 +72,12 @@ internal sealed partial class BPlusLeafGrain(
         // array rather than resolved options so the observation adds no await
         // and no new failure mode to the teardown path.
         var checkpointAtEntry = SumPersistedCheckpointsAcrossPartitions();
+        if (AwaitDiagnostics.Enabled)
+        {
+            // #6166: why leaves deactivate, so warm activations under a read load can be
+            // told apart from first touches.
+            AwaitDiagnostics.Count(string.Concat("leaf.deactivate.", reason.ReasonCode.ToString()));
+        }
 
         // Stop the coverage-lag bound before any teardown work. The
         // deactivation capture below supersedes it for this activation, and a
@@ -3375,6 +3381,8 @@ internal sealed partial class BPlusLeafGrain(
             NoteHintAtUncoveredPartition(p, offsetsByPartition[p]);
             await ApplyCheckpointHintAsync(p, offsetsByPartition[p]);
         }
+
+        _birthHintAwaitedUntil = 0;
     }
 
     public async Task InitializeSiblingAsync(SiblingInitialization init)
@@ -3571,6 +3579,12 @@ internal sealed partial class BPlusLeafGrain(
         // no-op rather than seeding against an empty consumer id.
         if (state.State.TreeId is not null)
         {
+            if (bornHere && init.AwaitsBirthHint && GetCurrentCheckpointForPartition(0) < 0)
+            {
+                // #6166: the creator applies the birth hint after this call returns.
+                _birthHintAwaitedUntil = Stopwatch.GetTimestamp() + (long)(BirthHintGrace.TotalSeconds * Stopwatch.Frequency);
+            }
+
             await SeedDurableMaterialiserBlockPinAsync(init.WalHeadsAtBirth);
             await EnsureCoverageLagTimerAsync();
         }
@@ -4108,7 +4122,14 @@ internal sealed partial class BPlusLeafGrain(
         };
     }
 
-    public async Task MergeEntriesAsync(Dictionary<string, LwwValue<byte[]>> entries)
+    public Task MergeEntriesAsync(Dictionary<string, LwwValue<byte[]>> entries) =>
+        MergeEntriesCoreAsync(entries, default);
+
+    /// <inheritdoc />
+    public Task MergeEntriesStampedAsync(Dictionary<string, LwwValue<byte[]>> entries, WalRoutingStamp routing) =>
+        MergeEntriesCoreAsync(entries, StampedRouting(routing));
+
+    private async Task MergeEntriesCoreAsync(Dictionary<string, LwwValue<byte[]>> entries, WalRoutingStamp routing)
     {
         using var routingMutation = EnterLeafRoutingMutation();
         await AwaitReplayBarrierAsync();
@@ -4256,6 +4277,13 @@ internal sealed partial class BPlusLeafGrain(
                         // 1); only a refresh that fails appends the transfer unstamped.
                         mergeOffsets = await AppendTransferAfterStaleAsync(writer!, segment, walEntries!, walCount, stale);
                     }
+                }
+                else if (routing != default)
+                {
+                    // #6166: a shard root's routed merge is this leaf's own append, attributed
+                    // to it alone, rather than an unrouted one every leaf of the partition
+                    // must read past (C4).
+                    mergeOffsets = await AppendManyRoutedAsync(writer!, segment, routing);
                 }
                 else
                 {

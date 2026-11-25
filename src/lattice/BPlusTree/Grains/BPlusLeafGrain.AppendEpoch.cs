@@ -166,6 +166,9 @@ internal sealed partial class BPlusLeafGrain
         try
         {
             var verdict = await LiveAdvanceShardRoot(treeId, shardIndex).GetDescentVerdictAsync(context.GrainId, state.State.LowKeyInclusive);
+            AwaitDiagnostics.Count(verdict == DescentVerdict.Undecided ? "leaf.reachability-proof.undecided"
+                : verdict == DescentVerdict.Reachable ? "leaf.reachability-proof.reachable"
+                : "leaf.reachability-proof.unreachable");
             if (verdict == DescentVerdict.Undecided)
             {
                 // #5876, D2: the descent overlapped a routing-structure mutation, so it is no
@@ -261,7 +264,7 @@ internal sealed partial class BPlusLeafGrain
                 ex,
                 "Leaf {LeafId}: could not prove it is reachable by descent; it appends unstamped and tries again after a backoff (epic #5605, #5709).",
                 context.GrainId);
-            fence.OnReachabilityUndecided();
+            fence.OnReachabilityUndecided("leaf.gate-view.close.proof-failed");
         }
     }
 
@@ -407,24 +410,32 @@ internal sealed partial class BPlusLeafGrain
 
     /// <summary>
     /// The commit-log writer the leaf appends through: every append is stamped by
-    /// this activation's fence (epic #5605).
+    /// this activation's fence (epic #5605), or by a bulk seed's while one is in flight
+    /// on the call.
     /// </summary>
     private sealed class FencedCommitLogWriter(IFencedCommitLogWriter inner, ILeafAppendFence fence) : IRoutingStampedCommitLogWriter
     {
         /// <inheritdoc />
         public Task<long> AppendAsync(WalRecord entry, CancellationToken cancellationToken = default) =>
-            inner.AppendAsync(entry, BulkSeedScope.Value ?? fence, cancellationToken);
+            inner.AppendAsync(entry, FenceFor(WalRoutingStamp.None), cancellationToken);
 
         /// <inheritdoc />
         public Task<IReadOnlyList<long>> AppendManyAsync(IReadOnlyList<WalRecord> entries, CancellationToken cancellationToken = default) =>
-            inner.AppendManyAsync(entries, BulkSeedScope.Value ?? fence, cancellationToken);
+            inner.AppendManyAsync(entries, FenceFor(WalRoutingStamp.None), cancellationToken);
 
         /// <inheritdoc />
         public Task<long> AppendAsync(WalRecord entry, WalRoutingStamp routing, CancellationToken cancellationToken) =>
-            inner.AppendAsync(entry, fence, routing, cancellationToken);
+            inner.AppendAsync(entry, FenceFor(routing), routing, cancellationToken);
 
         /// <inheritdoc />
         public Task<IReadOnlyList<long>> AppendManyAsync(IReadOnlyList<WalRecord> entries, WalRoutingStamp routing, CancellationToken cancellationToken) =>
-            inner.AppendManyAsync(entries, fence, routing, cancellationToken);
+            inner.AppendManyAsync(entries, FenceFor(routing), routing, cancellationToken);
+
+        // #6166: a caller passes an unset routing for an unrouted append - the override
+        // hold's slow path always does - so the seed scope is honoured on every overload.
+        // Read on the routed overload, the activation's fence stamped a seed: never
+        // proven inside a seed, it sent the seed unstamped.
+        private ILeafAppendFence FenceFor(WalRoutingStamp routing) =>
+            routing == default ? BulkSeedScope.Value ?? fence : fence;
     }
 }

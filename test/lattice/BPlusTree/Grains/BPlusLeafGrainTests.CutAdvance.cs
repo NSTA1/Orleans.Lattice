@@ -16,7 +16,7 @@ public partial class BPlusLeafGrainTests
 {
     private const long CutAdvanceCheckpoint = 5;
 
-    private static async Task<(BPlusLeafGrain Grain, LiveAdvanceRig Rig)> IdleCutLeafAsync(WalSplitCut cut, Action<LiveAdvanceRig>? configure = null, string? highKey = null)
+    private static async Task<(BPlusLeafGrain Grain, LiveAdvanceRig Rig)> IdleCutLeafAsync(WalSplitCut cut, Action<LiveAdvanceRig>? configure = null, string? highKey = null, Action<LeafNodeState>? configureState = null)
     {
         var rig = PreArmRig();
         rig.Shard.GetSplitCutAsync(Arg.Any<WalAppendStamp>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>()).Returns(Task.FromResult(cut));
@@ -25,6 +25,7 @@ public partial class BPlusLeafGrainTests
         state.State.ProjectionCheckpointOffset = CutAdvanceCheckpoint;
         state.State.ProjectionCheckpointOffsetAssigned = true;
         state.State.HighKeyExclusive = highKey;
+        configureState?.Invoke(state.State);
         var grain = CreateGrain(
             state,
             liveAdvance: rig,
@@ -107,6 +108,41 @@ public partial class BPlusLeafGrainTests
         {
             Assert.That(order, Does.Contain("cut"), "precondition: the advance read its cut");
             Assert.That(order.LastIndexOf("view"), Is.GreaterThan(order.IndexOf("cut")), "the marker view was read before the cut");
+        });
+    }
+
+    [Test]
+    public async Task CutAdvance_at_activation_reads_the_cut_for_no_activation_and_the_stall_drive_for_its_own()
+    {
+        // #6166: at activation nothing above the checkpoint is applied yet, so the cut must be
+        // bounded by every activation's records, as a resumed close reads them (#5837, rule R).
+        var readers = new List<WalAppendStamp>();
+        var (grain, rig) = await IdleCutLeafAsync(new WalSplitCut(Head: 40, ForeignHigh: -1, UnstampedWatermark: -1));
+        rig.Shard.When(s => s.GetSplitCutAsync(Arg.Any<WalAppendStamp>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>()))
+            .Do(c => readers.Add(c.Arg<WalAppendStamp>()));
+
+        await grain.TryAdvanceCheckpointFromCutAsync(partitions: 1);
+        await grain.TryAdvanceCheckpointFromCutAsync(partitions: 1, atActivation: true);
+
+        Assert.That(readers.Select(r => r.Activation == Guid.Empty), Is.EqualTo(new[] { false, true }),
+            "the activation's cut excluded an activation's records it had not applied, or the drive's its own applied ones");
+    }
+
+    [Test]
+    public async Task CutAdvance_at_activation_is_refused_while_durable_saga_work_is_unrestored()
+    {
+        // #6166: the activation's cut runs before the replay restores the deferred saga work a
+        // previous activation recorded, so a terminal above the checkpoint is not yet bound.
+        var (grain, _) = await IdleCutLeafAsync(
+            new WalSplitCut(Head: 40, ForeignHigh: -1, UnstampedWatermark: -1),
+            configureState: s => s.UnresolvedReplayWork = [new UnresolvedReplayWorkEntry(0, 3, default)]);
+
+        var outcome = await grain.TryAdvanceCheckpointFromCutAsync(partitions: 1, atActivation: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(outcome, Is.EqualTo(BPlusLeafGrain.CutAdvanceOutcome.NotTaken));
+            Assert.That(grain.GetCurrentCheckpointForPartition(0), Is.EqualTo(CutAdvanceCheckpoint));
         });
     }
 

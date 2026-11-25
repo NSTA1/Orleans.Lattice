@@ -1053,6 +1053,12 @@ internal sealed class WalCommitLogWriter(
             return Array.Empty<long>();
         }
 
+        if (fence is null && AwaitDiagnostics.Enabled)
+        {
+            // #6166: an append with no fence at all goes unstamped.
+            AwaitDiagnostics.Count(entries[0].IsMerge ? "wal.dispatch.unstamped.unfenced.merge" : "wal.dispatch.unstamped.unfenced.write");
+        }
+
         // Single entry historically collapsed to the per-entry overload so
         // the per-call allocation cost matched AppendAsync for the dominant
         // SetMany([single]) case. That overload takes an exclusive grain

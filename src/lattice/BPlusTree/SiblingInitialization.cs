@@ -160,4 +160,14 @@ internal readonly record struct SiblingInitialization
     /// appended unstamped.
     /// </summary>
     [Id(13)] public long SpanGeneration { get; init; }
+
+    /// <summary>
+    /// Set by a creator that applies the sibling's birth checkpoint hint after this call
+    /// (#6166): a split that captured its heads, a bulk load with a seed hint, and a bulk
+    /// append whose switch close applies one. The sibling then waits a bounded grace for
+    /// the hint before its coverage tick drives it as starved of a checkpoint. Unset - a
+    /// creator that sends no hint, or a build that does not send it - and the tick drives
+    /// it at once.
+    /// </summary>
+    [Id(14)] public bool AwaitsBirthHint { get; init; }
 }
