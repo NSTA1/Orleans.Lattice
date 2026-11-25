@@ -89,6 +89,20 @@ internal static class AwaitDiagnostics
         Interlocked.Increment(ref Census.GetOrAdd(name, static _ => new long[1])[0]);
     }
 
+    /// <summary>
+    /// Adds <paramref name="amount"/> to <paramref name="name"/>'s census total, reported as
+    /// <see cref="Count"/>'s are; paired with a <see cref="Count"/> it gives a mean. A no-op
+    /// when the diagnostic is disabled. Pass a constant: the name is the key.
+    /// </summary>
+    internal static void Add(string name, long amount)
+    {
+        if (!Enabled)
+            return;
+
+        EnsureWatchdog();
+        Interlocked.Add(ref Census.GetOrAdd(name, static _ => new long[1])[0], amount);
+    }
+
     private static async Task<T> TimeSlowAsync<T>(Task<T> task, string region, GrainId grain, string? detail)
     {
         using var scope = Begin(region, grain, detail);

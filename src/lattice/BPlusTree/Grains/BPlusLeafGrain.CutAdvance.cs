@@ -473,6 +473,35 @@ internal sealed partial class BPlusLeafGrain
         }
     }
 
+    /// <summary>
+    /// Counts, on the benchmark census (#6166), where one partition of an activation's replay
+    /// starts: the offsets it owes to the probed head (summed, and bucketed by power of two
+    /// so the tail is visible), whether the partition was never persisted - a held birth hint
+    /// (#5877, H2) or a leaf no capture covered - and whether a pending advance put the start
+    /// past the persisted checkpoint. Called only when the diagnostic is enabled.
+    /// </summary>
+    private static void CountActivationReplayStart(ActivationCut pass, long persisted, long start, long? probedHead)
+    {
+        var prefix = pass == ActivationCut.Final ? "leaf.replay.activation.final." : "leaf.replay.activation.first.";
+        AwaitDiagnostics.Count(string.Concat(prefix, "partitions"));
+        if (persisted < 0)
+        {
+            AwaitDiagnostics.Count(string.Concat(prefix, "never-persisted"));
+        }
+
+        if (start > persisted)
+        {
+            AwaitDiagnostics.Count(string.Concat(prefix, "pending-ahead"));
+        }
+
+        if (probedHead is { } head)
+        {
+            var owed = Math.Max(0, head - 1 - start);
+            AwaitDiagnostics.Add(string.Concat(prefix, "owed-offsets"), owed);
+            AwaitDiagnostics.Count(string.Concat(prefix, "owed.log2-", (owed == 0 ? 0 : 64 - System.Numerics.BitOperations.LeadingZeroCount((ulong)owed)).ToString(System.Globalization.CultureInfo.InvariantCulture)));
+        }
+    }
+
     /// <summary>Counts a stall drive's cut outcome and its reason on the benchmark census.</summary>
     private void CountDriveCut(CutAdvanceOutcome outcome)
     {

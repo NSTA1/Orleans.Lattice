@@ -72,6 +72,12 @@ internal sealed partial class BPlusLeafGrain(
         // array rather than resolved options so the observation adds no await
         // and no new failure mode to the teardown path.
         var checkpointAtEntry = SumPersistedCheckpointsAcrossPartitions();
+        if (AwaitDiagnostics.Enabled)
+        {
+            // #6166: why leaves deactivate, so warm activations under a read load can be
+            // told apart from first touches.
+            AwaitDiagnostics.Count(string.Concat("leaf.deactivate.", reason.ReasonCode.ToString()));
+        }
 
         // Stop the coverage-lag bound before any teardown work. The
         // deactivation capture below supersedes it for this activation, and a

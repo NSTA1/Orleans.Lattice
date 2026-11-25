@@ -5224,6 +5224,10 @@ internal sealed partial class BPlusLeafGrain
             }
 
             perPartitionMaxScanned[partition] = checkpoint;
+            if (activationCut != ActivationCut.None && AwaitDiagnostics.Enabled)
+            {
+                CountActivationReplayStart(activationCut, persistedCheckpoint, checkpoint, probedHead);
+            }
 
             // Durable-frontier fall-off guard (issue #945: silent durable data
             // loss). The cold-cache-reset override (checkpointOverride = -1, set

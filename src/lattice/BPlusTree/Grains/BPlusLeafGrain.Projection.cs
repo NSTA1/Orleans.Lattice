@@ -832,6 +832,13 @@ internal sealed partial class BPlusLeafGrain
         }
 
         var held = HoldBackUncoveredHints(pending);
+        if (held is not null)
+        {
+            // #6166: this activation ends with a checkpoint no capture covered, so its next
+            // activation replays that partition from its persisted start.
+            AwaitDiagnostics.Count("leaf.deactivate.hint-left-unpersisted");
+        }
+
         if (pending.Count == 0)
         {
             _pendingCheckpointOffsetsByPartition = held;
