@@ -1006,6 +1006,7 @@ internal sealed partial class ShardRootGrain
         }
 
         RecordWrite(sortedEntries.Count);
+        var phase = BulkPhaseStart();
 
         if (state.State.PendingBulkGraft is not null)
         {
@@ -1058,7 +1059,9 @@ internal sealed partial class ShardRootGrain
         // frontier read against the rows it relocates. Best effort - a leaf that
         // cannot be driven now (saturated, or awaiting a rebuild) leaves the append
         // exactly as it was before this drive, starting at its lagging frontier.
+        phase = BulkPhaseMark("bulk.append.ms.prepare", phase);
         await CatchUpRightmostLeafAsync(rightmostLeaf);
+        phase = BulkPhaseMark("bulk.append.ms.catch-up", phase);
 
         var (graftSeams, existingCount, rightEdge) = await ReadAppendTailAsync(rightmostLeaf);
 
@@ -1087,6 +1090,7 @@ internal sealed partial class ShardRootGrain
             }
         }
 
+        phase = BulkPhaseMark("bulk.append.ms.tail", phase);
         int space = maxLeafKeys - existingCount;
 
         if (space > 0 && idx < sortedEntries.Count)
@@ -1108,9 +1112,11 @@ internal sealed partial class ShardRootGrain
             // - at -1 on a fresh tree, where the cap then drops the birth hint and
             // every leaf this chunk grafts replays the whole WAL later. Banking
             // the fill here keeps the frontier at the head.
+            phase = BulkPhaseMark("bulk.append.ms.fill", phase);
             if (idx < sortedEntries.Count)
             {
                 await CatchUpRightmostLeafAsync(rightmostLeaf);
+                phase = BulkPhaseMark("bulk.append.ms.catch-up", phase);
             }
         }
 
@@ -1134,6 +1140,7 @@ internal sealed partial class ShardRootGrain
         // class, so the seed claims no append epoch for a leaf not yet grafted.
         var seedRouting = await BulkSeedRoutingAsync(operationId);
         var awaitsBirthHint = HasHandOffStorage();
+        phase = BulkPhaseMark("bulk.append.ms.switch", phase);
 
         var graftEntries = new List<GraftEntry>();
         var newLeafIds = new GrainId[newLeafCount];
@@ -1186,6 +1193,7 @@ internal sealed partial class ShardRootGrain
             leafIndex++;
         }
 
+        phase = BulkPhaseMark("bulk.append.ms.seed", phase);
         NoteStructuralRoutingChange(); // #5876
         state.State.PendingBulkGraft = new PendingBulkGraft
         {
@@ -1197,7 +1205,38 @@ internal sealed partial class ShardRootGrain
         await WriteShardStateAsync();
 
         await CompleteBulkGraftAsync();
+        phase = BulkPhaseMark("bulk.append.ms.graft", phase);
         await MirrorBulkAppendAsync(mirrored, sortedEntries);
+        BulkPhaseMark("bulk.append.ms.mirror", phase);
+    }
+
+    /// <summary>
+    /// Starts timing one bulk append's phases on the benchmark census (#6166): 0, and so
+    /// no timing, when the diagnostic is disabled. Counts the call, so each phase's summed
+    /// milliseconds divide into a mean per append.
+    /// </summary>
+    private static long BulkPhaseStart()
+    {
+        if (!AwaitDiagnostics.Enabled)
+        {
+            return 0;
+        }
+
+        AwaitDiagnostics.Count("bulk.append.calls");
+        return System.Diagnostics.Stopwatch.GetTimestamp();
+    }
+
+    /// <summary>Adds the time since <paramref name="start"/> to <paramref name="region"/>'s census total and returns now; a no-op for 0.</summary>
+    private static long BulkPhaseMark(string region, long start)
+    {
+        if (start == 0)
+        {
+            return 0;
+        }
+
+        var now = System.Diagnostics.Stopwatch.GetTimestamp();
+        AwaitDiagnostics.Add(region, (long)System.Diagnostics.Stopwatch.GetElapsedTime(start, now).TotalMilliseconds);
+        return now;
     }
 
     /// <summary>
