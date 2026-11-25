@@ -52,6 +52,10 @@ param(
 	[int] $PreseedStallSec = 900,
 	# Seed rate the execution ceiling assumes (keys/s).
 	[int] $PreseedKeysPerSecFloor = 250,
+	# Independent ladder cohorts per silo count. Above 1 each rung publishes the median
+	# p95 with its range, and a range wider than -SpreadGatePct of the median is UNSTABLE.
+	[int] $Repeats = 1,
+	[double] $SpreadGatePct = 25,
 	[string] $DocPath,
 	[switch] $Resume,
 	[switch] $DryRun,
@@ -125,6 +129,15 @@ function Read-TreeSizeSegment {
 		seedSegmentStart = $null; seedSegmentEntries = $null
 		p50Ms = $null; p95Ms = $null; p99Ms = $null; maxMs = $null; readCount = $null
 		failed = $null; unresolved = $null
+		verifyVerified = $null; verifyMismatch = $null; verifyMissing = $null; verifyUnverifiable = $null
+	}
+	$vf = [regex]::Matches($Text, '\[producer\] read-verify-final verified=([\d,]+) mismatch=([\d,]+) missing=([\d,]+) unverifiable=([\d,]+)')
+	if ($vf.Count -gt 0) {
+		$g = $vf[$vf.Count - 1].Groups
+		$result.verifyVerified = ConvertFrom-GroupedNumber $g[1].Value
+		$result.verifyMismatch = ConvertFrom-GroupedNumber $g[2].Value
+		$result.verifyMissing = ConvertFrom-GroupedNumber $g[3].Value
+		$result.verifyUnverifiable = ConvertFrom-GroupedNumber $g[4].Value
 	}
 	$result.hasEnd = [regex]::IsMatch($Text, 'tree-size-rung index=\d+ rung=\d+ phase=end')
 	$result.done = [regex]::IsMatch($Text, '\[producer\] DONE ')
@@ -194,13 +207,14 @@ function Read-TreeSizeLadderLog {
 	$finals = [regex]::Matches($text, '\[silo\] FINAL ops=[^\r\n]*')
 	$steady = [regex]::Matches($text, '\[producer\] read-latency-final window=steady [^\r\n]*')
 	$dones = [regex]::Matches($text, '\[producer\] DONE [^\r\n]*')
+	$verifies = [regex]::Matches($text, '\[producer\] read-verify-final [^\r\n]*')
 	$segments = [ordered]@{}
 	foreach ($idx in @($rungByIndex.Keys)) {
 		$rung = $rungByIndex[$idx]
 		$n = [int]$idx
 		$sb = [System.Text.StringBuilder]::new()
 		foreach ($m in [regex]::Matches($text, "\[producer\] preseed treeId=\S+ entries=$rung [^\r\n]*method=[^\r\n]*")) { [void]$sb.AppendLine($m.Value) }
-		foreach ($set in @($finals, $steady, $dones)) {
+		foreach ($set in @($finals, $steady, $dones, $verifies)) {
 			if ($set.Count -gt $n) { [void]$sb.AppendLine($set[$n].Value) }
 		}
 		if ($endIndexes.ContainsKey($idx)) { [void]$sb.AppendLine($endIndexes[$idx]) }
@@ -222,6 +236,100 @@ function Test-TreeSizeMeasureUsable {
 		(($null -eq $Rung.unresolved) -or ([long]$Rung.unresolved -eq 0))
 }
 
+function Test-TreeSizeRungConsistent {
+	<#
+	.SYNOPSIS
+		False when the read verifier saw a value that differs from what the seed
+		wrote, or a seeded key that read back absent. A rung with no verifier
+		line (verification disabled, or an older log) is not judged inconsistent.
+	#>
+	param($Rung)
+	if ($null -eq $Rung) { return $true }
+	$mismatch = Get-StateValue -Container $Rung -Key 'verifyMismatch'
+	$missing = Get-StateValue -Container $Rung -Key 'verifyMissing'
+	return -not ((($null -ne $mismatch) -and ([long]$mismatch -gt 0)) -or (($null -ne $missing) -and ([long]$missing -gt 0)))
+}
+
+function Get-TreeSizeMedian {
+	param([double[]] $Values)
+	$s = @($Values | Sort-Object)
+	if ($s.Count -eq 0) { return $null }
+	$mid = [math]::Floor($s.Count / 2)
+	if ($s.Count % 2 -eq 1) { return $s[$mid] }
+	return ($s[$mid - 1] + $s[$mid]) / 2.0
+}
+
+function Get-TreeSizeCohortKey {
+	param([Parameter(Mandatory)][int] $Silos, [int] $Repeat = 1)
+	if ($Repeat -le 1) { return "ladder-n$Silos" }
+	return "ladder-n$Silos-r$Repeat"
+}
+
+function Merge-TreeSizeRepeats {
+	<#
+	.SYNOPSIS
+		Folds one rung's repeat measurements into the rung the report publishes.
+		Any inconsistent repeat wins outright (a correctness failure in any run
+		is the result). Otherwise the usable repeats are reduced to their median
+		p50/p95/p99 and seed time, with the p95 range and its spread
+		((max - min) / median) against the gate. A single repeat is returned as is.
+	#>
+	param([object[]] $Samples, [double] $SpreadGatePct = 25)
+	$present = @($Samples | Where-Object { $null -ne $_ })
+	if ($present.Count -eq 0) { return $null }
+	foreach ($r in $present) { if (-not (Test-TreeSizeRungConsistent $r)) { return $r } }
+	$usable = @($present | Where-Object { (Test-TreeSizeMeasureUsable $_) -and (Test-TreeSizeSeedUsable $_) })
+	if ($usable.Count -le 1) {
+		if ($usable.Count -eq 1) { return $usable[0] }
+		return $present[0]
+	}
+	$p95s = @($usable | ForEach-Object { [double]$_.p95Ms })
+	$median = Get-TreeSizeMedian $p95s
+	$min = ($p95s | Measure-Object -Minimum).Minimum
+	$max = ($p95s | Measure-Object -Maximum).Maximum
+	$spread = if ($median -gt 0) { 100.0 * ($max - $min) / $median } else { 0.0 }
+	$first = $usable[0]
+	$merged = [ordered]@{}
+	foreach ($k in @(Get-TreeSizeKeys $first)) { $merged[$k] = Get-StateValue -Container $first -Key $k }
+	$merged['p50Ms'] = Get-TreeSizeMedian @($usable | ForEach-Object { [double]$_.p50Ms })
+	$merged['p95Ms'] = $median
+	$merged['p99Ms'] = Get-TreeSizeMedian @($usable | ForEach-Object { [double]$_.p99Ms })
+	$merged['seedElapsedMs'] = Get-TreeSizeMedian @($usable | ForEach-Object { [double]$_.seedElapsedMs })
+	$merged['readCount'] = [long](Get-TreeSizeMedian @($usable | ForEach-Object { [double]$_.readCount }))
+	$merged['repeats'] = $usable.Count
+	$merged['p95MinMs'] = $min
+	$merged['p95MaxMs'] = $max
+	$merged['p95SpreadPct'] = $spread
+	$merged['unstable'] = ($spread -gt $SpreadGatePct)
+	return $merged
+}
+
+function Get-TreeSizeKeys {
+	param($Container)
+	if ($Container -is [System.Collections.IDictionary]) { return @($Container.Keys) }
+	return @($Container.PSObject.Properties | ForEach-Object { $_.Name })
+}
+
+function Get-TreeSizeVerdict {
+	<# The 'Within p95 budget' cell: INCONSISTENT, UNSTABLE, yes or no. #>
+	param($Rung, [double] $BudgetMs)
+	if (-not (Test-TreeSizeRungConsistent $Rung)) { return 'INCONSISTENT' }
+	if ([bool](Get-StateValue -Container $Rung -Key 'unstable')) { return 'UNSTABLE' }
+	if ([double]$Rung.p95Ms -le $BudgetMs) { return 'yes' }
+	return 'no'
+}
+
+function Format-TreeSizeP95 {
+	<# Read p95, with the repeat range when more than one repeat was merged. #>
+	param($Rung)
+	$text = Format-Ms $Rung.p95Ms
+	$n = Get-StateValue -Container $Rung -Key 'repeats'
+	if ($null -ne $n -and [int]$n -gt 1) {
+		$text += " ($(Format-Ms $Rung.p95MinMs) - $(Format-Ms $Rung.p95MaxMs), n=$n)"
+	}
+	return $text
+}
+
 function Test-TreeSizeSeedUsable {
 	param($Rung)
 	return ($null -ne $Rung) -and ($Rung.seedMethod -eq 'bulk-append') -and ($null -ne $Rung.seedElapsedMs) -and ($null -ne $Rung.seedSegmentEntries)
@@ -240,9 +348,18 @@ function Get-StateValue {
 }
 
 function Get-TreeSizeRung {
+	<# One silo count's rung, merged over every recorded repeat (see Merge-TreeSizeRepeats). #>
 	param([Parameter(Mandatory)] $State, [Parameter(Mandatory)][int] $Silos, [Parameter(Mandatory)][long] $Size)
-	$cohort = Get-StateValue -Container $State.cohorts -Key "ladder-n$Silos"
-	return Get-StateValue -Container (Get-StateValue -Container $cohort -Key 'rungs') -Key (Format-SizeTag $Size)
+	$repeats = Get-StateValue -Container $State -Key 'repeats'
+	if ($null -eq $repeats -or [int]$repeats -lt 1) { $repeats = 1 }
+	$gate = Get-StateValue -Container $State -Key 'spreadGatePct'
+	if ($null -eq $gate) { $gate = 25 }
+	$samples = @()
+	for ($k = 1; $k -le [int]$repeats; $k++) {
+		$cohort = Get-StateValue -Container $State.cohorts -Key (Get-TreeSizeCohortKey -Silos $Silos -Repeat $k)
+		$samples += , (Get-StateValue -Container (Get-StateValue -Container $cohort -Key 'rungs') -Key (Format-SizeTag $Size))
+	}
+	return Merge-TreeSizeRepeats -Samples $samples -SpreadGatePct ([double]$gate)
 }
 
 function Get-TreeSizeLadderFor {
@@ -279,7 +396,7 @@ function Get-TreeSizeKnee {
 	$within = $null; $first = $null
 	foreach ($size in (Get-TreeSizeLadderFor -State $State -Silos 1)) {
 		$c = Get-TreeSizeRung -State $State -Silos 1 -Size $size
-		if (-not (Test-TreeSizeMeasureUsable $c)) { continue }
+		if (-not (Test-TreeSizeMeasureUsable $c) -or -not (Test-TreeSizeRungConsistent $c)) { continue }
 		if ([double]$c.p95Ms -le [double]$State.degradeP95Ms) {
 			if ($null -eq $first) { $within = [long]$size }
 		} elseif ($null -eq $first) {
@@ -347,10 +464,12 @@ function Render-TreeSizeLadder {
 			$seedTime = Format-Duration $rung.seedElapsedMs
 			$seedRate = Format-Rate $rung.seedSegmentEntries $rung.seedElapsedMs
 		}
-		if (Test-TreeSizeMeasureUsable $rung) {
+		if (-not (Test-TreeSizeRungConsistent $rung)) {
+			[void]$sb.Append("| $(Format-TreeSize $size) | $segment | $seedTime | $seedRate | $(Format-Ms $rung.p50Ms) | $(Format-Ms $rung.p95Ms) | $(Format-Ms $rung.p99Ms) | $(if ($null -ne $rung.readCount) { '{0:N0}' -f [long]$rung.readCount } else { '-' }) | INCONSISTENT |").Append($nl)
+		} elseif (Test-TreeSizeMeasureUsable $rung) {
 			$n++
-			$ok = if ([double]$rung.p95Ms -le [double]$State.degradeP95Ms) { 'yes' } else { 'no' }
-			[void]$sb.Append("| $(Format-TreeSize $size) | $segment | $seedTime | $seedRate | $(Format-Ms $rung.p50Ms) | $(Format-Ms $rung.p95Ms) | $(Format-Ms $rung.p99Ms) | $('{0:N0}' -f [long]$rung.readCount) | $ok |").Append($nl)
+			$ok = Get-TreeSizeVerdict -Rung $rung -BudgetMs ([double]$State.degradeP95Ms)
+			[void]$sb.Append("| $(Format-TreeSize $size) | $segment | $seedTime | $seedRate | $(Format-Ms $rung.p50Ms) | $(Format-TreeSizeP95 $rung) | $(Format-Ms $rung.p99Ms) | $('{0:N0}' -f [long]$rung.readCount) | $ok |").Append($nl)
 		} else {
 			[void]$sb.Append("| $(Format-TreeSize $size) | $segment | $seedTime | $seedRate | _not measured_ | _not measured_ | _not measured_ | - | - |").Append($nl)
 		}
@@ -386,9 +505,13 @@ function Render-TreeSizeSilos {
 		$row = "| $(Format-TreeSize $size) |"
 		foreach ($s in $counts) {
 			$c = Get-TreeSizeRung -State $State -Silos $s -Size $size
-			if (Test-TreeSizeMeasureUsable $c) {
+			if (-not (Test-TreeSizeRungConsistent $c)) {
+				$row += ' INCONSISTENT |'
+			} elseif (Test-TreeSizeMeasureUsable $c) {
 				$n++
-				$row += " $(Format-Ms $c.p95Ms) ($(Format-Ms $c.p50Ms)) |"
+				$cell = "$(Format-TreeSizeP95 $c) ($(Format-Ms $c.p50Ms))"
+				if ([bool](Get-StateValue -Container $c -Key 'unstable')) { $cell += ' UNSTABLE' }
+				$row += " $cell |"
 			} else { $row += ' _not measured_ |' }
 		}
 		[void]$sb.Append($row).Append($nl)
@@ -468,9 +591,26 @@ function Get-TreeSizeUsableRungCount {
 	$n = 0
 	foreach ($r in $Ladder) {
 		$rung = Get-StateValue -Container (Get-StateValue -Container $Cohort -Key 'rungs') -Key (Format-SizeTag $r)
-		if ((Test-TreeSizeMeasureUsable $rung) -and (Test-TreeSizeSeedUsable $rung)) { $n++ }
+		if ((Test-TreeSizeMeasureUsable $rung) -and (Test-TreeSizeSeedUsable $rung) -and (Test-TreeSizeRungConsistent $rung)) { $n++ }
 	}
 	return $n
+}
+
+function Test-TreeSizeCohortInconsistent {
+	<#
+	.SYNOPSIS
+		True when any measured rung of the cohort failed the read verifier. An
+		inconsistency is a finding, not a transient: a retry must never replace it.
+	#>
+	param($Cohort)
+	if ($null -eq $Cohort) { return $false }
+	$rungs = Get-StateValue -Container $Cohort -Key 'rungs'
+	if ($null -eq $rungs) { return $false }
+	$names = if ($rungs -is [System.Collections.IDictionary]) { @($rungs.Keys) } else { @($rungs.PSObject.Properties.Name) }
+	foreach ($n in $names) {
+		if (-not (Test-TreeSizeRungConsistent (Get-StateValue -Container $rungs -Key $n))) { return $true }
+	}
+	return $false
 }
 
 # ---------------------------------------------------------------------------
@@ -535,13 +675,20 @@ if ($null -eq $state) {
 	}
 }
 $state.measuredDate = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
+$state['repeats'] = $Repeats
+$state['spreadGatePct'] = $SpreadGatePct
 Save-TreeSizeState -State $state -Path $statePath
 
 # Largest silo count first: it seeds fastest, so it shows earliest how far the sweep can reach.
 foreach ($s in @($SiloCounts | Sort-Object -Descending)) {
-	$key = "ladder-n$s"
+for ($repeat = 1; $repeat -le $Repeats; $repeat++) {
+	$key = Get-TreeSizeCohortKey -Silos $s -Repeat $repeat
 	[long[]] $ladder = Get-TreeSizeLadderFor -State $state -Silos $s
 	$existing = Get-StateValue -Container $state.cohorts -Key $key
+	if (Test-TreeSizeCohortInconsistent $existing) {
+		Write-Warning "[tree-size] $key is INCONSISTENT (read verifier); keeping it and not re-running"
+		continue
+	}
 	if ($null -ne $existing -and (Get-TreeSizeUsableRungCount -Cohort $existing -Ladder $ladder) -eq $ladder.Count) {
 		Write-Host "[tree-size] $key already measured; skipping" -ForegroundColor DarkGray
 		continue
@@ -573,13 +720,19 @@ foreach ($s in @($SiloCounts | Sort-Object -Descending)) {
 		$parsed['wallClockSec'] = [int]((Get-Date) - $started).TotalSeconds
 		$usable = Get-TreeSizeUsableRungCount -Cohort $parsed -Ladder $ladder
 		$bestUsable = if ($null -ne $best) { Get-TreeSizeUsableRungCount -Cohort $best -Ladder $ladder } else { -1 }
-		if ($usable -gt $bestUsable) { $best = $parsed }
+		$inconsistent = Test-TreeSizeCohortInconsistent $parsed
+		if ($inconsistent -or $usable -gt $bestUsable) { $best = $parsed }
 		$state.cohorts[$key] = $best
 		Save-TreeSizeState -State $state -Path $statePath
 		Write-TreeSizeDoc -State $state
+		if ($inconsistent) {
+			Write-Warning "[tree-size] $key attempt $attempt is INCONSISTENT (read verifier); not retrying"
+			break
+		}
 		if ($usable -eq $ladder.Count) { break }
 		Write-Warning "[tree-size] $key attempt $attempt measured $usable of $($ladder.Count) rungs (verdict=$($parsed.verdict) ladderComplete=$($parsed.ladderComplete))"
 	}
+}
 }
 
 Write-TreeSizeDoc -State $state

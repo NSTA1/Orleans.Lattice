@@ -557,7 +557,10 @@ marker, no window was productive, the cumulative `ops` count stopped advancing f
 `-FreezeWedgeSec` seconds while work was in flight, or a multi-account cohort's WAL
 placement was not confirmed. A saturated cohort that kept completing work stays
 `HEALTHY`, with its failures and any `FINAL` unresolved entries (its backlog when the
-in-flight-tail budget expired) carried as data; Layer 2 grades unresolved entries `WEDGE`. `-DeferHarvest` returns
+in-flight-tail budget expired) carried as data; Layer 2 grades unresolved entries `WEDGE`.
+A read cohort whose `[producer] read-verify-final` lines report any `mismatch` or
+`missing` reads is graded `INCONSISTENT`, overriding `HEALTHY` and `WEDGE`: a wrong
+answer is a correctness failure, whatever the throughput. `-DeferHarvest` returns
 before that step and leaves it to `complete-cohort-aca.ps1 -PendingHarvestPath <path>`.
 
 | Parameter | Default | Meaning |
@@ -645,6 +648,30 @@ leaves the seed has passed deactivate instead of running their periodic timers, 
 it unset for published numbers: a bulk-loaded leaf has no persisted checkpoint, so each
 reactivation replays its whole WAL partition, and at 60 s the 3 M-key read p95 rose to
 10-24 s.
+
+**Consistency, not just latency.** Every read is also checked for correctness, and
+repeats bound the run-to-run variance:
+
+- **Read verifier.** The preseed writes `BenchPreseed.PayloadFor(index)` under each key,
+  so the producer can check every read against its expected value with no extra
+  storage round trip. `BENCH_READ_VERIFY_SAMPLE` sets the stride: unset checks every
+  read, `N` checks one in `N`, and `0` turns it off. Each rung logs
+  `[producer] read-verify-final verified=.. mismatch=.. missing=.. unverifiable=.. sample=..`.
+  A wrong value (`mismatch`) or a seeded key read back absent (`missing`) is a
+  correctness failure. The rung is graded `INCONSISTENT`, it is never usable and the knee
+  skips it, and `complete-cohort-aca.ps1` grades the whole cohort `Verdict : INCONSISTENT`,
+  which `performance-report.ps1` does not count as HEALTHY. An inconsistent attempt is
+  never retried away: it is kept, and `-Resume` does not re-run it.
+- **Repeats.** `-Repeats N` (default 1) runs each silo count's ladder `N` times on fresh
+  storage (cohort keys `ladder-n<S>`, `ladder-n<S>-r2`, ...). A rung publishes the median
+  p50/p95/p99 and seed time with the p95 range and `n`. When the p95 spread
+  ((max - min) / median) exceeds `-SpreadGatePct` (default 25) the rung is graded
+  `UNSTABLE` and does not count as within budget. Any inconsistent repeat makes the
+  merged rung `INCONSISTENT`.
+
+Iterate on consistency at small sizes first, for example
+`-Sizes 100000,300000 -SiloAxisSizes 100000 -SiloCounts 2 -Repeats 3`, and widen the
+ladder only once those show no mismatches and a spread inside the gate.
 
 ```powershell
 ./scripts/deploy-aca.ps1 -NamePrefix latsz1

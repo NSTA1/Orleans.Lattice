@@ -640,6 +640,11 @@ internal sealed class BenchIngestEngine(
             Console.WriteLine($"[producer] read-latency-final window=total unit={unit} {readLatency.Total().Format()}");
             Console.WriteLine($"[producer] read-latency-final window=steady unit={unit} {readLatency.Steady().Format()}");
         }
+
+        if (readVerifier is not null)
+        {
+            Console.WriteLine($"[producer] read-verify-final {readVerifier.Format()}");
+        }
     }
 
     // Sentinel returned by FlushAsync when a SetManyAsync was rejected
@@ -721,6 +726,13 @@ internal sealed class BenchIngestEngine(
     private readonly BenchLatencyRecorder? readLatency =
         settings.WorkloadMode is BenchWorkloadMode.GetPoint or BenchWorkloadMode.GetMany
             ? new BenchLatencyRecorder()
+            : null;
+
+    // Read correctness check against the preseed's deterministic values.
+    // BENCH_READ_VERIFY_SAMPLE sets the stride (default 1, 0 disables).
+    private readonly BenchReadVerifier? readVerifier =
+        settings.WorkloadMode is BenchWorkloadMode.GetPoint or BenchWorkloadMode.GetMany
+            ? BenchReadVerifier.FromEnvironmentValue(Environment.GetEnvironmentVariable("BENCH_READ_VERIFY_SAMPLE"))
             : null;
 
     // Samples before this are the cold window; the report publishes both.
@@ -853,7 +865,8 @@ internal sealed class BenchIngestEngine(
                     ct,
                     grainFactory,
                     settings.TreeId,
-                    readLatency).ConfigureAwait(false);
+                    readLatency,
+                readVerifier).ConfigureAwait(false);
             }
             catch (BenchPointFanOutException partial)
             {

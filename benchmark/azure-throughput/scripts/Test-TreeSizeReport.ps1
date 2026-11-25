@@ -159,6 +159,57 @@ try {
     Assert-Case 'seed row n4' ($seed.Block -match '\| 4 \| 20 s \(50,000\) \| _not measured_ \|')
     Assert-Case 'seed meta drops load keys' ($seed.Block -notmatch 'vehiclesPerSilo=')
 
+    # --- Read verifier: parsing and INCONSISTENT ----------------------------
+    $vlog = Join-Path $tmp 'verify.log'
+    @(
+        '[producer] tree-size-rung index=0 rung=100000 phase=seed from=0'
+        '[producer] preseed treeId=ts-1 entries=100000 payloadBytes=245 method=bulk-append chunkSize=16384 attempts=7 elapsedMs=9000 segmentStart=0 segmentEntries=100000'
+        '[producer] tree-size-rung index=0 rung=100000 phase=measure'
+        '[producer] read-latency-final window=steady unit=key count=1,000 p50Ms=1.000 p95Ms=2.000 p99Ms=3.000 maxMs=4.000'
+        '[producer] read-verify-final verified=1,000 mismatch=2 missing=0 unverifiable=5 sample=1'
+        '[producer] tree-size-rung index=0 rung=100000 phase=end'
+    ) | Set-Content $vlog
+    $v1 = (Read-TreeSizeLadderLog -Path $vlog).rungs['100k']
+    Assert-Case 'verify fields parsed' ($v1.verifyVerified -eq 1000 -and $v1.verifyMismatch -eq 2 -and $v1.verifyMissing -eq 0 -and $v1.verifyUnverifiable -eq 5)
+    Assert-Case 'mismatch is inconsistent' (-not (Test-TreeSizeRungConsistent $v1))
+    Assert-Case 'no verify line is consistent' (Test-TreeSizeRungConsistent $r1)
+    $missingRung = New-Rung 0 100000 9000 2.0; $missingRung['verifyMismatch'] = 0; $missingRung['verifyMissing'] = 1
+    Assert-Case 'missing key is inconsistent' (-not (Test-TreeSizeRungConsistent $missingRung))
+    Assert-Case 'inconsistent verdict' ((Get-TreeSizeVerdict -Rung $v1 -BudgetMs 5) -eq 'INCONSISTENT')
+    Assert-Case 'inconsistent repeat wins merge' ((Merge-TreeSizeRepeats -Samples @((New-Rung 0 1 1 1.0), $missingRung, (New-Rung 0 1 1 1.0))) -eq $missingRung)
+
+    $bad = [ordered]@{}; foreach ($k in $state.Keys) { $bad[$k] = $state[$k] }
+    $bad['cohorts'] = [ordered]@{ 'ladder-n1' = [ordered]@{ verdict = 'HEALTHY'; rungs = [ordered]@{
+                '1m' = New-Rung 0 1000000 40000 2.0; '3m' = $missingRung; '10m' = New-Rung 3000000 7000000 300000 9.0 } } }
+    $badKnee = Get-TreeSizeKnee -State $bad
+    Assert-Case 'knee skips inconsistent rung' ($badKnee.Within -eq 1000000 -and $badKnee.Exceeded -eq 10000000)
+    Assert-Case 'inconsistent rung not usable' ((Get-TreeSizeUsableRungCount -Cohort $bad.cohorts['ladder-n1'] -Ladder @(1000000, 3000000, 10000000)) -eq 2)
+    Assert-Case 'inconsistent row rendered' ((Render-TreeSizeLadder -State $bad).Block -match '\| 3 M \|[^\r\n]*\| INCONSISTENT \|')
+    Assert-Case 'cohort inconsistent detected' (Test-TreeSizeCohortInconsistent $bad.cohorts['ladder-n1'])
+    Assert-Case 'clean cohort not inconsistent' (-not (Test-TreeSizeCohortInconsistent $state.cohorts['ladder-n1']) -and -not (Test-TreeSizeCohortInconsistent $null))
+
+    # --- Repeats: median, range and the spread gate -------------------------
+    Assert-Case 'median odd' ((Get-TreeSizeMedian @(3, 1, 2)) -eq 2)
+    Assert-Case 'median even' ((Get-TreeSizeMedian @(4, 1, 2, 3)) -eq 2.5)
+    Assert-Case 'repeat 1 key unchanged' ((Get-TreeSizeCohortKey -Silos 2) -eq 'ladder-n2' -and (Get-TreeSizeCohortKey -Silos 2 -Repeat 3) -eq 'ladder-n2-r3')
+    $rep = [ordered]@{}; foreach ($k in $state.Keys) { $rep[$k] = $state[$k] }
+    $rep['repeats'] = 3; $rep['spreadGatePct'] = 25
+    $rep['cohorts'] = [ordered]@{
+        'ladder-n1' = [ordered]@{ verdict = 'HEALTHY'; rungs = [ordered]@{ '1m' = New-Rung 0 1000000 40000 2.0; '3m' = New-Rung 1000000 2000000 80000 4.0 } }
+        'ladder-n1-r2' = [ordered]@{ verdict = 'HEALTHY'; rungs = [ordered]@{ '1m' = New-Rung 0 1000000 50000 2.2; '3m' = New-Rung 1000000 2000000 90000 8.0 } }
+        'ladder-n1-r3' = [ordered]@{ verdict = 'HEALTHY'; rungs = [ordered]@{ '1m' = New-Rung 0 1000000 60000 2.1; '3m' = New-Rung 1000000 2000000 70000 4.2 } }
+    }
+    $m1 = Get-TreeSizeRung -State $rep -Silos 1 -Size 1000000
+    Assert-Case 'repeat median p95' ($m1.p95Ms -eq 2.1 -and $m1.repeats -eq 3 -and $m1.seedElapsedMs -eq 50000)
+    Assert-Case 'repeat range' ($m1.p95MinMs -eq 2.0 -and $m1.p95MaxMs -eq 2.2 -and -not $m1.unstable)
+    $m3 = Get-TreeSizeRung -State $rep -Silos 1 -Size 3000000
+    Assert-Case 'wide spread unstable' ($m3.unstable -and $m3.p95Ms -eq 4.2)
+    Assert-Case 'unstable verdict' ((Get-TreeSizeVerdict -Rung $m3 -BudgetMs 5) -eq 'UNSTABLE')
+    $repBlock = (Render-TreeSizeLadder -State $rep).Block
+    Assert-Case 'range rendered' ($repBlock -match '2\.10 ms \(2\.00 ms - 2\.20 ms, n=3\)')
+    Assert-Case 'unstable rendered' ($repBlock -match '\| 3 M \|[^\r\n]*\| UNSTABLE \|')
+    Assert-Case 'single repeat unaffected' ((Get-TreeSizeRung -State $state -Silos 1 -Size 1000000).p95Ms -eq 2.0)
+
     # --- Document update is idempotent and keeps notes single ----------------
     $doc = "intro`r`n`r`n<!-- perf-table:treesize:start -->`r`n<!-- perf-table:treesize:end -->`r`n`r`nmid`r`n`r`n<!-- perf-table:treesize-silos:start -->`r`n<!-- perf-table:treesize-silos:end -->`r`n`r`n<!-- perf-table:treesize-seed:start -->`r`n<!-- perf-table:treesize-seed:end -->`r`n`r`ntail`r`n"
     $once = Update-TreeSizeDoc -Content $doc -State $state
