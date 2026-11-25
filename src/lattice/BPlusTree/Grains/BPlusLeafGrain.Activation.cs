@@ -5226,7 +5226,7 @@ internal sealed partial class BPlusLeafGrain
             perPartitionMaxScanned[partition] = checkpoint;
             if (activationCut != ActivationCut.None && AwaitDiagnostics.Enabled)
             {
-                CountActivationReplayStart(activationCut, persistedCheckpoint, checkpoint, probedHead);
+                CountActivationReplayStart(activationCut, partition, persistedCheckpoint, checkpoint, probedHead);
             }
 
             // Durable-frontier fall-off guard (issue #945: silent durable data

@@ -480,7 +480,7 @@ internal sealed partial class BPlusLeafGrain
     /// (#5877, H2) or a leaf no capture covered - and whether a pending advance put the start
     /// past the persisted checkpoint. Called only when the diagnostic is enabled.
     /// </summary>
-    private static void CountActivationReplayStart(ActivationCut pass, long persisted, long start, long? probedHead)
+    private static void CountActivationReplayStart(ActivationCut pass, int partition, long persisted, long start, long? probedHead)
     {
         var prefix = pass == ActivationCut.Final ? "leaf.replay.activation.final." : "leaf.replay.activation.first.";
         AwaitDiagnostics.Count(string.Concat(prefix, "partitions"));
@@ -499,6 +499,11 @@ internal sealed partial class BPlusLeafGrain
             var owed = Math.Max(0, head - 1 - start);
             AwaitDiagnostics.Add(string.Concat(prefix, "owed-offsets"), owed);
             AwaitDiagnostics.Count(string.Concat(prefix, "owed.log2-", (owed == 0 ? 0 : 64 - System.Numerics.BitOperations.LeadingZeroCount((ulong)owed)).ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            if (owed > 4096)
+            {
+                // Which partition a heavy span owes: one shard whose cut head lags shows as one name.
+                AwaitDiagnostics.Count(string.Concat(prefix, "owed-heavy.partition-", partition.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            }
         }
     }
 

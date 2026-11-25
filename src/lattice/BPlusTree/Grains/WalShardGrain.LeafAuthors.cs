@@ -74,8 +74,39 @@ internal sealed partial class WalShardGrain
                     : "wal.cut.watermark.floor");
             }
 
-            return Task.FromResult(new WalSplitCut(DurableContiguousTailOffset(), bound, watermark));
+            var head = DurableContiguousTailOffset();
+            if (AwaitDiagnostics.Enabled)
+            {
+                CountCutHeadLag(head);
+            }
+
+            return Task.FromResult(new WalSplitCut(head, bound, watermark));
         }
+    }
+
+    /// <summary>
+    /// Counts, on the benchmark census (#6166), how far a cut's head - the durable contiguous
+    /// tail - lies below the allocated head, and what holds it there: a flush in flight, the
+    /// highest stored offset, or an abandoned flush window not yet settled (#4621, #6146). A
+    /// leaf's cut reaches only that head, so its replay owes the rest. Called under
+    /// <see cref="_stateGate"/>, only when the diagnostic is enabled.
+    /// </summary>
+    private void CountCutHeadLag(long head)
+    {
+        var lag = _nextOffset - head;
+        if (lag <= 0)
+        {
+            AwaitDiagnostics.Count("wal.cut.head.at-allocated");
+            return;
+        }
+
+        var reason = AbandonedWindows()?.LowestUnsettledStart() is { } abandoned && abandoned <= head ? "abandoned-unsettled"
+            : _inFlight.Count != 0 && _inFlight.First!.Value.StartOffset <= head ? "in-flight"
+            : _highestStored + 1 <= head ? "stored-clamp"
+            : "other";
+        AwaitDiagnostics.Count(string.Concat("wal.cut.head.lag.", reason));
+        AwaitDiagnostics.Add("wal.cut.head.lag-offsets", lag);
+        AwaitDiagnostics.Count(string.Concat("wal.cut.head.lag.log2-", (64 - System.Numerics.BitOperations.LeadingZeroCount((ulong)lag)).ToString(System.Globalization.CultureInfo.InvariantCulture)));
     }
 
     /// <summary>The most leaves whose authors one shard activation tracks before it folds them into the floor.</summary>
