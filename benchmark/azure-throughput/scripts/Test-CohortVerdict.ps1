@@ -837,6 +837,22 @@ _Assert -Name 'windows with no calls are ignored, and none at all is null' `
 	-Condition ($null -eq (Merge-PhaseAWindows -Rows @((ConvertFrom-PhaseALine -Line (_PhaseA 30 0 1 2 3 4 5 5)))) -and $null -eq (Merge-PhaseAWindows -Rows @()))
 
 Write-Host ''
+Write-Host 'Get-CohortReadVerifyFailures' -ForegroundColor Cyan
+_Assert 'no verify line -> null' ($null -eq (Get-CohortReadVerifyFailures -Lines @('[producer] DONE total=1')))
+$vClean = Get-CohortReadVerifyFailures -Lines @('[producer] read-verify-final verified=1,000 mismatch=0 missing=0 unverifiable=3 sample=1')
+_Assert 'clean verify not failed' ($null -ne $vClean -and -not $vClean.Failed)
+$vBad = Get-CohortReadVerifyFailures -Lines @(
+	'[producer] read-verify-final verified=1,000 mismatch=0 missing=0 unverifiable=0 sample=1'
+	'[aca-silo x] noise'
+	'[producer] read-verify-final verified=2,000 mismatch=1,200 missing=3 unverifiable=0 sample=1'
+)
+_Assert 'failures summed across segments' ($vBad.Failed -and $vBad.Mismatch -eq 1200 -and $vBad.Missing -eq 3)
+$vBlock = Format-CohortVerdictLogBlock -VerdictState 'INCONSISTENT' -VerdictDetail ' (read verifier)' -DrainTailSamples 0
+$vRecovered = $null
+foreach ($l in $vBlock) { if ($l -match $consumerVerdictPattern) { $vRecovered = $Matches[1] } }
+_Assert 'INCONSISTENT survives the consumer verdict parse' ($vRecovered -eq 'INCONSISTENT')
+
+Write-Host ''
 $summaryColor = if ($script:_FailCount -eq 0) { 'Green' } else { 'Red' }
 Write-Host ("Total: {0} passed, {1} failed" -f $script:_PassCount, $script:_FailCount) `
 	-ForegroundColor $summaryColor

@@ -48,6 +48,9 @@ public static class BenchWorkloadDispatcher
     /// <param name="readLatency">Optional client-side latency recorder. The
     /// read modes record each successful <c>GetAsync</c> (per key) or
     /// <c>GetManyAsync</c> (per batch) call into it; other modes ignore it.</param>
+    /// <param name="readVerifier">Optional correctness check. The read modes
+    /// hand it every key and the value read (null when absent); other modes
+    /// ignore it.</param>
     public static async Task<int> DispatchAsync(
         BenchWorkloadMode mode,
         ILattice lattice,
@@ -57,7 +60,8 @@ public static class BenchWorkloadDispatcher
         CancellationToken ct,
         IGrainFactory? grainFactory = null,
         string? treeId = null,
-        BenchLatencyRecorder? readLatency = null)
+        BenchLatencyRecorder? readLatency = null,
+        BenchReadVerifier? readVerifier = null)
     {
         ArgumentNullException.ThrowIfNull(lattice);
         ArgumentNullException.ThrowIfNull(batch);
@@ -137,8 +141,9 @@ public static class BenchWorkloadDispatcher
                     async (kvp, token) =>
                     {
                         var started = System.Diagnostics.Stopwatch.GetTimestamp();
-                        _ = await lattice.GetAsync(kvp.Key, token).ConfigureAwait(false);
+                        var value = await lattice.GetAsync(kvp.Key, token).ConfigureAwait(false);
                         readLatency?.RecordSince(started);
+                        readVerifier?.Observe(kvp.Key, value);
                     },
                     ct).ConfigureAwait(false);
                 return batch.Count;
@@ -150,8 +155,15 @@ public static class BenchWorkloadDispatcher
                     var keys = new List<string>(batch.Count);
                     for (var i = 0; i < batch.Count; i++) keys.Add(batch[i].Key);
                     var started = System.Diagnostics.Stopwatch.GetTimestamp();
-                    _ = await lattice.GetManyAsync(keys, ct).ConfigureAwait(false);
+                    var found = await lattice.GetManyAsync(keys, ct).ConfigureAwait(false);
                     readLatency?.RecordSince(started);
+                    if (readVerifier is not null)
+                    {
+                        for (var i = 0; i < keys.Count; i++)
+                        {
+                            readVerifier.Observe(keys[i], found.TryGetValue(keys[i], out var v) ? v : null);
+                        }
+                    }
                     return batch.Count;
                 }
 

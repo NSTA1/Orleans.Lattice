@@ -282,6 +282,38 @@ function Format-CohortVerdictLogBlock {
 
 <#
 .SYNOPSIS
+	Sums the read verifier's correctness failures across a cohort log, or
+	$null when the log carries no '[producer] read-verify-final' line.
+
+.DESCRIPTION
+	The Orleans-client producer prints one 'read-verify-final verified=..
+	mismatch=.. missing=.. unverifiable=..' line per measured read segment.
+	A mismatch (a read returned bytes other than the seed wrote) or a missing
+	key (a seeded key read back absent) is a correctness failure, which the
+	Layer 3 grade reports as INCONSISTENT ahead of every throughput verdict.
+	Unverifiable reads (a key the verifier cannot attribute to the seed) are
+	not failures.
+#>
+function Get-CohortReadVerifyFailures {
+	[CmdletBinding()]
+	param([AllowEmptyCollection()] [AllowNull()] [string[]] $Lines)
+
+	$seen = $false
+	$mismatch = 0L
+	$missing = 0L
+	foreach ($line in @($Lines)) {
+		if ($line -and ($line -match '\[producer\] read-verify-final verified=[\d,]+ mismatch=([\d,]+) missing=([\d,]+)')) {
+			$seen = $true
+			$mismatch += [long]($Matches[1] -replace ',', '')
+			$missing += [long]($Matches[2] -replace ',', '')
+		}
+	}
+	if (-not $seen) { return $null }
+	return [pscustomobject]@{ Mismatch = $mismatch; Missing = $missing; Failed = ($mismatch + $missing) -gt 0 }
+}
+
+<#
+.SYNOPSIS
 	Parses the in-flight gauge from a single '[silo] t=' per-second
 	progress line, or $null when the line has no parseable gauge.
 

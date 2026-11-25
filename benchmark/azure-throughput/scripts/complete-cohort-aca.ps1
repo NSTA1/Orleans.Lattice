@@ -154,6 +154,14 @@ if (-not $producerDone) {
 	$verdictState = 'WEDGE'
 	$verdictDetail = " (WAL placement across $walAccounts accounts not confirmed: no '[producer] wal-placement' line)"
 }
+# A read that returned other bytes than the seed wrote, or a seeded key read
+# back absent, is a correctness failure: it outranks every throughput grade,
+# and no non-HEALTHY cohort is published.
+$verify = Get-CohortReadVerifyFailures -Lines @($lines)
+if ($null -ne $verify -and $verify.Failed) {
+	$verdictState = 'INCONSISTENT'
+	$verdictDetail = (' (read verifier: {0:N0} mismatched, {1:N0} missing)' -f $verify.Mismatch, $verify.Missing)
+}
 if ($verdictState -eq 'HEALTHY' -and $unresolvedAtFinal -gt 0) {
 	$verdictDetail = (' (saturation backlog: {0:N0} entries still in flight at FINAL; carried as data, not completed throughput)' -f $unresolvedAtFinal)
 }

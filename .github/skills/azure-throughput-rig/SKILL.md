@@ -659,7 +659,10 @@ Key lines in the silo log:
   advancing for `-FreezeWedgeSec` seconds while work was in flight, the `FINAL` line reported
   `unresolved > 0`, or a `-WalAccounts` > 1 cohort's log lacks the producer's `wal-placement`
   line. A saturated Layer 3 cohort that kept completing work stays `HEALTHY`, its failures
-  carried as data rather than as `FAILED`.
+  carried as data rather than as `FAILED`. A read cohort whose `[producer] read-verify-final`
+  lines report any `mismatch` or `missing` read (the read verifier, `BENCH_READ_VERIFY_SAMPLE`,
+  on by default) is graded `INCONSISTENT` instead, overriding both: a correctness failure,
+  never retried away and never counted as HEALTHY.
 - `[silo] wal-placement treeId=.. accounts=N partitions=M version=.. -> 0:default,1:acct1,...` - emitted when
   `BENCH_WAL_ACCOUNTS > 1`; confirms which account each WAL partition landed on. Its
   absence (with accounts >1) means the arm ran single-account, unless a
