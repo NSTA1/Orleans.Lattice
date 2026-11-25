@@ -832,6 +832,7 @@ internal sealed partial class ShardRootGrain
                     HighKeyExclusive = slot + 1 < leafIds.Count ? separators[slot + 1] : null,
                     PrevSibling = slot > 0 ? leafIds[slot - 1] : null,
                     NextSibling = slot + 1 < leafIds.Count ? leafIds[slot + 1] : null,
+                    AwaitsBirthHint = seedHint is not null,
                 });
 
                 if (seedHint is not null)
@@ -1132,6 +1133,7 @@ internal sealed partial class ShardRootGrain
         // #5812: the appended leaves are seeded under the open switch with the bulk-seed
         // class, so the seed claims no append epoch for a leaf not yet grafted.
         var seedRouting = await BulkSeedRoutingAsync(operationId);
+        var awaitsBirthHint = HasHandOffStorage();
 
         var graftEntries = new List<GraftEntry>();
         var newLeafIds = new GrainId[newLeafCount];
@@ -1171,6 +1173,9 @@ internal sealed partial class ShardRootGrain
                     HighKeyExclusive = idx < sortedEntries.Count ? sortedEntries[idx].Key : null,
                     PrevSibling = leafIndex > 0 ? newLeafIds[leafIndex - 1] : null,
                     NextSibling = leafIndex + 1 < newLeafCount ? newLeafIds[leafIndex + 1] : null,
+
+                    // #6166: the switch's close applies the birth hint it stored.
+                    AwaitsBirthHint = awaitsBirthHint,
                 });
             }
             await WalFenceSeamRetry.RunAsync(

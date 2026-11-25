@@ -1452,6 +1452,7 @@ internal sealed partial class BPlusLeafGrain
             // SetCheckpointOffsetHintsAsync stamps below, so the pin and the
             // sibling's projection checkpoint start life in agreement.
             WalHeadsAtBirth = resolvedHeads,
+            AwaitsBirthHint = resolvedHeads is not null,
 
             // The donor's applied-terminal witnesses for the moved keys (issue
             // #4545), adopted before any migrated row or shadow marker reaches the

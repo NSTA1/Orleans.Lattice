@@ -23,7 +23,8 @@ public partial class BPlusLeafGrainTests
         IReadOnlyDictionary<GrainId, IBPlusLeafGrain>? leafStubs = null,
         Action<IGrainFactory>? configureGrainFactory = null,
         IWalAppendFenceGate? fenceGate = null,
-        LiveAdvanceRig? liveAdvance = null)
+        LiveAdvanceRig? liveAdvance = null,
+        ILeafCursorReporter? cursorReporter = null)
     {
         var context = Substitute.For<IGrainContext>();
         context.GrainId.Returns(GrainId.Create("leaf", liveAdvance is null ? replicaId : liveAdvance.LeafId.ToString("N")));
@@ -76,6 +77,8 @@ public partial class BPlusLeafGrainTests
                 services.GetService(typeof(ILatticeMergeModeResolver)).Returns(mergeModeResolver);
             if (envelopeCodec is not null)
                 services.GetService(typeof(ILatticeEnvelopeCodec)).Returns(envelopeCodec);
+            if (cursorReporter is not null)
+                services.GetService(typeof(ILeafCursorReporter)).Returns(cursorReporter);
             context.ActivationServices.Returns(services);
             if ((commitLog is not null || envelopeCodec is not null) && string.IsNullOrEmpty(state.State.TreeId))
                 state.State.TreeId = "test-tree";

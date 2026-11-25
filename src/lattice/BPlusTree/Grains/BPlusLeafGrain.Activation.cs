@@ -5216,6 +5216,11 @@ internal sealed partial class BPlusLeafGrain
             if (resumeFromCurrent)
             {
                 checkpoint = Math.Max(checkpoint, GetCurrentCheckpointForPartition(partition));
+
+                // The pending advance it resumes past is progress this replay owes a bank,
+                // as the re-read it skips was: a starved leaf's drive otherwise reads
+                // nothing, reports no advance, and the leaf stays starved (#6166).
+                anyAdvanced |= checkpoint > persistedCheckpoint;
             }
 
             perPartitionMaxScanned[partition] = checkpoint;

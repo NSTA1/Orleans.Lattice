@@ -50,6 +50,7 @@ public partial class BPlusLeafGrainTests
             TreeId = "tree-6166-birth-hint",
             ShardIndex = 0,
             LowKeyInclusive = "k",
+            AwaitsBirthHint = true,
         });
         await grain.MergeEntriesAsync(new Dictionary<string, LwwValue<byte[]>>
         {
@@ -66,6 +67,30 @@ public partial class BPlusLeafGrainTests
         await grain.OnCoverageLagTimerTickAsync(CancellationToken.None);
         Assert.That(ReadSliceStarts(wal.Coordinator), Is.Not.Empty,
             "control: once its hint is delivered, a leaf still without a checkpoint is driven as starved");
+    }
+
+    [Test]
+    public async Task A_leaf_born_without_a_promised_birth_hint_is_driven_as_starved_at_once()
+    {
+        var wal = new GrowingWal();
+        var (grain, state, _, _) = CreateCoalescingLeafWithPinCapture(wal.Coordinator);
+        state.State.TreeId = null;
+        wal.GrowTo(3);
+        await grain.InitializeSiblingAsync(new SiblingInitialization
+        {
+            TreeId = "tree-6166-no-birth-hint",
+            ShardIndex = 0,
+            LowKeyInclusive = "k",
+        });
+        await grain.MergeEntriesAsync(new Dictionary<string, LwwValue<byte[]>>
+        {
+            ["k1"] = LwwValue<byte[]>.Create([1], HybridLogicalClock.Tick(HybridLogicalClock.Zero)),
+        });
+
+        wal.Coordinator.ClearReceivedCalls();
+        await grain.OnCoverageLagTimerTickAsync(CancellationToken.None);
+        Assert.That(ReadSliceStarts(wal.Coordinator), Is.Not.Empty,
+            "a creator that sends no hint must not delay the leaf's first checkpoint");
     }
 
     private static List<long> ReadSliceStarts(ILeafReplayCoordinatorGrain coordinator) =>
