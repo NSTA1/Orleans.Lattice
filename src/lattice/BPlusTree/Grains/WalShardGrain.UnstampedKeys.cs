@@ -59,6 +59,10 @@ internal sealed partial class WalShardGrain
     // one, raised by every non-key-local record and every record folded out of the table.
     private long _unstampedKeyFloor = -1;
 
+    // The floor this activation started at (K5), so the benchmark census (#6166) can tell
+    // a floor raised since from one left at the recovered head.
+    private long _unstampedKeyRestartFloor = -1;
+
     /// <summary>Starts the table afresh at activation, below the recovered head (K5). Called before any append is admitted.</summary>
     private void ResetUnstampedKeys(long recoveredNextOffset)
     {
@@ -71,7 +75,8 @@ internal sealed partial class WalShardGrain
         _unstampedKeyNext = 0;
         _unstampedKeyCount = 0;
         _unstampedKeyFloor = recoveredNextOffset - 1;
-        AwaitDiagnostics.Count("wal.unstamped.key.restart-floor");
+        _unstampedKeyRestartFloor = _unstampedKeyFloor;
+        AwaitDiagnostics.Count(recoveredNextOffset > 0 ? "wal.unstamped.key.restart-floor" : "wal.unstamped.key.fresh-start");
     }
 
     /// <summary>

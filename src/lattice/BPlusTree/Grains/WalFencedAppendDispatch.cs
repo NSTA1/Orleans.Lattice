@@ -80,6 +80,15 @@ internal static class WalFencedAppendDispatch
                     // #5833, revision 2, C4: a write with no routing generation is never pre-arm;
                     // it goes unstamped and raises the shared watermark.
                     leafStamp = null;
+                    CountUnstampedExit("pre-arm-unrouted");
+                }
+                else if (leafStamp is null)
+                {
+                    CountUnstampedExit("no-leaf-stamp");
+                }
+                else if (routing.ForcesUnstamped)
+                {
+                    CountUnstampedExit("forced-unstamped");
                 }
 
                 if (leafStamp is not null && !routing.ForcesUnstamped && fence.OnAdmitted(routing.AdmissionMark) is { } admittedBeforeClose)
@@ -160,6 +169,19 @@ internal static class WalFencedAppendDispatch
         }
     }
 
+    /// <summary>
+    /// Counts, on the benchmark census (#6166), why the dispatch appends a record unstamped:
+    /// a pre-arm stamp with no routing generation (C4), no stamp from the fence, or a
+    /// routing that forces it. One static read when the diagnostic is disabled.
+    /// </summary>
+    private static void CountUnstampedExit(string reason)
+    {
+        if (AwaitDiagnostics.Enabled)
+        {
+            AwaitDiagnostics.Count(string.Concat("wal.dispatch.unstamped.", reason));
+        }
+    }
+
     /// <summary>Appends one partition's slice of a batch through <paramref name="fence"/>.</summary>
     /// <param name="grain">The partition's WAL shard.</param>
     /// <param name="entries">The partition's slice.</param>
@@ -191,6 +213,15 @@ internal static class WalFencedAppendDispatch
                     // #5833, revision 2, C4: a write with no routing generation is never pre-arm;
                     // it goes unstamped and raises the shared watermark.
                     leafStamp = null;
+                    CountUnstampedExit("pre-arm-unrouted");
+                }
+                else if (leafStamp is null)
+                {
+                    CountUnstampedExit("no-leaf-stamp");
+                }
+                else if (routing.ForcesUnstamped)
+                {
+                    CountUnstampedExit("forced-unstamped");
                 }
 
                 if (leafStamp is not null && !routing.ForcesUnstamped && fence.OnAdmitted(routing.AdmissionMark) is { } admittedBeforeClose)

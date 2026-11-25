@@ -66,8 +66,12 @@ internal sealed partial class WalShardGrain
             var watermark = UnstampedHighForRangeLocked(lowInclusive, highExclusive);
             if (AwaitDiagnostics.Enabled)
             {
-                // #6166: whether the range's bound is the shared floor or a tabled record.
-                AwaitDiagnostics.Count(watermark <= _unstampedKeyFloor ? "wal.cut.watermark.floor" : "wal.cut.watermark.tabled");
+                // #6166: whether the range's bound is the shared floor - left at a restart's
+                // recovered head, or raised since - a tabled record, or nothing at all.
+                AwaitDiagnostics.Count(watermark < 0 ? "wal.cut.watermark.none"
+                    : watermark > _unstampedKeyFloor ? "wal.cut.watermark.tabled"
+                    : _unstampedKeyFloor == _unstampedKeyRestartFloor ? "wal.cut.watermark.restart-floor"
+                    : "wal.cut.watermark.floor");
             }
 
             return Task.FromResult(new WalSplitCut(DurableContiguousTailOffset(), bound, watermark));

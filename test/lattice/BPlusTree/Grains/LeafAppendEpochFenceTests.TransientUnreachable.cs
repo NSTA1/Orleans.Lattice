@@ -72,4 +72,36 @@ public sealed partial class LeafAppendEpochFenceTests
             Assert.That(fence.NeedsReachabilityProof, Is.True, "the demoted activation does not prove again");
         });
     }
+
+    [Test]
+    public async Task An_undecided_live_view_holds_off_a_proven_activations_stamps_but_not_an_unproven_ones_proof()
+    {
+        // #6166: a bulk-seeded leaf reads its view while the operation's graft is pending.
+        // Unproven, it stamps nothing either way, so a backoff would only hold off the proof
+        // its first live write - the next chunk's fill - makes, sending that fill unstamped.
+        // A proven activation still appends unstamped for the backoff (#5876, D2).
+        var unproven = NewPreArmFence();
+        unproven.OnLiveViewUndecided();
+        var proven = NewPreArmFence();
+        proven.OnReachabilityProven();
+        proven.OnLiveViewUndecided();
+        var shard = Substitute.For<IWalShardGrain>();
+        var provenStamp = await proven.StampForAsync(shard, partition: 0, CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(unproven.NeedsReachabilityProof, Is.True, "an undecided view held off an unproven activation's proof");
+            Assert.That(provenStamp, Is.Null, "a proven activation stamped through an undecided view's backoff");
+            Assert.That(proven.IsUnreachable, Is.False);
+        });
+
+        static LeafAppendEpochFence NewPreArmFence() => new(
+            Leaf,
+            new PreArmGate(),
+            new EnumerableMemoryGrainStorage(),
+            _ => { },
+            new KeyValuePair<string, object?>(LatticeMetrics.TagTree, "tree"),
+            LatticeTenantLabel.ForTree("tree"),
+            requireReachabilityProof: true);
+    }
 }

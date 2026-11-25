@@ -327,6 +327,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
                 // pre-arm gate); it proves again, with the marker, before it claims. This
                 // append goes unstamped meanwhile.
                 _reachability = ReachabilityUnproven;
+                AwaitDiagnostics.Count("leaf.stamp.none.reprove-with-marker");
                 return new ValueTask<WalAppendStamp?>((WalAppendStamp?)null);
             }
         }
@@ -344,6 +345,7 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
     {
         if (!WalForwardChain.TryApply(ref stamp, WalForwardChain.Current))
         {
+            AwaitDiagnostics.Count("leaf.stamp.none.forward-chain-bound");
             return null;
         }
 
@@ -1460,6 +1462,28 @@ internal sealed class LeafAppendEpochFence : ILeafAppendFence
         lock (_sync)
         {
             CloseGateViewLocked(ClaimFailureBackoffForTesting, censusReason);
+        }
+    }
+
+    /// <summary>
+    /// The live-advance view's descent was undecided (#5876, D2): no verdict. An activation
+    /// that may stamp appends unstamped for a backoff, as for an undecided proof. One not yet
+    /// proven stamps nothing either way, so the backoff would only hold off its proof, which
+    /// is a fresh descent of its own: it is left open (#6166). A leaf a bulk operation seeds
+    /// reads its view while the operation's graft is pending, and its first live write - the
+    /// next chunk's fill - would otherwise go unstamped and raise the shared watermark.
+    /// </summary>
+    internal void OnLiveViewUndecided()
+    {
+        lock (_sync)
+        {
+            if (_requireReachability && _reachability == ReachabilityUnproven)
+            {
+                AwaitDiagnostics.Count("leaf.gate-view.open.live-view-undecided-unproven");
+                return;
+            }
+
+            CloseGateViewLocked(ClaimFailureBackoffForTesting, "leaf.gate-view.close.live-view-undecided");
         }
     }
 
