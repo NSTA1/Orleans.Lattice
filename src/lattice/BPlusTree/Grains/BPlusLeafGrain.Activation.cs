@@ -4967,18 +4967,20 @@ internal sealed partial class BPlusLeafGrain
         _warmCacheReplaysInFlight++;
         if (_warmCacheReplaysInFlight != 1)
             _warmCacheReplayFailed = true;
+        var census = atActivation && AwaitDiagnostics.Enabled ? new ActivationReplayCensus() : null;
         try
         {
             var advanced = await ReplayWalSinceCheckpointCoreAsync(
-                checkpointOverride, cancellationToken, atActivation ? ActivationCut.CatchUpAllowed : ActivationCut.None);
+                checkpointOverride, cancellationToken, atActivation ? ActivationCut.CatchUpAllowed : ActivationCut.None, census);
             if (atActivation && _replayReadCap is not null)
             {
                 // The capped catch-up read to the leaf's own close is done: the cut again,
                 // then the tail past it, never a second catch-up.
                 _replayReadCap = null;
-                advanced |= await ReplayWalSinceCheckpointCoreAsync(checkpointOverride, cancellationToken, ActivationCut.Final);
+                advanced |= await ReplayWalSinceCheckpointCoreAsync(checkpointOverride, cancellationToken, ActivationCut.Final, census);
             }
 
+            census?.Report();
             return advanced;
         }
         catch (OperationCanceledException)
@@ -5144,11 +5146,18 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <inheritdoc cref="ReplayWalSinceCheckpointAsync"/>
-    private async Task<bool> ReplayWalSinceCheckpointCoreAsync(long? checkpointOverride, CancellationToken cancellationToken, ActivationCut activationCut)
+    private async Task<bool> ReplayWalSinceCheckpointCoreAsync(long? checkpointOverride, CancellationToken cancellationToken, ActivationCut activationCut, ActivationReplayCensus? census = null)
     {
         var treeId = state.State.TreeId;
         if (string.IsNullOrEmpty(treeId))
+        {
+            if (census is not null)
+            {
+                census.Class = "no-tree";
+            }
+
             return false;
+        }
 
         var resolvedOptions = await GetOptionsAsync();
         var partitionCount = Math.Max(1, resolvedOptions.WalPartitions);
@@ -5243,11 +5252,11 @@ internal sealed partial class BPlusLeafGrain
         if (checkpointOverride is null && activationCut != ActivationCut.None)
         {
             anyAdvanced |= await TryAdvanceActivationFromCutAsync(
-                sweep, partitionCount, resolvedOptions.WalReplaySliceBudget, activationCut == ActivationCut.CatchUpAllowed);
+                sweep, partitionCount, resolvedOptions.WalReplaySliceBudget, activationCut == ActivationCut.CatchUpAllowed, census);
         }
         else if (activationCut != ActivationCut.None)
         {
-            CountCut(activationCut == ActivationCut.CatchUpAllowed, "cold-rebuild");
+            CountCut(activationCut == ActivationCut.CatchUpAllowed, "cold-rebuild", census);
         }
 
         // Issue #6166. A warm replay resumes from the leaf's current read position, its
@@ -5298,7 +5307,7 @@ internal sealed partial class BPlusLeafGrain
             perPartitionMaxScanned[partition] = checkpoint;
             if (activationCut != ActivationCut.None && AwaitDiagnostics.Enabled)
             {
-                CountActivationReplayStart(activationCut, partition, persistedCheckpoint, checkpoint, probedHead);
+                CountActivationReplayStart(activationCut, partition, persistedCheckpoint, checkpoint, probedHead, census);
             }
 
             // Durable-frontier fall-off guard (issue #945: silent durable data
@@ -5477,6 +5486,7 @@ internal sealed partial class BPlusLeafGrain
                 anyAdvanced = true;
             if (maxScanned > perPartitionMaxScanned[partition])
                 perPartitionMaxScanned[partition] = maxScanned;
+            census?.AddRead(maxScanned - checkpoint);
 
             // The warm-cache proof needs this partition's window read whole, and
             // a filtered replay (issue #3565) cannot show that by density: its

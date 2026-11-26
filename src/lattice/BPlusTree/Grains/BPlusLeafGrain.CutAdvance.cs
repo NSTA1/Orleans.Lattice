@@ -410,16 +410,18 @@ internal sealed partial class BPlusLeafGrain
     /// (<see cref="_replayReadCap"/>), as a stall drive's does; the caller then takes the cut
     /// again once the capped read is done.
     /// </param>
+    /// <param name="census">The activation's census scratch; <see langword="null"/> unless the diagnostic is enabled.</param>
     /// <returns>Whether the cut stamped any partition.</returns>
     private async Task<bool> TryAdvanceActivationFromCutAsync(
         List<(int Partition, long? ProbedHead)> sweep,
         int partitions,
         int sliceBudget,
-        bool allowCatchUp)
+        bool allowCatchUp,
+        ActivationReplayCensus? census)
     {
         if (partitions <= 1)
         {
-            CountCut(allowCatchUp, "single-partition");
+            CountCut(allowCatchUp, "single-partition", census);
             return false;
         }
 
@@ -435,7 +437,7 @@ internal sealed partial class BPlusLeafGrain
 
         if (backlog <= (long)Math.Max(1, sliceBudget) * (partitions + 2))
         {
-            CountCut(allowCatchUp, "backlog-under-gate");
+            CountCut(allowCatchUp, "backlog-under-gate", census);
             return false;
         }
 
@@ -445,7 +447,7 @@ internal sealed partial class BPlusLeafGrain
         using (AwaitDiagnostics.Begin("leaf.replay.cut", context.GrainId))
         {
             var outcome = await TryAdvanceCheckpointFromCutAsync(partitions, atActivation: true);
-            CountCut(allowCatchUp, outcome, _cutDecline);
+            CountCut(allowCatchUp, outcome, _cutDecline, census);
             if (outcome == CutAdvanceOutcome.CatchUp && allowCatchUp)
             {
                 _replayReadCap = _cutCatchUpBounds;
@@ -474,22 +476,36 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private string _cutDecline = string.Empty;
 
-    /// <summary>Counts an activation cut declined before it ran, on the benchmark census.</summary>
-    private static void CountCut(bool firstPass, string reason)
+    /// <summary>
+    /// Counts an activation cut declined before it ran, on the benchmark census; a first
+    /// pass also names the activation's class on <paramref name="census"/>.
+    /// </summary>
+    private static void CountCut(bool firstPass, string reason, ActivationReplayCensus? census = null)
     {
         if (AwaitDiagnostics.Enabled)
         {
             AwaitDiagnostics.Count(string.Concat(firstPass ? "leaf.replay.cut.first." : "leaf.replay.cut.final.", reason));
+            if (firstPass && census is not null)
+            {
+                census.Class = reason;
+            }
         }
     }
 
-    /// <summary>Counts an activation cut's outcome and its reason on the benchmark census.</summary>
-    private static void CountCut(bool firstPass, CutAdvanceOutcome outcome, string reason)
+    /// <summary>
+    /// Counts an activation cut's outcome and its reason on the benchmark census; a first
+    /// pass also names the activation's class on <paramref name="census"/>.
+    /// </summary>
+    private static void CountCut(bool firstPass, CutAdvanceOutcome outcome, string reason, ActivationReplayCensus? census = null)
     {
         if (AwaitDiagnostics.Enabled)
         {
-            AwaitDiagnostics.Count(string.Concat(
-                firstPass ? "leaf.replay.cut.first." : "leaf.replay.cut.final.", outcome.ToString(), ".", reason));
+            var cutClass = string.Concat(outcome.ToString(), ".", reason);
+            AwaitDiagnostics.Count(string.Concat(firstPass ? "leaf.replay.cut.first." : "leaf.replay.cut.final.", cutClass));
+            if (firstPass && census is not null)
+            {
+                census.Class = cutClass;
+            }
         }
     }
 
@@ -500,7 +516,7 @@ internal sealed partial class BPlusLeafGrain
     /// (#5877, H2) or a leaf no capture covered - and whether a pending advance put the start
     /// past the persisted checkpoint. Called only when the diagnostic is enabled.
     /// </summary>
-    private static void CountActivationReplayStart(ActivationCut pass, int partition, long persisted, long start, long? probedHead)
+    private static void CountActivationReplayStart(ActivationCut pass, int partition, long persisted, long start, long? probedHead, ActivationReplayCensus? census)
     {
         var prefix = pass == ActivationCut.Final ? "leaf.replay.activation.final." : "leaf.replay.activation.first.";
         AwaitDiagnostics.Count(string.Concat(prefix, "partitions"));
@@ -523,6 +539,63 @@ internal sealed partial class BPlusLeafGrain
             {
                 // Which partition a heavy span owes: one shard whose cut head lags shows as one name.
                 AwaitDiagnostics.Count(string.Concat(prefix, "owed-heavy.partition-", partition.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+                if (pass != ActivationCut.Final && census is not null)
+                {
+                    census.OwedHeavyPartitions++;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// One activation replay's benchmark census (#6166), attributed to its first cut's class:
+    /// the offsets its passes actually read - a catch-up reads only to its close, where the
+    /// owed counts measure to the head - the partitions that owed a heavy span, and the
+    /// replay's elapsed time. Allocated once per activation replay, only when the diagnostic is
+    /// enabled; otherwise the replay passes <see langword="null"/> and allocates nothing.
+    /// </summary>
+    private sealed class ActivationReplayCensus
+    {
+        /// <summary>A replay read past this many offsets, over every partition and pass, counts as heavy.</summary>
+        internal const long HeavyReadOffsets = 65_536;
+
+        private readonly long _started = System.Diagnostics.Stopwatch.GetTimestamp();
+
+        /// <summary>The first cut's outcome and reason, as its <c>leaf.replay.cut.first.*</c> name carries them.</summary>
+        internal string? Class;
+
+        /// <summary>The offsets read, summed over every partition and pass.</summary>
+        internal long ReadOffsets;
+
+        /// <summary>The partitions whose first pass owed more than 4096 offsets to the head.</summary>
+        internal int OwedHeavyPartitions;
+
+        /// <summary>Adds one partition's read span; a pass that read nothing adds nothing.</summary>
+        internal void AddRead(long offsets)
+        {
+            if (offsets > 0)
+            {
+                ReadOffsets += offsets;
+            }
+        }
+
+        /// <summary>Writes the replay's totals under <c>leaf.replay.activation.by-cut.{class}</c>.</summary>
+        internal void Report()
+        {
+            var prefix = string.Concat("leaf.replay.activation.by-cut.", Class ?? "unclassified");
+            AwaitDiagnostics.Count(prefix);
+            AwaitDiagnostics.Add(string.Concat(prefix, ".read-offsets"), ReadOffsets);
+            AwaitDiagnostics.Add(
+                string.Concat(prefix, ".ms"),
+                (long)System.Diagnostics.Stopwatch.GetElapsedTime(_started).TotalMilliseconds);
+            if (ReadOffsets > HeavyReadOffsets)
+            {
+                AwaitDiagnostics.Count(string.Concat(prefix, ".read-heavy"));
+            }
+
+            if (OwedHeavyPartitions > 0)
+            {
+                AwaitDiagnostics.Add(string.Concat(prefix, ".owed-heavy-partitions"), OwedHeavyPartitions);
             }
         }
     }
