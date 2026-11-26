@@ -284,9 +284,9 @@ one `[storage-metrics]` line per storage account the cohort used, grades the coh
 the cohort log. Orleans' `Failed to address message` errors (`Orleans.Messaging[100071]`) and
 `Dropping expired message` warnings (`Orleans.Messaging[101038]`) are counted, not harvested:
 one `[aca-silo ...] suppressed N` line per replica and event id. Parking six silos
-logged 124,000 of the first in 30 s (#5100), which the 200-row paging took about 40 minutes to
+logged 124,000 of the first in 30 s (#5100), which the then 200-row paging took about 40 minutes to
 fetch, and an overloaded large-tree cohort logged over 21,000 of the second per replica,
-past the harvest's 200,000-row limit. With `-DeferHarvest` it returns after parking instead, leaving
+past the harvest's then 200,000-row limit. Pages are now 5,000 rows and the limit 500,000: each page re-runs the whole ordered query, so small pages made a 190,000-row diagnostic harvest take over 30 minutes. With `-DeferHarvest` it returns after parking instead, leaving
 `complete-cohort-aca.ps1 -PendingHarvestPath <path>` to the caller. The silos are scaled back to
 zero in a `finally` either way. Its load parameters are **per silo**, so every cell offers the
 same load per silo.
@@ -372,7 +372,7 @@ stubbed `az`. A cohort that still throws is skipped, and `-Resume` tops its cell
 cohorts are tagged after the highest recorded tag (`c4` after `c2`, `c3`), never by count, which
 would overwrite an existing log. The harvests wrap every `if`-assigned query result in `@()`: an
 `if` assignment turns an empty array into `$null`, whose `.Count` throws under strict mode, so a
-silo log whose row count was an exact multiple of the 200-row page once failed a cohort's harvest.
+silo log whose row count was an exact multiple of the page size once failed a cohort's harvest.
 
 **Silo env does not persist between cohorts.** Each cohort applies its silo env with one
 `az containerapp update --set-env-vars`, which merges into the app's existing environment, so
@@ -451,7 +451,7 @@ table. Tables state the usable throughput cohort count per row, and a failed att
 cannot preserve an older result under the new run's metadata.
 
 Layer 3 harvest retains revision-scoped silo diagnostics with timestamp and replica identity
-in 200-row pages under one ingestion snapshot. Non-phaseA lines carry an `[aca-silo ...]`
+in 5,000-row pages under one ingestion snapshot. Non-phaseA lines carry an `[aca-silo ...]`
 prefix so they cannot pollute the producer throughput series. The `set-point-mv` view name
 is `bench-{treeId}` for both registration and lag reporting, isolating durable checkpoints
 between cohorts that rotate their source tree but retain VM grain-state storage.

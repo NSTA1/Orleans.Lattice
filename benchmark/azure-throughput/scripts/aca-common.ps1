@@ -1531,7 +1531,7 @@ function Get-AcaSiloLog {
 		(Orleans.Messaging[101038], Messaging_DroppingExpiredMessage) is
 		treated the same way: an overloaded large-tree cohort logged more than
 		21,000 per replica, about 294,000 silo lines in all, which hit the
-		harvest's 200,000-row limit. Each suppressed event id gets its own
+		harvest's then 200,000-row limit (now 500,000). Each suppressed event id gets its own
 		line per replica.
 	#>
 	[CmdletBinding()] param(
@@ -1558,7 +1558,10 @@ function Get-AcaSiloLog {
 	# below Log Analytics' size limit: it can truncate before the row limit.
 	$snapshot = [datetime]::UtcNow.ToString('o')
 	$baseQuery = "ContainerAppConsoleLogs_CL | where TimeGenerated between (datetime($($SinceUtc.ToString('o'))) .. datetime($($UntilUtc.ToString('o')))) | where ingestion_time() <= datetime($snapshot) | where ContainerAppName_s == '$($Context.siloApp)'$revFilter$lineFilter | project TimeGenerated, ContainerGroupName_s, Log_s | order by TimeGenerated asc, ContainerGroupName_s asc, Log_s asc | serialize row = row_number()"
-	$pageSize = 200
+	# Every page re-runs the full ordered query, so the harvest is quadratic in
+	# pages: 200-row pages took over 30 minutes for a 190k-row diag cohort.
+	# 5,000 rows of console text stays a few MB, well under the response cap.
+	$pageSize = 5000
 	$rows = [System.Collections.Generic.List[object]]::new()
 	for ($offset = 0; ; $offset += $pageSize) {
 		$kql = "$baseQuery | where row > $offset and row <= $($offset + $pageSize) | project-away row"
@@ -1576,7 +1579,7 @@ function Get-AcaSiloLog {
 		$page = @(if ($json -and $json.Trim()) { $json | ConvertFrom-Json -ErrorAction Stop })
 		foreach ($row in $page) { $rows.Add($row) }
 		if ($page.Count -lt $pageSize) { break }
-		if ($rows.Count -ge 200000) { throw '[aca] silo log query reached its row limit; diagnostics may be truncated.' }
+		if ($rows.Count -ge 500000) { throw '[aca] silo log query reached its row limit; diagnostics may be truncated.' }
 	}
 	$suppressed = @()
 	if ($IncludeDiagnostics) {
