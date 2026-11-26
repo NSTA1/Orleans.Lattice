@@ -128,7 +128,7 @@ try {
         sizes = @(1000000, 3000000, 10000000); siloAxisSizes = @(1000000, 10000000); siloCounts = @(1, 2, 4)
         cohorts = [ordered]@{
             'ladder-n1' = [ordered]@{ verdict = 'HEALTHY'; rungs = [ordered]@{
-                    '1m' = New-Rung 0 1000000 40000 2.0; '3m' = New-Rung 1000000 2000000 80000 4.0; '10m' = New-Rung 3000000 7000000 300000 9.0 } }
+                    '1m' = New-Rung 0 1000000 40000 2.0; '3m' = New-Rung 1000000 2000000 80000 2.8; '10m' = New-Rung 3000000 7000000 300000 9.0 } }
             'ladder-n2' = [ordered]@{ verdict = 'HEALTHY'; rungs = [ordered]@{
                     '1m' = New-Rung 0 1000000 25000 1.5; '10m' = New-Rung 1000000 9000000 200000 2.5 } }
             'ladder-n4' = [ordered]@{ verdict = 'WEDGE'; rungs = [ordered]@{
@@ -142,8 +142,8 @@ try {
 
     $ladder = Render-TreeSizeLadder -State $state
     Assert-Case 'ladder cohortN' ($ladder.CohortN -eq 3)
-    Assert-Case 'ladder summary' ($ladder.Block -match 'up to 3 M keys and exceeded it at 10 M')
-    Assert-Case 'ladder row' ($ladder.Block -match '\| 10 M \| 7 M \| 5 min 00 s \| 23,333 \| 1.00 ms \| 9.00 ms \| 18.0 ms \| 1,000 \| no \|')
+    Assert-Case 'ladder summary' ($ladder.Block -match 'stayed within 1.5x of its 1 M-key baseline \(2.00 ms\) up to 3 M keys and degraded at 10 M')
+    Assert-Case 'ladder row' ($ladder.Block -match '\| 10 M \| 7 M \| 5 min 00 s \| 23,333 \| 1.00 ms \| 9.00 ms \| 18.0 ms \| 1,000 \| yes \|')
     Assert-Case 'ladder CRLF header' ($ladder.Block.StartsWith("<!-- perf-table:treesize:start`r`n  schema=v1`r`n"))
 
     $silos = Render-TreeSizeSilos -State $state
@@ -175,7 +175,7 @@ try {
     Assert-Case 'no verify line is consistent' (Test-TreeSizeRungConsistent $r1)
     $missingRung = New-Rung 0 100000 9000 2.0; $missingRung['verifyMismatch'] = 0; $missingRung['verifyMissing'] = 1
     Assert-Case 'missing key is inconsistent' (-not (Test-TreeSizeRungConsistent $missingRung))
-    Assert-Case 'inconsistent verdict' ((Get-TreeSizeVerdict -Rung $v1 -BudgetMs 5) -eq 'INCONSISTENT')
+    Assert-Case 'inconsistent verdict' ((Get-TreeSizeVerdict -Rung $v1 -Baseline $null) -eq 'INCONSISTENT')
     Assert-Case 'inconsistent repeat wins merge' ((Merge-TreeSizeRepeats -Samples @((New-Rung 0 1 1 1.0), $missingRung, (New-Rung 0 1 1 1.0))) -eq $missingRung)
 
     $bad = [ordered]@{}; foreach ($k in $state.Keys) { $bad[$k] = $state[$k] }
@@ -201,31 +201,42 @@ try {
     }
     $m1 = Get-TreeSizeRung -State $rep -Silos 1 -Size 1000000
     Assert-Case 'repeat median p95' ($m1.p95Ms -eq 2.1 -and $m1.repeats -eq 3 -and $m1.seedElapsedMs -eq 50000)
-    Assert-Case 'repeat range' ($m1.p95MinMs -eq 2.0 -and $m1.p95MaxMs -eq 2.2 -and -not $m1.unstable)
+    Assert-Case 'repeat range' ($m1.p95MinMs -eq 2.0 -and $m1.p95MaxMs -eq 2.2 -and -not $m1.spreadWide)
     $m3 = Get-TreeSizeRung -State $rep -Silos 1 -Size 3000000
-    Assert-Case 'wide spread unstable' ($m3.unstable -and $m3.p95Ms -eq 4.2)
-    Assert-Case 'unstable verdict' ((Get-TreeSizeVerdict -Rung $m3 -BudgetMs 5) -eq 'UNSTABLE')
+    Assert-Case 'wide spread flagged' ($m3.spreadWide -and $m3.p95Ms -eq 4.2)
+    Assert-Case 'wide degraded verdict' ((Get-TreeSizeVerdict -Rung $m3 -Baseline $m1 -KneeFactor 1.5) -eq 'yes (wide)')
     $repBlock = (Render-TreeSizeLadder -State $rep).Block
-    Assert-Case 'range rendered' ($repBlock -match '2\.10 ms \(2\.00 ms - 2\.20 ms, n=3\)')
-    Assert-Case 'unstable rendered' ($repBlock -match '\| 3 M \|[^\r\n]*\| UNSTABLE \|')
+    Assert-Case 'range rendered' ($repBlock -match '2\.10 ms \[2\.00 ms - 2\.20 ms, n=3\]')
+    Assert-Case 'wide rendered' ($repBlock -match '\| 3 M \|[^\r\n]*\| yes \(wide\) \|')
+    Assert-Case 'baseline rendered' ($repBlock -match '\| 1 M \|[^\r\n]*\| baseline \|')
     Assert-Case 'single repeat unaffected' ((Get-TreeSizeRung -State $state -Silos 1 -Size 1000000).p95Ms -eq 2.0)
     $wobble = @((New-Rung 0 1 1 2.895), (New-Rung 0 1 1 3.596), (New-Rung 0 1 1 4.095))
-    Assert-Case 'spread under floor stable' (-not (Merge-TreeSizeRepeats -Samples $wobble -SpreadGatePct 30 -SpreadFloorMs 1.5).unstable)
-    Assert-Case 'spread without floor unstable' ((Merge-TreeSizeRepeats -Samples $wobble -SpreadGatePct 30 -SpreadFloorMs 0).unstable)
+    Assert-Case 'spread under floor not wide' (-not (Merge-TreeSizeRepeats -Samples $wobble -SpreadGatePct 30 -SpreadFloorMs 1.5).spreadWide)
+    Assert-Case 'spread without floor wide' ((Merge-TreeSizeRepeats -Samples $wobble -SpreadGatePct 30 -SpreadFloorMs 0).spreadWide)
 
-    # --- Relative degrade budget --------------------------------------------
+    # --- Noise-band knee: baseline, factor and band overlap -----------------
     $rel = [ordered]@{}; foreach ($k in $state.Keys) { $rel[$k] = $state[$k] }
     $rel['cohorts'] = [ordered]@{ 'ladder-n1' = [ordered]@{ verdict = 'HEALTHY'; rungs = [ordered]@{
                 '1m' = New-Rung 0 1000000 40000 3.0; '3m' = New-Rung 1000000 2000000 80000 5.5; '10m' = New-Rung 3000000 7000000 300000 7.0 } } }
-    Assert-Case 'absolute budget without factor' ((Get-TreeSizeBudgetMs -State $rel) -eq 5.0 -and (Get-TreeSizeKnee -State $rel).Within -eq 1000000)
-    $rel['degradeFactor'] = 2.0
-    Assert-Case 'relative budget from baseline' ((Get-TreeSizeBudgetMs -State $rel) -eq 6.0)
+    Assert-Case 'baseline is smallest usable rung' ((Get-TreeSizeBaseline -State $rel -Silos 1).Size -eq 1000000)
+    Assert-Case 'default knee factor' ((Get-TreeSizeKneeFactor -State $rel) -eq 1.5)
     $relKnee = Get-TreeSizeKnee -State $rel
-    Assert-Case 'relative knee' ($relKnee.Within -eq 3000000 -and $relKnee.Exceeded -eq 10000000)
-    Assert-Case 'relative budget published' ((Render-TreeSizeLadder -State $rel).Block -match 'degradeFactor=2')
-    $rel['degradeFactor'] = 1.0
-    Assert-Case 'budget never below absolute' ((Get-TreeSizeBudgetMs -State $rel) -eq 5.0)
-
+    Assert-Case 'knee at 1.5x' ($relKnee.Within -eq 1000000 -and $relKnee.Exceeded -eq 3000000 -and $relKnee.Baseline -eq 1000000)
+    $rel['kneeFactor'] = 2.0
+    $relKnee = Get-TreeSizeKnee -State $rel
+    Assert-Case 'knee factor override' ($relKnee.Within -eq 3000000 -and $relKnee.Exceeded -eq 10000000)
+    $relBlock = (Render-TreeSizeLadder -State $rel).Block
+    Assert-Case 'knee meta published' ($relBlock -match 'kneeFactor=2' -and $relBlock -match 'baselineP95Ms=3' -and $relBlock -match 'baseline=1m')
+    $baseBand = New-Rung 0 1 1 3.0; $baseBand['p95MinMs'] = 2.0; $baseBand['p95MaxMs'] = 4.0
+    $overlap = New-Rung 0 1 1 5.0; $overlap['p95MinMs'] = 3.5; $overlap['p95MaxMs'] = 8.0
+    Assert-Case 'overlapping band not degraded' (-not (Test-TreeSizeDegraded -Rung $overlap -Baseline $baseBand -KneeFactor 1.5))
+    $overlap['p95MinMs'] = 4.5
+    Assert-Case 'separated band degraded' (Test-TreeSizeDegraded -Rung $overlap -Baseline $baseBand -KneeFactor 1.5)
+    $rel.Remove('kneeFactor')
+    $allNo = [ordered]@{}; foreach ($k in $state.Keys) { $allNo[$k] = $state[$k] }
+    $allNo['cohorts'] = [ordered]@{ 'ladder-n1' = [ordered]@{ verdict = 'HEALTHY'; rungs = [ordered]@{
+                '1m' = New-Rung 0 1000000 40000 3.0; '3m' = New-Rung 1000000 2000000 80000 3.5; '10m' = New-Rung 3000000 7000000 300000 4.0 } } }
+    Assert-Case 'knee beyond ladder' ((Render-TreeSizeLadder -State $allNo).Block -match 'at every size measured, up to 10 M keys; the knee lies beyond the ladder')
     # --- Document update is idempotent and keeps notes single ----------------
     $doc = "intro`r`n`r`n<!-- perf-table:treesize:start -->`r`n<!-- perf-table:treesize:end -->`r`n`r`nmid`r`n`r`n<!-- perf-table:treesize-silos:start -->`r`n<!-- perf-table:treesize-silos:end -->`r`n`r`n<!-- perf-table:treesize-seed:start -->`r`n<!-- perf-table:treesize-seed:end -->`r`n`r`ntail`r`n"
     $once = Update-TreeSizeDoc -Content $doc -State $state

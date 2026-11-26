@@ -635,8 +635,8 @@ and graded `WEDGE`. Cold-start latency over a large tree is a separate measureme
 
 Each rung publishes the producer's client-side read latency from its
 `[producer] read-latency-final window=steady ...` line (t >= 15 s of the rung's
-measurement), and the page marks the largest size whose p95 stays within
-`-DegradeP95Ms` (default 5 ms). The seed success line adds
+measurement), and the page marks the knee: the first size whose p95 degrades against
+that silo count's small-tree baseline (see the noise band below). The seed success line adds
 `elapsedMs=.. segmentStart=.. segmentEntries=..`, and a long seed logs a
 `[producer] preseed-progress` line every 1,048,576 keys. A silo count whose cohort
 leaves rungs unusable is retried once; the better attempt is kept. A multi-hour seed
@@ -675,20 +675,22 @@ repeats bound the run-to-run variance:
   storage (cohort keys `ladder-n<S>`, `ladder-n<S>-r2`, ...). A rung publishes the median
   p50/p95/p99 and seed time with the p95 range and `n`. When the p95 spread
   ((max - min) / median) exceeds `-SpreadGatePct` (default 30) and the absolute range
-  (max - min) also exceeds `-SpreadFloorMs` (default 1.5 ms), the rung is graded
-  `UNSTABLE` and does not count as within budget. The floor stops a millisecond of
-  environment noise on a 3 ms p95 reading as instability. Any inconsistent repeat
-  makes the merged rung `INCONSISTENT`.
-- **Relative budget.** `-DegradeFactor` (default 2.0) raises each silo count's budget
-  to that multiple of its own smallest usable, consistent, stable rung's p95, never
-  below `-DegradeP95Ms`. The knee then marks where reads degrade relative to that
-  cluster's small-tree baseline, rather than where they cross a fixed figure that
-  the client round trip alone can exceed. `0` keeps the absolute budget only. The
-  page records `degradeFactor=` and the resolved `budgetP95Ms=`.
+  (max - min) also exceeds `-SpreadFloorMs` (default 3 ms), the rung is flagged `(wide)`.
+  The flag is advisory and never fails a rung: at single-digit milliseconds one slow
+  repeat moves the spread past 30%. Any inconsistent repeat makes the merged rung
+  `INCONSISTENT`, which remains the only hard failure.
+- **Noise band.** Each silo count's baseline is its smallest usable, consistent rung. A
+  larger rung is degraded when its median p95 is at least `-KneeFactor` (default 1.5)
+  times the baseline's median **and** its fastest repeat is slower than the baseline's
+  slowest (`p95Min` above the baseline's `p95Max`), so the two bands do not overlap. The
+  knee is the first degraded rung, and the table's last column reads `baseline`, `yes`,
+  `no` or `INCONSISTENT`. `-DryRun` accepts `-KneeFactor`, `-SpreadGatePct` and
+  `-SpreadFloorMs` and regrades the saved results without re-running anything.
+  `-DegradeP95Ms` and `-DegradeFactor` are retired: still accepted, ignored by grading.
 
 Iterate on consistency at small sizes first, for example
 `-Sizes 100000,300000 -SiloAxisSizes 100000 -SiloCounts 2 -Repeats 3`, and widen the
-ladder only once those show no mismatches and a spread inside the gate.
+ladder only once those show no mismatches (`missing=0`, `mismatch=0`).
 
 ```powershell
 ./scripts/deploy-aca.ps1 -NamePrefix latsz1

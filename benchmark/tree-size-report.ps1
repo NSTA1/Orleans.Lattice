@@ -41,9 +41,12 @@ param(
 	[int] $DurationSec = 60,
 	[int] $VehiclesPerSilo = 1000,
 	[int] $TickHz = 5,
+	# A rung is degraded when its median p95 is at least -KneeFactor x the baseline median
+	# (the silo count's smallest consistent, usable rung) AND its repeat band lies wholly
+	# above the baseline's band. The knee is the first degraded rung.
+	[double] $KneeFactor = 1.5,
+	# Retired by the noise-band knee; still accepted so older invocations keep working.
 	[double] $DegradeP95Ms = 5.0,
-	# The p95 budget is relative to the silo count's own baseline (the p95 of its smallest
-	# usable rung): max(-DegradeP95Ms, -DegradeFactor x baseline). 0 keeps the absolute budget.
 	[double] $DegradeFactor = 2.0,
 	[string] $WorkloadMode = 'get-point',
 	# Silo grain collection age (BENCH_GRAIN_COLLECTION_AGE_SEC); 0 keeps the Orleans
@@ -56,12 +59,13 @@ param(
 	# Seed rate the execution ceiling assumes (keys/s).
 	[int] $PreseedKeysPerSecFloor = 250,
 	# Independent ladder cohorts per silo count. Above 1 each rung publishes the median
-	# p95 with its range, and a range wider than -SpreadGatePct of the median AND wider
-	# than -SpreadFloorMs in absolute terms is UNSTABLE (the floor stops a few-ms p95
-	# from failing the gate on a 1 ms environment wobble).
+	# p95 with its [min - max] band. A band wider than -SpreadGatePct of the median AND
+	# wider than -SpreadFloorMs in absolute terms is flagged 'wide' as an advisory only:
+	# at single-digit milliseconds a few ms of environment noise is a large percentage,
+	# so spread never fails a rung. Missing keys (INCONSISTENT) remain the hard gate.
 	[int] $Repeats = 1,
 	[double] $SpreadGatePct = 30,
-	[double] $SpreadFloorMs = 1.5,
+	[double] $SpreadFloorMs = 3,
 	[string] $DocPath,
 	[switch] $Resume,
 	[switch] $DryRun,
@@ -278,11 +282,11 @@ function Merge-TreeSizeRepeats {
 		Any inconsistent repeat wins outright (a correctness failure in any run
 		is the result). Otherwise the usable repeats are reduced to their median
 		p50/p95/p99 and seed time, with the p95 range and its spread
-		((max - min) / median) against the gate. The rung is unstable only when the
-		spread exceeds the gate AND the absolute range exceeds the floor. A single
-		repeat is returned as is.
+		((max - min) / median). The rung is flagged spreadWide (advisory, never a
+		failure) only when the spread exceeds the gate AND the absolute range exceeds
+		the floor. A single repeat is returned as is.
 	#>
-	param([object[]] $Samples, [double] $SpreadGatePct = 30, [double] $SpreadFloorMs = 1.5)
+	param([object[]] $Samples, [double] $SpreadGatePct = 30, [double] $SpreadFloorMs = 3)
 	$present = @($Samples | Where-Object { $null -ne $_ })
 	if ($present.Count -eq 0) { return $null }
 	foreach ($r in $present) { if (-not (Test-TreeSizeRungConsistent $r)) { return $r } }
@@ -309,7 +313,7 @@ function Merge-TreeSizeRepeats {
 	$merged['p95MaxMs'] = $max
 	$merged['p95SpreadPct'] = $spread
 	$merged['p95RangeMs'] = $max - $min
-	$merged['unstable'] = ($spread -gt $SpreadGatePct) -and (($max - $min) -gt $SpreadFloorMs)
+	$merged['spreadWide'] = ($spread -gt $SpreadGatePct) -and (($max - $min) -gt $SpreadFloorMs)
 	return $merged
 }
 
@@ -319,13 +323,44 @@ function Get-TreeSizeKeys {
 	return @($Container.PSObject.Properties | ForEach-Object { $_.Name })
 }
 
+function Get-TreeSizeBand {
+	<# A rung's p95 band: [min, max] over its repeats, or the single value. #>
+	param([Parameter(Mandatory)] $Rung)
+	$lo = Get-StateValue -Container $Rung -Key 'p95MinMs'
+	$hi = Get-StateValue -Container $Rung -Key 'p95MaxMs'
+	if ($null -eq $lo -or $null -eq $hi) { $lo = $Rung.p95Ms; $hi = $Rung.p95Ms }
+	return @{ Min = [double]$lo; Max = [double]$hi; Median = [double]$Rung.p95Ms }
+}
+
+function Test-TreeSizeDegraded {
+	<#
+	.SYNOPSIS
+		Whether a rung's read p95 has degraded against the baseline: its median is at
+		least KneeFactor x the baseline median AND its band lies wholly above the
+		baseline's band (min > baseline max), so noise alone cannot produce it.
+	#>
+	param([Parameter(Mandatory)] $Rung, [Parameter(Mandatory)] $Baseline, [double] $KneeFactor = 1.5)
+	$r = Get-TreeSizeBand $Rung
+	$b = Get-TreeSizeBand $Baseline
+	return ($r.Median -ge $KneeFactor * $b.Median) -and ($r.Min -gt $b.Max)
+}
+
+function Get-TreeSizeKneeFactor {
+	param([Parameter(Mandatory)] $State)
+	$f = Get-StateValue -Container $State -Key 'kneeFactor'
+	if ($null -eq $f -or [double]$f -le 1) { return 1.5 }
+	return [double]$f
+}
+
 function Get-TreeSizeVerdict {
-	<# The 'Within p95 budget' cell: INCONSISTENT, UNSTABLE, yes or no. #>
-	param($Rung, [double] $BudgetMs)
+	<# The 'Degraded vs baseline' cell: INCONSISTENT, baseline, yes or no ('wide' appended when the band is wide). #>
+	param($Rung, $Baseline, [double] $KneeFactor = 1.5, [switch] $IsBaseline)
 	if (-not (Test-TreeSizeRungConsistent $Rung)) { return 'INCONSISTENT' }
-	if ([bool](Get-StateValue -Container $Rung -Key 'unstable')) { return 'UNSTABLE' }
-	if ([double]$Rung.p95Ms -le $BudgetMs) { return 'yes' }
-	return 'no'
+	$v = if ($IsBaseline -or $null -eq $Baseline) { 'baseline' }
+		elseif (Test-TreeSizeDegraded -Rung $Rung -Baseline $Baseline -KneeFactor $KneeFactor) { 'yes' }
+		else { 'no' }
+	if ([bool](Get-StateValue -Container $Rung -Key 'spreadWide')) { $v += ' (wide)' }
+	return $v
 }
 
 function Format-TreeSizeP95 {
@@ -334,7 +369,7 @@ function Format-TreeSizeP95 {
 	$text = Format-Ms $Rung.p95Ms
 	$n = Get-StateValue -Container $Rung -Key 'repeats'
 	if ($null -ne $n -and [int]$n -gt 1) {
-		$text += " ($(Format-Ms $Rung.p95MinMs) - $(Format-Ms $Rung.p95MaxMs), n=$n)"
+		$text += " [$(Format-Ms $Rung.p95MinMs) - $(Format-Ms $Rung.p95MaxMs), n=$n]"
 	}
 	return $text
 }
@@ -364,7 +399,7 @@ function Get-TreeSizeRung {
 	$gate = Get-StateValue -Container $State -Key 'spreadGatePct'
 	if ($null -eq $gate) { $gate = 30 }
 	$floor = Get-StateValue -Container $State -Key 'spreadFloorMs'
-	if ($null -eq $floor) { $floor = 0.0 }
+	if ($null -eq $floor) { $floor = 3.0 }
 	$samples = @()
 	for ($k = 1; $k -le [int]$repeats; $k++) {
 		$cohort = Get-StateValue -Container $State.cohorts -Key (Get-TreeSizeCohortKey -Silos $Silos -Repeat $k)
@@ -397,45 +432,44 @@ function Get-TreeSizeCumulativeSeedMs {
 	return $total
 }
 
-function Get-TreeSizeBudgetMs {
+function Get-TreeSizeBaseline {
 	<#
 	.SYNOPSIS
-		The p95 budget for one silo count: max(degradeP95Ms, degradeFactor x baseline),
-		where baseline is the p95 of the smallest consistent, stable, usable rung of
-		that silo count. Falls back to degradeP95Ms when there is no baseline or no factor.
+		The baseline rung for one silo count: its smallest consistent, usable rung,
+		as @{ Size; Rung }, or $null when none has been measured.
 	#>
 	param([Parameter(Mandatory)] $State, [int] $Silos = 1)
-	$abs = [double]$State.degradeP95Ms
-	$factor = Get-StateValue -Container $State -Key 'degradeFactor'
-	if ($null -eq $factor -or [double]$factor -le 0) { return $abs }
 	foreach ($size in (Get-TreeSizeLadderFor -State $State -Silos $Silos)) {
 		$c = Get-TreeSizeRung -State $State -Silos $Silos -Size $size
 		if (-not (Test-TreeSizeMeasureUsable $c) -or -not (Test-TreeSizeRungConsistent $c)) { continue }
-		if ([bool](Get-StateValue -Container $c -Key 'unstable')) { continue }
-		return [Math]::Max($abs, [double]$factor * [double]$c.p95Ms)
+		return @{ Size = [long]$size; Rung = $c }
 	}
-	return $abs
+	return $null
 }
 
 function Get-TreeSizeKnee {
 	<#
 	.SYNOPSIS
-		The first ladder size whose one-silo P95 exceeds the budget, and the
-		largest size before it that stayed inside. Either may be $null.
+		The first one-silo ladder size whose read p95 has degraded against the
+		baseline (Test-TreeSizeDegraded), and the largest size before it that had
+		not. Inconsistent and unmeasured rungs are skipped. Either may be $null.
 	#>
 	param([Parameter(Mandatory)] $State)
 	$within = $null; $first = $null
-	$budget = Get-TreeSizeBudgetMs -State $State -Silos 1
+	$base = Get-TreeSizeBaseline -State $State -Silos 1
+	if ($null -eq $base) { return @{ Within = $null; Exceeded = $null; Baseline = $null } }
+	$factor = Get-TreeSizeKneeFactor -State $State
 	foreach ($size in (Get-TreeSizeLadderFor -State $State -Silos 1)) {
 		$c = Get-TreeSizeRung -State $State -Silos 1 -Size $size
 		if (-not (Test-TreeSizeMeasureUsable $c) -or -not (Test-TreeSizeRungConsistent $c)) { continue }
-		if ([double]$c.p95Ms -le $budget) {
-			if ($null -eq $first) { $within = [long]$size }
-		} elseif ($null -eq $first) {
+		if ($null -ne $first) { continue }
+		if ([long]$size -ne $base.Size -and (Test-TreeSizeDegraded -Rung $c -Baseline $base.Rung -KneeFactor $factor)) {
 			$first = [long]$size
+		} else {
+			$within = [long]$size
 		}
 	}
-	return @{ Within = $within; Exceeded = $first }
+	return @{ Within = $within; Exceeded = $first; Baseline = $base.Size }
 }
 
 function Render-TreeSizeMeta {
@@ -470,6 +504,8 @@ function New-TreeSizeBaseMeta {
 	$m['tickHz'] = "$($State.tickHz)"
 	$m['durationSec'] = "$($State.durationSec)"
 	$m['payloadBytes'] = '245'
+	$rep = Get-StateValue -Container $State -Key 'repeats'
+	if ($null -ne $rep -and [int]$rep -gt 1) { $m['repeats'] = "$rep" }
 	if ($State.PSObject.Properties['grainCollectionAgeSec'] -and $State.grainCollectionAgeSec) {
 		$m['grainCollectionAgeSec'] = "$($State.grainCollectionAgeSec)"
 	}
@@ -482,13 +518,15 @@ function Render-TreeSizeLadder {
 	$meta = New-TreeSizeBaseMeta -State $State
 	$sizes = Get-TreeSizeLadderFor -State $State -Silos 1
 	$meta['sizes'] = ($sizes | ForEach-Object { Format-SizeTag $_ }) -join ','
-	$meta['degradeP95Ms'] = "$($State.degradeP95Ms)"
-	$budgetMs = Get-TreeSizeBudgetMs -State $State -Silos 1
-	$factor = Get-StateValue -Container $State -Key 'degradeFactor'
-	if ($null -ne $factor -and [double]$factor -gt 0) { $meta['degradeFactor'] = "$factor"; $meta['budgetP95Ms'] = '{0:0.###}' -f $budgetMs }
+	$factor = Get-TreeSizeKneeFactor -State $State
+	$base = Get-TreeSizeBaseline -State $State -Silos 1
+	$meta['kneeFactor'] = "$factor"
+	$floorMeta = Get-StateValue -Container $State -Key 'spreadFloorMs'
+	if ($null -ne $floorMeta) { $meta['spreadFloorMs'] = "$floorMeta" }
+	if ($null -ne $base) { $meta['baseline'] = Format-SizeTag $base.Size; $meta['baselineP95Ms'] = '{0:0.###}' -f [double]$base.Rung.p95Ms }
 	$meta['methodology'] = 'one producer execution grows a fresh tree on one silo rung by rung with bulk-append seeding of only the new keys, then reads uniformly over every seeded key on the same warm cluster; read latency is the producer-side per-key GetAsync latency over t>=15s of each rung, quantiles are histogram bucket upper edges'
 	$sb = [System.Text.StringBuilder]::new()
-	[void]$sb.Append('| Tree size | Seed segment | Seed time | Seed rate (keys/s) | Read p50 | Read p95 | Read p99 | Reads measured | Within p95 budget |').Append($nl)
+	[void]$sb.Append('| Tree size | Seed segment | Seed time | Seed rate (keys/s) | Read p50 | Read p95 | Read p99 | Reads measured | Degraded vs baseline |').Append($nl)
 	[void]$sb.Append('|----------:|-------------:|----------:|-------------------:|---------:|---------:|---------:|---------------:|:-----------------:|').Append($nl)
 	$n = 0
 	foreach ($size in $sizes) {
@@ -503,7 +541,8 @@ function Render-TreeSizeLadder {
 			[void]$sb.Append("| $(Format-TreeSize $size) | $segment | $seedTime | $seedRate | $(Format-Ms $rung.p50Ms) | $(Format-Ms $rung.p95Ms) | $(Format-Ms $rung.p99Ms) | $(if ($null -ne $rung.readCount) { '{0:N0}' -f [long]$rung.readCount } else { '-' }) | INCONSISTENT |").Append($nl)
 		} elseif (Test-TreeSizeMeasureUsable $rung) {
 			$n++
-			$ok = Get-TreeSizeVerdict -Rung $rung -BudgetMs $budgetMs
+			$isBase = ($null -ne $base -and [long]$size -eq $base.Size)
+			$ok = Get-TreeSizeVerdict -Rung $rung -Baseline $(if ($null -ne $base) { $base.Rung } else { $null }) -KneeFactor $factor -IsBaseline:$isBase
 			[void]$sb.Append("| $(Format-TreeSize $size) | $segment | $seedTime | $seedRate | $(Format-Ms $rung.p50Ms) | $(Format-TreeSizeP95 $rung) | $(Format-Ms $rung.p99Ms) | $('{0:N0}' -f [long]$rung.readCount) | $ok |").Append($nl)
 		} else {
 			[void]$sb.Append("| $(Format-TreeSize $size) | $segment | $seedTime | $seedRate | _not measured_ | _not measured_ | _not measured_ | - | - |").Append($nl)
@@ -511,13 +550,12 @@ function Render-TreeSizeLadder {
 	}
 	$meta['cohortN'] = "$n"
 	$knee = Get-TreeSizeKnee -State $State
-	$budget = Format-Ms $budgetMs
+	$fx = '{0:0.##}x' -f $factor
+	$baseText = if ($null -ne $base) { "its $(Format-TreeSize $base.Size)-key baseline ($(Format-Ms $base.Rung.p95Ms))" } else { 'its baseline' }
 	$summary = if ($null -ne $knee.Exceeded -and $null -ne $knee.Within) {
-		"One silo kept read P95 within $budget up to $(Format-TreeSize $knee.Within) keys and exceeded it at $(Format-TreeSize $knee.Exceeded)."
-	} elseif ($null -ne $knee.Exceeded) {
-		"One silo exceeded the $budget read P95 budget at the smallest size measured, $(Format-TreeSize $knee.Exceeded) keys."
-	} elseif ($n -gt 0) {
-		"One silo kept read P95 within $budget at every size measured, up to $(Format-TreeSize ([long]($sizes | Measure-Object -Maximum).Maximum)) keys; the knee lies beyond the ladder."
+		"One silo's read P95 stayed within $fx of $baseText up to $(Format-TreeSize $knee.Within) keys and degraded at $(Format-TreeSize $knee.Exceeded)."
+	} elseif ($null -ne $knee.Within) {
+		"One silo's read P95 stayed within $fx of $baseText at every size measured, up to $(Format-TreeSize $knee.Within) keys; the knee lies beyond the ladder."
 	} else { 'No ladder size has been measured yet.' }
 	$block = (Render-TreeSizeMeta -Layer 'treesize' -Meta $meta) + $nl + $nl + $sb.ToString() + $nl + $summary + $nl + $nl + '<!-- perf-table:treesize:end -->'
 	return @{ Block = $block; Meta = $meta; CohortN = $n }
@@ -545,7 +583,7 @@ function Render-TreeSizeSilos {
 			} elseif (Test-TreeSizeMeasureUsable $c) {
 				$n++
 				$cell = "$(Format-TreeSizeP95 $c) ($(Format-Ms $c.p50Ms))"
-				if ([bool](Get-StateValue -Container $c -Key 'unstable')) { $cell += ' UNSTABLE' }
+				if ([bool](Get-StateValue -Container $c -Key 'spreadWide')) { $cell += ' (wide)' }
 				$row += " $cell |"
 			} else { $row += ' _not measured_ |' }
 		}
@@ -591,9 +629,10 @@ function Render-TreeSizeSeed {
 function Render-TreeSizeNote {
 	param([Parameter(Mandatory)][string] $Layer, [Parameter(Mandatory)] $Meta)
 	$lead = "> Measured $($Meta['rowsMeasured']) on Azure Container Apps (Consumption) in $($Meta['region']) (.NET $($Meta['dotnet'])) at git sha $($Meta['gitSha']), n=$($Meta['cohortN'])"
+	$cohorts = if ($Meta.Contains('repeats')) { "$($Meta['repeats']) ladder cohorts" } else { 'one ladder cohort' }
 	switch ($Layer) {
-		'treesize' { return "$lead rungs of one ladder cohort. Each rung offers $($Meta['vehiclesPerSilo']) vehicles x $($Meta['tickHz']) Hz of point reads for $($Meta['durationSec']) s on the warm silo that seeded it." }
-		'treesize-silos' { return "$lead cells, silo counts $($Meta['siloCounts']), one ladder cohort per silo count. Offered load scales with the silo count; all silo counts share one Azure Storage account." }
+		'treesize' { return "$lead rungs of $cohorts$(if ($Meta.Contains('repeats')) { ', each rung the median of the cohorts' }). Each rung offers $($Meta['vehiclesPerSilo']) vehicles x $($Meta['tickHz']) Hz of point reads for $($Meta['durationSec']) s on the warm silo that seeded it." }
+		'treesize-silos' { return "$lead cells, silo counts $($Meta['siloCounts']), $cohorts per silo count. Offered load scales with the silo count; all silo counts share one Azure Storage account." }
 		'treesize-seed' { return "$lead cells, silo counts $($Meta['siloCounts']); every silo count seeded its own fresh tree on one Azure Storage account." }
 		default { throw "Unknown layer '$Layer'" }
 	}
@@ -678,6 +717,10 @@ if ($DryRun) {
 	}
 	if (-not $statePath -or -not (Test-Path $statePath)) { throw 'No tree-size state.json to re-render.' }
 	$state = Get-Content $statePath -Raw | ConvertFrom-Json -AsHashtable
+	# Grading parameters passed explicitly regrade the stored measurements; the state file is not rewritten.
+	foreach ($p in @(@('KneeFactor', 'kneeFactor'), @('SpreadGatePct', 'spreadGatePct'), @('SpreadFloorMs', 'spreadFloorMs'))) {
+		if ($PSBoundParameters.ContainsKey($p[0])) { $state[$p[1]] = $PSBoundParameters[$p[0]] }
+	}
 	Write-TreeSizeDoc -State $state
 	return
 }
@@ -713,7 +756,7 @@ $state.measuredDate = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
 $state['repeats'] = $Repeats
 $state['spreadGatePct'] = $SpreadGatePct
 $state['spreadFloorMs'] = $SpreadFloorMs
-$state['degradeFactor'] = $DegradeFactor
+$state['kneeFactor'] = $KneeFactor
 Save-TreeSizeState -State $state -Path $statePath
 
 # Largest silo count first: it seeds fastest, so it shows earliest how far the sweep can reach.
