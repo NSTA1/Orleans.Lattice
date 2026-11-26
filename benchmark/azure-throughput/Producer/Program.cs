@@ -360,11 +360,30 @@ static async Task RunOrleansClientProducerAsync(string[] args)
         if (BenchProbe.IsVerifyAll(Environment.GetEnvironmentVariable(BenchProbe.EnvironmentVariable)))
         {
             var probeParallelism = ReadInt("BENCH_PROBE_PARALLELISM", 4);
-            Console.WriteLine($"[producer] probe=verify-all treeId={settings.TreeId} keys={settings.PreseedKeyCount} chunkSize={BenchPreseed.ChunkSize} parallelism={probeParallelism}");
-            var totals = await BenchProbe.VerifyAllAsync(
-                lattice, settings.PreseedKeyCount, BenchPreseed.ChunkSize, probeParallelism, Console.WriteLine, ct).ConfigureAwait(false);
-            await BenchProbe.ReportTreeAsync(lattice, Console.WriteLine, ct).ConfigureAwait(false);
-            Console.WriteLine($"[producer] probe DONE treeId={settings.TreeId} verified={totals.Verified} mismatch={totals.Mismatch} missing={totals.Missing} pointMissing={totals.PointMissing}");
+            var probeSteps = BenchProbe.ParseSteps(Environment.GetEnvironmentVariable("BENCH_PROBE_STEPS"));
+            var (probeStart, probeEnd) = BenchProbe.ParseRange(Environment.GetEnvironmentVariable("BENCH_PROBE_RANGE"), settings.PreseedKeyCount);
+            Console.WriteLine($"[producer] probe=verify-all treeId={settings.TreeId} keys={settings.PreseedKeyCount} steps={string.Join(',', probeSteps)} range={probeStart}:{probeEnd} chunkSize={BenchPreseed.ChunkSize} parallelism={probeParallelism}");
+            BenchProbe.Totals? totals = null;
+            foreach (var step in probeSteps)
+            {
+                switch (step)
+                {
+                    case "verify":
+                        totals = await BenchProbe.VerifyAllAsync(
+                            lattice, probeEnd, BenchPreseed.ChunkSize, probeParallelism, Console.WriteLine, ct, start: probeStart).ConfigureAwait(false);
+                        break;
+                    case "count":
+                        await BenchProbe.CountAsync(lattice, Console.WriteLine, ct).ConfigureAwait(false);
+                        break;
+                    case "orphans":
+                        await BenchProbe.SurveyOrphansAsync(lattice, Console.WriteLine, ct).ConfigureAwait(false);
+                        break;
+                }
+            }
+
+            Console.WriteLine(totals is null
+                ? $"[producer] probe DONE treeId={settings.TreeId} verify=skipped"
+                : $"[producer] probe DONE treeId={settings.TreeId} verified={totals.Verified} mismatch={totals.Mismatch} missing={totals.Missing} pointMissing={totals.PointMissing}");
             return;
         }
 
