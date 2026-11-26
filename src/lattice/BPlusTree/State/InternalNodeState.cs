@@ -111,6 +111,16 @@ internal sealed class InternalNodeState
     [Id(13)] public long DigestPublishSequence { get; set; }
 
     /// <summary>
+    /// The child whose accepted promotion caused this node's latest division (#6166),
+    /// persisted with the division's intent. A redelivery of that promotion hands the
+    /// division (<see cref="SplitKey"/>, <see cref="SplitSiblingId"/>) back to the caller:
+    /// when the write completing the division landed but was reported lost, the caller never
+    /// received it, the row reads complete so no recovery replays it, and the new sibling
+    /// would otherwise never be linked.
+    /// </summary>
+    [Id(14)] public GrainId? SplitTriggerChildId { get; set; }
+
+    /// <summary>
     /// Routes a key to the correct child grain by finding the rightmost separator ≤ key.
     /// </summary>
     public GrainId Route(string key)
