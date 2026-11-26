@@ -185,6 +185,15 @@ Two caller obligations make it safe to re-drive:
   grafted twice (issue #5460). A chunk that changes any of those values is
   not a re-delivery: it is applied, so a refresh that overwrites keys
   reaches replicas and views as it did before.
+  A chunk that failed part-way - after some of the leaves it appends were
+  created and seeded, but before they were linked into the tree - keeps its
+  first attempt's layout when it is re-driven. Those leaves keep the ranges
+  they were born with, while the shard's old rightmost leaf, which still owns
+  the appended range, takes up their seeded rows, so a retry laid out afresh
+  from that leaf's new right edge would reuse the same leaves under other
+  ranges and leave keys unreadable. The retry instead appends from the first
+  leaf's original low bound, and the old leaf's rows at or above it move into
+  the appended leaves when it is narrowed (issue #6166).
 - **Keys should ascend**, both within a chunk and across the whole stream.
   Hash-partitioning a globally sorted stream preserves relative order within
   each partition, which is what keeps the per-shard appends on the right edge
