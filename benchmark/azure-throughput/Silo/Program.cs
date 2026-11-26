@@ -1265,7 +1265,11 @@ internal sealed class TcpIngestService(
         // (directory-cache race) and transient activation cancellations -
         // a shard warm-up probe that activates a grain whose state read
         // times out against a transiently-throttled storage account
-        // surfaces as a bare TaskCanceledException. Without this, that
+        // surfaces as a bare TaskCanceledException. A response timeout
+        // (TimeoutException) is retried too: against a tree whose leaves
+        // replay a long WAL on first activation, the first warm-up call
+        // can outlive the response timeout while the next one succeeds.
+        // Without this, that
         // cancellation escaped the loop and (because the silo runs with
         // BackgroundServiceExceptionBehavior=StopHost) killed the host,
         // producing a spurious WEDGE on pinned re-runs (issue #821). The
@@ -1305,12 +1309,14 @@ internal sealed class TcpIngestService(
             catch (Exception ex) when (!stoppingToken.IsCancellationRequested
                 && (IsOrleansMessageRejection(ex)
                     || WarmUpRetryClassifier.IsTransientActivationCancellation(ex)
-                    || WarmUpRetryClassifier.IsTransientPlacementConvergence(ex)))
+                    || WarmUpRetryClassifier.IsTransientPlacementConvergence(ex)
+                    || WarmUpRetryClassifier.IsTransientRequestTimeout(ex)))
             {
                 lastWarmUpException = ex;
                 var backoffMs = Math.Min(100 * (1 << (warmUpAttempt - 1)), MaxWarmUpBackoffMs);
                 var kind = IsOrleansMessageRejection(ex) ? "REJECTED"
                     : WarmUpRetryClassifier.IsTransientPlacementConvergence(ex) ? "PLACEMENT-CONVERGING"
+                    : WarmUpRetryClassifier.IsTransientRequestTimeout(ex) ? "TIMEOUT"
                     : "TRANSIENT-CANCEL";
                 Console.WriteLine($"[silo] warmup treeId={settings.TreeId} attempt={warmUpAttempt} {kind} ({ex.GetType().Name}: {Truncate(ex.Message, 160)}); backing off {backoffMs}ms before retry");
                 try

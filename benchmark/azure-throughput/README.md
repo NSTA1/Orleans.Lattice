@@ -668,6 +668,9 @@ repeats bound the run-to-run variance:
   tree's entry count and the orphaned-leaf survey (`[probe] ...` lines, then
   `[producer] probe DONE`). `BENCH_PROBE_PARALLELISM` (default 4) bounds the chunks read
   at once.
+  `BENCH_PROBE_STEPS` (default `verify,count,orphans`) selects and orders the steps -
+  `orphans` alone runs just the survey - and `BENCH_PROBE_RANGE=start:end` narrows the
+  verify step to those key indexes.
 - **Repeats.** `-Repeats N` (default 1) runs each silo count's ladder `N` times on fresh
   storage (cohort keys `ladder-n<S>`, `ladder-n<S>-r2`, ...). A rung publishes the median
   p50/p95/p99 and seed time with the p95 range and `n`. When the p95 spread
