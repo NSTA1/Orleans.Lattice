@@ -662,6 +662,12 @@ repeats bound the run-to-run variance:
   skips it, and `complete-cohort-aca.ps1` grades the whole cohort `Verdict : INCONSISTENT`,
   which `performance-report.ps1` does not count as HEALTHY. An inconsistent attempt is
   never retried away: it is kept, and `-Resume` does not re-run it.
+- **Full re-read probe.** To find which keys a `missing` count lost, run the producer with
+  `BENCH_PROBE=verify-all` against the kept tree: it re-reads every seeded key read-only,
+  point-reads each miss, and logs every absent key with its seed offset and chunk, the
+  tree's entry count and the orphaned-leaf survey (`[probe] ...` lines, then
+  `[producer] probe DONE`). `BENCH_PROBE_PARALLELISM` (default 4) bounds the chunks read
+  at once.
 - **Repeats.** `-Repeats N` (default 1) runs each silo count's ladder `N` times on fresh
   storage (cohort keys `ladder-n<S>`, `ladder-n<S>-r2`, ...). A rung publishes the median
   p50/p95/p99 and seed time with the p95 range and `n`. When the p95 spread
