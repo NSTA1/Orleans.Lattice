@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Collections.Immutable;
+using System.Diagnostics;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -34,6 +36,12 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// </summary>
 internal sealed class WalSaturationSampler : IHostedService, IDisposable
 {
+    /// <summary>Benchmark census: consumers the drain-lag pass visited, summed over ticks (#6166).</summary>
+    internal const string DrainLagScanVisitedCensus = "wal.sampler.drain-lag.visited";
+
+    /// <summary>Benchmark census: microseconds the drain-lag pass spent visiting, summed over ticks (#6166).</summary>
+    internal const string DrainLagScanMicrosCensus = "wal.sampler.drain-lag.us";
+
     private readonly WalSaturationSignal _signal;
     private readonly WalSaturationObserverDispatcher _dispatcher;
     private readonly IWalCursorRegistry _cursors;
@@ -559,92 +567,45 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
             {
                 WalCommitLogWriter._walAppendTimes.TryGetValue(treeId, out var appendTimes);
                 await _signal.InitializeMetricTreeAsync(treeId).ConfigureAwait(false);
-                var snapshot = await _cursors.SnapshotAsync(treeId, cancellationToken).ConfigureAwait(false);
-                long lagTicks = 0;
-                var lagging = 0;
-                var unclaimed = 0;
-                var incomplete = false;
-                var measured = false;
-                var eligible = false;
-                (WalCursorSnapshot Entry, long Lag)? first = null, second = null, third = null;
-                for (var index = 0; index < snapshot.Count; index++)
+                // Only consumers that reported inside the freshness window can be
+                // eligible, so the in-memory registry is walked newest-first and
+                // stops at the first stale one, in place (#6166). A large tree
+                // keeps a consumer per leaf per partition on every silo its leaves
+                // have lived on, and copying all of them every tick to find the
+                // fresh ones was the dominant cost of a large tree's silo.
+                var scan = new DrainLagScan(appendTimes, drainLagReportedAtOrAfterTicks, observedAt.UtcTicks, lagThreshold.Ticks);
+                var scanStarted = AwaitDiagnostics.Enabled ? Stopwatch.GetTimestamp() : 0L;
+                int visited;
+                if (_cursors is InMemoryWalCursorRegistry inMemory)
                 {
-                    var entry = snapshot[index];
-                    if (!WalDrainLagEligibility.IsEligible(entry, drainLagReportedAtOrAfterTicks))
-                        continue;
-                    eligible = true;
-                    if (entry.CheckpointOffsets is not { Count: > 0 } offsets)
+                    visited = inMemory.VisitReportedSince(treeId, drainLagReportedAtOrAfterTicks, ref scan);
+                }
+                else
+                {
+                    var snapshot = await _cursors.SnapshotAsync(treeId, cancellationToken).ConfigureAwait(false);
+                    for (var index = 0; index < snapshot.Count; index++)
                     {
-                        // An empty map is a withdrawn claim (ClearCheckpointAsync, #5981):
-                        // a resident leaf the live advance moved. Only a null map - a
-                        // legacy HLC-only consumer - is unknown history.
-                        if (entry.CheckpointOffsets is null)
-                        {
-                            incomplete = true;
-                        }
-                        else
-                        {
-                            unclaimed++;
-                        }
+                        scan.Visit(snapshot[index]);
+                    }
 
-                        continue;
-                    }
-                    long? age = null;
-                    var claims = false;
-                    foreach (var offset in offsets)
-                    {
-                        // A negative checkpoint is "no claim": a leaf born with no
-                        // checkpoint at the partition (its donor had no replay
-                        // frontier there, #5757/#5769) or one that has applied nothing
-                        // yet. It is its own case - neither lag from the partition's
-                        // first append, which would count every freshly built leaf
-                        // (#5969), nor incomplete history, which would warn on every
-                        // fresh resize.
-                        if (offset.Value < 0)
-                        {
-                            continue;
-                        }
-
-                        claims = true;
-
-                        if (appendTimes is null || !appendTimes.TryGetValue(offset.Key, out var timeline))
-                        {
-                            incomplete = true;
-                            continue;
-                        }
-                        var partitionAge = timeline.GetLagTicks(offset.Value, observedAt.UtcTicks, out var missingHistory);
-                        incomplete |= missingHistory;
-                        if (partitionAge is { } knownAge)
-                            age = Math.Max(age ?? 0, knownAge);
-                    }
-                    // Unclaimed counts consumers, as lagging does: one with no claim at
-                    // any partition, like one that withdrew its claim above.
-                    if (!claims)
-                    {
-                        unclaimed++;
-                        continue;
-                    }
-                    if (age is not { } consumerLag)
-                        continue;
-                    measured = true;
-                    lagTicks = Math.Max(lagTicks, consumerLag);
-                    if (consumerLag > lagThreshold.Ticks)
-                        lagging++;
-                    if (first is null || consumerLag > first.Value.Lag)
-                    {
-                        third = second;
-                        second = first;
-                        first = (entry, consumerLag);
-                    }
-                    else if (second is null || consumerLag > second.Value.Lag)
-                    {
-                        third = second;
-                        second = (entry, consumerLag);
-                    }
-                    else if (third is null || consumerLag > third.Value.Lag)
-                        third = (entry, consumerLag);
+                    visited = snapshot.Count;
                 }
 
+                if (scanStarted != 0L)
+                {
+                    AwaitDiagnostics.Add(DrainLagScanVisitedCensus, visited);
+                    AwaitDiagnostics.Add(DrainLagScanMicrosCensus, (long)Stopwatch.GetElapsedTime(scanStarted).TotalMicroseconds);
+                }
+
+                var lagTicks = scan.LagTicks;
+                var lagging = scan.Lagging;
+                var unclaimed = scan.Unclaimed;
+                var incomplete = scan.Incomplete;
+                var measured = scan.Measured;
+                var eligible = scan.Eligible;
+                var first = scan.First;
+                var second = scan.Second;
+                var third = scan.Third;
                 if (incomplete && (!_lastUnknownDrainLagLogTimestamp.TryGetValue(treeId, out var lastUnknown)
                     || _time.GetElapsedTime(lastUnknown) >= TimeSpan.FromMinutes(10)))
                 {
@@ -1256,6 +1217,128 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
             AttributedPartition = null;
             AttributedShard = null;
             Partitions.Clear();
+        }
+    }
+
+    /// <summary>
+    /// One tree's drain-lag pass over its eligible consumers, accumulated in place so the
+    /// in-memory registry can hand each consumer to it without a copy (#6166). The verdict is
+    /// the one the pass computed over a snapshot before: the oldest unread append any eligible
+    /// consumer owes, how many owe one past the threshold, the three that owe the most, and
+    /// whether any history needed to measure it was missing.
+    /// </summary>
+    private struct DrainLagScan(
+        ConcurrentDictionary<int, WalAppendTimeline>? appendTimes,
+        long reportedAtOrAfterTicks,
+        long observedAtTicks,
+        long lagThresholdTicks) : IWalCursorVisitor
+    {
+        public long LagTicks;
+        public int Lagging;
+        public int Unclaimed;
+        public bool Incomplete;
+        public bool Measured;
+        public bool Eligible;
+        public (WalCursorSnapshot Entry, long Lag)? First;
+        public (WalCursorSnapshot Entry, long Lag)? Second;
+        public (WalCursorSnapshot Entry, long Lag)? Third;
+
+        public void Visit(in WalCursorSnapshot entry)
+        {
+            if (!WalDrainLagEligibility.IsEligible(entry, reportedAtOrAfterTicks))
+                return;
+            Eligible = true;
+            if (entry.CheckpointOffsets is not { Count: > 0 } offsets)
+            {
+                // An empty map is a withdrawn claim (ClearCheckpointAsync, #5981):
+                // a resident leaf the live advance moved. Only a null map - a
+                // legacy HLC-only consumer - is unknown history.
+                if (entry.CheckpointOffsets is null)
+                {
+                    Incomplete = true;
+                }
+                else
+                {
+                    Unclaimed++;
+                }
+
+                return;
+            }
+
+            long? age = null;
+            var claims = false;
+            if (offsets is ImmutableDictionary<int, long> registryOffsets)
+            {
+                // The registry's own map type: enumerated without boxing an enumerator.
+                foreach (var offset in registryOffsets)
+                {
+                    AddPartitionAge(offset.Key, offset.Value, ref age, ref claims);
+                }
+            }
+            else
+            {
+                foreach (var offset in offsets)
+                {
+                    AddPartitionAge(offset.Key, offset.Value, ref age, ref claims);
+                }
+            }
+
+            // Unclaimed counts consumers, as lagging does: one with no claim at
+            // any partition, like one that withdrew its claim above.
+            if (!claims)
+            {
+                Unclaimed++;
+                return;
+            }
+
+            if (age is not { } consumerLag)
+                return;
+            Measured = true;
+            LagTicks = Math.Max(LagTicks, consumerLag);
+            if (consumerLag > lagThresholdTicks)
+                Lagging++;
+            if (First is null || consumerLag > First.Value.Lag)
+            {
+                Third = Second;
+                Second = First;
+                First = (entry, consumerLag);
+            }
+            else if (Second is null || consumerLag > Second.Value.Lag)
+            {
+                Third = Second;
+                Second = (entry, consumerLag);
+            }
+            else if (Third is null || consumerLag > Third.Value.Lag)
+            {
+                Third = (entry, consumerLag);
+            }
+        }
+
+        private void AddPartitionAge(int partition, long checkpoint, ref long? age, ref bool claims)
+        {
+            // A negative checkpoint is "no claim": a leaf born with no
+            // checkpoint at the partition (its donor had no replay
+            // frontier there, #5757/#5769) or one that has applied nothing
+            // yet. It is its own case - neither lag from the partition's
+            // first append, which would count every freshly built leaf
+            // (#5969), nor incomplete history, which would warn on every
+            // fresh resize.
+            if (checkpoint < 0)
+            {
+                return;
+            }
+
+            claims = true;
+            if (appendTimes is null || !appendTimes.TryGetValue(partition, out var timeline))
+            {
+                Incomplete = true;
+                return;
+            }
+
+            var partitionAge = timeline.GetLagTicks(checkpoint, observedAtTicks, out var missingHistory);
+            Incomplete |= missingHistory;
+            if (partitionAge is { } knownAge)
+                age = Math.Max(age ?? 0, knownAge);
         }
     }
 }
