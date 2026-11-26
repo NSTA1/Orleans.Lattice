@@ -55,14 +55,17 @@ defects stop larger runs; see [Where the ladder stops](#where-the-ladder-stops).
   the upper edge of a fixed histogram bucket, so a figure is an upper bound
   on the true quantile.
 - **The budget is absolute.** A size is within budget when its P95 is at or
-  below 5 ms, roughly one Azure Tables round trip.
+  below 5 ms, roughly one Azure Tables round trip. A sweep run with
+  `-DegradeFactor` instead takes the larger of that and a multiple of each
+  silo count's own small-tree P95, and records both in the table's metadata.
 - **Every read is checked.** The seed writes a value derived from each key's
   index, so the producer compares every value it reads with the one seeded. A
   wrong or missing value grades the size `INCONSISTENT`, and it is never
   counted as within budget, whatever its latency.
 - **Repeats bound the variance.** With repeats, each size reports the median
-  P95 with its range across runs. A size whose P95 spread exceeds 25% of the
-  median is graded `UNSTABLE` and is not counted as within budget either.
+  P95 with its range across runs. A size whose P95 spread exceeds 30% of the
+  median, and whose range is also wider than 1.5 ms, is graded `UNSTABLE` and
+  is not counted as within budget either.
 
 ## Read latency by tree size
 
@@ -245,6 +248,7 @@ az group delete --name rg-<prefix> --yes --no-wait
 `-Resume` picks up an interrupted sweep from its saved state, `-DryRun`
 re-renders this page from that state, and `-Sizes`, `-SiloAxisSizes` and
 `-SiloCounts` change the grid, `-Repeats` runs each ladder several times and
-`-SpreadGatePct` sets the spread above which a size is `UNSTABLE`. See
+`-SpreadGatePct` and `-SpreadFloorMs` set the spread above which a size is
+`UNSTABLE`, and `-DegradeFactor` makes the budget relative. See
 [the rig's README](../../benchmark/azure-throughput/README.md#tree-size-sweep)
 for every option.
