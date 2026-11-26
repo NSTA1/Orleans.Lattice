@@ -561,6 +561,38 @@ internal sealed partial class BPlusLeafGrain
 
         private readonly long _started = System.Diagnostics.Stopwatch.GetTimestamp();
 
+        /// <summary>Where the replay's time went, by <see cref="Phase"/>, in stopwatch ticks.</summary>
+        private readonly long[] _phaseTicks = new long[(int)Phase.Settle + 1];
+
+        private long _lapStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+
+        /// <summary>The spans of an activation replay the census splits its time into.</summary>
+        internal enum Phase
+        {
+            /// <summary>Options and the sweep's head probe of every partition.</summary>
+            Sweep,
+
+            /// <summary>The consistent cut, its view read and its stamps.</summary>
+            Cut,
+
+            /// <summary>The registry's shard map, the permit returned and queued for again around it.</summary>
+            ShardMap,
+
+            /// <summary>The per-partition loop: the fall-off check, the read and the warm proof.</summary>
+            Partitions,
+
+            /// <summary>The deferred terminals, the reconciliation and the flushes after the loop.</summary>
+            Settle,
+        }
+
+        /// <summary>Charges the time since the last lap to <paramref name="phase"/>.</summary>
+        internal void Lap(Phase phase)
+        {
+            var now = System.Diagnostics.Stopwatch.GetTimestamp();
+            _phaseTicks[(int)phase] += now - _lapStarted;
+            _lapStarted = now;
+        }
+
         /// <summary>The first cut's outcome and reason, as its <c>leaf.replay.cut.first.*</c> name carries them.</summary>
         internal string? Class;
 
@@ -593,12 +625,33 @@ internal sealed partial class BPlusLeafGrain
                 AwaitDiagnostics.Count(string.Concat(prefix, ".read-heavy"));
             }
 
+            for (var phase = Phase.Sweep; phase <= Phase.Settle; phase++)
+            {
+                var ticks = _phaseTicks[(int)phase];
+                if (ticks > 0)
+                {
+                    AwaitDiagnostics.Add(
+                        string.Concat(prefix, ".ms.", PhaseName(phase)),
+                        (long)(ticks * 1000.0 / System.Diagnostics.Stopwatch.Frequency));
+                }
+            }
+
             if (OwedHeavyPartitions > 0)
             {
                 AwaitDiagnostics.Add(string.Concat(prefix, ".owed-heavy-partitions"), OwedHeavyPartitions);
             }
         }
     }
+
+    /// <summary>The census name of an activation replay phase.</summary>
+    private static string PhaseName(ActivationReplayCensus.Phase phase) => phase switch
+    {
+        ActivationReplayCensus.Phase.Sweep => "sweep",
+        ActivationReplayCensus.Phase.Cut => "cut",
+        ActivationReplayCensus.Phase.ShardMap => "shard-map",
+        ActivationReplayCensus.Phase.Partitions => "partitions",
+        _ => "settle",
+    };
 
     /// <summary>Counts a stall drive's cut outcome and its reason on the benchmark census.</summary>
     private void CountDriveCut(CutAdvanceOutcome outcome)

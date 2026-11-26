@@ -4972,12 +4972,14 @@ internal sealed partial class BPlusLeafGrain
         {
             var advanced = await ReplayWalSinceCheckpointCoreAsync(
                 checkpointOverride, cancellationToken, atActivation ? ActivationCut.CatchUpAllowed : ActivationCut.None, census);
+            census?.Lap(ActivationReplayCensus.Phase.Settle);
             if (atActivation && _replayReadCap is not null)
             {
                 // The capped catch-up read to the leaf's own close is done: the cut again,
                 // then the tail past it, never a second catch-up.
                 _replayReadCap = null;
                 advanced |= await ReplayWalSinceCheckpointCoreAsync(checkpointOverride, cancellationToken, ActivationCut.Final, census);
+                census?.Lap(ActivationReplayCensus.Phase.Settle);
             }
 
             census?.Report();
@@ -5182,13 +5184,19 @@ internal sealed partial class BPlusLeafGrain
         // the legacy stamp-based axis. It is read after the permit is taken, so
         // ownership is captured as of the replay itself; the lookup returns the
         // permit for the call (issue #5775).
-        var replayShardMap = await ResolveReplayShardMapAsync(treeId);
-
+        //
         // The ownership every partition's slices are judged by AND filtered by
         // (issue #3565), captured from one read of the leaf's state. A resident
         // replay can overlap a split, so admission also checks the live span
         // before applying a key-scoped record. See LeafReplayOwnership.
-        var replayOwnership = LeafReplayOwnership.Capture(state.State, replayShardMap);
+        //
+        // Both are taken at the first partition that has a record to read, and
+        // never on a replay that reads nothing (issue #6166). Only a read uses
+        // them, and the lookup returns the permit for the call and queues for it
+        // again, so a replay with nothing to read - every leaf of a large tree on
+        // its first touch after a seed - queued twice and made a registry call
+        // for a value it never used.
+        LeafReplayOwnership? replayOwnership = null;
 
         var anyAdvanced = false;
         // Pass 1: per-partition tail replay, deferring every saga
@@ -5243,6 +5251,7 @@ internal sealed partial class BPlusLeafGrain
         // re-read it; see issue #2089.
         var sweep = await BuildPassOneSweepOrderAsync(
             treeId, partitionCount, checkpointOverride, cancellationToken);
+        census?.Lap(ActivationReplayCensus.Phase.Sweep);
 
         // Issue #6166. A warm activation first passes, by the consistent cut, the span
         // behind its checkpoint the cut proves holds nothing it has not read, where the
@@ -5258,6 +5267,8 @@ internal sealed partial class BPlusLeafGrain
         {
             CountCut(activationCut == ActivationCut.CatchUpAllowed, "cold-rebuild", census);
         }
+
+        census?.Lap(ActivationReplayCensus.Phase.Cut);
 
         // Issue #6166. A warm replay resumes from the leaf's current read position, its
         // pending advance included: that advance is what the next flush persists, so the
@@ -5480,7 +5491,18 @@ internal sealed partial class BPlusLeafGrain
                 }
             }
 
-            var (advanced, maxScanned) = await ReplayPartitionAsync(treeId, partition, checkpoint, projection, deferredTerminals, deferredOffsets, partitionsAbsorbed == partitionCount - 1, replayOwnership, resolvedOptions.WalReplayMaxRecordsPerTurn, resolvedOptions.MaxDurableUnresolvedReplayWork, probedHead, resolvedOptions.MaxLeafReplayEntries, cancellationToken);
+            // A head the sweep probed at or below the checkpoint leaves nothing to
+            // read: ReplayPartitionAsync returns before its first read, on the same
+            // test, and the window the warm proof below would check is empty.
+            var windowEmpty = probedHead is { } sweptHead && CapReplayHead(partition, sweptHead) - 1 <= checkpoint;
+            if (!windowEmpty && replayOwnership is null)
+            {
+                census?.Lap(ActivationReplayCensus.Phase.Partitions);
+                replayOwnership = LeafReplayOwnership.Capture(state.State, await ResolveReplayShardMapAsync(treeId));
+                census?.Lap(ActivationReplayCensus.Phase.ShardMap);
+            }
+
+            var (advanced, maxScanned) = await ReplayPartitionAsync(treeId, partition, checkpoint, projection, deferredTerminals, deferredOffsets, partitionsAbsorbed == partitionCount - 1, replayOwnership ?? default, resolvedOptions.WalReplayMaxRecordsPerTurn, resolvedOptions.MaxDurableUnresolvedReplayWork, probedHead, resolvedOptions.MaxLeafReplayEntries, cancellationToken);
             partitionsAbsorbed++;
             if (advanced)
                 anyAdvanced = true;
@@ -5496,7 +5518,7 @@ internal sealed partial class BPlusLeafGrain
             // offset, taken now the read is done, is still at or below the first
             // offset the window needed - the boundary the cold-replay guard above
             // uses for the same question.
-            if (warmReplayProven && !_warmCacheReplayFailed && !replayOwnership.Filter.IsUnbounded)
+            if (warmReplayProven && !_warmCacheReplayFailed && !windowEmpty && replayOwnership is { Filter.IsUnbounded: false })
             {
                 var floor = await ReplaySliceReader.AwaitProviderReadAsync(
                     grainFactory.GetGrain<ILeafReplayCoordinatorGrain>($"{treeId}/{partition}")
@@ -5505,6 +5527,8 @@ internal sealed partial class BPlusLeafGrain
                     _warmCacheReplayFailed = true;
             }
         }
+
+        census?.Lap(ActivationReplayCensus.Phase.Partitions);
 
         // Pass 2: drain every deferred saga terminal (and DeleteRange
         // tombstone) in arrival order across partitions. By this

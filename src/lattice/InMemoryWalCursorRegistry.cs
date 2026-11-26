@@ -34,6 +34,12 @@ public sealed class InMemoryWalCursorRegistry : IWalCursorRegistry
     private readonly object _gate = new();
     private readonly Dictionary<string, TreeState> _byTree = new(StringComparer.Ordinal);
 
+    /// <summary>The report time last stamped, so report times never step backwards.</summary>
+    private long _lastReportTicks;
+
+    /// <summary>Test view of whether the calling thread holds the registry's lock.</summary>
+    internal bool IsLockHeldByCurrentThreadForTest => Monitor.IsEntered(_gate);
+
     /// <inheritdoc />
     public Task ReportCheckpointAsync(
         string treeName, string consumerId, HybridLogicalClock cursor,
@@ -65,7 +71,7 @@ public sealed class InMemoryWalCursorRegistry : IWalCursorRegistry
             if (_byTree.TryGetValue(treeName, out var state)
                 && state.PerConsumer.TryGetValue(consumerId, out var existing))
             {
-                IReadOnlyDictionary<int, long>? next = existing.CheckpointOffsets switch
+                IReadOnlyDictionary<int, long>? next = existing.Snapshot.CheckpointOffsets switch
                 {
                     null => ImmutableDictionary<int, long>.Empty,
                     var offsets when offsets.ContainsKey(walPartition) => ((ImmutableDictionary<int, long>)offsets).Remove(walPartition),
@@ -73,7 +79,7 @@ public sealed class InMemoryWalCursorRegistry : IWalCursorRegistry
                 };
                 if (next is not null)
                 {
-                    state.PerConsumer[consumerId] = existing with { CheckpointOffsets = next };
+                    existing.Snapshot = existing.Snapshot with { CheckpointOffsets = next };
                 }
             }
         }
@@ -176,7 +182,6 @@ public sealed class InMemoryWalCursorRegistry : IWalCursorRegistry
         }
         cancellationToken.ThrowIfCancellationRequested();
 
-        var nowTicks = DateTime.UtcNow.Ticks;
         // Defensive clone: callers may continue to mutate the supplied
         // VersionVector after the report returns (e.g. by ticking it on
         // the next applied entry). Cloning here keeps the registry's
@@ -185,14 +190,19 @@ public sealed class InMemoryWalCursorRegistry : IWalCursorRegistry
 
         lock (_gate)
         {
+            // Never behind an earlier report, so each tree's report-order list is
+            // also ordered by report time even across a wall-clock step backwards,
+            // which is what lets CopyReportedSince stop at its cut-off (#6166).
+            var nowTicks = _lastReportTicks = Math.Max(DateTime.UtcNow.Ticks, _lastReportTicks);
             if (!_byTree.TryGetValue(treeName, out var state))
             {
                 state = new TreeState();
                 _byTree[treeName] = state;
             }
 
-            if (state.PerConsumer.TryGetValue(consumerId, out var existing))
+            if (state.PerConsumer.TryGetValue(consumerId, out var entry))
             {
+                var existing = entry.Snapshot;
                 var advancedCursor = existing.Cursor;
                 if (cursor > existing.Cursor)
                 {
@@ -253,7 +263,7 @@ public sealed class InMemoryWalCursorRegistry : IWalCursorRegistry
                     ? nowTicks
                     : existing.CursorAdvancedAtTicks;
 
-                state.PerConsumer[consumerId] = new WalCursorSnapshot(
+                entry.Snapshot = new WalCursorSnapshot(
                     consumerId,
                     advancedCursor,
                     nowTicks,
@@ -263,6 +273,7 @@ public sealed class InMemoryWalCursorRegistry : IWalCursorRegistry
                     CursorAdvancedAtTicks = cursorAdvancedAtTicks,
                     CheckpointOffsets = MergeCheckpoint(existing.CheckpointOffsets, walPartition, checkpointOffset),
                 };
+                state.MarkReported(entry);
 
                 if (shouldInvalidate)
                 {
@@ -271,7 +282,7 @@ public sealed class InMemoryWalCursorRegistry : IWalCursorRegistry
             }
             else
             {
-                state.PerConsumer[consumerId] = new WalCursorSnapshot(
+                entry = new ConsumerEntry(new WalCursorSnapshot(
                     consumerId,
                     cursor,
                     nowTicks,
@@ -282,7 +293,9 @@ public sealed class InMemoryWalCursorRegistry : IWalCursorRegistry
                     // show the consumer draining, so position age starts unknown.
                     CursorAdvancedAtTicks = 0,
                     CheckpointOffsets = MergeCheckpoint(null, walPartition, checkpointOffset),
-                };
+                });
+                state.PerConsumer[consumerId] = entry;
+                state.MarkReported(entry);
 
                 // A new consumer always affects the meet - its absence
                 // was the previous floor. Invalidate unconditionally.
@@ -326,8 +339,9 @@ public sealed class InMemoryWalCursorRegistry : IWalCursorRegistry
         {
             if (_byTree.TryGetValue(treeName, out var state))
             {
-                if (state.PerConsumer.Remove(consumerId))
+                if (state.PerConsumer.Remove(consumerId, out var removed))
                 {
+                    state.Unlink(removed);
                     state.InvalidateCaches();
                 }
 
@@ -357,7 +371,7 @@ public sealed class InMemoryWalCursorRegistry : IWalCursorRegistry
             }
 
             HybridLogicalClock? min = null;
-            foreach (var snapshot in state.PerConsumer.Values)
+            foreach (var snapshot in state.Snapshots)
             {
                 // Skip blocked-floor-only consumers (registered
                 // with cursor=Zero) so a buffer pin does not disable
@@ -393,7 +407,7 @@ public sealed class InMemoryWalCursorRegistry : IWalCursorRegistry
             }
 
             HybridLogicalClock? min = null;
-            foreach (var snapshot in state.PerConsumer.Values)
+            foreach (var snapshot in state.Snapshots)
             {
                 // Blocked-floor-only, cold, and position-stale leaf
                 // consumers are excluded; the predicate is shared with the
@@ -434,7 +448,7 @@ public sealed class InMemoryWalCursorRegistry : IWalCursorRegistry
                 return Task.FromResult(state.CachedCausalStable?.Clone());
             }
 
-            var computed = ComputeCausalStable(state.PerConsumer.Values);
+            var computed = ComputeCausalStable(state.Snapshots);
             state.HasCachedCausalStable = true;
             state.CachedCausalStable = computed;
             return Task.FromResult(computed?.Clone());
@@ -461,7 +475,7 @@ public sealed class InMemoryWalCursorRegistry : IWalCursorRegistry
                 return Task.FromResult(state.CachedBlockedFloor);
             }
 
-            var computed = ComputeBlockedFloor(state.PerConsumer.Values);
+            var computed = ComputeBlockedFloor(state.Snapshots);
             state.HasCachedBlockedFloor = true;
             state.CachedBlockedFloor = computed;
             return Task.FromResult(computed);
@@ -485,16 +499,76 @@ public sealed class InMemoryWalCursorRegistry : IWalCursorRegistry
 
             var copy = new WalCursorSnapshot[state.PerConsumer.Count];
             var i = 0;
-            foreach (var snapshot in state.PerConsumer.Values)
+            foreach (var entry in state.PerConsumer.Values)
             {
                 // Clone the embedded vector so callers cannot mutate
                 // the registry's internal copy.
+                var snapshot = entry.Snapshot;
                 copy[i++] = snapshot with { Vector = snapshot.Vector?.Clone() };
             }
             return Task.FromResult<IReadOnlyList<WalCursorSnapshot>>(copy);
         }
     }
 
+    /// <summary>
+    /// Copies into <paramref name="buffer"/>, newest report first, every consumer of
+    /// <paramref name="treeName"/> that has reported at or after
+    /// <paramref name="reportedAtOrAfterTicks"/>, stopping at the first that has not
+    /// (issue #6166). Only the copy runs under the registry's lock: the caller measures
+    /// what it copied after the lock is released.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// A consumer stays registered after its leaf deactivates, so a large tree accumulates
+    /// consumers - one per leaf per WAL partition - on every silo its leaves have lived on.
+    /// The drain-lag sampler reads only consumers that reported inside its freshness window,
+    /// and copying all of them five times a second through <see cref="SnapshotAsync"/> to
+    /// find those cost a large tree's silo a core and tens of megabytes of garbage per tick.
+    /// Report times never step backwards (see <see cref="_lastReportTicks"/>), so the
+    /// report-order list is ordered by them.
+    /// </para>
+    /// <para>
+    /// The lock is the one every consumer's report takes, which is why nothing but the copy
+    /// may run under it: measuring a consumer reads its partition's append history under that
+    /// history's own lock, contended with every WAL append, and measured here it held this lock
+    /// for most of each tick during a bulk seed. The copies carry no
+    /// <see cref="WalCursorSnapshot.Vector"/>, which the registry merges in place.
+    /// </para>
+    /// </remarks>
+    /// <param name="treeName">The tree whose consumers to copy.</param>
+    /// <param name="reportedAtOrAfterTicks">The cut-off report time, in UTC ticks.</param>
+    /// <param name="buffer">Reused across calls; grown when the fresh consumers do not fit.</param>
+    /// <returns>The number of consumers copied to the front of <paramref name="buffer"/>.</returns>
+    internal int CopyReportedSince(string treeName, long reportedAtOrAfterTicks, ref WalCursorSnapshot[] buffer)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(treeName);
+        ArgumentNullException.ThrowIfNull(buffer);
+        var copied = 0;
+        lock (_gate)
+        {
+            if (!_byTree.TryGetValue(treeName, out var state))
+            {
+                return 0;
+            }
+
+            for (var entry = state.Newest; entry is not null; entry = entry.Older)
+            {
+                if (entry.Snapshot.LastReportedAtTicks < reportedAtOrAfterTicks)
+                {
+                    break;
+                }
+
+                if (copied == buffer.Length)
+                {
+                    Array.Resize(ref buffer, Math.Max(16, buffer.Length * 2));
+                }
+
+                buffer[copied++] = entry.Snapshot with { Vector = null };
+            }
+        }
+
+        return copied;
+    }
     /// <summary>
     /// Computes the pointwise-min <see cref="VersionVector"/> across
     /// every consumer that has reported a non-<see langword="null"/>
@@ -569,8 +643,70 @@ public sealed class InMemoryWalCursorRegistry : IWalCursorRegistry
     /// </summary>
     private sealed class TreeState
     {
-        public Dictionary<string, WalCursorSnapshot> PerConsumer { get; } =
+        public Dictionary<string, ConsumerEntry> PerConsumer { get; } =
             new(StringComparer.Ordinal);
+
+        /// <summary>The consumer that reported most recently; the head of the report-order list.</summary>
+        public ConsumerEntry? Newest { get; private set; }
+
+        /// <summary>The consumer that reported least recently; the tail of the report-order list.</summary>
+        public ConsumerEntry? Oldest { get; private set; }
+
+        /// <summary>The live snapshots, in no particular order.</summary>
+        public IEnumerable<WalCursorSnapshot> Snapshots
+        {
+            get
+            {
+                foreach (var entry in PerConsumer.Values)
+                {
+                    yield return entry.Snapshot;
+                }
+            }
+        }
+
+        /// <summary>Records a report by <paramref name="entry"/>, making it the newest.</summary>
+        public void MarkReported(ConsumerEntry entry)
+        {
+            if (ReferenceEquals(Newest, entry))
+            {
+                return;
+            }
+
+            Unlink(entry);
+            entry.Older = Newest;
+            if (Newest is not null)
+            {
+                Newest.Newer = entry;
+            }
+
+            Newest = entry;
+            Oldest ??= entry;
+        }
+
+        /// <summary>Removes <paramref name="entry"/> from the report-order list.</summary>
+        public void Unlink(ConsumerEntry entry)
+        {
+            if (entry.Newer is not null)
+            {
+                entry.Newer.Older = entry.Older;
+            }
+            else if (ReferenceEquals(Newest, entry))
+            {
+                Newest = entry.Older;
+            }
+
+            if (entry.Older is not null)
+            {
+                entry.Older.Newer = entry.Newer;
+            }
+            else if (ReferenceEquals(Oldest, entry))
+            {
+                Oldest = entry.Newer;
+            }
+
+            entry.Newer = null;
+            entry.Older = null;
+        }
 
         public bool HasCachedCausalStable { get; set; }
 
@@ -587,5 +723,22 @@ public sealed class InMemoryWalCursorRegistry : IWalCursorRegistry
             HasCachedBlockedFloor = false;
             CachedBlockedFloor = null;
         }
+    }
+
+    /// <summary>
+    /// One registered consumer: its snapshot, and its place in its tree's
+    /// report-order list (issue #6166). The list is what lets
+    /// <see cref="CopyReportedSince"/> stop at the first consumer that
+    /// has not reported since its cut-off instead of walking every consumer.
+    /// </summary>
+    private sealed class ConsumerEntry(WalCursorSnapshot snapshot)
+    {
+        public WalCursorSnapshot Snapshot = snapshot;
+
+        /// <summary>The consumer that reported next after this one, or <see langword="null"/> for the newest.</summary>
+        public ConsumerEntry? Newer;
+
+        /// <summary>The consumer that reported last before this one, or <see langword="null"/> for the oldest.</summary>
+        public ConsumerEntry? Older;
     }
 }
