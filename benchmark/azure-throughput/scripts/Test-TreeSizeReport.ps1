@@ -209,6 +209,22 @@ try {
     Assert-Case 'range rendered' ($repBlock -match '2\.10 ms \(2\.00 ms - 2\.20 ms, n=3\)')
     Assert-Case 'unstable rendered' ($repBlock -match '\| 3 M \|[^\r\n]*\| UNSTABLE \|')
     Assert-Case 'single repeat unaffected' ((Get-TreeSizeRung -State $state -Silos 1 -Size 1000000).p95Ms -eq 2.0)
+    $wobble = @((New-Rung 0 1 1 2.895), (New-Rung 0 1 1 3.596), (New-Rung 0 1 1 4.095))
+    Assert-Case 'spread under floor stable' (-not (Merge-TreeSizeRepeats -Samples $wobble -SpreadGatePct 30 -SpreadFloorMs 1.5).unstable)
+    Assert-Case 'spread without floor unstable' ((Merge-TreeSizeRepeats -Samples $wobble -SpreadGatePct 30 -SpreadFloorMs 0).unstable)
+
+    # --- Relative degrade budget --------------------------------------------
+    $rel = [ordered]@{}; foreach ($k in $state.Keys) { $rel[$k] = $state[$k] }
+    $rel['cohorts'] = [ordered]@{ 'ladder-n1' = [ordered]@{ verdict = 'HEALTHY'; rungs = [ordered]@{
+                '1m' = New-Rung 0 1000000 40000 3.0; '3m' = New-Rung 1000000 2000000 80000 5.5; '10m' = New-Rung 3000000 7000000 300000 7.0 } } }
+    Assert-Case 'absolute budget without factor' ((Get-TreeSizeBudgetMs -State $rel) -eq 5.0 -and (Get-TreeSizeKnee -State $rel).Within -eq 1000000)
+    $rel['degradeFactor'] = 2.0
+    Assert-Case 'relative budget from baseline' ((Get-TreeSizeBudgetMs -State $rel) -eq 6.0)
+    $relKnee = Get-TreeSizeKnee -State $rel
+    Assert-Case 'relative knee' ($relKnee.Within -eq 3000000 -and $relKnee.Exceeded -eq 10000000)
+    Assert-Case 'relative budget published' ((Render-TreeSizeLadder -State $rel).Block -match 'degradeFactor=2')
+    $rel['degradeFactor'] = 1.0
+    Assert-Case 'budget never below absolute' ((Get-TreeSizeBudgetMs -State $rel) -eq 5.0)
 
     # --- Document update is idempotent and keeps notes single ----------------
     $doc = "intro`r`n`r`n<!-- perf-table:treesize:start -->`r`n<!-- perf-table:treesize:end -->`r`n`r`nmid`r`n`r`n<!-- perf-table:treesize-silos:start -->`r`n<!-- perf-table:treesize-silos:end -->`r`n`r`n<!-- perf-table:treesize-seed:start -->`r`n<!-- perf-table:treesize-seed:end -->`r`n`r`ntail`r`n"

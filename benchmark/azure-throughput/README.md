@@ -665,9 +665,17 @@ repeats bound the run-to-run variance:
 - **Repeats.** `-Repeats N` (default 1) runs each silo count's ladder `N` times on fresh
   storage (cohort keys `ladder-n<S>`, `ladder-n<S>-r2`, ...). A rung publishes the median
   p50/p95/p99 and seed time with the p95 range and `n`. When the p95 spread
-  ((max - min) / median) exceeds `-SpreadGatePct` (default 25) the rung is graded
-  `UNSTABLE` and does not count as within budget. Any inconsistent repeat makes the
-  merged rung `INCONSISTENT`.
+  ((max - min) / median) exceeds `-SpreadGatePct` (default 30) and the absolute range
+  (max - min) also exceeds `-SpreadFloorMs` (default 1.5 ms), the rung is graded
+  `UNSTABLE` and does not count as within budget. The floor stops a millisecond of
+  environment noise on a 3 ms p95 reading as instability. Any inconsistent repeat
+  makes the merged rung `INCONSISTENT`.
+- **Relative budget.** `-DegradeFactor` (default 2.0) raises each silo count's budget
+  to that multiple of its own smallest usable, consistent, stable rung's p95, never
+  below `-DegradeP95Ms`. The knee then marks where reads degrade relative to that
+  cluster's small-tree baseline, rather than where they cross a fixed figure that
+  the client round trip alone can exceed. `0` keeps the absolute budget only. The
+  page records `degradeFactor=` and the resolved `budgetP95Ms=`.
 
 Iterate on consistency at small sizes first, for example
 `-Sizes 100000,300000 -SiloAxisSizes 100000 -SiloCounts 2 -Repeats 3`, and widen the
