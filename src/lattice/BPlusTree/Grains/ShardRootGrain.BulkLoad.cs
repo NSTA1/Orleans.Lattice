@@ -1073,6 +1073,22 @@ internal sealed partial class ShardRootGrain
             ? null
             : (await rightmostLeaf.GetKeyRangeAndNextSiblingAsync()).KeyRange.LowKeyInclusive;
         var belowEdge = CountBelowEdge(sortedEntries, rightEdge, lowBound);
+
+        // #6166: an earlier attempt of this operation that failed after seeding its leaves
+        // fixed their layout - ids are derived from the operation, and a leaf keeps the
+        // range it was first born declaring - while the old rightmost leaf, not yet
+        // narrowed, replays those seeds and moves its right edge up. Laying the retry out
+        // from that moved edge reuses the same leaves under other ranges, and keys land
+        // in leaves whose declared range excludes them. Only a re-delivery puts entries
+        // below the edge, so only then is the first attempt's layout looked up.
+        var priorLayoutLow = belowEdge > 0 && graftSeams
+            ? await PriorAttemptLayoutLowAsync(operationId, rightmostLeafId, lowBound)
+            : null;
+        if (priorLayoutLow is not null)
+        {
+            belowEdge = FirstAtOrAbove(sortedEntries, priorLayoutLow);
+        }
+
         int idx = 0;
         if (belowEdge > 0)
         {
@@ -1091,7 +1107,9 @@ internal sealed partial class ShardRootGrain
         }
 
         phase = BulkPhaseMark("bulk.append.ms.tail", phase);
-        int space = maxLeafKeys - existingCount;
+
+        // Under the first attempt's layout the fill already landed below its first leaf.
+        int space = priorLayoutLow is null ? maxLeafKeys - existingCount : 0;
 
         if (space > 0 && idx < sortedEntries.Count)
         {
@@ -1288,6 +1306,46 @@ internal sealed partial class ShardRootGrain
         catch (Exception ex) when (ex is LatticeSaturatedException or LeafProjectionStaleException)
         {
         }
+    }
+
+    /// <summary>
+    /// The low bound an earlier attempt of bulk append <paramref name="operationId"/> gave
+    /// its first leaf (#6166), when that attempt seeded its leaves but never grafted them and
+    /// the retry must keep their layout; otherwise <see langword="null"/>. The first leaf's
+    /// id is derived from the operation, and a leaf keeps the range it was first born
+    /// declaring, so the bound outlives the switch's close. It is the layout to keep only
+    /// while it lies inside the current rightmost leaf's range, which that attempt was to
+    /// narrow, and that leaf is not one of the operation's own: a later operation that
+    /// grafted beyond it, or this one having grafted, leaves the below-edge path as it is.
+    /// One call, made only on a re-delivery.
+    /// </summary>
+    private async Task<string?> PriorAttemptLayoutLowAsync(string operationId, GrainId rightmostLeafId, string? rightmostLow)
+    {
+        var first = grainFactory.GetGrain<IBPlusLeafGrain>(
+            DeterministicGuid($"{context.GrainId.Key}/append/{operationId}/leaf/0"));
+        if (first.GetGrainId() == rightmostLeafId)
+        {
+            return null;
+        }
+
+        var low = (await first.GetKeyRangeAndNextSiblingAsync()).KeyRange.LowKeyInclusive;
+        return low is not null && (rightmostLow is null || string.CompareOrdinal(low, rightmostLow) > 0) ? low : null;
+    }
+
+    /// <summary>The index of the first entry at or above <paramref name="key"/>; the entries sort ordinally.</summary>
+    private static int FirstAtOrAbove(List<KeyValuePair<string, byte[]>> sortedEntries, string key)
+    {
+        int lo = 0, hi = sortedEntries.Count;
+        while (lo < hi)
+        {
+            var mid = (lo + hi) >>> 1;
+            if (string.CompareOrdinal(sortedEntries[mid].Key, key) < 0)
+                lo = mid + 1;
+            else
+                hi = mid;
+        }
+
+        return lo;
     }
 
     /// <summary>
