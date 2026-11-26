@@ -245,7 +245,7 @@ population remains publishable; excluded or failed attempted rows become `_pendi
 instead of inheriting old measurements, while unattempted rows remain intact.
 Layer 3 logs retain silo diagnostics with time and replica identity, scoped to the
 cohort revision. Non-phaseA silo lines are prefixed to keep them out of the producer
-throughput series. Harvest uses 200-row pages under a fixed ingestion snapshot to
+throughput series. Harvest uses 5,000-row pages under a fixed ingestion snapshot to
 avoid Log Analytics' response-size truncation; malformed responses fail explicitly.
 
 In atomic modes each saga is its own flush unit: it takes its own
