@@ -355,6 +355,19 @@ static async Task RunOrleansClientProducerAsync(string[] args)
         var lattice = lattices[0];
         var ct = lifetime.ApplicationStopping;
 
+        // #6166: the read-only probe runs against the tree as it stands - no reshard,
+        // warm-up, WAL spread or seed, all of which write - and then exits.
+        if (BenchProbe.IsVerifyAll(Environment.GetEnvironmentVariable(BenchProbe.EnvironmentVariable)))
+        {
+            var probeParallelism = ReadInt("BENCH_PROBE_PARALLELISM", 4);
+            Console.WriteLine($"[producer] probe=verify-all treeId={settings.TreeId} keys={settings.PreseedKeyCount} chunkSize={BenchPreseed.ChunkSize} parallelism={probeParallelism}");
+            var totals = await BenchProbe.VerifyAllAsync(
+                lattice, settings.PreseedKeyCount, BenchPreseed.ChunkSize, probeParallelism, Console.WriteLine, ct).ConfigureAwait(false);
+            await BenchProbe.ReportTreeAsync(lattice, Console.WriteLine, ct).ConfigureAwait(false);
+            Console.WriteLine($"[producer] probe DONE treeId={settings.TreeId} verified={totals.Verified} mismatch={totals.Mismatch} missing={totals.Missing} pointMissing={totals.PointMissing}");
+            return;
+        }
+
         if (settings.ShardCountOverride > 0)
         {
             await SubmitAndWaitForReshardAsync(lattice, settings.TreeId, settings.ShardCountOverride, ct).ConfigureAwait(false);
