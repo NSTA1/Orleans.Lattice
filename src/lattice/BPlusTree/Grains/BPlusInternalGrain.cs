@@ -465,6 +465,41 @@ internal sealed partial class BPlusInternalGrain(
             // Otherwise fall through to insert the promotion in THIS node.
         }
 
+        // #6166: this node divided, and the division is durable - its intent was persisted
+        // - but the write completing it may have landed while reporting a conflict this
+        // node could not adopt. Its caller then never received the division, and the row,
+        // reading complete, replays no recovery, so the new sibling holding the right half
+        // stays unlinked and every key under it unreachable. Two deliveries reveal it, and
+        // each hands the division back; linking is idempotent, so a caller that did link
+        // it links nothing new.
+        if (pendingRecovery is null
+            && state.State.SplitSiblingId is { } splitSibling
+            && state.State.SplitKey is { } splitKey)
+        {
+            var division = new SplitResult
+            {
+                PromotedKey = splitKey,
+                NewSiblingId = splitSibling,
+                ChildIsLeaf = false,
+            };
+
+            // A promotion at or above the bound belongs to the sibling, which a caller routes
+            // here only while it is unlinked. Inserting it here would put it below the key it
+            // sorts after, and could divide this node again and so lose the record below; the
+            // sibling accepts it, as the recovery branch above forwards it.
+            if (string.Compare(promotedKey, splitKey, StringComparison.Ordinal) >= 0)
+            {
+                var sibling = grainFactory.GetGrain<IBPlusInternalGrain>(splitSibling);
+                return SplitResult.Combine(division, await sibling.AcceptSplitAsync(promotedKey, newChild));
+            }
+
+            // A redelivery of the promotion that caused the division, which stayed on this side.
+            if (state.State.SplitTriggerChildId == newChild)
+            {
+                return division;
+            }
+        }
+
         // Idempotency check: if this separator+child pair already exists, this is a
         // duplicate delivery (e.g. crash recovery re-emit). Skip the insert.
         for (int i = 0; i < state.State.Children.Count; i++)
@@ -502,6 +537,9 @@ internal sealed partial class BPlusInternalGrain(
         var splitRan = false;
         if (state.State.Children.Count > (await GetOptionsAsync()).MaxInternalChildren)
         {
+            // Persisted with the division's intent, so a redelivery of this promotion can
+            // be handed the division back (#6166).
+            state.State.SplitTriggerChildId = newChild;
             splitResult = await SplitAsync();
             splitRan = true;
         }

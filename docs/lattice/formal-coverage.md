@@ -68,7 +68,7 @@ once, either here or in the
 | Cross-cluster atomic visibility | 1 | 66 | 43 | 150 | [Verified Atomic-Commit: the replicated half](verified-atomic-commit.md#scope-the-single-cluster-protocol-and-the-replicated-half-checked-separately) |
 | Replication convergence | 5 | 100 | 82 | 216 | [Replication: formal verification](../lattice.replication/architecture.md#formal-verification) |
 | Backup and restore | 7 | 123 | 122 | 229 | [Verified backup and restore](../lattice.backup/verified-backup.md) |
-| B+ tree topology | 6 | 100 | 140 | 62 | [B+ tree topology](../../spec/bplustree/README.md) |
+| B+ tree topology | 6 | 100 | 140 | 63 | [B+ tree topology](../../spec/bplustree/README.md) |
 | Materialised-view tail and lifecycle | 1 | 22 | 27 | 30 | [Materialised views](../../spec/materialised-views/README.md) |
 | Tree lifecycle composition | 2 | 46 | 66 | 48 | [Resize, reshard and shadow cutover](../../spec/tree-lifecycle/README.md) |
 | Anti-entropy remediation | 1 | 32 | 39 | 60 | [Digest-driven repair](../../spec/anti-entropy/README.md) |
