@@ -37,6 +37,9 @@ public sealed class InMemoryWalCursorRegistry : IWalCursorRegistry
     /// <summary>The report time last stamped, so report times never step backwards.</summary>
     private long _lastReportTicks;
 
+    /// <summary>Test view of whether the calling thread holds the registry's lock.</summary>
+    internal bool IsLockHeldByCurrentThreadForTest => Monitor.IsEntered(_gate);
+
     /// <inheritdoc />
     public Task ReportCheckpointAsync(
         string treeName, string consumerId, HybridLogicalClock cursor,
@@ -189,7 +192,7 @@ public sealed class InMemoryWalCursorRegistry : IWalCursorRegistry
         {
             // Never behind an earlier report, so each tree's report-order list is
             // also ordered by report time even across a wall-clock step backwards,
-            // which is what lets VisitReportedSince stop at its cut-off (#6166).
+            // which is what lets CopyReportedSince stop at its cut-off (#6166).
             var nowTicks = _lastReportTicks = Math.Max(DateTime.UtcNow.Ticks, _lastReportTicks);
             if (!_byTree.TryGetValue(treeName, out var state))
             {
@@ -508,28 +511,39 @@ public sealed class InMemoryWalCursorRegistry : IWalCursorRegistry
     }
 
     /// <summary>
-    /// Visits, newest report first, every consumer of <paramref name="treeName"/> that has
-    /// reported at or after <paramref name="reportedAtOrAfterTicks"/>, and stops at the first
-    /// that has not (issue #6166). The visit runs under the registry's lock and copies nothing,
-    /// where <see cref="SnapshotAsync"/> copies every consumer the tree has ever registered.
+    /// Copies into <paramref name="buffer"/>, newest report first, every consumer of
+    /// <paramref name="treeName"/> that has reported at or after
+    /// <paramref name="reportedAtOrAfterTicks"/>, stopping at the first that has not
+    /// (issue #6166). Only the copy runs under the registry's lock: the caller measures
+    /// what it copied after the lock is released.
     /// </summary>
     /// <remarks>
+    /// <para>
     /// A consumer stays registered after its leaf deactivates, so a large tree accumulates
     /// consumers - one per leaf per WAL partition - on every silo its leaves have lived on.
     /// The drain-lag sampler reads only consumers that reported inside its freshness window,
-    /// and copying all of them five times a second to find those cost a large tree's silo a
-    /// core and tens of megabytes of garbage per tick. Report times never step backwards
-    /// (see <see cref="_lastReportTicks"/>), so the report-order list is ordered by them.
+    /// and copying all of them five times a second through <see cref="SnapshotAsync"/> to
+    /// find those cost a large tree's silo a core and tens of megabytes of garbage per tick.
+    /// Report times never step backwards (see <see cref="_lastReportTicks"/>), so the
+    /// report-order list is ordered by them.
+    /// </para>
+    /// <para>
+    /// The lock is the one every consumer's report takes, which is why nothing but the copy
+    /// may run under it: measuring a consumer reads its partition's append history under that
+    /// history's own lock, contended with every WAL append, and measured here it held this lock
+    /// for most of each tick during a bulk seed. The copies carry no
+    /// <see cref="WalCursorSnapshot.Vector"/>, which the registry merges in place.
+    /// </para>
     /// </remarks>
-    /// <param name="treeName">The tree whose consumers to visit.</param>
+    /// <param name="treeName">The tree whose consumers to copy.</param>
     /// <param name="reportedAtOrAfterTicks">The cut-off report time, in UTC ticks.</param>
-    /// <param name="visitor">The visitor, passed by reference so its accumulated state is the caller's.</param>
-    /// <returns>The number of consumers visited.</returns>
-    internal int VisitReportedSince<TVisitor>(string treeName, long reportedAtOrAfterTicks, ref TVisitor visitor)
-        where TVisitor : struct, IWalCursorVisitor
+    /// <param name="buffer">Reused across calls; grown when the fresh consumers do not fit.</param>
+    /// <returns>The number of consumers copied to the front of <paramref name="buffer"/>.</returns>
+    internal int CopyReportedSince(string treeName, long reportedAtOrAfterTicks, ref WalCursorSnapshot[] buffer)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(treeName);
-        var visited = 0;
+        ArgumentNullException.ThrowIfNull(buffer);
+        var copied = 0;
         lock (_gate)
         {
             if (!_byTree.TryGetValue(treeName, out var state))
@@ -544,14 +558,17 @@ public sealed class InMemoryWalCursorRegistry : IWalCursorRegistry
                     break;
                 }
 
-                visitor.Visit(in entry.Snapshot);
-                visited++;
+                if (copied == buffer.Length)
+                {
+                    Array.Resize(ref buffer, Math.Max(16, buffer.Length * 2));
+                }
+
+                buffer[copied++] = entry.Snapshot with { Vector = null };
             }
         }
 
-        return visited;
+        return copied;
     }
-
     /// <summary>
     /// Computes the pointwise-min <see cref="VersionVector"/> across
     /// every consumer that has reported a non-<see langword="null"/>
@@ -711,7 +728,7 @@ public sealed class InMemoryWalCursorRegistry : IWalCursorRegistry
     /// <summary>
     /// One registered consumer: its snapshot, and its place in its tree's
     /// report-order list (issue #6166). The list is what lets
-    /// <see cref="VisitReportedSince{TVisitor}"/> stop at the first consumer that
+    /// <see cref="CopyReportedSince"/> stop at the first consumer that
     /// has not reported since its cut-off instead of walking every consumer.
     /// </summary>
     private sealed class ConsumerEntry(WalCursorSnapshot snapshot)

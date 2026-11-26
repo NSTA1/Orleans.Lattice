@@ -42,7 +42,19 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
     /// <summary>Benchmark census: microseconds the drain-lag pass spent visiting, summed over ticks (#6166).</summary>
     internal const string DrainLagScanMicrosCensus = "wal.sampler.drain-lag.us";
 
+    /// <summary>
+    /// The drain-lag buffer's length kept across ticks however few consumers the last pass
+    /// copied; a longer buffer is cut back once a pass uses under a quarter of it.
+    /// </summary>
+    private const int DrainLagBufferRetainedLength = 1024;
+
     private readonly WalSaturationSignal _signal;
+
+    /// <summary>
+    /// The fresh consumers the in-memory registry copies out for one tree's drain-lag pass,
+    /// reused across trees and ticks (#6166). Only the sample loop touches it.
+    /// </summary>
+    private WalCursorSnapshot[] _drainLagBuffer = [];
     private readonly WalSaturationObserverDispatcher _dispatcher;
     private readonly IWalCursorRegistry _cursors;
     private readonly IOptionsMonitor<LatticeOptions> _options;
@@ -568,17 +580,25 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
                 WalCommitLogWriter._walAppendTimes.TryGetValue(treeId, out var appendTimes);
                 await _signal.InitializeMetricTreeAsync(treeId).ConfigureAwait(false);
                 // Only consumers that reported inside the freshness window can be
-                // eligible, so the in-memory registry is walked newest-first and
-                // stops at the first stale one, in place (#6166). A large tree
-                // keeps a consumer per leaf per partition on every silo its leaves
-                // have lived on, and copying all of them every tick to find the
-                // fresh ones was the dominant cost of a large tree's silo.
+                // eligible, so the in-memory registry copies out only those, newest
+                // first, and the pass measures them after its lock is released
+                // (#6166). A large tree keeps a consumer per leaf per partition on
+                // every silo its leaves have lived on; copying all of them every tick
+                // to find the fresh ones was the dominant cost of a large tree's silo,
+                // and measuring them under the lock every cursor report takes blocked
+                // the reporting leaves' threads for most of each tick.
                 var scan = new DrainLagScan(appendTimes, drainLagReportedAtOrAfterTicks, observedAt.UtcTicks, lagThreshold.Ticks);
                 var scanStarted = AwaitDiagnostics.Enabled ? Stopwatch.GetTimestamp() : 0L;
                 int visited;
                 if (_cursors is InMemoryWalCursorRegistry inMemory)
                 {
-                    visited = inMemory.VisitReportedSince(treeId, drainLagReportedAtOrAfterTicks, ref scan);
+                    visited = inMemory.CopyReportedSince(treeId, drainLagReportedAtOrAfterTicks, ref _drainLagBuffer);
+                    for (var index = 0; index < visited; index++)
+                    {
+                        scan.Visit(in _drainLagBuffer[index]);
+                    }
+
+                    ReleaseDrainLagBuffer(visited);
                 }
                 else
                 {
@@ -1221,8 +1241,22 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
     }
 
     /// <summary>
-    /// One tree's drain-lag pass over its eligible consumers, accumulated in place so the
-    /// in-memory registry can hand each consumer to it without a copy (#6166). The verdict is
+    /// Drops the references the last pass copied into <see cref="_drainLagBuffer"/>, so the
+    /// checkpoint maps they hold are not kept alive between ticks, and cuts a buffer a burst
+    /// grew back once a pass uses under a quarter of it.
+    /// </summary>
+    private void ReleaseDrainLagBuffer(int used)
+    {
+        Array.Clear(_drainLagBuffer, 0, used);
+        if (_drainLagBuffer.Length > DrainLagBufferRetainedLength && used < _drainLagBuffer.Length / 4)
+        {
+            _drainLagBuffer = new WalCursorSnapshot[Math.Max(DrainLagBufferRetainedLength, used * 2)];
+        }
+    }
+
+    /// <summary>
+    /// One tree's drain-lag pass over its eligible consumers, accumulated in place over the
+    /// consumers the registry copied out (#6166). The verdict is
     /// the one the pass computed over a snapshot before: the oldest unread append any eligible
     /// consumer owes, how many owe one past the threshold, the three that owe the most, and
     /// whether any history needed to measure it was missing.
@@ -1231,7 +1265,7 @@ internal sealed class WalSaturationSampler : IHostedService, IDisposable
         ConcurrentDictionary<int, WalAppendTimeline>? appendTimes,
         long reportedAtOrAfterTicks,
         long observedAtTicks,
-        long lagThresholdTicks) : IWalCursorVisitor
+        long lagThresholdTicks)
     {
         public long LagTicks;
         public int Lagging;
