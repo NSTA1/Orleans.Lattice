@@ -393,6 +393,18 @@ gate will tell you if you forget.
   feature-off equivalence, deletion purge, break-glass removal and caps under
   concurrency. Run it, and extend it, when you change any of these seams.
 
+### Tenant tree-count admission (`src/lattice.tenancy`, consumed by `src/lattice.api.treeadmin`)
+- **Every registry row a tenant adds passes tree-count admission.** `MaxTreeCount`
+  bounds the rows under the tenant's prefix, read authoritatively from the registry at
+  the decision. A create, and an alias onto a logical id that has no registry row,
+  both pass `ITenantAdmissionController.IsTreeCreateAdmittedAsync` against that one
+  count, after authorization and before the registry write; a re-point of an existing
+  logical id adds no row and is not charged. Admission does not reserve, so concurrent
+  admissions can overshoot by the number in flight. The design, its mutations and its
+  detectors are `TenantTreeCount` in
+  [`spec/tenant-quotas/`](../../spec/tenant-quotas/RefinementTreeCount.md); the
+  tree-admin alias seam does not yet charge a new logical id (#5333).
+
 ## Release-status note for security fixes
 
 When labelling or writing changelog/PR prose for a change on these surfaces, judge

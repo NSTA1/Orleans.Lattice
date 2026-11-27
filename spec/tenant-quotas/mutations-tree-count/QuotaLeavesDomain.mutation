@@ -1,0 +1,11 @@
+MODULE: QuotaLeavesDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: a quota change writes a ceiling outside the finite quota domain
+PERTURBS: SetQuota
+
+--- FIND
+    /\ limit' \in {1, 2} \ {limit}
+--- REPLACE
+    /\ limit' = limit + 2
+--- END
