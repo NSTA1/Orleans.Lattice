@@ -73,10 +73,9 @@ once, either here or in the
 | Tree lifecycle composition | 2 | 46 | 66 | 48 | [Resize, reshard and shadow cutover](../../spec/tree-lifecycle/README.md) |
 | Anti-entropy remediation | 1 | 32 | 39 | 60 | [Digest-driven repair](../../spec/anti-entropy/README.md) |
 | Shared alias routing and revert | 2 | 25 | 40 | 22 | [Aliasing](../../spec/aliasing/README.md) |
-| Tenant quotas | 3 | 29 | 26 | 32 | [Quota admission](../../spec/tenant-quotas/README.md) |
+| Tenant quotas | 3 | 32 | 30 | 36 | [Quota admission](../../spec/tenant-quotas/README.md) |
 | Tenant rate budgets | 1 | 14 | 23 | 22 | [Rate-budget leases](../../spec/tenant-rate-budget/README.md) |
-| Tenant isolation | 1 | 25 | 25 | 31 | [Isolation epochs and leases](../../spec/tenant-isolation/README.md) |
-| Delegated tenant access | 1 | 19 | 20 | 35 | [Delegated tenant-access administration](../../spec/tenant-access-admin/README.md) |
+| Tenant isolation | 1 | 27 | 28 | 34 | [Isolation epochs and leases](../../spec/tenant-isolation/README.md) |
 | Scheduling and progress | 10 | 203 | 251 | 133 | [Verified Scheduling and Progress](verified-scheduling.md) |
 | Schema enforcement and versioning | 9 | 150 | 178 | 301 | [Schema enforcement and versioning](../../spec/schema/README.md) |
 | Schema and view composition | 1 | 23 | 23 | 28 | [Schema and view composition](../../spec/schema-view/README.md) |
@@ -406,6 +405,8 @@ states as load-bearing, and appends its own row to this table when it lands.
 |--------|---------|---------|----------------|----------------|------|
 | `AuthDecision` | Authorization decision layering | 18 | 17 | 41 | [Authorization decision](../../spec/auth-decision/README.md) |
 | `TenantAccessMembership` | Tenant-access membership under concurrency | 13 | 11 | 23 | [Tenant-access membership](../../spec/tenant-access-admin/README.md#tenantaccessmembership) |
+| `McpToolAuthorization` | MCP tool authorization lock-step | 22 | 12 | 24 | [MCP tool authorization](../../spec/mcp-tool-auth/README.md) |
+| `TenantAccessAuthorization` | Delegated tenant access: authorization | 19 | 20 | 35 | [Delegated tenant-access administration](../../spec/tenant-access-admin/README.md) |
 
 ## What each area covers, and what it does not
 
@@ -616,14 +617,16 @@ gaps, states its full scope.
   - **Covers:** sampled footprint admission against the last selected usage
     sample, cold admission, local and replicated usage accounting with
     per-cluster usage slots and their publication hysteresis, the
-    authoritative tree-count check with its check-then-register race, and the
+    authoritative tree-count check with its check-then-register race, with purges,
+    quota changes and uncharged alias re-points of existing logical ids
+    interleaved with it, and the
     quota evaluator's independent nullable limits, burst arithmetic and
     refusal order.
   - **Does not cover:** a hard ceiling - quotas are soft, concurrent admissions
     can overshoot, and no invariant bounds actual usage by the limit;
     deletions, changed quotas or residency, failed storage operations and
-    equal-clock writer ties; capacity reservation, registry merging or tree
-    deletion for tree counts; and rate limits, exception transport or
+    equal-clock writer ties; capacity reservation, registry merging or soft
+    deletion before purge for tree counts; and rate limits, exception transport or
     permission checks in the evaluator.
 
 - **Tenant rate budgets** ([`spec/tenant-rate-budget/`](../../spec/tenant-rate-budget/README.md)).
@@ -643,13 +646,15 @@ gaps, states its full scope.
     snapshot through the epoch advance and its lease ledger; when a silo may
     trust its snapshot for an authorization decision, a decision that cannot
     confirm currency denying; and publication failure with its background
-    re-publish, a silo crash, and the epoch coordinator's re-activation with
-    its grace.
+    re-publish, a silo crash, membership falsely declaring a live silo dead, and
+    the epoch coordinator's re-activation with its grace, which counts a death
+    only once the coordinator has seen it for one lease plus the margin.
   - **Does not cover:** revoking decisions already taken; the two windows
     tracked by design - a write whose publication failed, until the re-publish
     lands, and a crashed writer, until membership declares it dead; a silo
     clock slower than the epoch coordinator's by more than the ledger margin
-    over one lease; more than one write or two silos; and rate budgets and
+    over one lease; more than one write or two silos; liveness after a false
+    death declaration, which does not hold; and rate budgets and
     footprint quotas, which the two areas above cover.
 
 - **Delegated tenant access** ([`spec/tenant-access-admin/`](../../spec/tenant-access-admin/README.md)).
@@ -700,6 +705,19 @@ gaps, states its full scope.
     strict-consistency fence, existence probes, or what a registered MCP
     authorizer decides.
 
+- **MCP tool authorization** ([`spec/mcp-tool-auth/`](../../spec/mcp-tool-auth/README.md)).
+  - **Covers:** a session's `tools/list` advertisement and its `tools/call`
+    invocations through the shared gate while the policy and an app's install
+    change between them: a call is served only when its tool was advertised
+    and is still entitled under the current policy; `lattice_capabilities` is
+    the only ungated tool; the per-tool operation minimum, which an access set
+    carrying no operation never meets; the MCP telemetry tools reached only on
+    cluster-wide `Telemetry`, never on a tenant capability grant; the fail-closed
+    gate and default authorizer; the asserted active tenant re-resolved before
+    it scopes regions or app tools; and denials never answered as client errors.
+  - **Does not cover:** deny rules at discovery, region routing and peer
+    identity verification, transient discovery faults, or the staleness of the
+    capabilities payload.
 - **Scheduling and progress** ([`spec/scheduling/`](../../spec/scheduling/README.md)).
   - **Covers:** non-reentrant turn occupancy, partition admission capacity,
     paced gate-release bursts, queue ordering and wait-budget outcomes in the

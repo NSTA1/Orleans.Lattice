@@ -1,0 +1,17 @@
+# Pairs with NoEarlyGraceRelease. A death releases the grace only after the
+# grain has seen it for one lease plus the margin, which is long enough for every
+# lease the previous activation granted to lapse; the mutant ages the sighting
+# sooner, while a silo falsely declared dead still trusts its old lease.
+MODULE: SightingAgesKeepsOldLeases
+TARGET: NoEarlyGraceRelease
+CLASS: Invariant
+SUMMARY: a death sighting ages before the leases of the previous activation lapse
+PERTURBS: SightingAges
+BOUNDS: NumSilos = 1, MaxRestarts = 1, MaxFalseDeaths = 1
+
+--- FIND
+    /\ lease' = [u \in Silos |-> IF lease[u] = "old" THEN "none" ELSE lease[u]]
+--- REPLACE
+\* MUTATION: the sighting ages inside one lease plus the margin.
+    /\ lease' = lease
+--- END

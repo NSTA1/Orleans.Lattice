@@ -1,0 +1,12 @@
+# Pairs with FailClosed. The gate consults the authorizer even when no request
+# context is available, so a call nobody can describe is served.
+MODULE: MissingContextAdmits
+TARGET: FailClosed
+CLASS: Invariant
+SUMMARY: McpToolAuthorizationGate does not deny a call with no HttpContext
+
+--- FIND
+Gate(ctx, p, t) == ctx /\ AuthorizerAdmits(p, t)
+--- REPLACE
+Gate(ctx, p, t) == AuthorizerAdmits(p, t)
+--- END

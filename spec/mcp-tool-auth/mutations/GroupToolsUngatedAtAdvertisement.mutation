@@ -1,0 +1,13 @@
+# Pairs with FailClosed. The configurator lists a granted group's tools without
+# consulting the authorizer, so the default deny-all authorizer hides nothing.
+MODULE: GroupToolsUngatedAtAdvertisement
+TARGET: FailClosed
+CLASS: Invariant
+SUMMARY: group tools are advertised without the authorizer gate
+PERTURBS: OpenSession
+
+--- FIND
+ToolGroup(t) \in groups /\ ops \cap Required(t) # {} /\ Gate(TRUE, policy, t)}
+--- REPLACE
+ToolGroup(t) \in groups /\ ops \cap Required(t) # {}}
+--- END

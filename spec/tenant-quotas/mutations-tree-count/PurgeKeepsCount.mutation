@@ -1,0 +1,11 @@
+MODULE: PurgeKeepsCount
+TARGET: RegistrationAccounted
+CLASS: Invariant
+SUMMARY: a purged tree keeps counting against the tenant's tree quota
+PERTURBS: Purge
+
+--- FIND
+    /\ owned' = owned \ {q}
+--- REPLACE
+    /\ owned' = owned
+--- END
