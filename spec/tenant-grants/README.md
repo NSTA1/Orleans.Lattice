@@ -13,7 +13,7 @@ reach.
 
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 | --- | --- | --- | --- | --- | --- | --- |
-| `TenantGrants` | 7 | 0 | 14 | 23 | 20 | 56,456 |
+| `TenantGrants` | 7 | 0 | 14 | 25 | 20 | 56,456 |
 
 ## TenantGrants
 
@@ -66,8 +66,9 @@ deleted (`DeleteTenant`) and the grantee created again under its old id
 - `NonDisclosure`: an unauthorized caller is told only that it was denied and
   writes nothing, only an operator learns a tenant is not registered, an
   authorized answer cannot tell an unoffered grant from an unregistered
-  granting tenant, and the existence probe never reveals a tree a read would
-  refuse.
+  granting tenant, a refused read is told only the stage that refused it and
+  never whether a tenant is registered, and the existence probe never reveals
+  a tree a read would refuse.
 - `NoUnilateralTrap`: a revocation of an active grant by an operator or an
   admin of a registered party is never refused.
 

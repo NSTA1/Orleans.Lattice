@@ -125,10 +125,67 @@ public sealed class TenantGateEnforcerTests
         Assert.Multiple(() =>
         {
             Assert.That(decision.Allowed, Is.False);
-            Assert.That(decision.Reason, Does.Contain("not an admin"));
+            Assert.That(decision.Reason, Is.EqualTo(TenantGateEnforcer.ActiveTenantDeniedReason));
         });
     }
 
+    [Test]
+    public void Enforce_gives_one_active_tenant_reason_whatever_the_cause_and_names_no_tenant()
+    {
+        string[] causes =
+        [
+            "Tenant 'acme' is not registered.",
+            "Tenant 'acme' is not active (status 'Suspended').",
+            "Subject 'alice' is not an admin of tenant 'acme'.",
+        ];
+        var reasons = new List<string?>();
+        foreach (var cause in causes)
+        {
+            var engine = Substitute.For<ITenantPolicyEngine>();
+            engine.ValidateActiveTenant("alice", Acme).Returns(TenantAccessDecision.Deny(cause));
+            var enforcer = CreateEnforcer(engine);
+            LatticeActiveTenantContext.Current = Acme;
+            var request = Request(BetaTree);
+
+            reasons.Add(enforcer.Enforce(in request).Reason);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reasons, Has.All.EqualTo(TenantGateEnforcer.ActiveTenantDeniedReason));
+            Assert.That(TenantGateEnforcer.ActiveTenantDeniedReason, Does.Not.Contain("acme").And.Not.Contain("beta"));
+        });
+    }
+
+    [Test]
+    public void Enforce_gives_one_crossing_reason_whatever_the_cause_and_names_no_tenant()
+    {
+        string[] causes =
+        [
+            "Target tenant 'beta' is not registered.",
+            "Target tenant 'beta' is not active (status 'Suspended'), so its grants admit nothing.",
+            "Tenant 'beta' holds no active grant for tenant 'acme' covering scope 't/beta/orders' with operation 'Read'.",
+        ];
+        var reasons = new List<string?>();
+        foreach (var cause in causes)
+        {
+            var engine = Substitute.For<ITenantPolicyEngine>();
+            engine.ValidateActiveTenant("alice", Acme).Returns(TenantAccessDecision.Allow());
+            engine.ResolveCrossTenantGrant(Acme, Beta, BetaTree, TenantGrantOperations.Read)
+                .Returns(TenantAccessDecision.Deny(cause));
+            var enforcer = CreateEnforcer(engine);
+            LatticeActiveTenantContext.Current = Acme;
+            var request = Request(BetaTree);
+
+            reasons.Add(enforcer.Enforce(in request).Reason);
+        }
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reasons, Has.All.EqualTo(TenantGateEnforcer.CrossingDeniedReason));
+            Assert.That(TenantGateEnforcer.CrossingDeniedReason, Does.Not.Contain("acme").And.Not.Contain("beta"));
+        });
+    }
     // ---- (2) no active tenant on a tenant-owned tree --------------------
 
     [Test]
@@ -184,7 +241,7 @@ public sealed class TenantGateEnforcerTests
         Assert.Multiple(() =>
         {
             Assert.That(decision.Allowed, Is.False);
-            Assert.That(decision.Reason, Does.Contain("no grant"));
+            Assert.That(decision.Reason, Is.EqualTo(TenantGateEnforcer.CrossingDeniedReason));
         });
         engine.Received().ValidateActiveTenant("alice", Acme);
     }
@@ -215,7 +272,7 @@ public sealed class TenantGateEnforcerTests
         {
             Assert.That(decision.Allowed, Is.False,
                 "an unvalidated active tenant can never consume another tenant's cross-tenant grant");
-            Assert.That(decision.Reason, Does.Contain("not a member"));
+            Assert.That(decision.Reason, Is.EqualTo(TenantGateEnforcer.ActiveTenantDeniedReason));
         });
     }
 

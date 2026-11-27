@@ -12,6 +12,7 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Security
 
+- **Tenancy - Read denials no longer reveal other tenants.** A refused crossing or active-tenant check returns one fixed reason naming no tenant, so a caller cannot tell whether another tenant exists or is suspended; the cause is logged at debug level. ([#6231](https://github.com/NSTA1/Orleans.Lattice/issues/6231)) (`Orleans.Lattice.Tenancy`)
 - **Auth - Replicated rules cannot cross tenants.** An operator rule that names a tenant group on a tree outside that group's tenant, arriving by replication or restore, is now dropped when the policy compiles instead of taking effect. ([#6210](https://github.com/NSTA1/Orleans.Lattice/issues/6210)) (`Orleans.Lattice.Auth`)
 
 ### Added
