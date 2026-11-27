@@ -68,6 +68,24 @@ gate will tell you if you forget.
 
 ## Surface-specific invariants
 
+### Authorization decision (`src/lattice.auth`)
+- A matched operator-layer rule (every id outside `tenant:`, including `Tree:*`
+  and `app:`) is final, allow or deny. The tenant layer runs only when no operator
+  rule matches, only on a tenant data tree `t/{tenant}/{name}`, and only with that
+  tree owner's rules; a range filter composes the two layers per key on operator
+  coverage, not on the operator rule's effect.
+- `Telemetry` and `AppInstall` are conferred only by a tree-scope allow on
+  `LatticeScope.ClusterWideTreeId` (`Telemetry` also by a platform allow over one
+  tenant's capability scope), never by a key or prefix rule on the sentinel, a
+  data-plane grant, the tenant layer or the default effect. An unmatched
+  control-plane request is denied whatever the default effect, a key-filtered
+  allow is refused where a whole-scope allow is required, and bootstrap
+  administrators are the one root of trust. A batch is authorized only when every
+  (tree, key) pair is, before any intent is placed.
+- These are model-checked by `spec/auth-decision/` (`AuthDecision`), which also
+  publishes the `Allowed(caller, op, scope)` contract the other authorization
+  modules assume; its refinement note names the detector test for each guard.
+
 ### MCP tool authorization (`src/lattice.api.mcp`)
 - The tool authorizer is consulted at **both** enforcement points - `tools/list`
   advertisement (session configurator) and `tools/call` invocation (credential

@@ -1,0 +1,12 @@
+# Pairs with TenantLayerConfined: the compiled tenant partition keeps a tenant rule that escaped the store's confinement.
+
+MODULE: CompileKeepsEscapedRule
+TARGET: TenantLayerConfined
+CLASS: Invariant
+SUMMARY: the compiled tenant partition keeps a tenant rule that escaped the store's confinement
+
+--- FIND
+TenantPartition == {r \in rules : r.layer = "tenant" /\ Conforms(r)}
+--- REPLACE
+TenantPartition == {r \in rules : r.layer = "tenant"}
+--- END

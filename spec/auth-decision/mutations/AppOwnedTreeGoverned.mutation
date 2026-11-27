@@ -1,0 +1,12 @@
+# Pairs with TenantLayerConfined: the tenant layer governs an app-owned tenant tree as if it were a tenant data tree.
+
+MODULE: AppOwnedTreeGoverned
+TARGET: TenantLayerConfined
+CLASS: Invariant
+SUMMARY: the tenant layer governs an app-owned tenant tree as if it were a tenant data tree
+
+--- FIND
+TenantLayerTree(tree) == tree.kind = "tenant"
+--- REPLACE
+TenantLayerTree(tree) == tree.kind \in {"tenant", "appOwned"}
+--- END
