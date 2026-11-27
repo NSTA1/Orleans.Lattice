@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Orleans.Configuration;
 
 namespace Orleans.Lattice.Tenancy;
 
@@ -27,6 +28,17 @@ namespace Orleans.Lattice.Tenancy;
 /// cost the silo its authority. The deadline is measured from the moment each
 /// request was sent (see <see cref="CompiledTenantPolicySnapshotMaintainer.ApplyLease"/>).
 /// </para>
+/// <para>
+/// Membership can declare a live silo dead, and that silo can still commit a
+/// registry write before it learns of its death; if its publication then fails and
+/// it stops, the one invalidation the declaration triggered came too early to cover
+/// the write (#6216). So every newly-dead silo also opens a false-death horizon
+/// (<see cref="LatticeTenancyOptions.FalseDeathHorizon"/>): this silo re-invalidates
+/// every snapshot every <see cref="LatticeTenancyOptions.FalseDeathReinvalidationInterval"/>
+/// until an invalidation lands at or after the horizon's end. One loop per silo
+/// serves every snapshot and every death; a later death only extends the horizon.
+/// The guarantee assumes a silo falsely declared dead stops within the horizon.
+/// </para>
 /// </remarks>
 internal sealed class TenantPolicyEpochSubscription : IHostedService, ITenantPolicyEpochObserver
 {
@@ -38,6 +50,8 @@ internal sealed class TenantPolicyEpochSubscription : IHostedService, ITenantPol
     private readonly SiloAddress _siloAddress;
     private readonly TimeProvider _time;
     private readonly TimeSpan _leaseDuration;
+    private readonly TimeSpan _reinvalidationInterval;
+    private readonly TimeSpan _falseDeathHorizon;
     private readonly ILogger<TenantPolicyEpochSubscription> _logger;
     private readonly CancellationTokenSource _stopping = new();
 
@@ -45,6 +59,12 @@ internal sealed class TenantPolicyEpochSubscription : IHostedService, ITenantPol
     private Task _leaseLoop = Task.CompletedTask;
     private Task _membershipLoop = Task.CompletedTask;
     private Task _warmup = Task.CompletedTask;
+
+    // The false-death horizon: the timestamp (on _time) until which every snapshot is
+    // re-invalidated, and the single re-invalidation loop (0 idle, 1 running).
+    private long _horizonEnd;
+    private int _horizonLoopState;
+    private Task _horizonLoop = Task.CompletedTask;
 
     /// <summary>Initializes the subscription.</summary>
     /// <param name="grainFactory">The silo's grain factory.</param>
@@ -54,7 +74,12 @@ internal sealed class TenantPolicyEpochSubscription : IHostedService, ITenantPol
     /// <param name="timeProvider">The clock the lease and retry delays are measured on.</param>
     /// <param name="options">The tenancy options carrying the lease duration.</param>
     /// <param name="logger">The logger for renewal and warm-up failures.</param>
-    /// <exception cref="ArgumentNullException">Any argument is <c>null</c>.</exception>
+    /// <param name="membershipOptions">
+    /// Orleans cluster membership options, from which the false-death horizon is
+    /// derived when <see cref="LatticeTenancyOptions.FalseDeathHorizon"/> is not set;
+    /// Orleans' defaults are used when <c>null</c>.
+    /// </param>
+    /// <exception cref="ArgumentNullException">Any argument other than <paramref name="membershipOptions"/> is <c>null</c>.</exception>
     public TenantPolicyEpochSubscription(
         IGrainFactory grainFactory,
         IEnumerable<ITenantEpochSubscriber> snapshots,
@@ -62,7 +87,8 @@ internal sealed class TenantPolicyEpochSubscription : IHostedService, ITenantPol
         ILocalSiloDetails localSilo,
         TimeProvider timeProvider,
         IOptions<LatticeTenancyOptions> options,
-        ILogger<TenantPolicyEpochSubscription> logger)
+        ILogger<TenantPolicyEpochSubscription> logger,
+        IOptions<ClusterMembershipOptions>? membershipOptions = null)
     {
         ArgumentNullException.ThrowIfNull(grainFactory);
         ArgumentNullException.ThrowIfNull(snapshots);
@@ -78,7 +104,29 @@ internal sealed class TenantPolicyEpochSubscription : IHostedService, ITenantPol
         _siloAddress = localSilo.SiloAddress;
         _time = timeProvider;
         _leaseDuration = options.Value.PolicySnapshotLeaseDuration;
+        _reinvalidationInterval = options.Value.FalseDeathReinvalidationInterval;
+        _falseDeathHorizon = EffectiveFalseDeathHorizon(options.Value, membershipOptions?.Value ?? new ClusterMembershipOptions());
         _logger = logger;
+    }
+
+    /// <summary>The false-death re-invalidation loop, exposed so a test can await it.</summary>
+    internal Task HorizonLoop => Volatile.Read(ref _horizonLoop);
+
+    /// <summary>
+    /// The false-death horizon in force: <see cref="LatticeTenancyOptions.FalseDeathHorizon"/>
+    /// when set, otherwise the membership table refresh plus the probe timeout; never
+    /// shorter than <see cref="LatticeTenancyOptions.FalseDeathReinvalidationInterval"/>.
+    /// </summary>
+    /// <param name="options">The tenancy options.</param>
+    /// <param name="membership">The Orleans cluster membership options.</param>
+    /// <returns>How long a newly-dead silo keeps this silo re-invalidating.</returns>
+    internal static TimeSpan EffectiveFalseDeathHorizon(LatticeTenancyOptions options, ClusterMembershipOptions membership)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(membership);
+
+        var horizon = options.FalseDeathHorizon ?? membership.TableRefreshTimeout + membership.ProbeTimeout;
+        return horizon < options.FalseDeathReinvalidationInterval ? options.FalseDeathReinvalidationInterval : horizon;
     }
 
     /// <summary>The lease-renewal loop, exposed so a test can await it after <see cref="StopAsync"/>.</summary>
@@ -105,7 +153,7 @@ internal sealed class TenantPolicyEpochSubscription : IHostedService, ITenantPol
     public async Task StopAsync(CancellationToken cancellationToken)
     {
         await _stopping.CancelAsync().ConfigureAwait(false);
-        foreach (var loop in (Task[])[_warmup, _leaseLoop, _membershipLoop])
+        foreach (var loop in (Task[])[_warmup, _leaseLoop, _membershipLoop, HorizonLoop])
         {
             try
             {
@@ -231,6 +279,7 @@ internal sealed class TenantPolicyEpochSubscription : IHostedService, ITenantPol
                     if (newlyDead)
                     {
                         InvalidateAll();
+                        OpenFalseDeathHorizon();
                     }
                 }
 
@@ -246,12 +295,78 @@ internal sealed class TenantPolicyEpochSubscription : IHostedService, ITenantPol
                 // treat the gap as one.
                 _logger.LogDebug(ex, "Watching cluster membership for the tenant-policy snapshot failed; retrying.");
                 InvalidateAll();
+                OpenFalseDeathHorizon();
             }
 
             if (!await DelayAsync(MaxRetryDelay, cancellationToken).ConfigureAwait(false))
             {
                 return;
             }
+        }
+    }
+
+    /// <summary>
+    /// Extends the false-death horizon to now plus its length and starts the
+    /// re-invalidation loop when it is idle.
+    /// </summary>
+    private void OpenFalseDeathHorizon()
+    {
+        var end = TenantPolicyTimestamps.Add(_time, _time.GetTimestamp(), _falseDeathHorizon);
+        var current = Interlocked.Read(ref _horizonEnd);
+        while (end > current)
+        {
+            var observed = Interlocked.CompareExchange(ref _horizonEnd, end, current);
+            if (observed == current)
+            {
+                break;
+            }
+
+            current = observed;
+        }
+
+        if (Interlocked.CompareExchange(ref _horizonLoopState, 1, 0) == 0)
+        {
+            Volatile.Write(ref _horizonLoop, ReinvalidateUntilHorizonAsync(_stopping.Token));
+        }
+    }
+
+    /// <summary>
+    /// Re-invalidates every snapshot each interval until one invalidation lands at
+    /// or after the horizon's end, so a write committed inside the horizon is
+    /// followed by an invalidation within one interval. The next delay is armed
+    /// before each invalidation, so the cadence never drifts by the invalidation's
+    /// cost.
+    /// </summary>
+    private async Task ReinvalidateUntilHorizonAsync(CancellationToken cancellationToken)
+    {
+        var next = DelayAsync(_reinvalidationInterval, cancellationToken);
+        while (true)
+        {
+            if (!await next.ConfigureAwait(false))
+            {
+                Volatile.Write(ref _horizonLoopState, 0);
+                return;
+            }
+
+            if (_time.GetTimestamp() < Interlocked.Read(ref _horizonEnd))
+            {
+                next = DelayAsync(_reinvalidationInterval, cancellationToken);
+                InvalidateAll();
+                continue;
+            }
+
+            InvalidateAll();
+
+            // Go idle, then re-check so a death recorded after the read above is not
+            // left without a loop.
+            Volatile.Write(ref _horizonLoopState, 0);
+            if (_time.GetTimestamp() >= Interlocked.Read(ref _horizonEnd)
+                || Interlocked.CompareExchange(ref _horizonLoopState, 1, 0) != 0)
+            {
+                return;
+            }
+
+            next = DelayAsync(_reinvalidationInterval, cancellationToken);
         }
     }
 

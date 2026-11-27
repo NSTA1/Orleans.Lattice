@@ -129,6 +129,8 @@ The following inventory includes directly declared public members and overloads,
 - `public bool EnableDurableHistoryView { get; set; }`
 - `public bool SeedDefaultTenant { get; set; }`
 - `public TimeSpan PolicySnapshotLeaseDuration { get; set; }`
+- `public TimeSpan FalseDeathReinvalidationInterval { get; set; }`
+- `public TimeSpan? FalseDeathHorizon { get; set; }`
 - `public bool DelegatedAccessAdministrationEnabled { get; set; }`
 
 ### `Orleans.Lattice.Tenancy.LatticeTenancyServiceCollectionExtensions`

@@ -185,6 +185,80 @@ public sealed class TenantPolicyEpochSubscriptionTests
     }
 
     [Test]
+    public async Task A_newly_dead_silo_keeps_every_snapshot_re_invalidated_until_the_false_death_horizon_has_passed()
+    {
+        var other = Substitute.For<ITenantEpochSubscriber>();
+        var subscription = _subscription = new TenantPolicyEpochSubscription(
+            _grainFactory,
+            [_maintainer, other],
+            _membership.Service,
+            _localSilo,
+            _time,
+            Options.Create(new LatticeTenancyOptions
+            {
+                PolicySnapshotLeaseDuration = Lease,
+                FalseDeathReinvalidationInterval = TimeSpan.FromSeconds(1),
+                FalseDeathHorizon = TimeSpan.FromSeconds(2),
+            }),
+            NullLogger<TenantPolicyEpochSubscription>.Instance);
+        await subscription.StartAsync(CancellationToken.None);
+        await _maintainer.LeaseEstablished;
+        await _membership.PublishAsync(Member(1, SiloStatus.Active), Member(2, SiloStatus.Active));
+
+        await _membership.PublishAsync(Member(1, SiloStatus.Active), Member(2, SiloStatus.Dead));
+        Assert.That(Invalidations(other), Is.EqualTo(1), "the declaration itself invalidates");
+
+        // A silo falsely declared dead may commit a write after the declaration and
+        // stop before publishing it; only a later invalidation covers that write.
+        _time.Advance(TimeSpan.FromSeconds(1));
+        await WaitForInvalidationsAsync(other, 2);
+        _time.Advance(TimeSpan.FromSeconds(1));
+        await WaitForInvalidationsAsync(other, 3);
+        await subscription.HorizonLoop.WaitAsync(TimeSpan.FromSeconds(30));
+
+        _time.Advance(TimeSpan.FromSeconds(5));
+        Assert.That(Invalidations(other), Is.EqualTo(3), "nothing re-invalidates once the horizon has passed");
+    }
+
+    [Test]
+    public void EffectiveFalseDeathHorizon_derives_from_membership_and_is_never_shorter_than_the_interval()
+    {
+        var membership = new Orleans.Configuration.ClusterMembershipOptions
+        {
+            TableRefreshTimeout = TimeSpan.FromSeconds(60),
+            ProbeTimeout = TimeSpan.FromSeconds(5),
+        };
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                TenantPolicyEpochSubscription.EffectiveFalseDeathHorizon(new LatticeTenancyOptions(), membership),
+                Is.EqualTo(TimeSpan.FromSeconds(65)));
+            Assert.That(
+                TenantPolicyEpochSubscription.EffectiveFalseDeathHorizon(new LatticeTenancyOptions { FalseDeathHorizon = TimeSpan.FromSeconds(30) }, membership),
+                Is.EqualTo(TimeSpan.FromSeconds(30)));
+            Assert.That(
+                TenantPolicyEpochSubscription.EffectiveFalseDeathHorizon(
+                    new LatticeTenancyOptions { FalseDeathReinvalidationInterval = TimeSpan.FromSeconds(90) }, membership),
+                Is.EqualTo(TimeSpan.FromSeconds(90)));
+        });
+    }
+
+    private static int Invalidations(ITenantEpochSubscriber subscriber) =>
+        subscriber.ReceivedCalls().Count(c => c.GetMethodInfo().Name == nameof(ITenantEpochSubscriber.InvalidateClusterView));
+
+    private static async Task WaitForInvalidationsAsync(ITenantEpochSubscriber subscriber, int expected)
+    {
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
+        while (Invalidations(subscriber) < expected && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(10);
+        }
+
+        Assert.That(Invalidations(subscriber), Is.EqualTo(expected));
+    }
+
+    [Test]
     public async Task Failed_membership_watch_is_treated_as_a_missed_death()
     {
         // No lease (grain unreachable), so the only builds are the start-up warm-up

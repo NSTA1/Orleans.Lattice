@@ -1,0 +1,23 @@
+# Pairs with EveryCommitEventuallyCovered. A silo falsely declared dead can
+# commit after its declaration and stop before publishing; only the last
+# re-invalidation of the false-death horizon covers that write. The mutant ends
+# the horizon without it, so the write is never covered.
+MODULE: HorizonClosesLeavesWriteUncovered
+TARGET: EveryCommitEventuallyCovered
+CLASS: Temporal
+SUMMARY: the false-death horizon ends without re-invalidating the survivors
+PERTURBS: HorizonCloses
+BOUNDS: NumSilos = 1, MaxCrashes = 1, MaxFailures = 1, MaxFalseDeaths = 1
+
+--- FIND
+    /\ horizonOpen' = [horizonOpen EXCEPT ![s] = FALSE]
+    /\ stale' = [u \in Silos |-> stale[u] \/ alive[u]]
+    /\ scanDirty' = [u \in Silos |-> scanDirty[u] \/ (alive[u] /\ scanning[u])]
+    /\ IF wstate = "crashed" /\ wsilo = s
+          THEN /\ wstate' = "idle" /\ coveredVer' = regVer
+          ELSE UNCHANGED <<wstate, coveredVer>>
+--- REPLACE
+\* MUTATION: the horizon ends with no last re-invalidation.
+    /\ horizonOpen' = [horizonOpen EXCEPT ![s] = FALSE]
+    /\ UNCHANGED <<stale, scanDirty, wstate, coveredVer>>
+--- END

@@ -1,0 +1,17 @@
+# Pairs with EveryCommitEventuallyCovered. The horizon is long enough that a
+# silo falsely declared dead has stopped before it ends; the mutant ends it while
+# that silo still runs, so a write it commits and fails to publish afterwards,
+# before it stops, is never covered.
+MODULE: HorizonClosesBeforeSiloStops
+TARGET: EveryCommitEventuallyCovered
+CLASS: Temporal
+SUMMARY: the false-death horizon ends while the silo falsely declared dead still runs
+PERTURBS: HorizonCloses
+BOUNDS: NumSilos = 1, MaxCrashes = 1, MaxFailures = 1, MaxFalseDeaths = 1
+
+--- FIND
+    /\ ~(alive[s] /\ falseDead[s])
+--- REPLACE
+\* MUTATION: the horizon does not wait for the silo to stop.
+    /\ TRUE
+--- END

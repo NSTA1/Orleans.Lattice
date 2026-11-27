@@ -440,7 +440,12 @@ gate will tell you if you forget.
   member has leased from it, or has been seen dead by it for one lease plus the margin:
   a silo falsely declared dead keeps serving on a lease from the previous activation
   until it learns it is dead (#5719). Both grains record the first sighting of each
-  death per activation and measure the window from it. Model-checked by
+  death per activation and measure the window from it. Such a silo can also commit a
+  registry write after its declaration and stop before publishing it, so every silo
+  re-invalidates its tenant and app-registry snapshots on a fixed cadence for a
+  false-death horizon after any newly-dead silo, and the tenant registry refuses writes
+  on a silo membership reports dead (#6216). That assumes a silo falsely declared dead
+  stops within the horizon (`LatticeTenancyOptions.FalseDeathHorizon`). Model-checked by
   `spec/tenant-isolation/` (`TenantIsolation`: `NoStaleAuthority` and
   `NoEarlyGraceRelease`); its refinement note names the detector for each guard.
 - **The conformance suite is the regression guard.** `TenantAccessConformanceTests`
