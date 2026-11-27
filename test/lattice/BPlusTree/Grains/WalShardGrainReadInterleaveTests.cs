@@ -131,6 +131,69 @@ public class WalShardGrainReadInterleaveTests
             "After release the read sees the seeds plus the interleaved append.");
     }
 
+    [Test]
+    public void The_consistent_cut_and_the_readable_head_are_marked_AlwaysInterleave()
+    {
+        var cut = typeof(IWalShardGrain).GetMethod(nameof(IWalShardGrain.GetSplitCutAsync));
+        var head = typeof(IWalShardGrain).GetMethod(nameof(IWalShardGrain.GetReadableHeadAsync));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(cut!.GetCustomAttribute<AlwaysInterleaveAttribute>(), Is.Not.Null,
+                "Every leaf reads the cut on each activation and stall drive; it must not queue behind a flush.");
+            Assert.That(head!.GetCustomAttribute<AlwaysInterleaveAttribute>(), Is.Not.Null,
+                "Every leaf activation probes the readable head per partition; it must not queue behind a flush.");
+        });
+    }
+
+    /// <summary>
+    /// Issue #6166: a single-entry append holds the shard's exclusive turn across its
+    /// flush, so a cut or head read issued meanwhile waited for the provider round trip.
+    /// Every leaf of the tree reads both on each activation and stall drive, so that queue
+    /// grew with the tree. Both are locked synchronous reads and answer while the flush is
+    /// parked, with the parked append's offset not yet readable.
+    /// </summary>
+    [Test]
+    public async Task The_consistent_cut_and_the_readable_head_answer_while_an_append_flush_is_parked()
+    {
+        const string tree = "cut-interleave-tree";
+        var grain = _cluster.Client.GetGrain<IWalShardGrain>($"{tree}/0");
+        for (var i = 0; i < 3; i++)
+        {
+            await grain.AppendAsync(MakeEntry(tree, $"seed{i}"), CancellationToken.None);
+        }
+
+        GatingWalStorageProvider.ArmAppend(tree);
+        try
+        {
+            var appendTask = grain.AppendAsync(MakeEntry(tree, "parked"), CancellationToken.None);
+            await GatingWalStorageProvider.AppendEntered!.Task.WaitAsync(TimeSpan.FromSeconds(15));
+
+            var cut = await InterleaveProbe.AnswersWhileHeldAsync(
+                grain.GetSplitCutAsync(default, null, null, CancellationToken.None), GatingWalStorageProvider.AppendGate!.Task,
+                "The consistent cut issued while an append's flush is parked inside the provider");
+            var head = await InterleaveProbe.AnswersWhileHeldAsync(
+                grain.GetReadableHeadAsync(CancellationToken.None).AsTask(), GatingWalStorageProvider.AppendGate!.Task,
+                "The readable head issued while an append's flush is parked inside the provider");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(cut.Head, Is.EqualTo(3L), "the parked append's offset is not yet readable");
+                Assert.That(head, Is.EqualTo(3L), "the parked append's offset is not yet readable");
+            });
+
+            GatingWalStorageProvider.Release();
+            Assert.That(await appendTask.WaitAsync(TimeSpan.FromSeconds(15)), Is.EqualTo(3L));
+        }
+        finally
+        {
+            GatingWalStorageProvider.Release();
+            GatingWalStorageProvider.Reset();
+        }
+
+        Assert.That(await grain.GetReadableHeadAsync(CancellationToken.None), Is.EqualTo(4L));
+    }
+
     private static WalRecord MakeEntry(string tree, string key) => new()
     {
         TreeId = tree,
@@ -177,7 +240,27 @@ public class WalShardGrainReadInterleaveTests
 
         internal static volatile TaskCompletionSource? ReadGate;
         internal static volatile TaskCompletionSource? ReadEntered;
+        internal static volatile TaskCompletionSource? AppendGate;
+        internal static volatile TaskCompletionSource? AppendEntered;
         private static volatile string? _gatedTree;
+        private static volatile string? _gatedAppendTree;
+
+        internal static void ArmAppend(string tree)
+        {
+            _gatedAppendTree = tree;
+            AppendEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            AppendGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+
+        private static async Task ParkAppendAsync(string treeId, CancellationToken cancellationToken)
+        {
+            var gate = AppendGate;
+            if (gate is not null && string.Equals(treeId, _gatedAppendTree, StringComparison.Ordinal))
+            {
+                AppendEntered?.TrySetResult();
+                await gate.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
 
         internal static void Arm(string tree)
         {
@@ -186,13 +269,20 @@ public class WalShardGrainReadInterleaveTests
             ReadGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         }
 
-        internal static void Release() => ReadGate?.TrySetResult();
+        internal static void Release()
+        {
+            ReadGate?.TrySetResult();
+            AppendGate?.TrySetResult();
+        }
 
         internal static void Reset()
         {
             _gatedTree = null;
+            _gatedAppendTree = null;
             ReadGate = null;
             ReadEntered = null;
+            AppendGate = null;
+            AppendEntered = null;
         }
 
         public async IAsyncEnumerable<WalEntry> ReadAsync(
@@ -217,11 +307,17 @@ public class WalShardGrainReadInterleaveTests
             }
         }
 
-        public Task AppendBatchAsync(string treeId, int shardIndex, IReadOnlyList<WalEntry> entries, CancellationToken cancellationToken)
-            => _inner.AppendBatchAsync(treeId, shardIndex, entries, cancellationToken);
+        public async Task AppendBatchAsync(string treeId, int shardIndex, IReadOnlyList<WalEntry> entries, CancellationToken cancellationToken)
+        {
+            await ParkAppendAsync(treeId, cancellationToken).ConfigureAwait(false);
+            await _inner.AppendBatchAsync(treeId, shardIndex, entries, cancellationToken).ConfigureAwait(false);
+        }
 
-        public Task AppendEncodedBatchAsync(string treeId, int shardIndex, ReadOnlyMemory<ArraySegment<byte>> encodedEntries, ReadOnlyMemory<long> offsets, IWalRecordEncoder encoder, CancellationToken cancellationToken)
-            => _inner.AppendEncodedBatchAsync(treeId, shardIndex, encodedEntries, offsets, encoder, cancellationToken);
+        public async Task AppendEncodedBatchAsync(string treeId, int shardIndex, ReadOnlyMemory<ArraySegment<byte>> encodedEntries, ReadOnlyMemory<long> offsets, IWalRecordEncoder encoder, CancellationToken cancellationToken)
+        {
+            await ParkAppendAsync(treeId, cancellationToken).ConfigureAwait(false);
+            await _inner.AppendEncodedBatchAsync(treeId, shardIndex, encodedEntries, offsets, encoder, cancellationToken).ConfigureAwait(false);
+        }
 
         public Task<WalShardEncodedPage> ReadEncodedAsync(string treeId, int shardIndex, long fromOffsetExclusive, int maxEntries, IWalRecordEncoder encoder, CancellationToken cancellationToken)
             => _inner.ReadEncodedAsync(treeId, shardIndex, fromOffsetExclusive, maxEntries, encoder, cancellationToken);

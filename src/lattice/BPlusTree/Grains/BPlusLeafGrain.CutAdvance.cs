@@ -157,6 +157,7 @@ internal sealed partial class BPlusLeafGrain
     {
         var low = state.State.LowKeyInclusive;
         var high = state.State.HighKeyExclusive;
+        var started = AwaitDiagnostics.Enabled ? System.Diagnostics.Stopwatch.GetTimestamp() : 0L;
         try
         {
             for (var p = 0; p < into.Length; p++)
@@ -172,6 +173,12 @@ internal sealed partial class BPlusLeafGrain
         finally
         {
             Array.Clear(reads);
+            if (started != 0L)
+            {
+                // #6166: the cut's fan-out, queue included; its execution is a locked read.
+                AwaitDiagnostics.Count("leaf.cut.fanout");
+                AwaitDiagnostics.Add("leaf.cut.fanout.us", (long)System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMicroseconds);
+            }
         }
     }
 
