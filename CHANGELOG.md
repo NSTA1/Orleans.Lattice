@@ -10,6 +10,10 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ## Unreleased
 
+### Security
+
+- **Auth - Replicated rules cannot cross tenants.** An operator rule that names a tenant group on a tree outside that group's tenant, arriving by replication or restore, is now dropped when the policy compiles instead of taking effect. ([#6210](https://github.com/NSTA1/Orleans.Lattice/issues/6210)) (`Orleans.Lattice.Auth`)
+
 ### Added
 
 - **Views - Lag age in view status.** View status reports `ApplyLagAge`, how long the oldest unapplied source change has waited, and the Explorer's Views tab shows it beside the entry lag. ([#6145](https://github.com/NSTA1/Orleans.Lattice/issues/6145)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Explorer.UI`)

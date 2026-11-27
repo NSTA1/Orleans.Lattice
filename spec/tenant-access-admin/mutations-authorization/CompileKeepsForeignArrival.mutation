@@ -7,7 +7,7 @@ CLASS: Invariant
 SUMMARY: the snapshot compiler keeps a non-conforming tenant rule that arrived by replication or restore
 
 --- FIND
-CompileAdmits(r) == r.layer = "tenant" => TenantRuleShapeOk(r)
+CompileAdmits(r) == (r.layer = "tenant" => TenantRuleShapeOk(r)) /\ GroupSubjectOk(r)
 --- REPLACE
 CompileAdmits(r) == TRUE
 --- END
