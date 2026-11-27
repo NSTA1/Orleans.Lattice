@@ -1,0 +1,17 @@
+# Pairs with NoEarlyGraceRelease. The death window runs from the activation's
+# first sight of the death; the mutant measures it from the silo's last
+# heartbeat instead, which a silo suspected and declared dead missed long ago,
+# so the window has already passed while its old lease is still trusted.
+MODULE: DeclareFalselyDeadAgesFromHeartbeat
+TARGET: NoEarlyGraceRelease
+CLASS: Invariant
+SUMMARY: a false death declaration counts as seen for a whole window at once
+PERTURBS: DeclareFalselyDead
+BOUNDS: NumSilos = 1, MaxRestarts = 1, MaxFalseDeaths = 1
+
+--- FIND
+    /\ seen' = [seen EXCEPT ![s] = IF graceOpen THEN "fresh" ELSE "no"]
+--- REPLACE
+\* MUTATION: the window is measured from the last heartbeat.
+    /\ seen' = [seen EXCEPT ![s] = IF graceOpen THEN "aged" ELSE "no"]
+--- END

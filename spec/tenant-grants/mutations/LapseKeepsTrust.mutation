@@ -1,0 +1,15 @@
+# Pairs with RevocationTakesEffect. Waiting out a lease that has not really
+# lapsed on the peer lets the write return while the peer still trusts it.
+MODULE: LapseKeepsTrust
+TARGET: RevocationTakesEffect
+CLASS: Invariant
+SUMMARY: the publication stops waiting for the peer while the peer still trusts its lease
+PERTURBS: Lapse
+
+--- FIND
+    /\ trusted' = FALSE
+    /\ captured' = FALSE
+--- REPLACE
+    /\ trusted' = trusted
+    /\ captured' = FALSE
+--- END

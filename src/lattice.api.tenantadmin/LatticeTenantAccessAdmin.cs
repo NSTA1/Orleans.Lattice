@@ -219,8 +219,10 @@ internal sealed class LatticeTenantAccessAdmin : ILatticeTenantAccessAdmin
         // Unbypassable orphan guard: a tenant stripped of its last admin subject
         // disappears from every self-service surface and can only be reached by a
         // platform operator, so the removal is refused rather than silently
-        // stranding the tenant. Counted in place - no list materialised.
-        if (record.AdminSubjectCount <= 1)
+        // stranding the tenant. Counted in place - no list materialised. Only entries
+        // that admit anyone count: another tenant's group that arrived by replication
+        // never holds the set open, and removing one never empties it.
+        if (TenantAccessEntries.IsAdmissible(subjectId, tenant) && record.AdmissibleAdminSubjectCount <= 1)
         {
             throw new TenantLastAdminSubjectException(tenant.Value, subjectId);
         }

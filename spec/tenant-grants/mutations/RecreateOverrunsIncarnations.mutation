@@ -1,0 +1,13 @@
+# Pairs with TypeOK. The bound on re-creations is what keeps incarnations
+# inside the checked domain.
+MODULE: RecreateOverrunsIncarnations
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: the grantee is re-created without the incarnation bound
+PERTURBS: Recreate
+
+--- FIND
+    /\ incB < MaxInc
+--- REPLACE
+    /\ TRUE
+--- END

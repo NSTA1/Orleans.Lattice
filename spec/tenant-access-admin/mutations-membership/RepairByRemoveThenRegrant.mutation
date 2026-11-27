@@ -1,0 +1,19 @@
+# Pairs with LastAdminGuard. The superseded design: commit the removal, then
+# re-grant the entry when the set came out empty. Between the two writes the
+# tenant has no admin, and the refusal reports a write.
+MODULE: RepairByRemoveThenRegrant
+TARGET: LastAdminGuard
+CLASS: Invariant
+SUMMARY: an emptying removal is written and then repaired instead of refused
+PERTURBS: Commit
+
+--- FIND
+          THEN /\ pending' = [pending EXCEPT ![p] = None]
+               /\ obs' = [kind |-> "call", op |-> op.kind, result |-> "refused", wrote |-> FALSE]
+               /\ UNCHANGED <<slots, clock, groupExists, bindings, removed, budget>>
+--- REPLACE
+          THEN /\ slots' = merged
+               /\ pending' = [pending EXCEPT ![p] = None]
+               /\ obs' = [kind |-> "call", op |-> op.kind, result |-> "refused", wrote |-> TRUE]
+               /\ UNCHANGED <<clock, groupExists, bindings, removed, budget>>
+--- END

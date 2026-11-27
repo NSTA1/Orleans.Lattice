@@ -15,7 +15,7 @@ detectors reach.
 
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 | --- | --- | --- | --- | --- | --- | --- |
-| `ReplicationOriginBinding` | 2 | 0 | 1 | 10 | 2 | 1,250 |
+| `ReplicationOriginBinding` | 2 | 0 | 1 | 11 | 2 | 1,442 |
 | `ReplicationAdmission` | 4 | 0 | 2 | 7 | 4 | 1,740 |
 | `RestorePeerAuthority` | 4 | 0 | 8 | 17 | 6 | 45,828 |
 
@@ -31,7 +31,7 @@ be bound without naming how it admits its caller. With
 `BindCredentialToOriginCluster` on, the interceptor then binds the presented
 credential to the transport-stamped origin. An origin-bound verb (`Push`,
 `ExchangeContentManifest`, `GetPeerHighWaterMark`) requires a present stamped
-origin equal to the origin its body declares; a control verb acts only for the
+origin equal to the origin its body declares, and every entry a push carries must name that origin too; a control verb acts only for the
 credential-bound origin of an authorized peer of the current topology, binds
 the body's coordinator to it and overwrites the body's requester with it; a
 peer-read verb consumes no body-declared origin.
@@ -44,11 +44,11 @@ binding is on or off for the whole run.
 **Property.** `OriginAuthenticated`: every accepted call passed the seam. Its
 method is registered, its credential accepted and, with binding on, bound to
 the stamped origin; a body-declared origin is accepted only when the stamped
-origin is present and equal to it; a control verb acts only for a
+origin is present and equal to it, and a pushed entry only when it names the same origin; a control verb acts only for a
 credential-bound current peer; and a missing, unknown or mismatched origin
 draws one indistinguishable refusal.
 
-**Bounds.** Three clusters, three credentials and every bound method. The
+**Bounds.** Three clusters, three credentials, every bound method and, for a push, an entry naming any cluster. The
 property is a safety property over the last call, so each counterexample is
 one step long.
 

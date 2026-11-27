@@ -1,0 +1,13 @@
+# Pairs with NonDisclosure. An existence probe that stops at the policy grant
+# reveals another tenant's trees to a reader the enforcer would refuse.
+MODULE: ProbeSkipsTenantEnforcer
+TARGET: NonDisclosure
+CLASS: Invariant
+SUMMARY: the existence probe does not compose the tenant enforcer
+PERTURBS: Probe
+
+--- FIND
+        visible == pol /\ actsAsB /\ grantOk
+--- REPLACE
+        visible == pol
+--- END

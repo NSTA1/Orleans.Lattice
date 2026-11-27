@@ -1,0 +1,13 @@
+# Pairs with AdminScopedToOwnSide. Only the grantee decides what lands in its
+# view; accepting either party's admin lets the granting side answer.
+MODULE: AnswerFromEitherSide
+TARGET: AdminScopedToOwnSide
+CLASS: Invariant
+SUMMARY: approve and reject accept either party's admin, as revoke does
+PERTURBS: Answer
+
+--- FIND
+        a == AuthorizeAdmin(c, "B")
+--- REPLACE
+        a == IF TryAuthorizeAdmin(c, "A") THEN "ok" ELSE AuthorizeAdmin(c, "B")
+--- END
