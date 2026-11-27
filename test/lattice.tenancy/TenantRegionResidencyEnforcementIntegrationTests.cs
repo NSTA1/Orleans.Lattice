@@ -98,7 +98,7 @@ public sealed class TenantRegionResidencyEnforcementIntegrationTests
         record.AuthorizeRegion("other-region", Clock(1), "seed");
         record.SetRegionStatus("other-region", TenantRegionStatus.Online, Clock(2), "seed");
         record.AddAdminSubject(Admin, Clock(3), "seed");
-        await _fixture.Registry.PutAsync(record);
+        await _fixture.Registry.CreateAsync(record);
         await RebuildSnapshotsAsync();
 
         Assert.That(await OwnerAllowedAsync(tenant), Is.False,
@@ -142,7 +142,7 @@ public sealed class TenantRegionResidencyEnforcementIntegrationTests
         record.AuthorizeRegion(regionId, Clock(2), "seed");
         record.SetRegionStatus(regionId, status, Clock(3), "seed");
         record.AddAdminSubject(Admin, Clock(4), "seed");
-        await _fixture.Registry.PutAsync(record);
+        await _fixture.Registry.CreateAsync(record);
         await RebuildSnapshotsAsync();
     }
 

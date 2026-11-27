@@ -347,6 +347,28 @@
           "legendFormat": "hit ratio"
         }
       ]
+    },
+    {
+      "id": 13,
+      "title": "Admin audit write failures (rate)",
+      "description": "Durable admin audit trail writes that failed (denial, intent, finalize or reconcile). An intent failure refuses the administrative call; any non-zero rate means the admin audit trail is degraded.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 42 },
+      "fieldConfig": {
+        "defaults": { "unit": "ops" },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "AUDITFAIL",
+          "expr": "sum (rate(orleans_lattice_auth_admin_audit_write_failures_total[5m]))",
+          "legendFormat": "failed writes/s"
+        }
+      ]
     }
   ]
 }

@@ -147,6 +147,15 @@ public static class LatticeAuthServiceCollectionExtensions
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<ILatticeAuthAuditSink, DurableAuthAuditTrailSink>());
 
+        // The durable admin audit trail (#3638): the administration facades
+        // (auth admin, tenant admin, apps control, tree-admin aliases) resolve this
+        // seam and record every privileged decision and mutation through it. On by
+        // default (LatticeAuthOptions.EnableAdminAuditTrail); the per-silo
+        // reconciler resolves intents a crash left pending.
+        builder.Services.TryAddSingleton<ILatticeAdminAuditTrail, DurableLatticeAdminAuditTrail>();
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHostedService, AdminAuditReconciler>());
+
         // Tenant-isolation seam (issue #1624). The gate composes tenant isolation
         // through the ITenantGateEnforcer null seam so it needs no reference into
         // the tenancy add-on (Orleans.Lattice.Tenancy references this package, not

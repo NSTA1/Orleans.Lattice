@@ -82,6 +82,17 @@ internal interface ITenantScopedMembershipStore
     Task<IReadOnlyList<MembershipEdge>> RemoveGroupCascadeAsync(string groupId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// <see cref="RemoveGroupCascadeAsync"/>, also reporting whether the group record
+    /// itself was removed by this call (the admin audit trail records a commit only on
+    /// the store's own report).
+    /// </summary>
+    /// <param name="groupId">The group id.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The removed edges, and whether this call removed the group record.</returns>
+    Task<(IReadOnlyList<MembershipEdge> Edges, bool GroupRemoved)> RemoveGroupCascadeReportingAsync(
+        string groupId, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Removes everything in <paramref name="tenant"/>'s scope: every edge whose
     /// member or group starts with <c>t/{tenant}/</c> (forward and reverse prefix
     /// scans, removing each counterpart row too) and then every group record in

@@ -114,7 +114,7 @@ internal static class DirectoryTestSupport
             return Task.FromResult(new DirectoryGroupSlice(page, next));
         }
 
-        public Task<int> RemoveGroupCascadeAsync(string groupId, CancellationToken cancellationToken)
+        public Task<(int EdgesRemoved, bool GroupRemoved)> RemoveGroupCascadeAsync(string groupId, CancellationToken cancellationToken)
         {
             return Locked(() =>
             {
@@ -127,8 +127,8 @@ internal static class DirectoryTestSupport
 
                 Cascades++;
                 var removed = _edges.RemoveAll(e => e.GroupId == groupId || e.MemberId == groupId);
-                _groups.Remove(groupId);
-                return removed;
+                var groupRemoved = _groups.Remove(groupId);
+                return (removed, groupRemoved);
             });
         }
 
@@ -159,7 +159,7 @@ internal static class DirectoryTestSupport
             }
         }
 
-        public Task RemoveMemberAsync(string groupId, string memberId, CancellationToken cancellationToken)
+        public Task<bool> RemoveMemberAsync(string groupId, string memberId, CancellationToken cancellationToken)
         {
             return Locked(() =>
             {
@@ -171,7 +171,7 @@ internal static class DirectoryTestSupport
                 }
 
                 Writes++;
-                return _edges.RemoveAll(e => e.GroupId == groupId && e.MemberId == memberId);
+                return _edges.RemoveAll(e => e.GroupId == groupId && e.MemberId == memberId) > 0;
             });
         }
 
@@ -301,6 +301,14 @@ internal static class DirectoryTestSupport
             }
 
             return await put;
+        }
+
+        public Task<TenantRecord> CreateAsync(TenantRecord record, CancellationToken cancellationToken = default)
+        {
+            lock (_sync)
+            {
+                return inner.CreateAsync(record, cancellationToken);
+            }
         }
 
         public Task<bool> DeleteAsync(TenantId tenant, CancellationToken cancellationToken = default)

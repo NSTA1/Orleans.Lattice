@@ -85,12 +85,18 @@ internal sealed partial class LatticeMembershipDirectory
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<MembershipEdge>> RemoveGroupCascadeAsync(string groupId, CancellationToken cancellationToken = default)
+    public async Task<IReadOnlyList<MembershipEdge>> RemoveGroupCascadeAsync(string groupId, CancellationToken cancellationToken = default) =>
+        (await RemoveGroupCascadeReportingAsync(groupId, cancellationToken).ConfigureAwait(false)).Edges;
+
+    /// <inheritdoc />
+    public async Task<(IReadOnlyList<MembershipEdge> Edges, bool GroupRemoved)> RemoveGroupCascadeReportingAsync(
+        string groupId, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(groupId);
         await initializer.EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
 
         var removed = new List<MembershipEdge>();
+        bool groupRemoved;
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
             // Its parents (forward rows keyed by the group as member), then its
@@ -100,10 +106,10 @@ internal sealed partial class LatticeMembershipDirectory
 
             // The record goes last: an interrupted call leaves it in place, so the
             // group is still visible and a re-run finds any edge left behind.
-            await Groups.DeleteAsync(groupId, cancellationToken).ConfigureAwait(false);
+            groupRemoved = await Groups.DeleteAsync(groupId, cancellationToken).ConfigureAwait(false);
         }
 
-        return removed;
+        return (removed, groupRemoved);
     }
 
     /// <inheritdoc />

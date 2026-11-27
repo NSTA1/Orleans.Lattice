@@ -178,14 +178,15 @@ public class LatticeSystemTreeReplicationExtensionsTests
     }
 
     [Test]
-    public void BuildEnrolmentMap_with_audit_adds_or_set_audit_tree()
+    public void BuildEnrolmentMap_with_audit_adds_or_set_audit_tree_and_lww_admin_audit_tree()
     {
         var map = LatticeSystemTreeNames.BuildEnrolmentMap(includeAudit: true);
 
         Assert.Multiple(() =>
         {
-            Assert.That(map, Has.Count.EqualTo(4));
+            Assert.That(map, Has.Count.EqualTo(5));
             Assert.That(map[LatticeSystemTreeNames.AuthAudit], Is.EqualTo(LatticeMergeMode.OrSet));
+            Assert.That(map[LatticeSystemTreeNames.AdminAudit], Is.EqualTo(LatticeMergeMode.LwwRegister));
         });
     }
 }

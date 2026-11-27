@@ -2,6 +2,37 @@
   "schema": "lattice.agents/governance-audit-events/v1",
   "audit_records": [
     {
+      "id": "admin-audit-record",
+      "type": "LatticeAdminAuditRecord",
+      "fields": [
+        "operation_id",
+        "outcome",
+        "action",
+        "actor_subject_id",
+        "actor_tenant",
+        "actor_kind",
+        "target_scope",
+        "target_kind",
+        "target_id",
+        "anchor_tree_id",
+        "anchor_key",
+        "anchor_base_version",
+        "anchor_base_hash",
+        "anchor_value_hash",
+        "committed_revision_hlc",
+        "reason_code",
+        "detail",
+        "origin_region",
+        "timestamp_utc",
+        "completed_utc"
+      ],
+      "emitting_component": "Administration facades through LatticeAdminAudit and DurableLatticeAdminAuditTrail (auth admin, tenant admin, tenant directory, tenant policy, tenant access, tenant grants, tenant regions, apps control, tree-admin aliases); AdminAuditReconciler for intents left pending",
+      "sinks": [
+        "sys-auth-admin-audit"
+      ],
+      "source": "src/lattice/AdminAudit/LatticeAdminAuditRecord.cs"
+    },
+    {
       "id": "app-activation-failure-log",
       "type": "ILogger warning",
       "fields": [
@@ -301,6 +332,15 @@
       "source": "src/lattice.api.mcp/LatticeApiMcpMetrics.cs"
     },
     {
+      "id": "auth-admin-audit-write-failures",
+      "name": "orleans.lattice.auth.admin_audit.write_failures",
+      "instrument": "Counter<long>",
+      "tags": [
+        "tenant"
+      ],
+      "source": "src/lattice.auth/LatticeAuthMetrics.cs"
+    },
+    {
       "id": "auth-decision-duration",
       "name": "orleans.lattice.auth.decision.duration",
       "instrument": "Histogram<double>",
@@ -566,6 +606,36 @@
   ],
   "audit_controls": [
     {
+      "id": "auth-admin-audit-max-pending-age",
+      "field": "LatticeAuthOptions.AdminAuditMaxPendingAge",
+      "default": "01:00:00",
+      "source": "src/lattice.auth/LatticeAuthOptions.cs"
+    },
+    {
+      "id": "auth-admin-audit-reconcile-interval",
+      "field": "LatticeAuthOptions.AdminAuditReconcileInterval",
+      "default": "00:01:00",
+      "source": "src/lattice.auth/LatticeAuthOptions.cs"
+    },
+    {
+      "id": "auth-admin-audit-reconcile-lease",
+      "field": "LatticeAuthOptions.AdminAuditReconcileLease",
+      "default": "00:02:00",
+      "source": "src/lattice.auth/LatticeAuthOptions.cs"
+    },
+    {
+      "id": "auth-admin-audit-switch",
+      "field": "LatticeAuthOptions.EnableAdminAuditTrail",
+      "default": true,
+      "source": "src/lattice.auth/LatticeAuthOptions.cs"
+    },
+    {
+      "id": "auth-admin-audit-ttl",
+      "field": "LatticeAuthOptions.AdminAuditTrailTimeToLive",
+      "default": null,
+      "source": "src/lattice.auth/LatticeAuthOptions.cs"
+    },
+    {
       "id": "auth-audit-sampling",
       "field": "LatticeAuthOptions.AuditSamplingRatio",
       "default": 1.0,
@@ -590,18 +660,5 @@
       "source": "src/lattice.auth/LatticeAuthOptions.cs"
     }
   ],
-  "uncertainties": [
-    {
-      "status": "uncertain",
-      "reason": "Search found no dedicated tenancy audit record type beyond warning logs and metrics.",
-      "required_source": "src/lattice.tenancy",
-      "issue": 3638
-    },
-    {
-      "status": "uncertain",
-      "reason": "Search found no dedicated api.auth or api.tenantadmin audit record type beyond interceptor rejection logs and gRPC error logs.",
-      "required_source": "src/lattice.api.auth.grpc",
-      "issue": 3638
-    }
-  ]
+  "uncertainties": []
 }

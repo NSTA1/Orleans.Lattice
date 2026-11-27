@@ -201,6 +201,24 @@ public class LatticeAuthOptionsValidatorTests
         Assert.That(options.AuditSamplingRatio, Is.EqualTo(1.0));
         Assert.That(options.EnableDurableAuditTrail, Is.False);
         Assert.That(options.AuditTrailTimeToLive, Is.Null);
+        Assert.That(options.EnableAdminAuditTrail, Is.True, "the admin audit trail is on by default (#3638)");
+    }
+
+    [TestCase(0, 2, 60, 1, Description = "non-positive admin audit TTL")]
+    [TestCase(null, 0, 60, 1, Description = "non-positive reconcile lease")]
+    [TestCase(null, 5, 5, 1, Description = "max pending age not above the lease")]
+    [TestCase(null, 2, 60, 0, Description = "non-positive reconcile interval")]
+    public void Inconsistent_admin_audit_timings_fail_validation(int? ttlMinutes, int leaseMinutes, int maxAgeMinutes, int intervalMinutes)
+    {
+        var options = new LatticeAuthOptions
+        {
+            AdminAuditTrailTimeToLive = ttlMinutes is { } ttl ? TimeSpan.FromMinutes(ttl) : null,
+            AdminAuditReconcileLease = TimeSpan.FromMinutes(leaseMinutes),
+            AdminAuditMaxPendingAge = TimeSpan.FromMinutes(maxAgeMinutes),
+            AdminAuditReconcileInterval = TimeSpan.FromMinutes(intervalMinutes),
+        };
+
+        Assert.That(Validator.Validate(null, options).Failed, Is.True);
     }
 
     [Test]

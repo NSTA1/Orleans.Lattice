@@ -1,0 +1,17 @@
+# Pairs with DeletionIsFinal. The registry before #6230: an update of an
+# absent record created it, so a grant call that read the granting tenant's
+# record before the tenant was deleted re-created it, active, from that copy.
+MODULE: StalePutRecreatesGranter
+TARGET: DeletionIsFinal
+CLASS: Action
+SUMMARY: a commit after the granting tenant's deletion writes its stale copy back as a new record
+PERTURBS: CommitCall
+
+--- FIND
+       ELSE /\ obs' = CallObs(fl.verb, fl.caller, fl.auth, fl.present, fl.preActive, "notFound", FALSE)
+            /\ UNCHANGED <<status, grant>>
+--- REPLACE
+       ELSE /\ obs' = CallObs(fl.verb, fl.caller, fl.auth, fl.present, fl.preActive, fl.target, TRUE)
+            /\ status' = [status EXCEPT !["A"] = "active"]
+            /\ grant' = fl.cp
+--- END

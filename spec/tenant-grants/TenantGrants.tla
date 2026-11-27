@@ -294,10 +294,17 @@ Revoke(c, split) ==
 
 \* The write half of a split call: its copy, read before the writes that
 \* landed since, is merged by the record join. A grant record arriving by
-\* replication or restore is merged by the same join.
+\* replication or restore is merged by the same join. The write is an update:
+\* when the granting tenant was deleted since the read it is refused, as an
+\* unoffered grant, rather than re-creating the tenant from the stale copy.
 CommitCall ==
     /\ fl # NoCall
-    /\ Commit(fl.verb, fl.caller, fl.auth, fl.present, fl.preActive, fl.cp, Merge(grant, fl.cp), fl.target)
+    /\ IF status["A"] = "active"
+       THEN Commit(fl.verb, fl.caller, fl.auth, fl.present, fl.preActive, fl.cp, Merge(grant, fl.cp), fl.target)
+       ELSE /\ obs' = CallObs(fl.verb, fl.caller, fl.auth, fl.present, fl.preActive, "notFound", FALSE)
+            /\ UNCHANGED <<status, grant>>
+            /\ UNCHANGED <<incB, seen, trusted, wstate, owed, captured, ack, closed, offers,
+                           approvals, budget, failures>>
     /\ fl' = NoCall
 
 \* A reader acting as tenant B reads tree t/A/n on silo s. The policy
@@ -409,7 +416,6 @@ Rebuild ==
 DeleteTenant(t) ==
     /\ status[t] = "active"
     /\ CanWrite
-    /\ t = "A" => fl = NoCall
     /\ status' = [status EXCEPT ![t] = "absent"]
     /\ grant' = IF t = "A" THEN NoSlot
                 ELSE IF Live(grant) THEN Slot(grant.gen, "removed") ELSE grant
@@ -510,4 +516,10 @@ NonDisclosure ==
 \* Either party can always walk away (CallUntrapped).
 NoUnilateralTrap ==
     obs.kind = "call" => obs.untrapped
+
+\* A deleted tenant comes back only as a new incarnation created on purpose,
+\* never re-created by a write that read its record before the deletion.
+DeletionIsFinal ==
+    [][\A t \in Tenants :
+          (status[t] = "absent" /\ status'[t] = "active") => (t = "B" /\ incB' = incB + 1)]_vars
 =============================================================================

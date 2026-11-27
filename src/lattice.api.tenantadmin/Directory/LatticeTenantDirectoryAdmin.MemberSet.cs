@@ -54,57 +54,73 @@ internal sealed partial class LatticeTenantDirectoryAdmin
         var tenant = TenantAdminArguments.ParseTenantId(tenantId);
         ValidateEntry(subjectId, subjectKind, nameof(subjectId), nameof(subjectKind));
 
-        var record = await AuthorizeAsync(tenant, "add-member", cancellationToken).ConfigureAwait(false);
-
-        var storedId = ToStoredId(tenant, subjectId, subjectKind, nameof(subjectId));
-        if (record.HasMemberSubject(storedId))
-        {
-            return MemberChange(tenant, subjectId, subjectKind, changed: false);
-        }
-
-        if (subjectKind == TenantSubjectKind.TenantGroup)
-        {
-            await RequireGroupAsync(tenant, storedId, subjectId, nameof(subjectId), cancellationToken)
-                .ConfigureAwait(false);
-        }
-        else
-        {
-            await ValidateDirectoryPrincipalAsync(subjectId, subjectKind, nameof(subjectId), cancellationToken)
-                .ConfigureAwait(false);
-        }
-
-        var memberCap = record.Quotas.EffectiveMaxMemberSubjects;
-        TenantAccessCaps.AdmitAddition(
+        var audit = TenantAdminAudit.OnTenantRecord(
+            LatticeAdminAuditAction.TenantMemberAdd,
             tenant,
-            TenantTreeNames.RegistryTree,
-            TenantAccessCaps.MemberSubjectsDimension,
-            record.MemberSubjectCount,
-            memberCap);
+            LatticeAdminAuditTargetKind.TenantMember,
+            subjectId,
+            new Dictionary<string, string>(1, StringComparer.Ordinal) { ["subjectKind"] = subjectKind.ToString() });
+        var record = await AuthorizeAsync(audit, tenant, "add-member", cancellationToken).ConfigureAwait(false);
 
-        record.AddMemberSubject(storedId, _clock.Next(), _writerId);
-        var merged = await _registry.PutAsync(record, cancellationToken).ConfigureAwait(false);
-
-        // Verify-and-compensate on the committed join (see the type remarks):
-        // concurrent adds from stale reads can each pass the check above, and the
-        // registry's merge is the first point where the combined count is visible.
-        // Withdraw this entry at a later stamp, which supersedes only this call's add.
-        if (merged.MemberSubjectCount > memberCap)
-        {
-            await TenantCapCompensation.WithdrawAndRefuseAsync(
+        return await LatticeAdminAudit
+            .RunAsync(
+                _audit,
+                audit,
                 async ct =>
                 {
-                    merged.RemoveMemberSubject(storedId, TenantRemovalStamp.ForMemberEntry(_clock, merged, storedId), _writerId);
-                    await _registry.PutAsync(merged, ct).ConfigureAwait(false);
-                },
-                _logger,
-                tenant,
-                TenantTreeNames.RegistryTree,
-                TenantAccessCaps.MemberSubjectsDimension,
-                memberCap,
-                merged.MemberSubjectCount).ConfigureAwait(false);
-        }
+                    var storedId = ToStoredId(tenant, subjectId, subjectKind, nameof(subjectId));
+                    if (record.HasMemberSubject(storedId))
+                    {
+                        return MemberChange(tenant, subjectId, subjectKind, changed: false);
+                    }
 
-        return MemberChange(tenant, subjectId, subjectKind, changed: true);
+                    if (subjectKind == TenantSubjectKind.TenantGroup)
+                    {
+                        await RequireGroupAsync(tenant, storedId, subjectId, nameof(subjectId), ct)
+                            .ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await ValidateDirectoryPrincipalAsync(subjectId, subjectKind, nameof(subjectId), ct)
+                            .ConfigureAwait(false);
+                    }
+
+                    var memberCap = record.Quotas.EffectiveMaxMemberSubjects;
+                    TenantAccessCaps.AdmitAddition(
+                        tenant,
+                        TenantTreeNames.RegistryTree,
+                        TenantAccessCaps.MemberSubjectsDimension,
+                        record.MemberSubjectCount,
+                        memberCap);
+
+                    record.AddMemberSubject(storedId, _clock.Next(), _writerId);
+                    var merged = await _registry.PutAsync(record, ct).ConfigureAwait(false);
+
+                    // Verify-and-compensate on the committed join (see the type remarks):
+                    // concurrent adds from stale reads can each pass the check above, and the
+                    // registry's merge is the first point where the combined count is visible.
+                    // Withdraw this entry at a later stamp, which supersedes only this call's add.
+                    if (merged.MemberSubjectCount > memberCap)
+                    {
+                        await TenantCapCompensation.WithdrawAndRefuseAsync(
+                            async ct =>
+                            {
+                                merged.RemoveMemberSubject(storedId, TenantRemovalStamp.ForMemberEntry(_clock, merged, storedId), _writerId);
+                                await _registry.PutAsync(merged, ct).ConfigureAwait(false);
+                            },
+                            _logger,
+                            tenant,
+                            TenantTreeNames.RegistryTree,
+                            TenantAccessCaps.MemberSubjectsDimension,
+                            memberCap,
+                            merged.MemberSubjectCount).ConfigureAwait(false);
+                    }
+
+                    return MemberChange(tenant, subjectId, subjectKind, changed: true);
+                },
+                static r => r.Changed,
+                cancellationToken)
+            .ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -117,21 +133,41 @@ internal sealed partial class LatticeTenantDirectoryAdmin
         var tenant = TenantAdminArguments.ParseTenantId(tenantId);
         ValidateEntry(subjectId, subjectKind, nameof(subjectId), nameof(subjectKind));
 
-        var record = await AuthorizeAsync(tenant, "remove-member", cancellationToken).ConfigureAwait(false);
+        var audit = TenantAdminAudit.OnTenantRecord(
+            LatticeAdminAuditAction.TenantMemberRemove,
+            tenant,
+            LatticeAdminAuditTargetKind.TenantMember,
+            subjectId,
+            new Dictionary<string, string>(1, StringComparer.Ordinal) { ["subjectKind"] = subjectKind.ToString() });
+        var record = await AuthorizeAsync(audit, tenant, "remove-member", cancellationToken).ConfigureAwait(false);
 
-        var storedId = ToStoredId(tenant, subjectId, subjectKind, nameof(subjectId));
-        if (!record.HasMemberSubject(storedId))
-        {
-            return MemberChange(tenant, subjectId, subjectKind, changed: false);
-        }
+        return await LatticeAdminAudit
+            .RunAsync(
+                _audit,
+                audit,
+                async ct =>
+                {
+                    var storedId = ToStoredId(tenant, subjectId, subjectKind, nameof(subjectId));
+                    if (!record.HasMemberSubject(storedId))
+                    {
+                        return MemberChange(tenant, subjectId, subjectKind, changed: false);
+                    }
 
-        // Stamped later than the slot it removes as well as the local clock, so the
-        // removal wins the merge even when another silo's clock wrote the slot ahead
-        // of this one, and Changed=true means the entry is really gone.
-        record.RemoveMemberSubject(storedId, TenantRemovalStamp.ForMemberEntry(_clock, record, storedId), _writerId);
-        await _registry.PutAsync(record, cancellationToken).ConfigureAwait(false);
+                    // Stamped later than the slot it removes as well as the local clock, so the
+                    // removal wins the merge even when another silo's clock wrote the slot ahead
+                    // of this one. Changed reports whether the entry was live in the stored record
+                    // the merge folded into: a concurrent removal of the same entry passes the
+                    // check above too, and only one of the two removed anything (#3638).
+                    record.RemoveMemberSubject(storedId, TenantRemovalStamp.ForMemberEntry(_clock, record, storedId), _writerId);
+                    var (_, removed) = await TenantRecordProbedCommit
+                        .PutAsync(_registry, record, stored => stored.HasMemberSubject(storedId), ct)
+                        .ConfigureAwait(false);
 
-        return MemberChange(tenant, subjectId, subjectKind, changed: true);
+                    return MemberChange(tenant, subjectId, subjectKind, changed: removed);
+                },
+                static r => r.Changed,
+                cancellationToken)
+            .ConfigureAwait(false);
     }
 
     /// <inheritdoc />

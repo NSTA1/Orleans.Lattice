@@ -215,4 +215,48 @@ public sealed class LatticeAuthOptions
     /// Only consulted when <see cref="EnableDurableAuditTrail"/> is set.
     /// </summary>
     public TimeSpan? AuditTrailTimeToLive { get; set; }
+
+    /// <summary>
+    /// Whether the administration facades write the durable admin audit trail: one
+    /// record per privileged administrative decision or mutation (rule, group and
+    /// membership changes, tenant lifecycle, administrator and member sets, grants,
+    /// regions, app lifecycle, aliases), carrying the actor, the action, the target
+    /// and the outcome, including denials. Defaults to <c>true</c>. While enabled, an
+    /// administrative mutation whose audit intent cannot be written is refused before
+    /// it changes anything. Independent of <see cref="EnableAuditSink"/>, which governs
+    /// the sampled data-plane decision trail.
+    /// </summary>
+    public bool EnableAdminAuditTrail { get; set; } = true;
+
+    /// <summary>
+    /// How long a final admin audit record is kept, or <c>null</c> (the default) to
+    /// keep every record. Must be strictly positive when supplied. Pending intents are
+    /// never aged out: only the reconciler resolves them.
+    /// </summary>
+    public TimeSpan? AdminAuditTrailTimeToLive { get; set; }
+
+    /// <summary>
+    /// How long an admin audit intent may stay pending before the reconciler resolves
+    /// it from the anchor record's evidence. Defaults to two minutes. Must be strictly
+    /// positive.
+    /// </summary>
+    public TimeSpan AdminAuditReconcileLease { get; set; } = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// How long an admin audit intent may stay pending before the reconciler decides
+    /// it. An unwritten anchor only proves that nothing has committed yet, so an
+    /// intent is recorded as not committed only after this age; an intent the
+    /// evidence cannot resolve is recorded as
+    /// <see cref="LatticeAdminAuditOutcome.Indeterminate"/> after it. Set it above the
+    /// longest administrative operation. Defaults to one hour. Must be strictly greater
+    /// than <see cref="AdminAuditReconcileLease"/>.
+    /// </summary>
+    public TimeSpan AdminAuditMaxPendingAge { get; set; } = TimeSpan.FromHours(1);
+
+    /// <summary>
+    /// How often each silo's reconciler sweeps pending admin audit intents (and, when
+    /// <see cref="AdminAuditTrailTimeToLive"/> is set, ages out expired records).
+    /// Defaults to one minute. Must be strictly positive.
+    /// </summary>
+    public TimeSpan AdminAuditReconcileInterval { get; set; } = TimeSpan.FromMinutes(1);
 }
