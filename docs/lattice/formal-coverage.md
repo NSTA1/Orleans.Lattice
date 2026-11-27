@@ -75,7 +75,7 @@ once, either here or in the
 | Shared alias routing and revert | 2 | 25 | 40 | 22 | [Aliasing](../../spec/aliasing/README.md) |
 | Tenant quotas | 3 | 29 | 26 | 32 | [Quota admission](../../spec/tenant-quotas/README.md) |
 | Tenant rate budgets | 1 | 14 | 23 | 22 | [Rate-budget leases](../../spec/tenant-rate-budget/README.md) |
-| Tenant isolation | 1 | 25 | 25 | 31 | [Isolation epochs and leases](../../spec/tenant-isolation/README.md) |
+| Tenant isolation | 1 | 27 | 28 | 34 | [Isolation epochs and leases](../../spec/tenant-isolation/README.md) |
 | Scheduling and progress | 10 | 203 | 251 | 133 | [Verified Scheduling and Progress](verified-scheduling.md) |
 | Schema enforcement and versioning | 9 | 150 | 178 | 301 | [Schema enforcement and versioning](../../spec/schema/README.md) |
 | Schema and view composition | 1 | 23 | 23 | 28 | [Schema and view composition](../../spec/schema-view/README.md) |
@@ -641,13 +641,15 @@ gaps, states its full scope.
     snapshot through the epoch advance and its lease ledger; when a silo may
     trust its snapshot for an authorization decision, a decision that cannot
     confirm currency denying; and publication failure with its background
-    re-publish, a silo crash, and the epoch coordinator's re-activation with
-    its grace.
+    re-publish, a silo crash, membership falsely declaring a live silo dead, and
+    the epoch coordinator's re-activation with its grace, which counts a death
+    only once the coordinator has seen it for one lease plus the margin.
   - **Does not cover:** revoking decisions already taken; the two windows
     tracked by design - a write whose publication failed, until the re-publish
     lands, and a crashed writer, until membership declares it dead; a silo
     clock slower than the epoch coordinator's by more than the ledger margin
-    over one lease; more than one write or two silos; and rate budgets and
+    over one lease; more than one write or two silos; liveness after a false
+    death declaration, which does not hold (#6216); and rate budgets and
     footprint quotas, which the two areas above cover.
 
 - **Authorization decision** ([`spec/auth-decision/`](../../spec/auth-decision/README.md)).
