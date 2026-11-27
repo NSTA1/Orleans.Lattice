@@ -5,9 +5,9 @@
   "counts": {
     "invariants": 6,
     "properties": 2,
-    "actions": 22,
-    "mutations": 29,
-    "behaviourRows": 28,
+    "actions": 23,
+    "mutations": 31,
+    "behaviourRows": 29,
     "distinctStates": 200358
   },
   "variants": {
@@ -15,6 +15,6 @@
     "Restart": { "distinctStates": 672536 },
     "Failure": { "distinctStates": 627966 },
     "FalseDead": { "distinctStates": 2680898 },
-    "Faults": { "distinctStates": 41650 }
+    "Faults": { "distinctStates": 108547 }
   }
 }

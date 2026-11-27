@@ -129,7 +129,9 @@ public static partial class LatticeAppsServiceCollectionExtensions
             sp.GetService<ILocalSiloDetails>(),
             sp.GetRequiredService<CompiledAppRegistrySnapshotMaintainer>(),
             sp.GetRequiredService<TimeProvider>(),
-            sp.GetRequiredService<ILogger<AppRegistryEpochSubscription>>()));
+            sp.GetRequiredService<ILogger<AppRegistryEpochSubscription>>(),
+            sp.GetService<IClusterMembershipService>(),
+            sp.GetService<IOptions<Orleans.Configuration.ClusterMembershipOptions>>()));
 
         // App source seam: the in-image source, composed with any host-registered catalogue sources
         // into the AppSourceSet that serves as the single IAppSource.
