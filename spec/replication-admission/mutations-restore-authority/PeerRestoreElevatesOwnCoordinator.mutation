@@ -1,0 +1,12 @@
+# Pairs with PeerAuthorityBounded. The remote-coordinator condition is dropped, so
+# this cluster's own saga runs under system origin instead of the operator's identity.
+MODULE: PeerRestoreElevatesOwnCoordinator
+TARGET: PeerAuthorityBounded
+CLASS: Invariant
+SUMMARY: a step this cluster's own coordinator delivers runs with peer authority
+
+--- FIND
+HasPeerAuthority(c) == wired /\ c \notin {Self, NoCluster} /\ c \in topology
+--- REPLACE
+HasPeerAuthority(c) == wired /\ c # NoCluster /\ (c = Self \/ c \in topology)
+--- END

@@ -1,0 +1,13 @@
+# Pairs with OwnSagaCommitNeedsDurableDecision. A participant that lost its cache
+# rebuilds under system origin instead of as the ambient caller.
+MODULE: PeerRestoreDecidedWithoutShadow
+TARGET: OwnSagaCommitNeedsDurableDecision
+CLASS: Invariant
+SUMMARY: a decided own-saga commit borrows the prepare's authority without the shadow this participant built
+PERTURBS: Commit
+
+--- FIND
+ELSE IF cache # NoShadow THEN "decided"
+--- REPLACE
+ELSE IF TRUE THEN "decided"
+--- END

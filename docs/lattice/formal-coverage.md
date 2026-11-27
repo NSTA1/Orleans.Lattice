@@ -410,6 +410,7 @@ states as load-bearing, and appends its own row to this table when it lands.
 | `TenantGrants` | Cross-tenant grants | 25 | 20 | 36 | [Cross-tenant grants](../../spec/tenant-grants/README.md) |
 | `ReplicationOriginBinding` | Replication gRPC host admitted-peer seam and origin binding | 10 | 2 | 10 | [Replication receiver admission](../../spec/replication-admission/README.md) |
 | `ReplicationAdmission` | Replication receiver enrollment and merge-mode gate | 7 | 4 | 10 | [Replication receiver admission](../../spec/replication-admission/README.md) |
+| `RestorePeerAuthority` | Coordinated-restore participant peer authority, own-saga decision and cutover fence | 16 | 6 | 22 | [Replication receiver admission](../../spec/replication-admission/README.md) |
 
 ## What each area covers, and what it does not
 

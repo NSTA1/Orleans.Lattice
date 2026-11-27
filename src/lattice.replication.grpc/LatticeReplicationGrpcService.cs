@@ -508,6 +508,10 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         // origin and poison that stream's cursor.
         EnsureOriginMatchesCaller(context, request.OriginClusterId, nameof(Push));
 
+        // Every entry is keyed on its own origin downstream (high-water mark, dedupe,
+        // inbound contact), so each must be the caller's own too.
+        ReplicationAdmittedPeer.EnsureEntriesFromCaller(request.Entries, request.OriginClusterId, nameof(Push), _logger);
+
         // Record the sender's applied low watermark, if it shipped one, and learn
         // the frontier epoch every ack below reports (#4586 part 2b). Learnt
         // before the re-seed answer, which is bound to it (#4768).

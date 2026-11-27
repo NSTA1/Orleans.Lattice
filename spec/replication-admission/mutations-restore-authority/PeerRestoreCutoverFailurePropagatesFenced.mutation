@@ -1,0 +1,17 @@
+# Pairs with NoStrandedFence. The cutover failure is rethrown with the write fence
+# still engaged, so local writes stay blocked until the fence deadline.
+MODULE: PeerRestoreCutoverFailurePropagatesFenced
+TARGET: NoStrandedFence
+CLASS: Invariant
+SUMMARY: a failed cutover propagates before local writes are unblocked
+PERTURBS: Commit
+
+--- FIND
+          ELSE /\ fence' = "unblocked"
+               /\ cache' = t
+               /\ obs' = Obs("cutoverFailed"
+--- REPLACE
+          ELSE /\ fence' = "engaged"
+               /\ cache' = t
+               /\ obs' = Obs("cutoverFailed"
+--- END

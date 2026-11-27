@@ -1,0 +1,13 @@
+# Pairs with OwnSagaCommitNeedsDurableDecision. The abort borrows the prepare's
+# authority on the strength of the cached shadow alone.
+MODULE: PeerRestoreAbortUndecidedElevated
+TARGET: OwnSagaCommitNeedsDurableDecision
+CLASS: Invariant
+SUMMARY: an own-saga abort without a durable Abort decision runs with the prepare's authority
+PERTURBS: Abort
+
+--- FIND
+ELSE IF read = "abort" /\ cached THEN "decided"
+--- REPLACE
+ELSE IF cached THEN "decided"
+--- END
