@@ -1226,6 +1226,9 @@ internal sealed class WalCommitLogWriter(
         var tenantTag = LatticeTenantLabel.ForTree(treeId);
         var partitionTag = new KeyValuePair<string, object?>(LatticeMetrics.TagPartition, partition);
 
+        // #6166: a bulk seed's WAL append split by phase, per partition it dispatches to.
+        var seedPhase = fence is BulkSeedAppendFence && AwaitDiagnostics.Enabled ? dispatchStartTicks : 0L;
+
         // Pre-admission saturation gate (batched path).
         // Same shape as the single-entry overload above.
         // Classify the caller's whole batch, not each partition bucket: a
@@ -1238,6 +1241,8 @@ internal sealed class WalCommitLogWriter(
             // single-entry overload above.
             await PaceOnThrottleAsync(treeId, partition, perTree.WalThrottledAdmissionPace, cancellationToken, _drainCts.Token);
         }
+
+        seedPhase = SeedPhaseMark("wal.seed.saturation-gate.us", seedPhase);
 
         // Writer-side admission (batched path): same shape as the
         // single-entry overload above. The acquire bound is the same
@@ -1266,6 +1271,7 @@ internal sealed class WalCommitLogWriter(
             throw new LatticeShuttingDownException(ex.Message, ex);
         }
         LatticeMetrics.WalAppendAdmissionWait.Record(admissionWaitMs, treeTag, partitionTag, tenantTag);
+        seedPhase = SeedPhaseMark("wal.seed.admission.us", seedPhase);
 
         var pending = new PendingAppend(treeId, partition, entryCount: entries.Count, batchBytes: 0);
         var preDepth = tracker.LinkReturningPreDepth(pending);
@@ -1361,6 +1367,13 @@ internal sealed class WalCommitLogWriter(
                     throw;
                 }
             }
+            if (seedPhase != 0L)
+            {
+                SeedPhaseMark("wal.seed.shard.us", seedPhase);
+                AwaitDiagnostics.Count("wal.seed.dispatch");
+                AwaitDiagnostics.Add("wal.seed.dispatch.entries", entries.Count);
+            }
+
             var appendedAt = DateTime.UtcNow.Ticks;
             for (var i = 0; i < offsets.Count; i++)
                 RecordAppend(treeId, partition, offsets[i], appendedAt);
@@ -1372,6 +1385,19 @@ internal sealed class WalCommitLogWriter(
             tracker.ReleaseAdmission();
             RecordDispatchOutcome(treeId, partition, walPartitions, perTree, entryCount: entries.Count, dispatchStartTicks);
         }
+    }
+
+    /// <summary>Adds the microseconds since <paramref name="start"/> to <paramref name="name"/> and returns now; a no-op for 0 (#6166).</summary>
+    private static long SeedPhaseMark(string name, long start)
+    {
+        if (start == 0L)
+        {
+            return 0L;
+        }
+
+        var now = Stopwatch.GetTimestamp();
+        AwaitDiagnostics.Add(name, (long)Stopwatch.GetElapsedTime(start, now).TotalMicroseconds);
+        return now;
     }
 
     private void RecordDispatchOutcome(string treeId, int partition, int walPartitions, LatticeOptions perTree, int entryCount, long startTicks)
