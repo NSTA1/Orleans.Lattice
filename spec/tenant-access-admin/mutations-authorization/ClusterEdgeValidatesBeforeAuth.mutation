@@ -1,0 +1,17 @@
+# Pairs with AuthorizeBeforeDisclose. Validating first tells an unauthorized
+# caller whether an id exists in the identity directory.
+MODULE: ClusterEdgeValidatesBeforeAuth
+TARGET: AuthorizeBeforeDisclose
+CLASS: Invariant
+SUMMARY: the cluster facade validates a membership reference before authorizing the caller
+PERTURBS: ClusterAddEdge
+
+--- FIND
+       /\ IF ~auth THEN Refuse("clusterAddEdge", auth, FALSE, "denied", FALSE)
+          ELSE IF vreq /\ ((~IsTier(m) /\ m \notin Resolvable) \/ (~IsTier(g) /\ g \notin ResolvableGroups))
+               THEN Refuse("clusterAddEdge", auth, FALSE, "unresolved", TRUE)
+--- REPLACE
+       /\ IF vreq /\ ((~IsTier(m) /\ m \notin Resolvable) \/ (~IsTier(g) /\ g \notin ResolvableGroups))
+               THEN Refuse("clusterAddEdge", auth, FALSE, "unresolved", TRUE)
+          ELSE IF ~auth THEN Refuse("clusterAddEdge", auth, FALSE, "denied", FALSE)
+--- END

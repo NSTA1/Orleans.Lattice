@@ -1,0 +1,13 @@
+# Pairs with TenantRuleConfinement. Dropping the confinement guard lets a
+# tenant admin scope a rule to another tenant's tree or grant Telemetry.
+MODULE: FacadePutRuleSkipsConfinement
+TARGET: TenantRuleConfinement
+CLASS: Invariant
+SUMMARY: the store accepts a tenant rule outside its tenant's trees or data-plane operations
+PERTURBS: FacadePutRule
+
+--- FIND
+          ELSE IF ~StoreAdmits(draft) THEN Refuse("putRule", auth, fl, "refused", FALSE)
+--- REPLACE
+          ELSE IF FALSE THEN Refuse("putRule", auth, fl, "refused", FALSE)
+--- END

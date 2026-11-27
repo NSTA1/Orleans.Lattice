@@ -392,6 +392,12 @@ gate will tell you if you forget.
   end on a real cluster: layering, confinement, claim stripping, isolation, revocation,
   feature-off equivalence, deletion purge, break-glass removal and caps under
   concurrency. Run it, and extend it, when you change any of these seams.
+- **The formal model is `spec/tenant-access-admin/`.** Module `TenantAccessAuthorization`
+  (over the authorization contract's abstract `Allowed`, `spec/auth-decision/`) checks
+  tenant-tier rule confinement, the reserved `t/` namespace, claim stripping whatever
+  the flag, feature-off inertness, authorize-before-disclose and the authorize, validate,
+  write order, each with a mutation that turns it red and detectors in
+  `spec/tenant-access-admin/RefinementAuthorization.md`. Change the model with the seam.
 
 ## Release-status note for security fixes
 

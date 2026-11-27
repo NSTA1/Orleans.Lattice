@@ -83,6 +83,7 @@ internal static class FormalCoverageAreaCensus
             ["Tenant quotas"] = ["TenantFootprint", "TenantQuotaEvaluation", "TenantTreeCount"],
             ["Tenant rate budgets"] = ["TenantRateBudget"],
             ["Tenant isolation"] = ["TenantIsolation"],
+            ["Delegated tenant access"] = ["TenantAccessAuthorization"],
             ["Scheduling and progress"] =
             [
                 "MaterialiserDrain", "ReplayPermits", "ReplicationShipping", "SagaReadProgress", "TagIndexReconcile",

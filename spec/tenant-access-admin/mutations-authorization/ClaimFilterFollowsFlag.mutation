@@ -1,0 +1,14 @@
+# Pairs with ClaimsNeverConferTenantGroups. The finding behind D2: a filter that
+# follows the flag honours an asserted t/ group while the flag is off, after a
+# rollback, or on a lagging silo.
+MODULE: ClaimFilterFollowsFlag
+TARGET: ClaimsNeverConferTenantGroups
+CLASS: Invariant
+SUMMARY: the claim filter is active only while the resolving silo's delegated-access flag is on
+PERTURBS: ResolveClaims
+
+--- FIND
+        kept == {g \in asserted : ~(TenancyRegistered /\ IsTier(g)) \/ g \in dir}
+--- REPLACE
+        kept == {g \in asserted : ~(flag[s] /\ IsTier(g)) \/ g \in dir}
+--- END
