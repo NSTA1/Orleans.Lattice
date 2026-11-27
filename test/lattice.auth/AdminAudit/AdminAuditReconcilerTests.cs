@@ -97,6 +97,37 @@ public sealed class AdminAuditReconcilerTests
     }
 
     [Test]
+    public async Task Trace3_a_crashed_create_undone_by_a_replicated_delete_is_never_recorded_not_committed()
+    {
+        // F9 trace 3: a create commits, the caller crashes before finalizing, then a
+        // replicated delete lands. Absent before and absent after, but the history holds
+        // both revisions: the anchor moved.
+        var (harness, _) = await PendingAsync(anchorExists: false);
+        var created = harness.Anchor.Put(AdminAuditHarness.AnchorKey, [1]);
+        await harness.Anchor.Lattice.DeleteAsync(AdminAuditHarness.AnchorKey);
+        harness.Anchor.History = new EntryHistoryPage
+        {
+            Source = EntryHistorySource.View,
+            Revisions =
+            [
+                new EntryRevision { Hlc = created, SourceKey = AdminAuditHarness.AnchorKey, Kind = HistoryRowKind.Set },
+                new EntryRevision
+                {
+                    Hlc = new HybridLogicalClock { WallClockTicks = created.WallClockTicks + 1 },
+                    SourceKey = AdminAuditHarness.AnchorKey,
+                    Kind = HistoryRowKind.Delete,
+                    OriginClusterId = "us",
+                },
+            ],
+        };
+        harness.Time.Advance(harness.Options.AdminAuditMaxPendingAge);
+
+        await harness.Reconciler().SweepAsync(CancellationToken.None);
+
+        Assert.That(Final(harness).Outcome, Is.EqualTo(LatticeAdminAuditOutcome.Indeterminate));
+    }
+
+    [Test]
     public async Task Sweep_leaves_an_intent_younger_than_the_lease()
     {
         var (harness, intent) = await PendingAsync();
@@ -148,7 +179,7 @@ public sealed class AdminAuditReconcilerTests
     }
 
     [Test]
-    public async Task Sweep_records_not_committed_when_complete_history_holds_only_replicated_writes()
+    public async Task Sweep_records_indeterminate_when_only_a_replicated_write_moved_the_anchor()
     {
         var (harness, _) = await PendingAsync();
         var replicated = harness.Anchor.Put(AdminAuditHarness.AnchorKey, [3]);
@@ -161,15 +192,15 @@ public sealed class AdminAuditReconcilerTests
 
         await harness.Reconciler().SweepAsync(CancellationToken.None);
 
-        Assert.That(Final(harness).ReasonCode, Is.EqualTo(LatticeAdminAuditReasonCodes.FailedNotCommitted));
+        Assert.That(Final(harness).Outcome, Is.EqualTo(LatticeAdminAuditOutcome.Indeterminate),
+            "any revision since the intent counts as moved");
     }
 
     [Test]
     public async Task Sweep_waits_on_incomplete_history_then_records_indeterminate_at_the_max_pending_age()
     {
-        var (harness, intent) = await PendingAsync();
-        harness.Anchor.Put(AdminAuditHarness.AnchorKey, [4]);
-        harness.Anchor.History = new EntryHistoryPage { Source = EntryHistorySource.View };
+        var (harness, intent) = await PendingAsync(anchorExists: false);
+        harness.Anchor.History = new EntryHistoryPage { Source = EntryHistorySource.None };
         var reconciler = harness.Reconciler();
 
         harness.Time.Advance(harness.Options.AdminAuditReconcileLease);
@@ -181,7 +212,7 @@ public sealed class AdminAuditReconcilerTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(stillPending, Is.True, "a lagging history view proves nothing");
+            Assert.That(stillPending, Is.True, "missing history proves nothing");
             Assert.That(Final(harness).Outcome, Is.EqualTo(LatticeAdminAuditOutcome.Indeterminate));
         });
     }
@@ -235,7 +266,8 @@ public sealed class AdminAuditReconcilerTests
         Assert.Multiple(() =>
         {
             Assert.That(tooEarly, Is.Null, "an unmoved value is not proof while the operation may still run");
-            Assert.That(unchanged!.Value.ReasonCode, Is.EqualTo(LatticeAdminAuditReasonCodes.FailedNotCommitted));
+            Assert.That(unchanged!.Value.Outcome, Is.EqualTo(LatticeAdminAuditOutcome.Indeterminate),
+                "without versions an equal value can hide a write and its undo");
             Assert.That(changed!.Value.Outcome, Is.EqualTo(LatticeAdminAuditOutcome.Indeterminate));
         });
     }

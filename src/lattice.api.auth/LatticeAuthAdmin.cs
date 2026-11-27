@@ -171,11 +171,8 @@ internal sealed class LatticeAuthAdmin(
                 throw LatticeTenantOwnedGroupException.RemovalRejected(groupId, nameof(groupId));
             }
 
-            using (LatticeAccessGateContext.EnterSystemOrigin())
-            {
-                await _directory.RemoveGroupAsync(groupId, ct).ConfigureAwait(false);
-            }
-        }, cancellationToken).ConfigureAwait(false);
+            return await RemoveGroupReportingAsync(groupId, ct).ConfigureAwait(false);
+        }, static removed => removed, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -261,13 +258,12 @@ internal sealed class LatticeAuthAdmin(
             MembershipAuditAnchors.Edge(groupId, memberId));
         await AuthorizeAdminAsync(audit, cancellationToken).ConfigureAwait(false);
 
-        await LatticeAdminAudit.RunAsync(auditTrail, audit, async ct =>
-        {
-            using (LatticeAccessGateContext.EnterSystemOrigin())
-            {
-                await _directory.RemoveMemberAsync(groupId, memberId, ct).ConfigureAwait(false);
-            }
-        }, cancellationToken).ConfigureAwait(false);
+        await LatticeAdminAudit.RunAsync(
+            auditTrail,
+            audit,
+            ct => RemoveMemberReportingAsync(groupId, memberId, ct),
+            static removed => removed,
+            cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -876,6 +872,44 @@ internal sealed class LatticeAuthAdmin(
             ct => LatticeAccessGateEnforcement.EnforceWholeTreeAsync(
                 _gate, _membership, AdminScopeTreeId, LatticeOperation.Admin, ct),
             cancellationToken);
+
+    /// <summary>
+    /// Removes a group record and reports whether this call removed it. The admin audit
+    /// trail records a commit only on the store's own report; a replaced directory that
+    /// cannot report claims no change, which the trail accepts only if nothing wrote the
+    /// record, and otherwise records the call as indeterminate.
+    /// </summary>
+    private async Task<bool> RemoveGroupReportingAsync(string groupId, CancellationToken cancellationToken)
+    {
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            if (_directory is LatticeMembershipDirectory reporting)
+            {
+                return await reporting.RemoveGroupReportingAsync(groupId, cancellationToken).ConfigureAwait(false);
+            }
+
+            await _directory.RemoveGroupAsync(groupId, cancellationToken).ConfigureAwait(false);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Removes a membership edge and reports whether this call removed it; see
+    /// <see cref="RemoveGroupReportingAsync"/>.
+    /// </summary>
+    private async Task<bool> RemoveMemberReportingAsync(string groupId, string memberId, CancellationToken cancellationToken)
+    {
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            if (_directory is LatticeMembershipDirectory reporting)
+            {
+                return await reporting.RemoveMemberReportingAsync(groupId, memberId, cancellationToken).ConfigureAwait(false);
+            }
+
+            await _directory.RemoveMemberAsync(groupId, memberId, cancellationToken).ConfigureAwait(false);
+            return false;
+        }
+    }
 
     /// <summary>
     /// The admin audit request for a rule write or removal. The detail carries the
