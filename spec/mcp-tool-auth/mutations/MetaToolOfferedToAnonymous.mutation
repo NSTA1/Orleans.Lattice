@@ -1,0 +1,13 @@
+# Pairs with FailClosed. Discovery offers lattice_capabilities to a session
+# with no resolved credential, so an anonymous caller is offered a tool.
+MODULE: MetaToolOfferedToAnonymous
+TARGET: FailClosed
+CLASS: Invariant
+SUMMARY: the session configurator installs the meta-tool whether or not the caller is authenticated
+PERTURBS: OpenSession
+
+--- FIND
+        meta == IF c \in Authenticated THEN {"caps"} ELSE {}
+--- REPLACE
+        meta == {"caps"}
+--- END

@@ -1,0 +1,13 @@
+# Pairs with PerToolMinimum. The configurator admits every tool of a granted
+# group, so a bare Read grant is offered the mutating data tools.
+MODULE: MinimumDropped
+TARGET: PerToolMinimum
+CLASS: Invariant
+SUMMARY: the per-tool operation minimum is not applied inside an admitted group
+PERTURBS: OpenSession
+
+--- FIND
+ToolGroup(t) \in groups /\ ops \cap Required(t) # {} /\ Gate(TRUE, policy, t)}
+--- REPLACE
+ToolGroup(t) \in groups /\ Gate(TRUE, policy, t)}
+--- END

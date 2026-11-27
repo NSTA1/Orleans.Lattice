@@ -1,0 +1,13 @@
+# Pairs with OnlyMetaToolUngated. AuthorizedMetaTool does not re-run the gate,
+# so lattice_list_regions is served on a call the gate refuses.
+MODULE: RegionsGatedOnlyAtAdvertisement
+TARGET: OnlyMetaToolUngated
+CLASS: Invariant
+SUMMARY: the region-discovery tool is gated at advertisement only
+PERTURBS: CallRegions
+
+--- FIND
+        res == IF ~adv THEN "notFound" ELSE IF ~g THEN "denied" ELSE "ok"
+--- REPLACE
+        res == IF ~adv THEN "notFound" ELSE "ok"
+--- END

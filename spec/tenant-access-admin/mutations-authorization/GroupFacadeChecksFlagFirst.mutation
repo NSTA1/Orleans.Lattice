@@ -1,0 +1,15 @@
+# Pairs with AuthorizeBeforeDisclose. Checking the flag first tells a caller
+# who may not administer the tenant that the feature is off.
+MODULE: GroupFacadeChecksFlagFirst
+TARGET: AuthorizeBeforeDisclose
+CLASS: Invariant
+SUMMARY: the tenant directory facade checks the flag before authorizing the caller
+PERTURBS: FacadeUpsertGroup
+
+--- FIND
+       /\ IF ~auth THEN Refuse("facadeUpsertGroup", auth, fl, "denied", FALSE)
+          ELSE IF ~fl THEN Refuse("facadeUpsertGroup", auth, fl, "disabled", FALSE)
+--- REPLACE
+       /\ IF ~fl THEN Refuse("facadeUpsertGroup", auth, fl, "disabled", FALSE)
+          ELSE IF ~auth THEN Refuse("facadeUpsertGroup", auth, fl, "denied", FALSE)
+--- END
