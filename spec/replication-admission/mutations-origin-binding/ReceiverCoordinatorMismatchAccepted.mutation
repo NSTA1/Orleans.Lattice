@@ -1,0 +1,12 @@
+# Pairs with OriginAuthenticated. A saga control call attributes the saga to a
+# coordinator other than the credential-bound caller.
+MODULE: ReceiverCoordinatorMismatchAccepted
+TARGET: OriginAuthenticated
+CLASS: Invariant
+SUMMARY: a body coordinator that disagrees with the stamped origin is accepted
+
+--- FIND
+         ELSE IF m \notin RequesterQuery /\ body # NoBody /\ body # hdr THEN <<"denied", NoHeader>>
+--- REPLACE
+         ELSE IF FALSE THEN <<"denied", NoHeader>>
+--- END
