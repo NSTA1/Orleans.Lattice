@@ -1,0 +1,13 @@
+# Pairs with ReservedGroupNamespace. Without TenantGroupNesting.EnsureAllowed a
+# tenant group joins a cluster group or another tenant's group.
+MODULE: ClusterNestsTenantGroup
+TARGET: ReservedGroupNamespace
+CLASS: Invariant
+SUMMARY: the membership directory writes an edge without the tenant group nesting check
+PERTURBS: ClusterAddEdge
+
+--- FIND
+          ELSE IF ~NestingOk(g, m) THEN Refuse("clusterAddEdge", auth, FALSE, "refused", TRUE)
+--- REPLACE
+          ELSE IF FALSE THEN Refuse("clusterAddEdge", auth, FALSE, "refused", TRUE)
+--- END

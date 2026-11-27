@@ -405,6 +405,7 @@ states as load-bearing, and appends its own row to this table when it lands.
 |--------|---------|---------|----------------|----------------|------|
 | `AuthDecision` | Authorization decision layering | 18 | 17 | 41 | [Authorization decision](../../spec/auth-decision/README.md) |
 | `McpToolAuthorization` | MCP tool authorization lock-step | 22 | 12 | 24 | [MCP tool authorization](../../spec/mcp-tool-auth/README.md) |
+| `TenantAccessAuthorization` | Delegated tenant access: authorization | 19 | 20 | 35 | [Delegated tenant-access administration](../../spec/tenant-access-admin/README.md) |
 
 ## What each area covers, and what it does not
 
@@ -655,6 +656,23 @@ gaps, states its full scope.
     death declaration, which does not hold; and rate budgets and
     footprint quotas, which the two areas above cover.
 
+- **Delegated tenant access** ([`spec/tenant-access-admin/`](../../spec/tenant-access-admin/README.md)).
+  - **Covers:** the authorization half of delegated tenant-access
+    administration against the authorization contract's abstract `Allowed`:
+    tenant-tier rules written only by the tenant policy facade after its
+    admin check and confined to the tenant's own trees and data-plane
+    operations, with a non-conforming arrival by replication or restore
+    dropped when the snapshot compiles; the reserved `t/` group namespace and
+    the tenant group nesting rule for every caller; claim filtering of
+    asserted `t/` groups whatever the flag, on a lagging silo too; the
+    delegated-access flag switching the facades and the tenant layer off
+    without deleting anything; and the authorize, gate, validate, write order
+    of every facade verb.
+  - **Does not cover:** concurrent admin-set and member-set changes, the
+    last-admin guard and removal stamps; group deletion and its cascade;
+    membership records arriving by replication or restore; an operator rule
+    naming a tenant group that arrives around every store; app rules on
+    app-owned trees; and the compiled snapshot's rebuild after a flip.
 - **Authorization decision** ([`spec/auth-decision/`](../../spec/auth-decision/README.md)).
   - **Covers:** the decision over a rule store written by the operator
     surface, the tenant policy facade and system-origin writes: a matched

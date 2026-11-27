@@ -1,0 +1,13 @@
+# Pairs with DirectoryValidationOrder. With validation required, an
+# unresolvable group id must never be created.
+MODULE: ClusterGroupSkipsValidation
+TARGET: DirectoryValidationOrder
+CLASS: Invariant
+SUMMARY: the cluster facade creates a group without validating it against the identity directory
+PERTURBS: OperatorUpsertGroup
+
+--- FIND
+          ELSE IF vreq /\ g \notin ResolvableGroups THEN Refuse("opUpsertGroup", auth, FALSE, "unresolved", TRUE)
+--- REPLACE
+          ELSE IF FALSE THEN Refuse("opUpsertGroup", auth, FALSE, "unresolved", TRUE)
+--- END

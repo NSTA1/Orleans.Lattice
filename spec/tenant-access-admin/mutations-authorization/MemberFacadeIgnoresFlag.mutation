@@ -1,0 +1,13 @@
+# Pairs with FeatureOffInert. Every delegated facade verb except the posture
+# refuses while the flag is off.
+MODULE: MemberFacadeIgnoresFlag
+TARGET: FeatureOffInert
+CLASS: Invariant
+SUMMARY: the member-set verb writes while delegated access is off
+PERTURBS: AddMemberEntry
+
+--- FIND
+          ELSE IF ~fl THEN Refuse("addMember", auth, fl, "disabled", FALSE)
+--- REPLACE
+          ELSE IF FALSE THEN Refuse("addMember", auth, fl, "disabled", FALSE)
+--- END
