@@ -76,7 +76,7 @@ once, either here or in the
 | Tenant quotas | 3 | 29 | 26 | 32 | [Quota admission](../../spec/tenant-quotas/README.md) |
 | Tenant rate budgets | 1 | 14 | 23 | 22 | [Rate-budget leases](../../spec/tenant-rate-budget/README.md) |
 | Tenant isolation | 1 | 25 | 25 | 31 | [Isolation epochs and leases](../../spec/tenant-isolation/README.md) |
-| Delegated tenant access | 1 | 19 | 20 | 35 | [Delegated tenant-access administration](../../spec/tenant-access-admin/README.md) |
+| Delegated tenant access | 1 | 20 | 20 | 36 | [Delegated tenant-access administration](../../spec/tenant-access-admin/README.md) |
 | Scheduling and progress | 10 | 203 | 251 | 133 | [Verified Scheduling and Progress](verified-scheduling.md) |
 | Schema enforcement and versioning | 9 | 150 | 178 | 301 | [Schema enforcement and versioning](../../spec/schema/README.md) |
 | Schema and view composition | 1 | 23 | 23 | 28 | [Schema and view composition](../../spec/schema-view/README.md) |
@@ -642,8 +642,8 @@ gaps, states its full scope.
     administration against the authorization contract's abstract `Allowed`:
     tenant-tier rules written only by the tenant policy facade after its
     admin check and confined to the tenant's own trees and data-plane
-    operations, with a non-conforming arrival by replication or restore
-    dropped when the snapshot compiles; the reserved `t/` group namespace and
+    operations, with a non-conforming arrival by replication or restore,
+    tenant-tier or operator, dropped when the snapshot compiles; the reserved `t/` group namespace and
     the tenant group nesting rule for every caller; claim filtering of
     asserted `t/` groups whatever the flag, on a lagging silo too; the
     delegated-access flag switching the facades and the tenant layer off
@@ -651,8 +651,7 @@ gaps, states its full scope.
     of every facade verb.
   - **Does not cover:** concurrent admin-set and member-set changes, the
     last-admin guard and removal stamps; group deletion and its cascade;
-    membership records arriving by replication or restore; an operator rule
-    naming a tenant group that arrives around every store; app rules on
+    membership records arriving by replication or restore; app rules on
     app-owned trees; and the compiled snapshot's rebuild after a flip.
 
 - **Scheduling and progress** ([`spec/scheduling/`](../../spec/scheduling/README.md)).
