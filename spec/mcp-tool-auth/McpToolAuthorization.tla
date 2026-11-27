@@ -158,13 +158,9 @@ Entitled(c, t, hdr, p, app) ==
          [] OTHER -> app /\ Resolve(c, hdr) = "A" /\ RoleHeld(p, c)
 
 \* The same decision for one concrete call, under the snapshot current when it
-\* is made: a data tool must be allowed on the scope the call names. The
-\* region-discovery tool's facade-grant condition is decided at advertisement
-\* only (see the refinement note's gap register).
+\* is made: a data tool must be allowed on the scope the call names.
 EntitledCall(o) ==
-    /\ IF o.tool = "regions"
-       THEN o.caller \in Authenticated /\ AuthorizerAdmits(o.pol, "regions")
-       ELSE Entitled(o.caller, o.tool, o.hdr, o.pol, o.app)
+    /\ Entitled(o.caller, o.tool, o.hdr, o.pol, o.app)
     /\ o.tool \in DataTools => \E op \in Required(o.tool) : AllowedUnder(o.pol, o.caller, op, o.scope)
 
 -----------------------------------------------------------------------------
@@ -203,19 +199,23 @@ CallMeta ==
        /\ obs' = CallObs("caps", TRUE, FALSE, NoScope, adv, TRUE, "skipped", res, NoTenant, {})
        /\ UNCHANGED <<policy, appEnabled, authz, session>>
 
-\* Invoking lattice_list_regions: AuthorizedMetaTool re-runs the gate, then
-\* LatticeApiMcpRegionCatalog scopes the answer to the validated tenant.
+\* Invoking lattice_list_regions: AuthorizedMetaTool re-runs the gate and
+\* re-resolves the caller's access set, refusing a caller who no longer holds
+\* any facade grant, then LatticeApiMcpRegionCatalog scopes the answer to the
+\* validated tenant.
 CallRegions(ctx) ==
     LET c == session.caller
         hdr == session.hdr
         adv == "regions" \in session.tools
         g == Gate(ctx, policy, "regions")
+        held == AccessGroups(policy, c) # {}
         honoured == hdr # NoTenant /\ Resolve(c, hdr) = hdr
         annot == IF honoured THEN hdr ELSE NoTenant
         regs == IF hdr = NoTenant THEN Regions ELSE IF honoured THEN Actionable(hdr) ELSE {"current"}
-        res == IF ~adv THEN "notFound" ELSE IF ~g THEN "denied" ELSE "ok"
+        res == IF ~adv THEN "notFound" ELSE IF ~g THEN "denied" ELSE IF held THEN "ok" ELSE "denied"
+        facObs == IF ~adv \/ ~g THEN "skipped" ELSE IF held THEN "allow" ELSE "deny"
     IN /\ session # NoSession
-       /\ obs' = CallObs("regions", ctx, FALSE, NoScope, adv, g, "skipped", res,
+       /\ obs' = CallObs("regions", ctx, FALSE, NoScope, adv, g, facObs, res,
                          IF res = "ok" THEN annot ELSE NoTenant, IF res = "ok" THEN regs ELSE {})
        /\ UNCHANGED <<policy, appEnabled, authz, session>>
 
