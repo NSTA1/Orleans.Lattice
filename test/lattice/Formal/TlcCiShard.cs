@@ -297,6 +297,15 @@ internal static class TlcCiShard
     public const string Security = "TlcShardSecurity";
 
     /// <summary>
+    /// The five variant configurations of <c>TenantIsolation</c> (Crash, Restart,
+    /// Failure, Faults and FalseDead), taken out of the catch-all once the
+    /// false-death extension (#6055) grew them to about 28 minutes of case time
+    /// in CI run 46035326054. Routed by module name so a later variant joins with
+    /// no routing change; the base and mutations stay where they were.
+    /// </summary>
+    public const string TenantIsolationVariants = "TlcShardTenantIsolationVariants";
+
+    /// <summary>
     /// The prefix of the per-module category every TLC base, variant and
     /// mutation case carries beside its shard category (contract C2 of #5148),
     /// so <c>TestCategory=TlcModule_&lt;Module&gt;</c> selects exactly one
@@ -317,7 +326,7 @@ internal static class TlcCiShard
          MaterialisedViewResolvedIdentity, MaterialisedViewJointRepair, MaterialisedViewNumeric,
          AntiEntropy, AntiEntropy2, AntiEntropy3, TreeLifecycle, Aliasing, SplitGate,
          Scheduling, SchedulingWorkloadB, SchedulingReplayTwoPartitions, SchedulingShipping, SchedulingShippingVariants,
-         Schema, SchemaView, Security,
+         Schema, SchemaView, Security, TenantIsolationVariants,
          WalAppendEpoch, WalHandOffFence, WalRoutingFloor, WalBulkSwitch, WalLiveAdvanceCore,
          WalLiveAdvanceCoreEagerVariants, WalLiveAdvanceCoreLazyVariants, WalLiveAdvanceCoreFree,
          WalLiveAdvanceCoreFreeSnapshot, WalLiveAdvanceCoreFreeLink, WalLiveAdvanceCoreFreeReadPosition, WalLiveAdvanceCoreFreeVariants,
@@ -536,6 +545,11 @@ internal static class TlcCiShard
         if (string.Equals(module.Name, "BackupRetention", StringComparison.Ordinal))
         {
             return BackupRetention;
+        }
+
+        if (string.Equals(module.Name, "TenantIsolation", StringComparison.Ordinal))
+        {
+            return TenantIsolationVariants;
         }
 
         if (string.Equals(module.Name, "WalDurability", StringComparison.Ordinal)
