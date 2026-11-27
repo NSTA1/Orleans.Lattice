@@ -1,0 +1,22 @@
+# Pairs with NoStaleAuthority. The epoch ledger pushes to and waits out every
+# lease it captured, whatever membership says about the silo holding it; the
+# mutant stops waiting for a silo once it is declared dead, so a silo falsely
+# declared dead keeps trusting a snapshot older than a write that returned.
+MODULE: DeclareFalselyDeadReleasesCapture
+TARGET: NoStaleAuthority
+CLASS: Invariant
+SUMMARY: a false death declaration releases the advance's wait on that silo's lease
+PERTURBS: DeclareFalselyDead
+BOUNDS: MaxFalseDeaths = 1
+
+--- FIND
+    /\ UNCHANGED <<regVer, coveredVer, returnedVer, wstate, wsilo, owes, epoch,
+                   graceOpen, graceWait, lease, pend, snapVer, scanning, knows,
+                   alive, awaiting, dec, crashes, restarts, failures>>
+--- REPLACE
+\* MUTATION: the advance stops waiting for the silo declared dead.
+    /\ pend' = [pend EXCEPT ![s] = "no"]
+    /\ UNCHANGED <<regVer, coveredVer, returnedVer, wstate, wsilo, owes, epoch,
+                   graceOpen, graceWait, lease, snapVer, scanning, knows,
+                   alive, awaiting, dec, crashes, restarts, failures>>
+--- END

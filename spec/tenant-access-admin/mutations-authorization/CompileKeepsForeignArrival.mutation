@@ -1,0 +1,13 @@
+# Pairs with TenantRuleConfinement. CompiledTenantPartition re-validates each
+# tenant rule because replication and restore write around the store; without
+# it a foreign-tree or Telemetry tenant rule takes effect.
+MODULE: CompileKeepsForeignArrival
+TARGET: TenantRuleConfinement
+CLASS: Invariant
+SUMMARY: the snapshot compiler keeps a non-conforming tenant rule that arrived by replication or restore
+
+--- FIND
+CompileAdmits(r) == r.layer = "tenant" => TenantRuleShapeOk(r)
+--- REPLACE
+CompileAdmits(r) == TRUE
+--- END

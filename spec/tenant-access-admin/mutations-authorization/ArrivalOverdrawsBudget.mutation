@@ -1,0 +1,14 @@
+# Pairs with TypeOK. A model-domain defect: the budget leaves 0..MaxWrites.
+MODULE: ArrivalOverdrawsBudget
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: an arrival consumes two writes, driving the write budget below zero
+PERTURBS: ArriveRule
+
+--- FIND
+    /\ budget' = budget - 1
+    /\ obs' = NoObs
+--- REPLACE
+    /\ budget' = budget - 2
+    /\ obs' = NoObs
+--- END

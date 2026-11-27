@@ -1,0 +1,13 @@
+# Pairs with ClaimsNeverConferTenantGroups. An asserted t/default/x survives an
+# exact-shape test.
+MODULE: ClaimFilterChecksGroupShape
+TARGET: ClaimsNeverConferTenantGroups
+CLASS: Invariant
+SUMMARY: the claim filter strips only well-formed tenant group ids, not the whole t/ prefix
+PERTURBS: ResolveClaims
+
+--- FIND
+        kept == {g \in asserted : ~(TenancyRegistered /\ IsTier(g)) \/ g \in dir}
+--- REPLACE
+        kept == {g \in asserted : ~(TenancyRegistered /\ g \in WellFormed) \/ g \in dir}
+--- END
