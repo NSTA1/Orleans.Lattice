@@ -2848,6 +2848,7 @@ internal sealed partial class BPlusLeafGrain
             // its close, past which a replay now would be read again. Otherwise the drive
             // replays to the head, as before.
             var cut = CutAdvanceOutcome.NotTaken;
+            var pinDue = true;
             if (cutFirst)
             {
                 // #6166: a cut drive is admitted to the replay gate's timer share, as the
@@ -2866,6 +2867,15 @@ internal sealed partial class BPlusLeafGrain
                 }
 
                 var cutStarted = AwaitDiagnostics.Enabled ? Stopwatch.GetTimestamp() : 0L;
+
+                // #6166: a cut drive publishes the durable pin at most once per coverage-lag
+                // period. During an ingest every resident leaf is driven every few stall
+                // ticks, and each drive's persist mirrored and its bank published the pin to
+                // the tree's few shared pin grains: the queue a bulk seed's birth pins wait
+                // behind. A durable pin that lags only retains more WAL; the full pass and the
+                // deactivation flush still publish it.
+                pinDue = IsDrivePinPublishDue((await GetOptionsAsync()).LeafSnapshotMaxCoverageLagSeconds);
+                _drivePinQuiet = !pinDue;
                 try
                 {
                     cut = await TryAdvanceCheckpointFromCutAsync(partitionCount);
@@ -2873,6 +2883,7 @@ internal sealed partial class BPlusLeafGrain
                 finally
                 {
                     Interlocked.Decrement(ref _timerCutDrives);
+                    _drivePinQuiet = false;
                 }
 
                 CountDriveCut(cut);
@@ -2890,7 +2901,20 @@ internal sealed partial class BPlusLeafGrain
                 {
                     // #6166: a Reached drive's bank - flush, snapshot recheck, pin publish.
                     var bankStarted = AwaitDiagnostics.Enabled ? Stopwatch.GetTimestamp() : 0L;
-                    await BankDurablePinCoreAsync(partitionCount, flushPendingCheckpoint: true, CancellationToken.None);
+                    _drivePinQuiet = !pinDue;
+                    try
+                    {
+                        await BankDurablePinCoreAsync(partitionCount, flushPendingCheckpoint: true, CancellationToken.None, publishPin: pinDue);
+                    }
+                    finally
+                    {
+                        _drivePinQuiet = false;
+                    }
+
+                    if (pinDue)
+                    {
+                        _lastDrivePinPublish = Stopwatch.GetTimestamp();
+                    }
                     if (bankStarted != 0L)
                     {
                         AwaitDiagnostics.Add("leaf.drive.ms.bank.Reached", (long)Stopwatch.GetElapsedTime(bankStarted).TotalMilliseconds);

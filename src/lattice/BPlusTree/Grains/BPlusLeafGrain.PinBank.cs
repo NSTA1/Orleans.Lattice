@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
@@ -73,10 +74,16 @@ internal sealed partial class BPlusLeafGrain
     /// persisted.
     /// </param>
     /// <param name="cancellationToken">Bounds the flush, the recheck and the publish.</param>
+    /// <param name="publishPin">
+    /// Whether to publish the pin the bank makes bankable; <see langword="false"/> only for
+    /// a stall drive inside its pin-publish interval (#6166), which flushes and rechecks alone.
+    /// </param>
+    /// <remarks>See <see cref="IsDrivePinPublishDue"/> for why a drive may not publish.</remarks>
     private async Task BankDurablePinCoreAsync(
         int partitionCount,
         bool flushPendingCheckpoint,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool publishPin = true)
     {
         if (_starvationDriveInFlight || _warmRescueInFlight)
         {
@@ -103,7 +110,7 @@ internal sealed partial class BPlusLeafGrain
                 context.GrainId);
         }
 
-        if (!IsDurablePinBehindBankableOffset(partitionCount))
+        if (!publishPin || !IsDurablePinBehindBankableOffset(partitionCount))
         {
             return;
         }
@@ -122,4 +129,34 @@ internal sealed partial class BPlusLeafGrain
                 context.GrainId);
         }
     }
+
+    /// <summary>
+    /// When this activation's stall drive last published the durable pin, as a
+    /// <see cref="Stopwatch"/> timestamp; 0 before it first does (#6166).
+    /// </summary>
+    private long _lastDrivePinPublish;
+
+    /// <summary>
+    /// Set while a stall drive inside its pin-publish interval runs its cut and bank, so
+    /// the checkpoint flush it makes does not mirror the pin either (#6166). Cleared in the
+    /// drive's own frame; a flush interleaved in that window mirrors on its next persist.
+    /// </summary>
+    private bool _drivePinQuiet;
+
+    /// <summary>
+    /// Whether a stall drive should publish the durable pin (#6166): the first in this
+    /// activation, and then at most once per coverage-lag period. During an ingest every
+    /// resident leaf's checkpoint stalls behind the moving heads and is driven every few
+    /// stall ticks; each drive's persist mirrored the pin and its bank published it, so the
+    /// tree's few shared pin grains queued the reports of every resident leaf, and a bulk
+    /// seed's birth pins - written through to those grains - waited behind them. The pin is
+    /// a restart backstop and a WAL GC trim input; one that lags only retains more WAL, the
+    /// GC runs far less often than the period, and the coverage-lag full pass and the
+    /// deactivation flush still publish it.
+    /// </summary>
+    /// <param name="coverageLagSeconds">The tree's coverage-lag period, in seconds.</param>
+    private bool IsDrivePinPublishDue(int coverageLagSeconds) =>
+        _lastDrivePinPublish == 0
+        || coverageLagSeconds <= 0
+        || Stopwatch.GetElapsedTime(_lastDrivePinPublish) >= TimeSpan.FromSeconds(coverageLagSeconds);
 }

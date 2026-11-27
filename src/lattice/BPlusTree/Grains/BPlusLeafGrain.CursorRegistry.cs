@@ -217,6 +217,12 @@ internal sealed partial class BPlusLeafGrain
             return;
         }
 
+        if (_drivePinQuiet && _durableFrontierBarriered)
+        {
+            // #6166: a stall drive inside its pin-publish interval; see IsDrivePinPublishDue.
+            return;
+        }
+
         if (!_durableFrontierBarriered)
         {
             await FlushDurableMaterialiserFrontierAsync();
