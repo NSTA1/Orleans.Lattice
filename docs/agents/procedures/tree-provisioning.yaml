@@ -22,8 +22,8 @@ preconditions:
     check: "Caller holds whole-tree Admin authority over the tree id being created."
     source: "src/lattice.api.treeadmin/TreeAdminAccessAuthorizer.cs#AuthorizeTreeAdminAsync"
   - id: tenant-quota-admits
-    check: "With the tenancy add-on active, the active tenant's quota admits one more tree; the check runs only after authorization."
-    source: "docs/lattice.api.treeadmin/README.md"
+    check: "With the tenancy add-on active, the active tenant's quota admits one more tree for a create, and for an alias whose logical id has no registry entry; a re-point of an existing logical id is not charged. The check runs only after authorization."
+    source: "src/lattice.api.treeadmin/LatticeTreeAdmin.cs#SetTreeAliasAsync"
   - id: alias-admin-authority
     check: "Caller holds whole-tree Admin authority over both the logical tree id and the physical target tree id."
     source: "src/lattice.api.treeadmin/LatticeTreeAdmin.cs#SetTreeAliasAsync"
@@ -104,8 +104,8 @@ failure_modes:
     effect: "Nothing is registered or aliased."
     response: "Obtain whole-tree Admin over every tree id named in the call, then retry."
   - id: tenant-create-refused
-    signal: "With tenancy active, LatticeQuotaExceededException (gRPC FailedPrecondition) or LatticeTenantAccessDeniedException (gRPC PermissionDenied) when the tenant's quota does not admit the create."
-    effect: "No tree is registered."
+    signal: "With tenancy active, LatticeQuotaExceededException (gRPC FailedPrecondition) or LatticeTenantAccessDeniedException (gRPC PermissionDenied) when the tenant's quota does not admit the create, or an alias onto a logical id with no registry entry."
+    effect: "Nothing is registered or aliased."
     response: "Free tree-count quota or raise the tenant's quota before retrying."
   - id: alias-target-rejected
     signal: "ArgumentException (gRPC InvalidArgument) when the target equals the logical id, is a sys- tree aliased from an ordinary tree, or belongs to another tenant's namespace."

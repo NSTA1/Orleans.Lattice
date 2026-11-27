@@ -132,6 +132,46 @@ public sealed class CompiledTenantPartitionTests
     }
 
     [Test]
+    public void Compile_drops_an_operator_rule_naming_a_tenant_group_outside_its_tenant()
+    {
+        // Each would be refused by the store's D4 guard; one reaching the policy tree
+        // by replication or restore must not govern anything, whatever the layer flag.
+        var foreign = LatticeSubjectSelector.Group("t/fabrikam/readers");
+        var rules = new LatticeAuthorizationRule[]
+        {
+            Operator("other-tenant", foreign, LatticeScope.Tree(TenantTree), LatticeOperation.Read, LatticeEffect.Allow),
+            Operator("legacy", foreign, LatticeScope.Tree("orders"), LatticeOperation.Read, LatticeEffect.Allow),
+            Operator("malformed", LatticeSubjectSelector.Group("t/bad"), LatticeScope.Tree(TenantTree), LatticeOperation.Read, LatticeEffect.Allow),
+        };
+
+        foreach (var active in new[] { false, true })
+        {
+            var policy = CompiledPolicy.Compile(rules, includeTenantLayer: active);
+            var decision = Evaluate(rules, Subject("mallory", "t/fabrikam/readers", "t/bad"), TenantTree, LatticeOperation.Read, "k", active: active);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(policy.TreeCount, Is.Zero, $"layer active: {active}");
+                Assert.That(decision.Allowed, Is.False, $"layer active: {active}");
+            });
+        }
+    }
+
+    [Test]
+    public void Compile_keeps_an_operator_rule_naming_a_tenant_group_on_its_own_tenants_tree()
+    {
+        var policy = CompiledPolicy.Compile(
+            new[]
+            {
+                Operator("own", LatticeSubjectSelector.Group(ContosoReaders), LatticeScope.Tree(TenantTree), LatticeOperation.Read, LatticeEffect.Allow),
+                Operator("app:contoso:x:r", LatticeSubjectSelector.Group(ContosoReaders), LatticeScope.Tree("t/contoso/a/x/y"), LatticeOperation.Read, LatticeEffect.Allow),
+            },
+            includeTenantLayer: true);
+
+        Assert.That(policy.TreeCount, Is.EqualTo(2));
+    }
+
+    [Test]
     public void TryGetBuckets_reports_nothing_for_a_tenant_tree_without_tenant_rules()
     {
         var policy = CompiledPolicy.Compile(

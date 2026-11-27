@@ -78,7 +78,7 @@ postconditions:
     source: "docs/lattice.tenancy/README.md"
   - check: "Usage above cap x (1 + BurstPercent/100) is refused with LatticeQuotaExceededException; usage between the cap and that bound is admitted and metered as overage; lowering a cap refuses new writes only and does not remove existing data."
     source: "docs/lattice.tenancy/README.md"
-  - check: "MaxOpsPerSecond is a silo-local token budget charged on writes at admission and on reads after the access gate authorizes them; MaxTreeCount is charged at explicit tree creation through the tree-administration facade; footprint ceilings are never applied to reads."
+  - check: "MaxOpsPerSecond is a silo-local token budget charged on writes at admission and on reads after the access gate authorizes them; MaxTreeCount is charged at explicit tree creation, and at an alias onto a logical id with no registry entry, through the tree-administration facade; footprint ceilings are never applied to reads."
     source: "docs/lattice.tenancy/README.md"
   - check: "While suspended, requests acting as the tenant are denied, its recorded cross-tenant grants admit nothing, and inbound replication writes for it are refused and dead-lettered."
     source: "docs/lattice.tenancy/README.md"

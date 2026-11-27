@@ -22,11 +22,22 @@ namespace Orleans.Lattice.Api.Mcp;
 /// </remarks>
 internal sealed class AuthorizedMetaTool : DelegatingMcpServerTool
 {
+    private readonly Func<IServiceProvider, CancellationToken, ValueTask<bool>>? _stillEntitled;
+
     /// <summary>Wraps <paramref name="inner"/> with per-invocation authorization.</summary>
     /// <param name="inner">The meta-tool to gate.</param>
-    public AuthorizedMetaTool(McpServerTool inner)
+    /// <param name="stillEntitled">
+    /// An optional re-check of the advertisement-time condition beyond the
+    /// authorizer, run against the invocation's request services. A session's
+    /// tool collection is built once, so a condition decided only at
+    /// advertisement would otherwise outlive a revocation (#6205).
+    /// </param>
+    public AuthorizedMetaTool(
+        McpServerTool inner,
+        Func<IServiceProvider, CancellationToken, ValueTask<bool>>? stillEntitled = null)
         : base(inner)
     {
+        _stillEntitled = stillEntitled;
     }
 
     /// <inheritdoc />
@@ -41,7 +52,9 @@ internal sealed class AuthorizedMetaTool : DelegatingMcpServerTool
         var authorized = services is not null
             && await McpToolAuthorizationGate
                 .IsAuthorizedAsync(services, toolName, cancellationToken)
-                .ConfigureAwait(false);
+                .ConfigureAwait(false)
+            && (_stillEntitled is null
+                || await _stillEntitled(services, cancellationToken).ConfigureAwait(false));
         if (!authorized)
         {
             throw new McpException(
