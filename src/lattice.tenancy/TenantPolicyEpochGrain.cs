@@ -15,17 +15,20 @@ namespace Orleans.Lattice.Tenancy;
 /// waiting out an unresponsive silo's lease: a silo that could not renew would
 /// lose its authority and fall back to the registry for no reason. Every ledger
 /// operation mutates state under its own lock in a single synchronous section, and
-/// the grain's own set is touched only between awaits, so interleaving is safe.
+/// the grain's own collections are touched only between awaits, so interleaving is safe.
 /// </para>
 /// <para>
 /// A fresh activation holds every advance open for one lease plus the ledger's
 /// clock-rate margin (one tenth of the lease) in case a previous activation
 /// granted leases that are still live. It ends that
-/// grace early once every silo cluster membership does not report dead has leased
-/// from this activation: each such silo has then observed the new incarnation (so
-/// treats its snapshot as out of date) and is in the lease table every advance
-/// pushes to, so no lease from a previous activation can still make a silo
-/// authoritative. That keeps the first registry write after an activation - the
+/// grace early only once every silo cluster membership lists has either leased from
+/// this activation - it has then observed the new incarnation (so treats its
+/// snapshot as out of date) and is in the lease table every advance pushes to - or
+/// has been seen <see cref="SiloStatus.Dead"/> by this activation for at least one
+/// lease plus the margin. A silo declared dead is not assumed to have stopped: one
+/// falsely declared dead can keep deciding on a lease from the previous activation
+/// until that lease runs out, so its death releases nothing until the lease it could
+/// hold has expired (#5719). That keeps the first registry write after an activation - the
 /// lazily seeded default tenant, at cluster start - from waiting a whole lease.
 /// The membership view is this silo's; a silo that joined, leased from a previous
 /// activation, and is not yet in that view is the one case the early release does
@@ -45,6 +48,7 @@ internal sealed class TenantPolicyEpochGrain(
         Guid.NewGuid());
 
     private readonly HashSet<SiloAddress> _leasedSilos = [];
+    private readonly Dictionary<SiloAddress, long> _deadSince = [];
 
     /// <inheritdoc />
     public Task<TenantPolicyEpochLease> LeaseAsync(ITenantPolicyEpochObserver observer, SiloAddress silo)
@@ -70,42 +74,82 @@ internal sealed class TenantPolicyEpochGrain(
     }
 
     /// <summary>
-    /// <c>true</c> when every silo <paramref name="snapshot"/> does not report dead
-    /// appears in <paramref name="leased"/>. An empty snapshot proves nothing and
-    /// answers <c>false</c>.
+    /// <c>true</c> when the fresh-activation grace may end early: every silo <paramref name="snapshot"/>
+    /// lists has leased from this activation, or has been seen dead for at least <paramref name="window"/>
+    /// (one lease plus the margin). Records in <paramref name="deadSince"/> when each dead silo was first
+    /// seen dead, so the window runs from this activation's first sight of the death, never from an earlier
+    /// moment it cannot vouch for. An empty snapshot proves nothing and answers <c>false</c>.
     /// </summary>
     /// <param name="snapshot">The cluster membership view.</param>
     /// <param name="leased">The silos that have leased from this activation.</param>
+    /// <param name="deadSince">When this activation first saw each silo dead, on <paramref name="time"/>'s timestamp scale.</param>
+    /// <param name="now">The current timestamp on <paramref name="time"/>.</param>
+    /// <param name="time">The clock the timestamps are measured on.</param>
+    /// <param name="window">How long a silo must have been seen dead before its death releases the grace.</param>
     /// <returns><c>true</c> when the fresh-incarnation grace may end early.</returns>
-    internal static bool EveryLiveSiloHasLeased(ClusterMembershipSnapshot snapshot, IReadOnlySet<SiloAddress> leased)
+    internal static bool CanReleaseGrace(
+        ClusterMembershipSnapshot snapshot,
+        IReadOnlySet<SiloAddress> leased,
+        Dictionary<SiloAddress, long> deadSince,
+        long now,
+        TimeProvider time,
+        TimeSpan window)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         ArgumentNullException.ThrowIfNull(leased);
+        ArgumentNullException.ThrowIfNull(deadSince);
+        ArgumentNullException.ThrowIfNull(time);
 
         if (snapshot.Members.Count == 0)
         {
             return false;
         }
 
+        // Visit every member, so each death is recorded the first time it is seen.
+        var release = true;
         foreach (var member in snapshot.Members.Values)
         {
-            if (member.Status != SiloStatus.Dead && !leased.Contains(member.SiloAddress))
+            if (leased.Contains(member.SiloAddress))
             {
-                return false;
+                continue;
+            }
+
+            if (member.Status != SiloStatus.Dead)
+            {
+                release = false;
+                continue;
+            }
+
+            if (!deadSince.TryGetValue(member.SiloAddress, out var since))
+            {
+                deadSince[member.SiloAddress] = since = now;
+            }
+
+            if (time.GetElapsedTime(since, now) < window)
+            {
+                release = false;
             }
         }
 
-        return true;
+        return release;
     }
 
     private void TryReleaseGrace()
     {
-        if (_ledger.IsGraceReleased || !EveryLiveSiloHasLeased(membership.CurrentSnapshot, _leasedSilos))
+        if (_ledger.IsGraceReleased
+            || !CanReleaseGrace(
+                membership.CurrentSnapshot,
+                _leasedSilos,
+                _deadSince,
+                timeProvider.GetTimestamp(),
+                timeProvider,
+                _ledger.LeaseDuration + _ledger.Margin))
         {
             return;
         }
 
         _ledger.ReleaseGrace();
         _leasedSilos.Clear();
+        _deadSince.Clear();
     }
 }

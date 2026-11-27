@@ -75,7 +75,7 @@ once, either here or in the
 | Shared alias routing and revert | 2 | 25 | 40 | 22 | [Aliasing](../../spec/aliasing/README.md) |
 | Tenant quotas | 3 | 29 | 26 | 32 | [Quota admission](../../spec/tenant-quotas/README.md) |
 | Tenant rate budgets | 1 | 14 | 23 | 22 | [Rate-budget leases](../../spec/tenant-rate-budget/README.md) |
-| Tenant isolation | 1 | 27 | 28 | 34 | [Isolation epochs and leases](../../spec/tenant-isolation/README.md) |
+| Tenant isolation | 1 | 29 | 28 | 36 | [Isolation epochs and leases](../../spec/tenant-isolation/README.md) |
 | Scheduling and progress | 10 | 203 | 251 | 133 | [Verified Scheduling and Progress](verified-scheduling.md) |
 | Schema enforcement and versioning | 9 | 150 | 178 | 301 | [Schema enforcement and versioning](../../spec/schema/README.md) |
 | Schema and view composition | 1 | 23 | 23 | 28 | [Schema and view composition](../../spec/schema-view/README.md) |
@@ -771,7 +771,7 @@ area's list is the authoritative one. The separately listed interrupted-shadow d
 | Anti-entropy remediation | #4859, #4862, #4863, #5530 | [`spec/anti-entropy/`](../../spec/anti-entropy/README.md) |
 | Shared alias routing and revert | #4860 | [`spec/aliasing/`](../../spec/aliasing/README.md#defect-found) |
 | Tenant rate budgets | A late collaborator response installed after its cycle was cancelled (no issue number) | [`spec/tenant-rate-budget/`](../../spec/tenant-rate-budget/README.md#defect-found) |
-| Tenant isolation | #4806 | [`spec/tenant-isolation/`](../../spec/tenant-isolation/README.md#defects-this-specification-found) |
+| Tenant isolation | #4806, #5719 | [`spec/tenant-isolation/`](../../spec/tenant-isolation/README.md#defects-this-specification-found) |
 | Scheduling and progress | #4976, #4977, #4979, #4985, #4986, #4992 | [Scheduling defects](verified-scheduling.md#defects-found-during-the-bucket) |
 
 ## CI partition and non-vacuity
