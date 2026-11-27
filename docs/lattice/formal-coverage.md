@@ -403,7 +403,7 @@ states as load-bearing, and appends its own row to this table when it lands.
 
 | Module | Surface | Mutants | Behaviour rows | Detector tests | Page |
 |--------|---------|---------|----------------|----------------|------|
-| `AuthDecision` | Authorization decision layering | 18 | 17 | 34 | [Authorization decision](../../spec/auth-decision/README.md) |
+| `AuthDecision` | Authorization decision layering | 18 | 17 | 41 | [Authorization decision](../../spec/auth-decision/README.md) |
 
 ## What each area covers, and what it does not
 
