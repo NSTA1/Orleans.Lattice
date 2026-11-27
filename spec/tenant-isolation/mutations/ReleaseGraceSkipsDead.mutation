@@ -1,0 +1,18 @@
+# Pairs with NoEarlyGraceRelease. Defect #5719: the tenant-policy epoch grain
+# ended its grace as soon as every member membership did not report dead had
+# leased, skipping dead members at once. A silo falsely declared dead may still
+# trust a lease from the previous activation, so the mutant releases the grace
+# while that lease is live.
+MODULE: ReleaseGraceSkipsDead
+TARGET: NoEarlyGraceRelease
+CLASS: Invariant
+SUMMARY: the grace skips members membership reports dead without waiting out their leases
+PERTURBS: ReleaseGrace
+BOUNDS: NumSilos = 1, MaxRestarts = 1, MaxFalseDeaths = 1
+
+--- FIND
+    /\ \A t \in Silos : ~awaiting[t] /\ (LeasedHere(t) \/ (MemberDead(t) /\ seen[t] = "aged"))
+--- REPLACE
+\* MUTATION: a dead member counts at once.
+    /\ \A t \in Silos : ~awaiting[t] /\ (LeasedHere(t) \/ MemberDead(t))
+--- END

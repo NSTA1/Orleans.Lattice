@@ -75,6 +75,9 @@ internal sealed class CompiledAppRegistrySnapshotMaintainer : IMutationObserver,
     // Coalescing state for background rebuilds: 0 idle, 1 running, 2 running with
     // a queued follow-up.
     private int _rebuildState;
+
+    // Bumped by InvalidateClusterView; a snapshot stamped under an older count is never current.
+    private long _invalidations;
     private Task _backgroundRebuild = Task.CompletedTask;
 
     // Single-flight state for cluster epoch reads; see ReadEpochAsync.
@@ -153,6 +156,19 @@ internal sealed class CompiledAppRegistrySnapshotMaintainer : IMutationObserver,
         {
             ScheduleRebuild();
         }
+    }
+
+    /// <summary>
+    /// Treats the snapshot as out of date without a new epoch and schedules a rebuild. Used when cluster
+    /// membership declares a silo dead (#6216): that silo may have committed a registry write it never
+    /// published, so the epoch does not show it, and no snapshot built before this call is trusted again -
+    /// not on the leased fast path, and not by an epoch read that finds the epoch unchanged.
+    /// </summary>
+    internal void InvalidateClusterView()
+    {
+        Interlocked.Increment(ref _invalidations);
+        _currency?.Invalidate();
+        ScheduleRebuild();
     }
 
     /// <summary>
@@ -322,6 +338,7 @@ internal sealed class CompiledAppRegistrySnapshotMaintainer : IMutationObserver,
     private bool IsCurrentAgainst(AppRegistryEpoch observed) =>
         Interlocked.Read(ref _epoch) > 0
         && Volatile.Read(ref _builtAgainst) is { } stamp
+        && stamp.Invalidations == Interlocked.Read(ref _invalidations)
         && stamp.Epoch.Incarnation == observed.Incarnation
         && stamp.Epoch.Version >= observed.Version;
 
@@ -500,6 +517,7 @@ internal sealed class CompiledAppRegistrySnapshotMaintainer : IMutationObserver,
         // Read the currency generation before the epoch and the scan: every epoch this silo had
         // observed by then was advanced after its write committed, so the scan includes it (#5713).
         var generation = _currency?.Generation ?? 0;
+        var invalidations = Interlocked.Read(ref _invalidations);
 
         // Read the cluster epoch before the scan: every write that advanced the epoch to this
         // value had committed before the read, so the scan below includes it and the snapshot
@@ -510,7 +528,7 @@ internal sealed class CompiledAppRegistrySnapshotMaintainer : IMutationObserver,
         {
             try
             {
-                stamp = new StampedEpoch(await _epochSource.GetAsync(cancellationToken).ConfigureAwait(false));
+                stamp = new StampedEpoch(await _epochSource.GetAsync(cancellationToken).ConfigureAwait(false), invalidations);
             }
             catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
             {
@@ -615,5 +633,5 @@ internal sealed class CompiledAppRegistrySnapshotMaintainer : IMutationObserver,
     }
 
     /// <summary>A boxed <see cref="AppRegistryEpoch"/>, so the stamp is swapped as one reference.</summary>
-    private sealed record StampedEpoch(AppRegistryEpoch Epoch);
+    private sealed record StampedEpoch(AppRegistryEpoch Epoch, long Invalidations);
 }

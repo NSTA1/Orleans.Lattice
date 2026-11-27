@@ -12,12 +12,28 @@ namespace Orleans.Lattice.Tenancy;
 /// concurrent updates converge and replaying an older write never regresses a
 /// field. The default tenant is seeded lazily on first use by the shared
 /// initializer.
+/// <para>
+/// Every write first checks this silo's own standing in cluster membership and is
+/// refused, with nothing written, once membership reports the silo dead (#6216): a
+/// silo falsely declared dead keeps running until it learns of its death, and a
+/// write it committed then could fail to publish and be left uncovered when it
+/// stops. The check narrows that window; the false-death horizon in
+/// <see cref="TenantPolicyEpochSubscription"/> bounds what remains.
+/// </para>
 /// </summary>
+/// <param name="grainFactory">The grain factory the registry tree is reached through.</param>
+/// <param name="initializer">Seeds the default tenant on first use.</param>
+/// <param name="serializer">The record serializer.</param>
+/// <param name="accessDataPurge">Purges a deleted tenant's access data.</param>
+/// <param name="membership">Cluster membership, or <c>null</c> off a silo.</param>
+/// <param name="localSilo">This silo's details, or <c>null</c> off a silo.</param>
 internal sealed class LatticeTenantRegistry(
     IGrainFactory grainFactory,
     TenantRegistryInitializer initializer,
     OrleansLatticeSerializer<TenantRecord> serializer,
-    ITenantAccessDataPurge accessDataPurge) : ITenantRegistry, IGuardedTenantRegistry
+    ITenantAccessDataPurge accessDataPurge,
+    IClusterMembershipService? membership = null,
+    ILocalSiloDetails? localSilo = null) : ITenantRegistry, IGuardedTenantRegistry
 {
     /// <summary>
     /// The bounded optimistic-concurrency retry budget for a single
@@ -76,6 +92,7 @@ internal sealed class LatticeTenantRegistry(
     {
         ArgumentNullException.ThrowIfNull(record);
         var key = RequireTenantKey(record.Id);
+        EnsureNotDeclaredDead();
         await initializer.EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
 
         using (LatticeSystemOrigin.Enter())
@@ -104,6 +121,7 @@ internal sealed class LatticeTenantRegistry(
         ArgumentNullException.ThrowIfNull(record);
         ArgumentNullException.ThrowIfNull(validateMerged);
         var key = RequireTenantKey(record.Id);
+        EnsureNotDeclaredDead();
         await initializer.EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
 
         using (LatticeSystemOrigin.Enter())
@@ -183,6 +201,7 @@ internal sealed class LatticeTenantRegistry(
     public async Task<bool> DeleteAsync(TenantId tenant, CancellationToken cancellationToken = default)
     {
         var key = RequireTenantKey(tenant);
+        EnsureNotDeclaredDead();
         await initializer.EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
         await accessDataPurge.PurgeAsync(tenant, cancellationToken).ConfigureAwait(false);
         await PurgeInboundGrantsAsync(tenant, cancellationToken).ConfigureAwait(false);
@@ -259,6 +278,26 @@ internal sealed class LatticeTenantRegistry(
         }
 
         return removed;
+    }
+
+    /// <summary>
+    /// Refuses a registry write once cluster membership reports this silo dead.
+    /// Off a silo (no membership or no local silo) there is nothing to check.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">Membership reports this silo dead.</exception>
+    internal void EnsureNotDeclaredDead()
+    {
+        if (membership is null || localSilo is null)
+        {
+            return;
+        }
+
+        if (membership.CurrentSnapshot.GetSiloStatus(localSilo.SiloAddress) == SiloStatus.Dead)
+        {
+            throw new InvalidOperationException(
+                "Cluster membership reports this silo dead, so it refuses tenant-registry writes: a write it committed "
+                + "now might never be published to the other silos.");
+        }
     }
 
     /// <summary>

@@ -7,7 +7,7 @@ SUMMARY: the group deletion's admin-entry removal skips the guarded commit
 PERTURBS: Commit
 
 --- FIND
-       /\ IF "admin" \in op.sets /\ LiveCount(merged["admin"]) = 0
+       /\ IF "admin" \in op.sets /\ AdmissibleCount(merged["admin"]) = 0
 --- REPLACE
-       /\ IF "admin" \in op.sets /\ op.kind # "deleteGroup" /\ LiveCount(merged["admin"]) = 0
+       /\ IF "admin" \in op.sets /\ op.kind # "deleteGroup" /\ AdmissibleCount(merged["admin"]) = 0
 --- END

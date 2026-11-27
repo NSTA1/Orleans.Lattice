@@ -10,13 +10,10 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ## Unreleased
 
-### Breaking
-
-- **Tenancy - Registry updates no longer create records.** `ITenantRegistry.PutAsync` and the guarded put now throw `TenantRecordNotFoundException` for an absent tenant. **Migration:** create and seed through the new `CreateAsync`; a host-supplied `ITenantRegistry` must refuse an update to an absent record and implement `CreateAsync`. ([#6230](https://github.com/NSTA1/Orleans.Lattice/issues/6230)) (`Orleans.Lattice.Tenancy`)
-
 ### Security
 
-- **Tenancy - A deleted tenant stays deleted.** A tenant-admin write that read a tenant's record before the tenant was deleted is now refused instead of re-creating the tenant. ([#6230](https://github.com/NSTA1/Orleans.Lattice/issues/6230)) (`Orleans.Lattice.Tenancy`, `Orleans.Lattice.Api.TenantAdmin`)
+- **Replication - Set restore commits only hosted members.** A peer-coordinated backup-set restore no longer cuts over a member tree this cluster stopped replicating after prepare; that member is skipped, logged and its shadow collected, and only hosted members flip inside the write fence. ([#6233](https://github.com/NSTA1/Orleans.Lattice/issues/6233)) (`Orleans.Lattice.Replication`)
+- **Tenancy - A deleted tenant stays deleted.** A tenant-admin write that read a tenant's record before the tenant was deleted is now refused instead of re-creating the tenant. `ITenantRegistry.PutAsync` no longer creates a record; use the new `CreateAsync`. ([#6230](https://github.com/NSTA1/Orleans.Lattice/issues/6230)) (`Orleans.Lattice.Tenancy`, `Orleans.Lattice.Api.TenantAdmin`)
 - **Tenancy - Read denials no longer reveal other tenants.** A refused crossing or active-tenant check returns one fixed reason naming no tenant, so a caller cannot tell whether another tenant exists or is suspended; the cause is logged at debug level. ([#6231](https://github.com/NSTA1/Orleans.Lattice/issues/6231)) (`Orleans.Lattice.Tenancy`)
 - **Auth - Replicated rules cannot cross tenants.** An operator rule that names a tenant group on a tree outside that group's tenant, arriving by replication or restore, is now dropped when the policy compiles instead of taking effect. ([#6210](https://github.com/NSTA1/Orleans.Lattice/issues/6210)) (`Orleans.Lattice.Auth`)
 
@@ -26,9 +23,12 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 - **Telemetry - Tenant-confined telemetry grants.** A platform rule granting `Telemetry` over `LatticeScope.TenantCapability(tenant)` shows a user that one tenant's boards only; the Explorer rule editor offers the scope. ([#5582](https://github.com/NSTA1/Orleans.Lattice/issues/5582)) (`Orleans.Lattice.Auth`, `Orleans.Lattice.Api.Telemetry`, `Orleans.Lattice.Explorer.UI`)
 - **Formal - Authorization decision model.** The authorization decision is model-checked: operator-final layering, tenant-layer confinement, per-key range composition, scopeless capabilities, fail-closed control-plane isolation and all-or-nothing batch authorization. ([#6048](https://github.com/NSTA1/Orleans.Lattice/issues/6048)) (`repository-wide`)
 - **Formal - MCP tool authorization model.** MCP tool advertisement and invocation are model-checked in lock-step across policy changes: one ungated meta-tool, the per-tool minimum, cluster-wide-only telemetry tools and a validated active tenant. ([#6052](https://github.com/NSTA1/Orleans.Lattice/issues/6052)) (`repository-wide`)
+- **Formal - Coordinated-restore peer authority model.** A restore participant's authority is model-checked: system origin only for a credential-bound current peer on enrolled trees and sources, no backup-existence oracle, own-saga commits only once decided, and no stranded write fence. ([#6192](https://github.com/NSTA1/Orleans.Lattice/issues/6192)) (`repository-wide`)
 
 ### Fixed
 
+- **Tenancy - Policy freshness survives a false death declaration.** Policy and app-registry changes reach silos after a fresh epoch grain or a live silo wrongly declared dead; `FalseDeathHorizon` and `FalseDeathReinvalidationInterval` tune this. ([#5719](https://github.com/NSTA1/Orleans.Lattice/issues/5719), [#6216](https://github.com/NSTA1/Orleans.Lattice/issues/6216)) (`Orleans.Lattice.Tenancy`, `Orleans.Lattice.Apps`)
+- **Tenant access - Last-admin guard ignores foreign entries.** Another tenant's group or a malformed `t/` entry in a tenant's admin set, which only replication or restore can write, no longer lets the last real admin be removed. ([#6204](https://github.com/NSTA1/Orleans.Lattice/issues/6204)) (`Orleans.Lattice.Tenancy`, `Orleans.Lattice.Api.TenantAdmin`)
 - **MCP - Region discovery honours revoked grants.** `lattice_list_regions` re-checks at every call that the caller still holds a facade grant, so a session opened before its grants were revoked stops receiving region topology. ([#6205](https://github.com/NSTA1/Orleans.Lattice/issues/6205)) (`Orleans.Lattice.Api.Mcp`)
 - **Tree admin - Aliases count against the tree quota.** An alias that adds a new logical tree id now passes the tenant's `MaxTreeCount` admission like a create; re-pointing an existing logical tree is still not charged. ([#5333](https://github.com/NSTA1/Orleans.Lattice/issues/5333)) (`Orleans.Lattice.Api.TreeAdmin`)
 - **Replication - Lag reporting and re-seed.** `entries_behind` now reports the WAL tail minus the acknowledged watermark and keeps updating through an outage, and a receiver-requested export that already covers a lineage change no longer forces a second re-seed. ([#5587](https://github.com/NSTA1/Orleans.Lattice/issues/5587), [#5794](https://github.com/NSTA1/Orleans.Lattice/issues/5794)) (`Orleans.Lattice.Replication`)

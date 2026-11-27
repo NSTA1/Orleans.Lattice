@@ -1,0 +1,15 @@
+# Pairs with PeerAuthorityBounded. A set commit re-filters the hosted members
+# for its write fence but swaps every shadow the prepare cached, so a member
+# that stopped being replicated since prepare is cut over under peer authority
+# and outside the fence.
+MODULE: PeerRestoreCommitSwapsEveryCachedShadow
+TARGET: PeerAuthorityBounded
+CLASS: Invariant
+SUMMARY: a commit swaps every cached shadow, including a tree it no longer hosts
+PERTURBS: Commit
+
+--- FIND
+        sw == IF cached THEN cache \cap t ELSE t
+--- REPLACE
+        sw == IF cached THEN cache ELSE t
+--- END

@@ -75,7 +75,7 @@ once, either here or in the
 | Shared alias routing and revert | 2 | 25 | 40 | 22 | [Aliasing](../../spec/aliasing/README.md) |
 | Tenant quotas | 3 | 34 | 32 | 39 | [Quota admission](../../spec/tenant-quotas/README.md) |
 | Tenant rate budgets | 1 | 14 | 23 | 22 | [Rate-budget leases](../../spec/tenant-rate-budget/README.md) |
-| Tenant isolation | 1 | 27 | 28 | 34 | [Isolation epochs and leases](../../spec/tenant-isolation/README.md) |
+| Tenant isolation | 1 | 31 | 29 | 40 | [Isolation epochs and leases](../../spec/tenant-isolation/README.md) |
 | Scheduling and progress | 10 | 203 | 251 | 133 | [Verified Scheduling and Progress](verified-scheduling.md) |
 | Schema enforcement and versioning | 9 | 150 | 178 | 301 | [Schema enforcement and versioning](../../spec/schema/README.md) |
 | Schema and view composition | 1 | 23 | 23 | 28 | [Schema and view composition](../../spec/schema-view/README.md) |
@@ -407,9 +407,10 @@ states as load-bearing, and appends its own row to this table when it lands.
 | `TenantAccessMembership` | Tenant-access membership under concurrency | 12 | 11 | 20 | [Tenant-access membership](../../spec/tenant-access-admin/README.md#tenantaccessmembership) |
 | `McpToolAuthorization` | MCP tool authorization lock-step | 23 | 12 | 25 | [MCP tool authorization](../../spec/mcp-tool-auth/README.md) |
 | `TenantAccessAuthorization` | Delegated tenant access: authorization | 20 | 20 | 36 | [Delegated tenant-access administration](../../spec/tenant-access-admin/README.md) |
-| `TenantGrants` | Cross-tenant grants | 26 | 21 | 40 | [Cross-tenant grants](../../spec/tenant-grants/README.md) |
 | `ReplicationOriginBinding` | Replication gRPC host admitted-peer seam and origin binding | 10 | 2 | 10 | [Replication receiver admission](../../spec/replication-admission/README.md) |
 | `ReplicationAdmission` | Replication receiver enrollment and merge-mode gate | 7 | 4 | 10 | [Replication receiver admission](../../spec/replication-admission/README.md) |
+| `RestorePeerAuthority` | Coordinated-restore participant peer authority, own-saga decision and cutover fence | 17 | 6 | 23 | [Replication receiver admission](../../spec/replication-admission/README.md) |
+| `TenantGrants` | Cross-tenant grants | 26 | 21 | 40 | [Cross-tenant grants](../../spec/tenant-grants/README.md) |
 
 ## What each area covers, and what it does not
 
@@ -657,8 +658,8 @@ gaps, states its full scope.
     tracked by design - a write whose publication failed, until the re-publish
     lands, and a crashed writer, until membership declares it dead; a silo
     clock slower than the epoch coordinator's by more than the ledger margin
-    over one lease; more than one write or two silos; liveness after a false
-    death declaration, which does not hold; and rate budgets and
+    over one lease; a silo falsely declared dead that outlives the false-death
+    horizon; more than one write or two silos; and rate budgets and
     footprint quotas, which the two areas above cover.
 
 - **Delegated tenant access** ([`spec/tenant-access-admin/`](../../spec/tenant-access-admin/README.md)).
@@ -844,7 +845,7 @@ area's list is the authoritative one. The separately listed interrupted-shadow d
 | Anti-entropy remediation | #4859, #4862, #4863, #5530 | [`spec/anti-entropy/`](../../spec/anti-entropy/README.md) |
 | Shared alias routing and revert | #4860 | [`spec/aliasing/`](../../spec/aliasing/README.md#defect-found) |
 | Tenant rate budgets | A late collaborator response installed after its cycle was cancelled (no issue number) | [`spec/tenant-rate-budget/`](../../spec/tenant-rate-budget/README.md#defect-found) |
-| Tenant isolation | #4806 | [`spec/tenant-isolation/`](../../spec/tenant-isolation/README.md#defects-this-specification-found) |
+| Tenant isolation | #4806, #5719, #6216 | [`spec/tenant-isolation/`](../../spec/tenant-isolation/README.md#defects-this-specification-found) |
 | Scheduling and progress | #4976, #4977, #4979, #4985, #4986, #4992 | [Scheduling defects](verified-scheduling.md#defects-found-during-the-bucket) |
 
 ## CI partition and non-vacuity

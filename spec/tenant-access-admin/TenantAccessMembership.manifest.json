@@ -6,8 +6,8 @@
     "invariants": 4,
     "properties": 0,
     "actions": 8,
-    "mutations": 12,
+    "mutations": 13,
     "behaviourRows": 11,
-    "distinctStates": 17174
+    "distinctStates": 17176
   }
 }

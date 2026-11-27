@@ -1,6 +1,7 @@
 using System.Collections.Frozen;
 using Grpc.Core;
 using Microsoft.Extensions.Logging;
+using Orleans.Lattice.BPlusTree.Grains;
 
 namespace Orleans.Lattice.Replication.Grpc;
 
@@ -108,6 +109,54 @@ internal static class ReplicationAdmittedPeer
         throw new RpcException(new Status(StatusCode.PermissionDenied,
             $"The origin declared by {rpc} does not match the origin stamped on the call; "
             + "a peer may only act on its own origin."));
+    }
+
+    /// <summary>
+    /// Binds every entry of a pushed batch to the batch's declared origin, which
+    /// <see cref="EnsureDeclaredOriginIsCaller"/> has already bound to the caller. The
+    /// receiver keys its per-origin high-water mark, dedupe and inbound contact on each
+    /// entry's own origin, so an entry naming another cluster would advance or suppress
+    /// that cluster's stream under this caller's credential. No conforming sender relays:
+    /// a shipper ships only entries its own cluster authored, and the anti-entropy
+    /// re-replay and bootstrap fallback stamp the shipping cluster's id, so the only
+    /// origin the receiver expects from a sender is the sender itself. An entry with any
+    /// other origin, including none, refuses the whole batch before anything applies.
+    /// </summary>
+    /// <param name="entries">The batch's entries.</param>
+    /// <param name="declaredOrigin">The batch's declared origin, already bound to the caller.</param>
+    /// <param name="rpc">The RPC name, for the refusal diagnostic.</param>
+    /// <param name="logger">The calling service's logger.</param>
+    /// <exception cref="RpcException">
+    /// <see cref="StatusCode.PermissionDenied"/> when an entry names an origin other than
+    /// <paramref name="declaredOrigin"/>.
+    /// </exception>
+    public static void EnsureEntriesFromCaller(IReadOnlyList<WalRecord>? entries, string declaredOrigin, string rpc, ILogger logger)
+    {
+        if (entries is null)
+        {
+            return;
+        }
+
+        for (var i = 0; i < entries.Count; i++)
+        {
+            var entryOrigin = entries[i].OriginClusterId;
+            if (string.Equals(entryOrigin, declaredOrigin, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            // Cold reject path only.
+            logger.LogWarning(
+                "Refusing replication {Rpc}: an entry names origin '{EntryOrigin}' but the batch is from '{DeclaredOrigin}'. "
+                + "A peer may only ship entries it authored.",
+                rpc,
+                entryOrigin,
+                declaredOrigin);
+
+            throw new RpcException(new Status(StatusCode.PermissionDenied,
+                $"An entry of the {rpc} batch names an origin other than the batch's; "
+                + "a peer may only ship entries it authored."));
+        }
     }
 
     /// <summary>

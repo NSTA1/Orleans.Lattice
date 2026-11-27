@@ -50,6 +50,22 @@ internal sealed class LatticeTenancyOptionsValidator : IValidateOptions<LatticeT
                 $"{MaxTimerDuration}, the longest duration a timer can wait, but was {options.PolicySnapshotLeaseDuration}.");
         }
 
+        if (options.FalseDeathReinvalidationInterval <= TimeSpan.Zero
+            || options.FalseDeathReinvalidationInterval > MaxTimerDuration)
+        {
+            return ValidateOptionsResult.Fail(
+                $"LatticeTenancyOptions.{nameof(LatticeTenancyOptions.FalseDeathReinvalidationInterval)} must be strictly " +
+                $"positive and at most {MaxTimerDuration}, but was {options.FalseDeathReinvalidationInterval}.");
+        }
+
+        if (options.FalseDeathHorizon is { } horizon && horizon < options.FalseDeathReinvalidationInterval)
+        {
+            return ValidateOptionsResult.Fail(
+                $"LatticeTenancyOptions.{nameof(LatticeTenancyOptions.FalseDeathHorizon)} must be at least " +
+                $"{nameof(LatticeTenancyOptions.FalseDeathReinvalidationInterval)} ({options.FalseDeathReinvalidationInterval}), " +
+                $"but was {horizon}. Leave it null to derive it from cluster membership.");
+        }
+
         return ValidateOptionsResult.Success;
     }
 }

@@ -1,0 +1,17 @@
+# Pairs with NoStrandedFence. The participant drops its shadow on a failed cutover,
+# so a redelivered own-saga commit loses the prepare's authority.
+MODULE: PeerRestoreCutoverFailureDropsShadow
+TARGET: NoStrandedFence
+CLASS: Invariant
+SUMMARY: a failed cutover discards the cached shadow, so a redelivered decision cannot finish as decided
+PERTURBS: Commit
+
+--- FIND
+          ELSE /\ fence' = "unblocked"
+               /\ cache' = sw
+               /\ obs' = Obs("cutoverFailed"
+--- REPLACE
+          ELSE /\ fence' = "unblocked"
+               /\ cache' = NoShadow
+               /\ obs' = Obs("cutoverFailed"
+--- END

@@ -418,6 +418,40 @@ public partial class RestoreParticipantTests
     }
 
     [Test]
+    public async Task CommitSetAsync_from_a_peer_swaps_only_members_still_replicated_and_collects_the_rest()
+    {
+        var (engine, _) = ObservedEngine();
+        var replicated = new HashSet<string>(StringComparer.Ordinal) { TreeA, TreeB };
+        var membership = Substitute.For<IReplicatedTreeMembership>();
+        membership.IsReplicated(Arg.Any<string>()).Returns(ci => replicated.Contains((string)ci[0]));
+        var fence = Substitute.For<ISagaWriteFenceGrain>();
+        var participant = Participant(
+            engine,
+            FactoryFor(fence),
+            setResolver: TwoMemberResolver(),
+            membership: membership,
+            options: OptionsFor(LocalCluster),
+            topology: TopologyFor(CoordinatorCluster));
+        await participant.PrepareAsync(SetRequestFor(SetId));
+
+        // TreeB stops being replicated here between prepare and commit.
+        replicated.Remove(TreeB);
+        await participant.CommitAsync(SetRequestFor(SetId));
+
+        Assert.Multiple(() =>
+        {
+            engine.Received(1).CommitShadowAsync(
+                Arg.Is<LatticeRestoreResult>(r => r.TargetTreeId == TreeA), Arg.Any<CancellationToken>());
+            engine.DidNotReceive().CommitShadowAsync(
+                Arg.Is<LatticeRestoreResult>(r => r.TargetTreeId == TreeB), Arg.Any<CancellationToken>());
+            engine.Received(1).DeleteShadowAsync(TreeB + "-shadow", Arg.Any<CancellationToken>());
+            fence.Received(1).EngageAsync(Arg.Is<SagaWriteFenceRequest>(f => f.Trees.SequenceEqual(new[] { TreeA })));
+            Assert.That(participant.TryGetLocalSetResult(SetId, out var results), Is.True);
+            Assert.That(results!.Select(r => r.TargetTreeId), Is.EqualTo(new[] { TreeA }));
+        });
+    }
+
+    [Test]
     public async Task CommitSetAsync_and_AbortSetAsync_from_a_current_peer_run_with_system_origin()
     {
         var (engine, calls) = ObservedEngine();
