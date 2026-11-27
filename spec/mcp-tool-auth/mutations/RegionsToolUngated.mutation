@@ -1,0 +1,13 @@
+# Pairs with OnlyMetaToolUngated. lattice_list_regions rides along with the
+# meta-tool instead of passing the authorizer, widening the ungated set.
+MODULE: RegionsToolUngated
+TARGET: OnlyMetaToolUngated
+CLASS: Invariant
+SUMMARY: the region-discovery tool is advertised without consulting the authorizer
+PERTURBS: OpenSession
+
+--- FIND
+        regions == IF c \in Authenticated /\ groups # {} /\ Gate(TRUE, policy, "regions") THEN {"regions"} ELSE {}
+--- REPLACE
+        regions == IF c \in Authenticated /\ groups # {} THEN {"regions"} ELSE {}
+--- END

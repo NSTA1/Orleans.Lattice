@@ -1,0 +1,15 @@
+# Pairs with ScopelessToolsClusterWide. The MCP telemetry handler accepts the
+# caller's Telemetry grant over its validated active tenant's capability
+# scope, so a tenant-confined grant (#5582) runs a raw PromQL expression that
+# cannot be pinned to that tenant.
+MODULE: TelemetryHonoursTenantCapability
+TARGET: ScopelessToolsClusterWide
+CLASS: Invariant
+SUMMARY: the MCP telemetry handler falls back to the active tenant's capability scope
+PERTURBS: CallGroupTool
+
+--- FIND
+        fac == IF t = "telemetry" THEN AllowedUnder(policy, c, "Telemetry", ClusterTelemetry) ELSE
+--- REPLACE
+        fac == IF t = "telemetry" THEN AllowedUnder(policy, c, "Telemetry", ClusterTelemetry) \/ (Resolve(c, session.hdr) # NoTenant /\ AllowedUnder(policy, c, "Telemetry", Scope(TenantCapability(Resolve(c, session.hdr)), NoKey))) ELSE
+--- END

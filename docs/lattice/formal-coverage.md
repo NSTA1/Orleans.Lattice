@@ -404,6 +404,7 @@ states as load-bearing, and appends its own row to this table when it lands.
 | Module | Surface | Mutants | Behaviour rows | Detector tests | Page |
 |--------|---------|---------|----------------|----------------|------|
 | `AuthDecision` | Authorization decision layering | 18 | 17 | 41 | [Authorization decision](../../spec/auth-decision/README.md) |
+| `McpToolAuthorization` | MCP tool authorization lock-step | 22 | 12 | 24 | [MCP tool authorization](../../spec/mcp-tool-auth/README.md) |
 
 ## What each area covers, and what it does not
 
@@ -668,6 +669,19 @@ gaps, states its full scope.
     strict-consistency fence, existence probes, or what a registered MCP
     authorizer decides.
 
+- **MCP tool authorization** ([`spec/mcp-tool-auth/`](../../spec/mcp-tool-auth/README.md)).
+  - **Covers:** a session's `tools/list` advertisement and its `tools/call`
+    invocations through the shared gate while the policy and an app's install
+    change between them: a call is served only when its tool was advertised
+    and is still entitled under the current policy; `lattice_capabilities` is
+    the only ungated tool; the per-tool operation minimum, which an access set
+    carrying no operation never meets; the MCP telemetry tools reached only on
+    cluster-wide `Telemetry`, never on a tenant capability grant; the fail-closed
+    gate and default authorizer; the asserted active tenant re-resolved before
+    it scopes regions or app tools; and denials never answered as client errors.
+  - **Does not cover:** deny rules at discovery, region routing and peer
+    identity verification, transient discovery faults, or the staleness of the
+    capabilities payload.
 - **Scheduling and progress** ([`spec/scheduling/`](../../spec/scheduling/README.md)).
   - **Covers:** non-reentrant turn occupancy, partition admission capacity,
     paced gate-release bursts, queue ordering and wait-budget outcomes in the

@@ -168,6 +168,25 @@ public sealed class TelemetryToolCapabilityGateTests
     }
 
     [Test]
+    public async Task A_tenant_capability_telemetry_grant_does_not_authorize_an_mcp_telemetry_tool()
+    {
+        // #5582: a Telemetry grant can be confined to one tenant's capability scope,
+        // but these tools evaluate caller-supplied PromQL that cannot be pinned to a
+        // tenant, so they stay cluster-wide only and the confined grant never runs one.
+        var client = Client(out var handler);
+
+        var result = await TelemetryToolHandlers.QueryAsync(
+            client, ReadAll(), TelemetryAuthorizers.TenantCapabilityOnly(), CancellationToken.None, "up");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Success, Is.False);
+            Assert.That(result.Error, Does.Contain("Telemetry capability"));
+            Assert.That(handler.RequestCount, Is.Zero, "The backend must not be reached at all.");
+        });
+    }
+
+    [Test]
     public async Task An_authorization_off_cluster_is_unaffected()
     {
         // No gate registered at all is the authorization-off posture, and it must

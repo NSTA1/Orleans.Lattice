@@ -1,0 +1,14 @@
+# Pairs with ActiveTenantValidated. The region catalog annotates its answer
+# with the asserted tenant even when the assertion was refused, echoing the
+# caller's unvalidated header back.
+MODULE: RegionsEchoRefusedTenant
+TARGET: ActiveTenantValidated
+CLASS: Invariant
+SUMMARY: a refused tenant assertion is annotated back onto the region list
+PERTURBS: CallRegions
+
+--- FIND
+        annot == IF honoured THEN hdr ELSE NoTenant
+--- REPLACE
+        annot == hdr
+--- END

@@ -1,0 +1,13 @@
+# Pairs with FailClosed. lattice_capabilities is served by name to a session
+# whose collection does not hold it, so an anonymous caller reaches it.
+MODULE: MetaToolServedWithoutAdvertisement
+TARGET: FailClosed
+CLASS: Invariant
+SUMMARY: the meta-tool is served whether or not the session's collection holds it
+PERTURBS: CallMeta
+
+--- FIND
+        res == IF adv THEN "ok" ELSE "notFound"
+--- REPLACE
+        res == "ok"
+--- END
