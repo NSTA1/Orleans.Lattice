@@ -1188,6 +1188,7 @@ internal sealed partial class ShardRootGrain
             // create intent naming it (issue #4654). The leaf is born declaring
             // the range it owns, up to the next appended leaf's separator and open
             // at the tail (issue #5460; see SeedBulkLoadLeavesAsync).
+            var initStarted = phase != 0 ? System.Diagnostics.Stopwatch.GetTimestamp() : 0L;
             using (LatticeNewLeafIntentContext.BeginScope(newId))
             {
                 await newLeaf.InitializeSiblingAsync(new SiblingInitialization
@@ -1203,8 +1204,16 @@ internal sealed partial class ShardRootGrain
                     AwaitsBirthHint = awaitsBirthHint,
                 });
             }
+            // #6166: the seed phase split per appended leaf - its birth, then its rows.
+            var mergeStarted = BulkPhaseMark("bulk.append.ms.seed.init", initStarted);
             await WalFenceSeamRetry.RunAsync(
                 () => MergeBulkSeedAsync(newLeaf, batch, seedRouting), WalFenceSeamRetry.CallerShardCoordinator, TreeId);
+            BulkPhaseMark("bulk.append.ms.seed.merge", mergeStarted);
+            if (mergeStarted != 0)
+            {
+                AwaitDiagnostics.Count("bulk.append.seed.leaves");
+            }
+
             CollectMirroredRows(mirrored, batch);
 
             graftEntries.Add(new GraftEntry { SeparatorKey = separator, LeafId = newId });

@@ -846,8 +846,16 @@ internal sealed class LeafCursorReporter(
             }
 
             var pin = grainFactory!.GetGrain<IWalMaterialiserPinGrain>(grainKey);
+            var pinStarted = AwaitDiagnostics.Enabled ? System.Diagnostics.Stopwatch.GetTimestamp() : 0L;
             await (writeThrough ? pin.SeedManyAsync(bucket) : pin.ReportManyAsync(bucket))
                 .ConfigureAwait(false);
+            if (pinStarted != 0L)
+            {
+                // #6166: a pin shard call's wall time, queue included, by kind.
+                var kind = writeThrough ? "wal.pin.seed" : "wal.pin.report";
+                AwaitDiagnostics.Count(kind);
+                AwaitDiagnostics.Add(string.Concat(kind, ".us"), (long)System.Diagnostics.Stopwatch.GetElapsedTime(pinStarted).TotalMicroseconds);
+            }
         }
         catch (Exception ex) when (pinStorage is not null && IsPinRoutingUnavailable(ex))
         {

@@ -2865,6 +2865,7 @@ internal sealed partial class BPlusLeafGrain
                     return;
                 }
 
+                var cutStarted = AwaitDiagnostics.Enabled ? Stopwatch.GetTimestamp() : 0L;
                 try
                 {
                     cut = await TryAdvanceCheckpointFromCutAsync(partitionCount);
@@ -2875,6 +2876,10 @@ internal sealed partial class BPlusLeafGrain
                 }
 
                 CountDriveCut(cut);
+                if (cutStarted != 0L)
+                {
+                    AwaitDiagnostics.Add(string.Concat("leaf.drive.ms.cut.", cut.ToString()), (long)Stopwatch.GetElapsedTime(cutStarted).TotalMilliseconds);
+                }
             }
 
             if (cut is CutAdvanceOutcome.Reached or CutAdvanceOutcome.Deferred)
@@ -2883,7 +2888,13 @@ internal sealed partial class BPlusLeafGrain
                 _consecutiveTimerDriveRefusals = 0;
                 if (cut == CutAdvanceOutcome.Reached)
                 {
+                    // #6166: a Reached drive's bank - flush, snapshot recheck, pin publish.
+                    var bankStarted = AwaitDiagnostics.Enabled ? Stopwatch.GetTimestamp() : 0L;
                     await BankDurablePinCoreAsync(partitionCount, flushPendingCheckpoint: true, CancellationToken.None);
+                    if (bankStarted != 0L)
+                    {
+                        AwaitDiagnostics.Add("leaf.drive.ms.bank.Reached", (long)Stopwatch.GetElapsedTime(bankStarted).TotalMilliseconds);
+                    }
                 }
                 else
                 {
@@ -2997,6 +3008,12 @@ internal sealed partial class BPlusLeafGrain
         if (_interleavedTimerDrive is not null)
         {
             return;
+        }
+
+        if (AwaitDiagnostics.Enabled)
+        {
+            // #6166: which arm dispatches the drives, against the leaf count.
+            AwaitDiagnostics.Count(string.Concat("leaf.drive.dispatch.", arm.StartsWith("arm=", StringComparison.Ordinal) ? arm[4..] : arm));
         }
 
         try

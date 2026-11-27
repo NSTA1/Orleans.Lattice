@@ -4300,6 +4300,11 @@ internal sealed partial class BPlusLeafGrain(
                     new KeyValuePair<string, object?>(LatticeMetrics.TagTree, MetricTreeId),
                     new KeyValuePair<string, object?>(LatticeMetrics.TagKind, "merge"),
                     LatticeTenantLabel.ForTree(treeId));
+                if (AwaitDiagnostics.Enabled && BulkSeedScope.Value is not null)
+                {
+                    // #6166: a bulk seed's WAL append, against bulk.append.ms.seed.merge.
+                    AwaitDiagnostics.Add("bulk.append.ms.seed.merge.wal", (long)elapsedMs);
+                }
             }
         }
         }
