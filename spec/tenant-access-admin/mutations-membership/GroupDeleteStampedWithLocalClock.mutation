@@ -1,0 +1,13 @@
+# Pairs with RemovalWinsUnderSkew. A group deletion whose cascade stamps the
+# group's entries with the local clock leaves them in place on a lagging silo.
+MODULE: GroupDeleteStampedWithLocalClock
+TARGET: RemovalWinsUnderSkew
+CLASS: Invariant
+SUMMARY: the group deletion's entry removals are stamped with the local clock
+PERTURBS: BeginDeleteGroup
+
+--- FIND
+                      stamp |-> [x \in Sets |-> IF x \in inSets THEN RemovalStamp(clock[s], slots[x][OwnGroup]) ELSE 0],
+--- REPLACE
+                      stamp |-> [x \in Sets |-> IF x \in inSets THEN clock[s] + 1 ELSE 0],
+--- END

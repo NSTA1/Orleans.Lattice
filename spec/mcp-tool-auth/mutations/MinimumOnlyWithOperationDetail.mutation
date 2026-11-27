@@ -1,0 +1,14 @@
+# Pairs with PerToolMinimum. The pre-#4082 shape: the minimum is applied only
+# when the resolver supplied operation detail, so absent evidence reads as
+# permission and a group-only access set reaches the whole group.
+MODULE: MinimumOnlyWithOperationDetail
+TARGET: PerToolMinimum
+CLASS: Invariant
+SUMMARY: the per-tool minimum is skipped when the access set carries no operations
+PERTURBS: OpenSession
+
+--- FIND
+ToolGroup(t) \in groups /\ ops \cap Required(t) # {} /\ Gate(TRUE, policy, t)}
+--- REPLACE
+ToolGroup(t) \in groups /\ (ops = {} \/ ops \cap Required(t) # {}) /\ Gate(TRUE, policy, t)}
+--- END

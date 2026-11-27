@@ -1,0 +1,14 @@
+# Pairs with LockStep. The app tool skips IsInvocationPermittedAsync and is
+# served on the advertisement's verdict, so a disabled install or a revoked
+# role binding still answers.
+MODULE: AppToolCachesAdvertisedVerdict
+TARGET: LockStep
+CLASS: Invariant
+SUMMARY: an advertised app tool is not re-checked against the current registry and policy
+PERTURBS: CallAppTool
+
+--- FIND
+        permitted == appEnabled /\ Resolve(c, session.hdr) = "A" /\ RoleHeld(policy, c)
+--- REPLACE
+        permitted == TRUE
+--- END

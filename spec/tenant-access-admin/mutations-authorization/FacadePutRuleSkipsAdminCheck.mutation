@@ -1,0 +1,13 @@
+# Pairs with TenantRuleConfinement. Without the admin check any caller, an
+# outsider included, authors a tenant-tier rule through the facade.
+MODULE: FacadePutRuleSkipsAdminCheck
+TARGET: TenantRuleConfinement
+CLASS: Invariant
+SUMMARY: the tenant policy facade writes a tenant rule without authorizing the caller
+PERTURBS: FacadePutRule
+
+--- FIND
+       /\ IF ~auth THEN Refuse("putRule", auth, fl, "denied", FALSE)
+--- REPLACE
+       /\ IF FALSE THEN Refuse("putRule", auth, fl, "denied", FALSE)
+--- END

@@ -5,7 +5,10 @@ namespace Orleans.Lattice.Api.TenantAdmin;
 /// <summary>
 /// Commits a tenant record that removes an admin-set entry without ever committing
 /// a record whose admin set is empty (D6: a tenant may never be left without an
-/// admin).
+/// admin). Only entries that may admit anyone count
+/// (<see cref="TenantRecord.AdmissibleAdminSubjectCount"/>): another tenant's group
+/// or a malformed <c>t/</c> entry, which can arrive by replication or restore, never
+/// holds the set open.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -60,7 +63,7 @@ internal static class TenantAdminSetCommit
         var tenantId = record.Id.Value;
         void Guard(TenantRecord merged)
         {
-            if (merged.AdminSubjectCount == 0)
+            if (merged.AdmissibleAdminSubjectCount == 0)
             {
                 throw new TenantLastAdminSubjectException(tenantId, removedAdminEntry);
             }
@@ -81,7 +84,7 @@ internal static class TenantAdminSetCommit
         }
 
         var committed = await registry.PutAsync(record, cancellationToken).ConfigureAwait(false);
-        if (committed.AdminSubjectCount == 0)
+        if (committed.AdmissibleAdminSubjectCount == 0)
         {
             committed.AddAdminSubject(
                 removedAdminEntry,

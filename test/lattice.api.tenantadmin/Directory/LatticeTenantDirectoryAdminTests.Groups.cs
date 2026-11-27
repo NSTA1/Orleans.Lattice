@@ -228,6 +228,29 @@ public sealed partial class LatticeTenantDirectoryAdminTests
     }
 
     [Test]
+    public void RemoveGroupAsync_refuses_when_only_another_tenants_group_entry_would_remain()
+    {
+        var harness = Build(Operator);
+        harness.Store.SeedGroup("t/acme/admins");
+        var record = harness.Committed(Tenant);
+        record.RemoveAdminSubject(Alice, Stamp(70), "seed");
+        record.AddAdminSubject("t/acme/admins", Stamp(71), "seed");
+
+        // A replicated or restored record can carry another tenant's group, which
+        // never admits anyone here and so must not hold the admin set open.
+        record.AddAdminSubject("t/other/admins", Stamp(72), "peer");
+
+        var ex = Assert.ThrowsAsync<TenantLastAdminSubjectException>(async () => await harness.Admin.RemoveGroupAsync(Tenant, "admins"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.SubjectId, Is.EqualTo("t/acme/admins"));
+            Assert.That(harness.Store.HasGroup("t/acme/admins"), Is.True);
+            Assert.That(harness.Registry.Puts, Is.Zero);
+        });
+    }
+
+    [Test]
     public async Task RemoveGroupAsync_rerun_after_success_reports_nothing_left_to_remove()
     {
         var harness = Build(Alice);

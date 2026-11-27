@@ -1,0 +1,13 @@
+# Pairs with RemovalWinsUnderSkew. An admin-set removal stamped by the local
+# clock alone loses the merge to a slot a leading silo or peer wrote.
+MODULE: AdminRemovalStampedWithLocalClock
+TARGET: RemovalWinsUnderSkew
+CLASS: Invariant
+SUMMARY: the admin-set removal is stamped with the lagging silo's clock
+PERTURBS: BeginRemoveAdmin
+
+--- FIND
+                   stamp |-> [x \in Sets |-> IF x = "admin" THEN RemovalStamp(clock[s], slots["admin"][e]) ELSE 0],
+--- REPLACE
+                   stamp |-> [x \in Sets |-> IF x = "admin" THEN clock[s] + 1 ELSE 0],
+--- END

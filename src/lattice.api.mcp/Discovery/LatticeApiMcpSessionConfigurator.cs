@@ -187,8 +187,26 @@ internal sealed class LatticeApiMcpSessionConfigurator
             return false;
         }
 
-        tools.Add(new AuthorizedMetaTool(CreateListRegionsTool()));
+        tools.Add(new AuthorizedMetaTool(CreateListRegionsTool(), HoldsFacadeGrantAsync));
         return true;
+    }
+
+    /// <summary>
+    /// The invocation half of region discovery's grant condition: re-resolves the
+    /// caller from the invocation's own request and requires that it still holds a
+    /// facade grant, so a revocation after <c>tools/list</c> reaches an open session
+    /// (#6205). Fail-closed: no request context or no credential denies.
+    /// </summary>
+    private async ValueTask<bool> HoldsFacadeGrantAsync(IServiceProvider services, CancellationToken cancellationToken)
+    {
+        var httpContext = services.GetService<IHttpContextAccessor>()?.HttpContext;
+        if (httpContext is null || _credentialBridge.Resolve(httpContext) is not { } credential)
+        {
+            return false;
+        }
+
+        var access = await _permissionResolver.ResolveAsync(credential, cancellationToken).ConfigureAwait(false);
+        return !access.IsEmpty;
     }
 
     /// <summary>

@@ -1,0 +1,13 @@
+{
+  "mutations": "mutations",
+  "refinement": "Refinement.md",
+  "nonBehaviouralActions": ["ChangePolicy", "ToggleApp"],
+  "counts": {
+    "invariants": 8,
+    "properties": 0,
+    "actions": 7,
+    "mutations": 23,
+    "behaviourRows": 12,
+    "distinctStates": 32268
+  }
+}

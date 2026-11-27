@@ -1,0 +1,14 @@
+# Pairs with DenialNotClientError. CredentialStampingTool validates the
+# arguments before the gate, so a refused caller with a misspelt argument is
+# answered as a client error instead of a denial.
+MODULE: ArgumentsCheckedBeforeGate
+TARGET: DenialNotClientError
+CLASS: Invariant
+SUMMARY: argument validation runs before the authorization gate
+PERTURBS: CallGroupTool
+
+--- FIND
+        res == IF ~adv THEN "notFound" ELSE IF ~g THEN "denied" ELSE IF bad THEN "clientError" ELSE IF fac THEN "ok" ELSE "denied"
+--- REPLACE
+        res == IF ~adv THEN "notFound" ELSE IF bad THEN "clientError" ELSE IF ~g THEN "denied" ELSE IF fac THEN "ok" ELSE "denied"
+--- END

@@ -1,0 +1,16 @@
+# Pairs with RuleAuthoringConfined: the policy store admits a tenant: rule written directly off system origin.
+
+MODULE: OperatorWritesTenantRule
+TARGET: RuleAuthoringConfined
+CLASS: Invariant
+SUMMARY: the policy store admits a tenant: rule written directly off system origin
+PERTURBS: OperatorUpsert
+
+--- FIND
+    /\ r.layer = "operator"
+    /\ rules' = rules \cup {r}
+    /\ last' = [Blank EXCEPT !.kind = "write", !.actor = "operator", !.rule = r]
+--- REPLACE
+    /\ rules' = rules \cup {r}
+    /\ last' = [Blank EXCEPT !.kind = "write", !.actor = "operator", !.rule = r]
+--- END

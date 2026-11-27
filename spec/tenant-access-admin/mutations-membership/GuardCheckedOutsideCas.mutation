@@ -1,0 +1,14 @@
+# Pairs with LastAdminGuard. Check, then write: with the guard only in the
+# facade's read-check-write, two removals of different admin entries each
+# see two and together empty the set.
+MODULE: GuardCheckedOutsideCas
+TARGET: LastAdminGuard
+CLASS: Invariant
+SUMMARY: the commit does not re-apply the last-admin guard to the merged record
+PERTURBS: Commit
+
+--- FIND
+       /\ IF "admin" \in op.sets /\ AdmissibleCount(merged["admin"]) = 0
+--- REPLACE
+       /\ IF FALSE
+--- END

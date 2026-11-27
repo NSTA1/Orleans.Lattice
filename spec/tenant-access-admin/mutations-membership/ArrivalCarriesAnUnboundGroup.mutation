@@ -1,0 +1,13 @@
+# Pairs with TypeOK. A model-domain defect: an arriving binding names a group
+# outside the binding domain.
+MODULE: ArrivalCarriesAnUnboundGroup
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: an arriving role binding names a group outside BindGroups
+PERTURBS: ArriveBinding
+
+--- FIND
+    /\ bindings' = bindings \cup {g}
+--- REPLACE
+    /\ bindings' = bindings \cup {g, "t/C/g"}
+--- END

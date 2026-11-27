@@ -1,0 +1,17 @@
+# Pairs with DirectoryValidationOrder. Validating after the write leaves an
+# unresolvable id recorded as a live grant that whoever registers it inherits.
+MODULE: AdminEntryValidatedAfterWrite
+TARGET: DirectoryValidationOrder
+CLASS: Invariant
+SUMMARY: the admin-set verb writes the entry before validating it against the identity directory
+PERTURBS: AddAdminEntry
+
+--- FIND
+          ELSE IF vreq /\ ~IsTier(e) /\ e \notin Resolvable THEN Refuse("addAdmin", auth, FALSE, "unresolved", TRUE)
+--- REPLACE
+          ELSE IF vreq /\ ~IsTier(e) /\ e \notin Resolvable
+               THEN /\ adminEntries' = [adminEntries EXCEPT ![t] = @ \cup {e}]
+                    /\ budget' = budget - 1
+                    /\ obs' = Call("addAdmin", auth, FALSE, "unresolved", TRUE, TRUE)
+                    /\ UNCHANGED <<flag, vreq, rules, clusterGroups, tenantGroups, edges, memberEntries>>
+--- END

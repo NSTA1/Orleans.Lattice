@@ -1,0 +1,19 @@
+# Pairs with LockStep. CredentialStampingTool does not re-run the gate, so a
+# tool the authorizer has since withheld by name is still served.
+MODULE: GroupToolGatedOnlyAtAdvertisement
+TARGET: LockStep
+CLASS: Invariant
+SUMMARY: group tools are gated at advertisement only
+PERTURBS: CallGroupTool
+
+--- FIND
+        res == IF ~adv THEN "notFound" ELSE IF ~g THEN "denied" ELSE IF bad THEN "clientError" ELSE IF fac THEN "ok" ELSE "denied"
+        facObs == IF ~adv \/ ~g \/ bad THEN "skipped" ELSE IF fac THEN "allow" ELSE "deny"
+    IN /\ session # NoSession
+       /\ obs' = CallObs(t, ctx, bad, sc, adv, g, facObs, res, NoTenant, {})
+--- REPLACE
+        res == IF ~adv THEN "notFound" ELSE IF bad THEN "clientError" ELSE IF fac THEN "ok" ELSE "denied"
+        facObs == IF ~adv \/ bad THEN "skipped" ELSE IF fac THEN "allow" ELSE "deny"
+    IN /\ session # NoSession
+       /\ obs' = CallObs(t, ctx, bad, sc, adv, TRUE, facObs, res, NoTenant, {})
+--- END

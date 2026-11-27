@@ -1,0 +1,12 @@
+# Pairs with OperatorFinal: the tenant layer is consulted before the operator layer, so a tenant verdict overrides a matched operator rule.
+
+MODULE: TenantBeforeOperator
+TARGET: OperatorFinal
+CLASS: Invariant
+SUMMARY: the tenant layer is consulted before the operator layer, so a tenant verdict overrides a matched operator rule
+
+--- FIND
+       THEN IF opm.matched THEN opm ELSE tenm
+--- REPLACE
+       THEN IF tenm.matched THEN tenm ELSE opm
+--- END

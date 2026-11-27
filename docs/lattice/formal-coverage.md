@@ -73,9 +73,9 @@ once, either here or in the
 | Tree lifecycle composition | 2 | 46 | 66 | 48 | [Resize, reshard and shadow cutover](../../spec/tree-lifecycle/README.md) |
 | Anti-entropy remediation | 1 | 32 | 39 | 60 | [Digest-driven repair](../../spec/anti-entropy/README.md) |
 | Shared alias routing and revert | 2 | 25 | 40 | 22 | [Aliasing](../../spec/aliasing/README.md) |
-| Tenant quotas | 3 | 29 | 26 | 32 | [Quota admission](../../spec/tenant-quotas/README.md) |
+| Tenant quotas | 3 | 34 | 32 | 39 | [Quota admission](../../spec/tenant-quotas/README.md) |
 | Tenant rate budgets | 1 | 14 | 23 | 22 | [Rate-budget leases](../../spec/tenant-rate-budget/README.md) |
-| Tenant isolation | 1 | 25 | 25 | 31 | [Isolation epochs and leases](../../spec/tenant-isolation/README.md) |
+| Tenant isolation | 1 | 27 | 28 | 34 | [Isolation epochs and leases](../../spec/tenant-isolation/README.md) |
 | Scheduling and progress | 10 | 203 | 251 | 133 | [Verified Scheduling and Progress](verified-scheduling.md) |
 | Schema enforcement and versioning | 9 | 150 | 178 | 301 | [Schema enforcement and versioning](../../spec/schema/README.md) |
 | Schema and view composition | 1 | 23 | 23 | 28 | [Schema and view composition](../../spec/schema-view/README.md) |
@@ -403,6 +403,12 @@ states as load-bearing, and appends its own row to this table when it lands.
 
 | Module | Surface | Mutants | Behaviour rows | Detector tests | Page |
 |--------|---------|---------|----------------|----------------|------|
+| `AuthDecision` | Authorization decision layering | 18 | 17 | 41 | [Authorization decision](../../spec/auth-decision/README.md) |
+| `TenantAccessMembership` | Tenant-access membership under concurrency | 13 | 11 | 23 | [Tenant-access membership](../../spec/tenant-access-admin/README.md#tenantaccessmembership) |
+| `McpToolAuthorization` | MCP tool authorization lock-step | 23 | 12 | 25 | [MCP tool authorization](../../spec/mcp-tool-auth/README.md) |
+| `TenantAccessAuthorization` | Delegated tenant access: authorization | 20 | 20 | 36 | [Delegated tenant-access administration](../../spec/tenant-access-admin/README.md) |
+| `ReplicationOriginBinding` | Replication gRPC host admitted-peer seam and origin binding | 11 | 2 | 11 | [Replication receiver admission](../../spec/replication-admission/README.md) |
+| `ReplicationAdmission` | Replication receiver enrollment and merge-mode gate | 7 | 4 | 10 | [Replication receiver admission](../../spec/replication-admission/README.md) |
 
 ## What each area covers, and what it does not
 
@@ -613,14 +619,17 @@ gaps, states its full scope.
   - **Covers:** sampled footprint admission against the last selected usage
     sample, cold admission, local and replicated usage accounting with
     per-cluster usage slots and their publication hysteresis, the
-    authoritative tree-count check with its check-then-register race, and the
+    authoritative tree-count check with its check-then-register race, tree-count
+    admission of an alias onto a new logical id against the same count as a create
+    (a re-point of an existing logical id is never charged), purges and quota
+    changes interleaved with them, and the
     quota evaluator's independent nullable limits, burst arithmetic and
     refusal order.
   - **Does not cover:** a hard ceiling - quotas are soft, concurrent admissions
     can overshoot, and no invariant bounds actual usage by the limit;
     deletions, changed quotas or residency, failed storage operations and
-    equal-clock writer ties; capacity reservation, registry merging or tree
-    deletion for tree counts; and rate limits, exception transport or
+    equal-clock writer ties; capacity reservation, registry merging or soft
+    deletion before purge for tree counts; and rate limits, exception transport or
     permission checks in the evaluator.
 
 - **Tenant rate budgets** ([`spec/tenant-rate-budget/`](../../spec/tenant-rate-budget/README.md)).
@@ -640,15 +649,77 @@ gaps, states its full scope.
     snapshot through the epoch advance and its lease ledger; when a silo may
     trust its snapshot for an authorization decision, a decision that cannot
     confirm currency denying; and publication failure with its background
-    re-publish, a silo crash, and the epoch coordinator's re-activation with
-    its grace.
+    re-publish, a silo crash, membership falsely declaring a live silo dead, and
+    the epoch coordinator's re-activation with its grace, which counts a death
+    only once the coordinator has seen it for one lease plus the margin.
   - **Does not cover:** revoking decisions already taken; the two windows
     tracked by design - a write whose publication failed, until the re-publish
     lands, and a crashed writer, until membership declares it dead; a silo
     clock slower than the epoch coordinator's by more than the ledger margin
-    over one lease; more than one write or two silos; and rate budgets and
+    over one lease; more than one write or two silos; liveness after a false
+    death declaration, which does not hold; and rate budgets and
     footprint quotas, which the two areas above cover.
 
+- **Delegated tenant access** ([`spec/tenant-access-admin/`](../../spec/tenant-access-admin/README.md)).
+  - **Covers:** the authorization half of delegated tenant-access
+    administration against the authorization contract's abstract `Allowed`:
+    tenant-tier rules written only by the tenant policy facade after its
+    admin check and confined to the tenant's own trees and data-plane
+    operations, with a non-conforming arrival by replication or restore,
+    tenant-tier or operator, dropped when the snapshot compiles; the reserved `t/` group namespace and
+    the tenant group nesting rule for every caller; claim filtering of
+    asserted `t/` groups whatever the flag, on a lagging silo too; the
+    delegated-access flag switching the facades and the tenant layer off
+    without deleting anything; and the authorize, gate, validate, write order
+    of every facade verb.
+  - **Does not cover:** concurrent admin-set and member-set changes, the
+    last-admin guard and removal stamps; group deletion and its cascade;
+    membership records arriving by replication or restore; app rules on
+    app-owned trees; and the compiled snapshot's rebuild after a flip.
+
+- **Tenant-access membership** ([`spec/tenant-access-admin/`](../../spec/tenant-access-admin/README.md#tenantaccessmembership)).
+  - **Covers:** the concurrency half of delegated tenant-access
+    administration: concurrent admin-set and member-set removals and tenant
+    group deletion through the registry's compare-and-set loop, with the
+    last-admin guard re-applied to the merged record and counting only
+    entries that admit anyone; removals stamped on a silo whose clock lags the slot's writer; and admin-set, member-set and
+    role-binding entries arriving by replication or restore, another tenant's
+    group included, never conferring anything.
+  - **Does not cover:** the compare-and-set loop's retries and attempt budget
+    (one committing attempt per step); host-supplied registries without the
+    guarded commit; removals arriving by replication, and cross-region
+    whole-record resolution; and the rest of a group deletion's cascade
+    (edges, rules and the group record).
+
+- **Authorization decision** ([`spec/auth-decision/`](../../spec/auth-decision/README.md)).
+  - **Covers:** the decision over a rule store written by the operator
+    surface, the tenant policy facade and system-origin writes: a matched
+    operator verdict is final; the tenant layer runs only on its owner's tenant
+    data trees; a range filter composes the layers per key on operator
+    coverage; `Telemetry` and `AppInstall` come only from the cluster-wide id
+    (`Telemetry` also from a platform grant over one tenant's capability scope);
+    control-plane requests fail closed; bootstrap administrators are the one
+    root of trust; and a cross-tree batch is authorized all or nothing. It
+    publishes the `Allowed(caller, op, scope)` contract the other authorization
+    modules assume.
+  - **Does not cover:** group subjects and templated scopes, the uniform-range
+    shortcut, tenant-isolation composition, snapshot warm-up and the
+    strict-consistency fence, existence probes, or what a registered MCP
+    authorizer decides.
+
+- **MCP tool authorization** ([`spec/mcp-tool-auth/`](../../spec/mcp-tool-auth/README.md)).
+  - **Covers:** a session's `tools/list` advertisement and its `tools/call`
+    invocations through the shared gate while the policy and an app's install
+    change between them: a call is served only when its tool was advertised
+    and is still entitled under the current policy; `lattice_capabilities` is
+    the only ungated tool; the per-tool operation minimum, which an access set
+    carrying no operation never meets; the MCP telemetry tools reached only on
+    cluster-wide `Telemetry`, never on a tenant capability grant; the fail-closed
+    gate and default authorizer; the asserted active tenant re-resolved before
+    it scopes regions or app tools; and denials never answered as client errors.
+  - **Does not cover:** deny rules at discovery, region routing and peer
+    identity verification, transient discovery faults, or the staleness of the
+    capabilities payload.
 - **Scheduling and progress** ([`spec/scheduling/`](../../spec/scheduling/README.md)).
   - **Covers:** non-reentrant turn occupancy, partition admission capacity,
     paced gate-release bursts, queue ordering and wait-budget outcomes in the

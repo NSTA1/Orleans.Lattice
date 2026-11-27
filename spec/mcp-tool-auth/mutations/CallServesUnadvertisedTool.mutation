@@ -1,0 +1,14 @@
+# Pairs with PerToolMinimum. tools/call resolves a group tool by name from the
+# registered groups rather than from the session's collection, so a tool the
+# per-tool minimum withheld is still reachable.
+MODULE: CallServesUnadvertisedTool
+TARGET: PerToolMinimum
+CLASS: Invariant
+SUMMARY: a group tool absent from the session's collection is served by name
+PERTURBS: CallGroupTool
+
+--- FIND
+        res == IF ~adv THEN "notFound" ELSE IF ~g THEN "denied" ELSE IF bad THEN "clientError" ELSE IF fac THEN "ok" ELSE "denied"
+--- REPLACE
+        res == IF ~g THEN "denied" ELSE IF bad THEN "clientError" ELSE IF fac THEN "ok" ELSE "denied"
+--- END

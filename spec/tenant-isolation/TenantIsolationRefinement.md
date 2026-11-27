@@ -3,8 +3,10 @@
 This note maps [`TenantIsolation.tla`](TenantIsolation.tla) to the Orleans.Lattice code
 that plays each role. The model covers a registry write committing on one silo, the
 epoch advance published through the epoch grain, each silo's compiled snapshot and
-lease, the snapshot rebuild, silo crash and membership recovery, and epoch grain
-re-activation. Like the other refinement notes it is a documented mapping, not a
+lease, the snapshot rebuild, silo crash and membership recovery, membership falsely
+declaring a live silo dead, and epoch grain re-activation with its grace. The grace
+rule is the one both epoch grains share: the tenant-policy grain and the app registry
+grain (`AppRegistryEpochGrain`), which runs the same lease-and-push protocol. Like the other refinement notes it is a documented mapping, not a
 refinement proof; the gates check its names, detectors and coverage, and none checks
 its claims.
 
@@ -36,7 +38,9 @@ over one lease.
 | `knows` | The silo has observed the current epoch | `TenantSnapshotCurrency.Observe` via `CompiledTenantPolicySnapshotMaintainer.ObserveEpoch`. |
 | `alive`, `awaiting` | Process liveness, and a crash membership has not yet declared | The silo process, and the membership watch in `TenantPolicyEpochSubscription`. |
 | `dec` | The last authorization decision | The outcome of `TenantGateEnforcer.EnforceAsync`. |
-| `crashes`, `restarts`, `failures` | Environment budgets | Modelling devices only. |
+| `falseDead` | Membership reports the silo dead while its process still runs | A silo membership lists as dead that has not yet learned it is dead and stopped, as the `TenantPolicyEpochSubscription` membership watch and `AppRegistryEpochGrain.CanReleaseGrace` see it. |
+| `seen` | The epoch grain's first sighting of each death during its grace, and whether one lease plus the margin has passed since | The first-sighting record `AppRegistryEpochGrain.CanReleaseGrace` keeps for the activation. |
+| `crashes`, `restarts`, `failures`, `suspicions` | Environment budgets | Modelling devices only. |
 
 ## Action mapping
 
@@ -55,12 +59,14 @@ over one lease.
 | `RebuildFinish(s)` | The rebuild publishes, current only if nothing invalidated it meanwhile | `CompiledTenantPolicySnapshotMaintainer.RebuildNowAsync` and `TenantSnapshotCurrency.IsCurrent`. | Yes: `CompiledTenantPolicySnapshotMaintainerCurrencyTests.Epoch_observed_while_a_scan_runs_leaves_the_result_non_authoritative_until_the_follow_up`. |
 | `Renew(s)` | The silo renews; the lease carries the current epoch | `TenantPolicyEpochGrain.LeaseAsync` and `CompiledTenantPolicySnapshotMaintainer.ApplyLease`. | Yes: `TenantPolicyCrossSiloCurrencyTests.Unreachable_peer_that_renews_during_the_wait_learns_the_new_epoch`. |
 | `Decide(s, r)` | Trust an authoritative snapshot, else confirm against the registry, else deny | `TenantGateEnforcer.EnforceAsync`. | Yes: `TenantGateEnforcerSnapshotLagTests.EnforceAsync_registry_failure_while_the_snapshot_is_not_authoritative_denies` and `TenantGateEnforcerSnapshotLagTests.EnforceAsync_owned_tree_while_the_snapshot_is_not_authoritative_confirms_membership_with_one_registry_read`. |
-| `SiloCrash(s)` | A silo process is lost with its snapshot and any write in flight | Loss of the silo process. | Yes: `TenantPolicyCrossSiloCurrencyTests.Cold_silo_whose_warm_up_fails_denies_tenant_owned_access`. |
-| `DeclareDead(s)` | Membership declares the crashed silo dead; survivors invalidate | `TenantPolicyEpochSubscription` membership watch calls `CompiledTenantPolicySnapshotMaintainer.InvalidateClusterView`. | Yes: `TenantPolicyEpochSubscriptionTests.A_silo_declared_dead_invalidates_the_snapshot_but_the_baseline_does_not` and `CompiledTenantPolicySnapshotMaintainerCurrencyTests.InvalidateClusterView_revokes_authority_and_rebuilds`. |
+| `SiloCrash(s)` | A silo process is lost with its snapshot and any write in flight; a silo falsely declared dead stops this way once it learns it is dead | Loss of the silo process. | Yes: `TenantPolicyCrossSiloCurrencyTests.Cold_silo_whose_warm_up_fails_denies_tenant_owned_access`. |
+| `DeclareDead(s)` | Membership declares the crashed silo dead; survivors invalidate, and an epoch grain in its grace records the first sighting | `TenantPolicyEpochSubscription` membership watch calls `CompiledTenantPolicySnapshotMaintainer.InvalidateClusterView`; `AppRegistryEpochGrain.CanReleaseGrace` records the sighting. | Yes: `TenantPolicyEpochSubscriptionTests.A_silo_declared_dead_invalidates_the_snapshot_but_the_baseline_does_not`, `CompiledTenantPolicySnapshotMaintainerCurrencyTests.InvalidateClusterView_revokes_authority_and_rebuilds` and `AppRegistryEpochGrainGraceTests.Every_death_is_recorded_even_when_another_silo_already_holds_the_grace`. |
+| `DeclareFalselyDead(s)` | Membership declares a live silo dead; it keeps serving, survivors invalidate, the ledger still waits out its captured lease, and an epoch grain in its grace records the first sighting | Orleans membership declaring the silo dead; the `TenantPolicyEpochSubscription` membership watch calls `CompiledTenantPolicySnapshotMaintainer.InvalidateClusterView`; `TenantPolicyEpochLedger.AdvanceAsync` waits on every captured lease without consulting membership; `AppRegistryEpochGrain.CanReleaseGrace` records the sighting. | Yes: `TenantPolicyEpochSubscriptionTests.A_silo_declared_dead_invalidates_the_snapshot_but_the_baseline_does_not`, `TenantPolicyEpochLedgerTests.AdvanceAsync_waits_out_the_lease_of_a_subscriber_that_does_not_acknowledge` and `AppRegistryEpochGrainGraceTests.Every_death_is_recorded_even_when_another_silo_already_holds_the_grace`. |
+| `SightingAges(t)` | One lease plus the margin passes after the grain first saw a death, so every lease the previous activation granted has lapsed too | `AppRegistryEpochGrain.CanReleaseGrace` measures from the first sighting against `AppRegistryEpochLedger.LeaseDuration` plus `AppRegistryEpochLedger.Margin`. | Yes: `AppRegistryEpochGrainGraceTests.A_silo_newly_seen_dead_holds_the_grace_until_it_has_been_dead_for_a_lease_plus_the_margin`. |
 | `Recover(s)` | A fresh process starts with no snapshot and no observed epoch | `TenantPolicyEpochSubscription.StartAsync`. | Yes: `CompiledTenantPolicySnapshotMaintainerCurrencyTests.Built_but_never_leased_snapshot_is_not_authoritative` and `TenantPolicyEpochSubscriptionTests.StartAsync_leases_through_an_observer_reference_and_makes_the_snapshot_authoritative`. |
-| `EpochRestart` | The epoch grain re-activates with a fresh incarnation and an empty lease table | `TenantPolicyEpochGrain` activation draws a new incarnation for `TenantPolicyEpochLedger`. | Yes: `TenantPolicyEpochTests.Supersedes_any_version_of_a_different_incarnation` and `TenantPolicyCrossSiloCurrencyTests.Restarted_epoch_grain_invalidates_a_silo_that_renews_against_it`. |
+| `EpochRestart` | The epoch grain re-activates with a fresh incarnation, an empty lease table and no record of deaths, so every silo already dead is first seen at activation | `TenantPolicyEpochGrain` activation draws a new incarnation for `TenantPolicyEpochLedger`; `AppRegistryEpochGrain` starts its first-sighting record empty. | Yes: `TenantPolicyEpochTests.Supersedes_any_version_of_a_different_incarnation` and `TenantPolicyCrossSiloCurrencyTests.Restarted_epoch_grain_invalidates_a_silo_that_renews_against_it`. |
 | `GraceElapse` | One lease plus the margin passes after activation | The ledger's grace wait. | Yes: `TenantPolicyEpochLedgerTests.AdvanceAsync_on_a_fresh_incarnation_waits_out_one_lease_plus_margin` and `TenantPolicyCrossSiloCurrencyTests.Restarted_epoch_grain_holds_the_write_open_until_every_old_lease_has_lapsed`. |
-| `ReleaseGrace` | The grace ends early once every live silo has leased afresh | `TenantPolicyEpochGrain.EveryLiveSiloHasLeased` then `TenantPolicyEpochLedger.ReleaseGrace`. | Yes: `TenantSnapshotCurrencyTests.ReleaseGrace_lets_a_fresh_incarnations_advance_complete_before_one_lease` and `TenantSnapshotCurrencyTests.EveryLiveSiloHasLeased_is_true_only_when_every_non_dead_silo_leased`. |
+| `ReleaseGrace` | The grace ends early once every member has leased afresh, or has been seen dead for one lease plus the margin | `AppRegistryEpochGrain.CanReleaseGrace` then `AppRegistryEpochLedger.ReleaseGrace`. | Yes: `AppRegistryEpochGrainGraceTests.A_silo_newly_seen_dead_holds_the_grace_until_it_has_been_dead_for_a_lease_plus_the_margin`, `AppRegistryEpochGrainGraceTests.A_live_silo_that_has_not_leased_holds_the_grace` and `TenantSnapshotCurrencyTests.ReleaseGrace_lets_a_fresh_incarnations_advance_complete_before_one_lease`. |
 | `Stutter` | Terminal self-loop so a finished run is not reported as a deadlock | Not applicable: a modelling device with no production step. | Not applicable |
 
 ## Property mapping
@@ -72,6 +78,7 @@ over one lease.
 | `PublicationWindowTracked` | A write returns ahead of its coverage only through a failed publication still owed a re-publish, or a crashed writer. | Yes: `CompiledTenantPolicySnapshotMaintainerCurrencyTests.Failed_advance_leaves_the_silo_non_authoritative_until_a_background_retry_publishes_it`. |
 | `UnconfirmableDenies` | A decision trusts only an authoritative snapshot, confirms only with a reachable registry, and otherwise denies. | Yes: `TenantGateEnforcerSnapshotLagTests.EnforceAsync_registry_failure_while_the_snapshot_is_not_authoritative_denies`. |
 | `EpochMonotonic` | Epochs never repeat: versions grow within an incarnation and a new activation never reuses one. | Yes: `TenantPolicyEpochLedgerTests.AdvanceAsync_successive_advances_produce_strictly_increasing_versions` and `TenantSnapshotCurrencyTests.Observe_newer_version_or_incarnation_supersedes_and_older_does_not`. |
+| `NoEarlyGraceRelease` | A fresh epoch grain activation ends its grace only once no silo can still serve on a lease a previous activation granted, a silo falsely declared dead included. | Yes: `AppRegistryEpochGrainGraceTests.A_silo_newly_seen_dead_holds_the_grace_until_it_has_been_dead_for_a_lease_plus_the_margin` and `AppRegistryEpochLedgerTests.AdvanceAsync_on_a_fresh_incarnation_waits_out_one_lease_plus_margin`. |
 | `EveryCommitEventuallyCovered` | Every committed write is eventually published to every silo, or covered by its crashed writer being declared dead. | Yes: `CompiledTenantPolicySnapshotMaintainerCurrencyTests.Failed_advance_leaves_the_silo_non_authoritative_until_a_background_retry_publishes_it` and `TenantPolicyCrossSiloCurrencyTests.Peer_silo_converges_and_regains_authority_once_its_rebuild_lands`. |
 
 ## Excluded properties
@@ -111,6 +118,25 @@ over one lease.
   production owner.
 - **Boolean epoch knowledge.** Epochs only grow, so a silo's observation is modelled as
   whether it has seen the current epoch.
+  No production symbol: the gap is a modelling abstraction with no single
+  production owner.
+- **Tenant-policy grace release on a death.** `TenantPolicyEpochGrain.EveryLiveSiloHasLeased`
+  skips every member membership reports dead at once, so the tenant-policy epoch grain
+  can end its grace while a silo falsely declared dead still trusts a lease from the
+  previous activation. The model checks the rule
+  `AppRegistryEpochGrain.CanReleaseGrace` implements, which counts a death only once
+  the activation has seen it for one lease plus the margin.
+  Production symbols: `TenantPolicyEpochGrain.EveryLiveSiloHasLeased`, `AppRegistryEpochGrain.CanReleaseGrace`.
+- **Liveness under a false death declaration.** A silo falsely declared dead that
+  commits a registry write after its declaration, fails to publish it and then stops
+  leaves the write uncovered: survivors invalidated their snapshots at the declaration,
+  before the write, and no later death follows it, so `EveryCommitEventuallyCovered`
+  does not hold. `TenantIsolation.FalseDead.cfg` therefore checks the safety
+  properties only, and `TenantIsolation.Faults.cfg` keeps false declarations at zero.
+  Production symbols: `TenantPolicyEpochSubscription`, `CompiledTenantPolicySnapshotMaintainer.InvalidateClusterView`.
+- **Recovered silos and their old address.** A recovered silo is modelled as the same
+  silo; its previous incarnation, which membership keeps listing as dead, is not held
+  against the grace. That incarnation's process has stopped, so it trusts nothing.
   No production symbol: the gap is a modelling abstraction with no single
   production owner.
 - **Crashed silo leases.** A crashed silo's captured lease is released at the crash; in

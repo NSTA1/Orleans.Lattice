@@ -539,6 +539,32 @@ public sealed class TenantRecord
     }
 
     /// <summary>
+    /// The number of live admin-set entries that may admit anyone to this tenant
+    /// (<see cref="TenantAccessEntries.IsAdmissible"/>): a user id, a cluster group
+    /// or one of the tenant's own groups. Another tenant's group or a malformed
+    /// <c>t/</c> entry, which can only arrive by replication or restore, never
+    /// counts, because <see cref="IsAdmin"/> never honours it. This is the count the
+    /// last-admin guard applies, so such an entry can never hold the set open while
+    /// the last real admin is removed. Counted in place, allocation-free.
+    /// </summary>
+    internal int AdmissibleAdminSubjectCount
+    {
+        get
+        {
+            var count = 0;
+            foreach (var (subjectId, slot) in Subjects)
+            {
+                if (slot.Present && TenantAccessEntries.IsAdmissible(subjectId, Id))
+                {
+                    count++;
+                }
+            }
+
+            return count;
+        }
+    }
+
+    /// <summary>
     /// The live tenant member subject ids, in ordinal order. Materialised on each
     /// access; prefer <see cref="HasMemberSubject"/> for a single membership test.
     /// Empty by default, and always empty for the reserved

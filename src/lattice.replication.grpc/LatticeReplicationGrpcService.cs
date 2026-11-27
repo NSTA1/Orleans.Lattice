@@ -375,40 +375,8 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
     /// <see cref="StatusCode.PermissionDenied"/> when the stamped origin is absent,
     /// or names a different cluster than the body declares.
     /// </exception>
-    private void EnsureOriginMatchesCaller(ServerCallContext context, string declaredOrigin, string rpc)
-    {
-        var stamped = GrpcRequestHeaders.Read(context, LatticeReplicationGrpcMetadataNames.OriginClusterIdHeader);
-        if (string.IsNullOrWhiteSpace(stamped))
-        {
-            // Cold reject path only.
-            _logger.LogWarning(
-                "Refusing replication {Rpc}: the request declares origin '{DeclaredOrigin}' but the call "
-                + "carries no transport-stamped origin. A peer may only advance its own stream.",
-                rpc,
-                declaredOrigin);
-
-            throw new RpcException(new Status(StatusCode.PermissionDenied,
-                $"The {rpc} call carries no stamped origin cluster; the origin declared in the request "
-                + "body is not an authorization input. A peer may only act on its own origin."));
-        }
-
-        if (string.Equals(stamped, declaredOrigin, StringComparison.Ordinal))
-        {
-            return;
-        }
-
-        // Cold reject path only.
-        _logger.LogWarning(
-            "Refusing replication {Rpc}: the request declares origin '{DeclaredOrigin}' but the transport "
-            + "stamped origin '{StampedOrigin}'. A peer may only advance its own stream.",
-            rpc,
-            declaredOrigin,
-            stamped);
-
-        throw new RpcException(new Status(StatusCode.PermissionDenied,
-            $"The origin declared by {rpc} does not match the origin stamped on the call; "
-            + "a peer may only act on its own origin."));
-    }
+    private void EnsureOriginMatchesCaller(ServerCallContext context, string declaredOrigin, string rpc) =>
+        ReplicationAdmittedPeer.EnsureDeclaredOriginIsCaller(context, declaredOrigin, rpc, _logger);
 
     /// <summary>
     /// Records the applied low watermark the authenticated sender shipped as
@@ -539,6 +507,10 @@ internal sealed class LatticeReplicationGrpcService : LatticeReplicationGrpcServ
         // caller's own. Without this a peer could push under a third cluster's
         // origin and poison that stream's cursor.
         EnsureOriginMatchesCaller(context, request.OriginClusterId, nameof(Push));
+
+        // Every entry is keyed on its own origin downstream (high-water mark, dedupe,
+        // inbound contact), so each must be the caller's own too.
+        ReplicationAdmittedPeer.EnsureEntriesFromCaller(request.Entries, request.OriginClusterId, nameof(Push), _logger);
 
         // Record the sender's applied low watermark, if it shipped one, and learn
         // the frontier epoch every ack below reports (#4586 part 2b). Learnt

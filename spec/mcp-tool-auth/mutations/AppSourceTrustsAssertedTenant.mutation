@@ -1,0 +1,14 @@
+# Pairs with ActiveTenantValidated. The app tool source takes the asserted
+# active-tenant header at face value, so a caller asserting a tenant it is not
+# a member of is offered that tenant's app tools.
+MODULE: AppSourceTrustsAssertedTenant
+TARGET: ActiveTenantValidated
+CLASS: Invariant
+SUMMARY: app tools are offered for the asserted tenant without re-resolving it
+PERTURBS: OpenSession
+
+--- FIND
+        app == IF c \in Authenticated /\ appEnabled /\ Resolve(c, hdr) = "A" /\ RoleHeld(policy, c)
+--- REPLACE
+        app == IF c \in Authenticated /\ appEnabled /\ hdr = "A" /\ RoleHeld(policy, c)
+--- END

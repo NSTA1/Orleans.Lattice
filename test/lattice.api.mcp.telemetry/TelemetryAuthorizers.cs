@@ -29,6 +29,24 @@ internal static class TelemetryAuthorizers
     /// </summary>
     public static TelemetryAccessAuthorizer Filtered() => new(new FilteringGate());
 
+    /// <summary>
+    /// An authorizer backed by a gate that allows Telemetry only over a tenant's
+    /// capability scope (#5582) and denies it cluster-wide, modelling a caller
+    /// holding a tenant-confined Telemetry grant.
+    /// </summary>
+    public static TelemetryAccessAuthorizer TenantCapabilityOnly() => new(new TenantCapabilityGate());
+
+    private sealed class TenantCapabilityGate : ILatticeAccessGate
+    {
+        public ValueTask<LatticeAccessDecision> AuthorizeAsync(
+            in LatticeAccessRequest request,
+            CancellationToken cancellationToken = default) =>
+            new(request.Operation == LatticeOperation.Telemetry
+                && request.TreeId.StartsWith(LatticeTenantAdminScope.TenantScopePrefix, StringComparison.Ordinal)
+                    ? LatticeAccessDecision.Allow()
+                    : LatticeAccessDecision.Deny("The caller holds Telemetry only over a tenant capability scope."));
+    }
+
     private sealed class DenyingGate : ILatticeAccessGate
     {
         public ValueTask<LatticeAccessDecision> AuthorizeAsync(

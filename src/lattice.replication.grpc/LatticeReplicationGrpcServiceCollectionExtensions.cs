@@ -154,6 +154,11 @@ public static class LatticeReplicationGrpcServiceCollectionExtensions
         });
         services.TryAddSingleton<LatticeReplicationGrpcAuthInterceptor>();
 
+        // Warn once at startup when origin binding is on but only a cluster-wide
+        // secret is configured, so the binding authenticates no individual origin.
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<Microsoft.Extensions.Hosting.IHostedService, ReplicationOriginBindingStartupCheck>());
+
         // Live-push transport (outbound, client side). Register the
         // concrete transport as its own singleton and forward both the
         // live-push seam and the anti-entropy digest-probe seam to that

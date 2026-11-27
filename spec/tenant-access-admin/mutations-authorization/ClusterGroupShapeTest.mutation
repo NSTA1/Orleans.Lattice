@@ -1,0 +1,13 @@
+# Pairs with ReservedGroupNamespace. LatticeTenantGroupId.IsTenantGroupId is an
+# exact shape test, so t/default/x and malformed t/ ids slip past it.
+MODULE: ClusterGroupShapeTest
+TARGET: ReservedGroupNamespace
+CLASS: Invariant
+SUMMARY: the cluster facade reserves only well-formed tenant group ids, not the whole t/ prefix
+PERTURBS: OperatorUpsertGroup
+
+--- FIND
+          ELSE IF IsTier(g) THEN Refuse("opUpsertGroup", auth, FALSE, "refused", FALSE)
+--- REPLACE
+          ELSE IF g \in WellFormed THEN Refuse("opUpsertGroup", auth, FALSE, "refused", FALSE)
+--- END

@@ -122,6 +122,47 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
     }
 
     [Test]
+    public async Task A_read_only_access_set_is_offered_the_read_tools_and_none_of_the_mutating_ones()
+    {
+        var dataGroup = new DataToolGroup(enableWrites: true);
+        var configurator = CreateConfigurator(
+            new LatticeCredential("alice"),
+            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Data).WithOperations(LatticeOperation.Read),
+            dataGroup);
+
+        var plan = await configurator.BuildSessionPlanAsync(ContextWith(), CancellationToken.None);
+        var names = ToolNames(plan.Tools);
+        var mutating = dataGroup.Tools
+            .Select(t => t.ProtocolTool.Name)
+            .Where(n => dataGroup.RequiredOperationsFor(n) != LatticeApiMcpGroupCapabilityMap.RequiredOperations(LatticeApiMcpGroup.Data))
+            .ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(mutating, Is.Not.Empty, "The fixture must offer mutating tools for the minimum to withhold.");
+            Assert.That(names, Does.Contain("lattice_data_get"));
+            Assert.That(names, Does.Contain("lattice_data_read_range"));
+            Assert.That(names.Intersect(mutating), Is.Empty,
+                "A bare Read grant must not reach a mutating data tool through the coarse group mask.");
+        });
+    }
+
+    [Test]
+    public async Task An_access_set_carrying_no_operations_is_offered_no_group_tool()
+    {
+        var dataGroup = new DataToolGroup(enableWrites: true);
+        var configurator = CreateConfigurator(
+            new LatticeCredential("alice"),
+            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Data),
+            dataGroup);
+
+        var plan = await configurator.BuildSessionPlanAsync(ContextWith(), CancellationToken.None);
+
+        Assert.That(ToolNames(plan.Tools).Where(n => n.StartsWith("lattice_data_", StringComparison.Ordinal)), Is.Empty,
+            "Missing operation evidence is not permission: a group-only access set reaches no tool (#4082).");
+    }
+
+    [Test]
     public async Task Unauthenticated_session_gets_no_tools_and_no_groups()
     {
         var dataGroup = new FakeToolGroup(LatticeApiMcpGroup.Data, "data_read");
@@ -504,6 +545,57 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
             Assert.That(regionTool, Is.InstanceOf<AuthorizedMetaTool>(),
                 "The region-discovery tool must carry the invoke-time half of the lock-step gate.");
             Assert.That(plan.Instructions, Does.Contain("lattice_list_regions"));
+        });
+    }
+
+    [Test]
+    public async Task Region_discovery_tool_refuses_a_caller_whose_grants_were_revoked_after_advertisement()
+    {
+        // A session's tool collection is built once, so the grant condition that
+        // admitted lattice_list_regions at tools/list must be re-checked at
+        // tools/call: a caller revoked after advertisement must stop reading the
+        // region topology (#6205).
+        var access = TestAccessSets.Granting(LatticeApiMcpGroup.Data);
+        var services = new ServiceCollection()
+            .AddSingleton<ILatticeApiMcpAuthorizer>(new AllowAllMcpAuthorizer())
+            .BuildServiceProvider();
+        var configurator = new LatticeApiMcpSessionConfigurator(
+            new FakeBridge(new LatticeCredential("alice")),
+            new FakeResolver(_ => access),
+            [new FakeToolGroup(LatticeApiMcpGroup.Data, "data_read")],
+            services,
+            NullLogger<LatticeApiMcpSessionConfigurator>.Instance);
+
+        var plan = await configurator.BuildSessionPlanAsync(ContextWith(), CancellationToken.None);
+        var regionTool = plan.Tools.Single(t => t.ProtocolTool.Name == "lattice_list_regions");
+
+        await using var invocation = new ServiceCollection()
+            .AddSingleton<ILatticeApiMcpAuthorizer>(new AllowAllMcpAuthorizer())
+            .AddSingleton<IHttpContextAccessor>(new HttpContextAccessor { HttpContext = new DefaultHttpContext() })
+            .AddSingleton<ILatticeApiMcpRegionRouter>(new LatticeApiMcpRegionRouter("us", new[]
+            {
+                new LatticeApiMcpRegionDefinition
+                {
+                    RegionId = "us",
+                    ClusterId = "cluster-us",
+                    IsCurrent = true,
+                    Groups = new Dictionary<LatticeApiMcpGroup, string?> { [LatticeApiMcpGroup.Data] = null },
+                },
+            }))
+            .AddSingleton<Orleans.Lattice.Api.Region.ILatticeRegionCatalog>(sp => new LatticeApiMcpRegionCatalog(
+                sp.GetRequiredService<ILatticeApiMcpRegionRouter>(), sp))
+            .BuildServiceProvider();
+
+        var served = await McpToolInvocation.CallAsync(regionTool, invocation);
+        access = LatticeApiMcpAccessSet.None;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(served.IsError, Is.Not.True, "A caller still holding a grant is served.");
+            Assert.That(
+                async () => await McpToolInvocation.CallAsync(regionTool, invocation),
+                Throws.TypeOf<ModelContextProtocol.McpException>().With.Message.Contain("not authorized"),
+                "A caller whose every grant was revoked after advertisement must be refused.");
         });
     }
 

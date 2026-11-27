@@ -1,0 +1,12 @@
+# Pairs with TenantLayerConfined: the caller's active tenant, not the tree owner, selects the tenant layer of a crossing request.
+
+MODULE: ActiveTenantGoverns
+TARGET: TenantLayerConfined
+CLASS: Invariant
+SUMMARY: the caller's active tenant, not the tree owner, selects the tenant layer of a crossing request
+
+--- FIND
+LayerTenant(c, tree) == tree.tenant
+--- REPLACE
+LayerTenant(c, tree) == ActiveTenant(c)
+--- END

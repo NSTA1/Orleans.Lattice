@@ -157,7 +157,7 @@ internal sealed partial class LatticeTenantDirectoryAdmin
                     // Last-admin protection (D6): a group entry counts as one admin entry, and a
                     // tenant may never be left with none. Checked before anything is written.
                     var inAdminSet = record.HasAdminSubject(groupId);
-                    if (inAdminSet && record.AdminSubjectCount <= 1)
+                    if (inAdminSet && record.AdmissibleAdminSubjectCount <= 1)
                     {
                         throw new TenantLastAdminSubjectException(tenant.Value, groupId);
                     }

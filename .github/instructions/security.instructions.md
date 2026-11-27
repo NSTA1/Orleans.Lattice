@@ -68,6 +68,24 @@ gate will tell you if you forget.
 
 ## Surface-specific invariants
 
+### Authorization decision (`src/lattice.auth`)
+- A matched operator-layer rule (every id outside `tenant:`, including `Tree:*`
+  and `app:`) is final, allow or deny. The tenant layer runs only when no operator
+  rule matches, only on a tenant data tree `t/{tenant}/{name}`, and only with that
+  tree owner's rules; a range filter composes the two layers per key on operator
+  coverage, not on the operator rule's effect.
+- `Telemetry` and `AppInstall` are conferred only by a tree-scope allow on
+  `LatticeScope.ClusterWideTreeId` (`Telemetry` also by a platform allow over one
+  tenant's capability scope), never by a key or prefix rule on the sentinel, a
+  data-plane grant, the tenant layer or the default effect. An unmatched
+  control-plane request is denied whatever the default effect, a key-filtered
+  allow is refused where a whole-scope allow is required, and bootstrap
+  administrators are the one root of trust. A batch is authorized only when every
+  (tree, key) pair is, before any intent is placed.
+- These are model-checked by `spec/auth-decision/` (`AuthDecision`), which also
+  publishes the `Allowed(caller, op, scope)` contract the other authorization
+  modules assume; its refinement note names the detector test for each guard.
+
 ### MCP tool authorization (`src/lattice.api.mcp`)
 - The tool authorizer is consulted at **both** enforcement points - `tools/list`
   advertisement (session configurator) and `tools/call` invocation (credential
@@ -78,7 +96,9 @@ gate will tell you if you forget.
   in a permissive authorizer. This is secure-by-default; do not add an implicit
   allow fallback.
 - The `lattice_capabilities` meta-tool is the only ungated advertisement; do not
-  widen the ungated set.
+  widen the ungated set. `lattice_list_regions` is advertised only to a caller
+  holding a facade grant, and its invocation re-checks that grant as well as the
+  authorizer, because a session's tool collection outlives a revocation (#6205).
 - Discovery must not advertise a capability the caller does not hold. The two
   scopeless operations, which name no tree (`LatticeOperation.Telemetry` and
   `LatticeOperation.AppInstall`), are carried only from an Allow rule written at
@@ -107,6 +127,9 @@ gate will tell you if you forget.
   its size (#4056). Unknown argument names are further reduced to a safe character
   set, truncated, and capped in number (#3972). An authorization denial is never
   marked as a client error; it surfaces as a denial.
+- These are model-checked by `spec/mcp-tool-auth/` (`McpToolAuthorization`), over
+  the `Allowed(caller, op, scope)` contract of `spec/auth-decision/`; its
+  refinement note names the detector test for each guard.
 
 ### Telemetry metric-name allow-list (`src/lattice.api.telemetry`, consumed by `src/lattice.api.mcp.telemetry`)
 - The PromQL `__name__` / metric-name allow-list fails closed: an unparseable,
@@ -165,13 +188,20 @@ gate will tell you if you forget.
   including the dead-letter decorator's single-entry and per-entry branches (#4021).
   The inbound rows are capped, because an admitted run's origin id is still the
   peer's own claim; a new pair beyond the cap is not recorded.
+- These are model-checked by `ReplicationAdmission` in `spec/replication-admission/`,
+  whose merge mode is an open set of write classes; its refinement note names the
+  detector test for each guard.
 
 ### Replication origin binding (`src/lattice.replication`, `src/lattice.replication.grpc`)
 - A body-declared origin cluster id is never an authorization input on its own.
   The gRPC receiver refuses a data-plane call that consumes one (push,
   content-manifest exchange, peer high-water-mark read), and every saga control
   call, unless the transport-stamped origin header is present and names the same
-  cluster; an absent header is refused rather than tolerated (#3893).
+  cluster; an absent header is refused rather than tolerated (#3893). A push is also
+  refused when any entry of its batch names an origin other than the batch's
+  (`ReplicationAdmittedPeer.EnsureEntriesFromCaller`), because the applier keys the
+  high-water mark, dedupe and inbound contact on each entry's own origin; no conforming
+  sender relays, so the sender is the only origin a receiver accepts from it (#6220).
 - `LatticeReplicationSecurityOptions.BindCredentialToOriginCluster` defaults to
   `true` (#4082). With it on, the receiver's gRPC authentication interceptor also
   requires the presented credential to equal the secret this cluster would itself
@@ -181,8 +211,20 @@ gate will tell you if you forget.
   proves only that the caller holds some accepted secret. A missing origin, an
   origin with no configured secret, and a mismatch are one indistinguishable
   `PermissionDenied`, compared in constant time. An estate running an asymmetric
-  per-peer secret scheme must set it to `false`, and must then not rely on a claimed
++
++  origin for any security decision.
   origin for any security decision.
+- Every method bound on the replication gRPC host is registered with one
+  admitted-peer seam (`ReplicationAdmittedPeer`) under its admission class, and the
+  interceptor refuses a method of the replication services the seam does not
+  register (`Unimplemented`, before any credential). A new cross-cluster service
+  registers its methods and calls the seam's checks
+  (`ReplicationAdmittedPeer.EnsureDeclaredOriginIsCaller`,
+  `ReplicationAdmittedPeer.CredentialBoundOrigin`) rather than re-implementing
+  them. `ReplicationAdmittedPeerTests` enumerates every bound method and fails on an
+  unregistered one. This is model-checked by `ReplicationOriginBinding` in
+  `spec/replication-admission/`; its refinement note names the detector test for
+  each guard and the gaps it does not yet close.
 - A coordinated-restore participant acting on a **remote** coordinator's saga runs
   its restore steps under system origin (peer authority), because the operator was
   authorized on the coordinator cluster and the saga carries no user identity
@@ -386,12 +428,48 @@ gate will tell you if you forget.
   silo whose clock runs behind still removes the entry. A cap withdrawal is retried a
   bounded number of times, and one that never lands is reported as a
   `LatticeQuotaExceededException` saying the cap may stay exceeded, never as success.
+- **A death is not proof a silo stopped.** A tenant registry write returns only after
+  every silo that could trust the old policy has acknowledged the new epoch or let its
+  lease lapse, and a fresh `TenantPolicyEpochGrain` or `AppRegistryEpochGrain`
+  activation holds every advance for one lease plus the margin, in case a previous
+  activation granted leases still live. It may end that grace early only once every
+  member has leased from it, or has been seen dead by it for one lease plus the margin:
+  a silo falsely declared dead keeps serving on a lease from the previous activation
+  until it learns it is dead. `AppRegistryEpochGrain` implements this rule; the
+  tenant-policy grain still releases on a death at once (#5719). Model-checked by
+  `spec/tenant-isolation/` (`TenantIsolation`: `NoStaleAuthority` and
+  `NoEarlyGraceRelease`); its refinement note names the detector for each guard.
 - **The conformance suite is the regression guard.** `TenantAccessConformanceTests`
   (`test/lattice.api.tenantadmin/Security/`, Category `Integration`, filter
   `FullyQualifiedName~TenantAccessConformanceTests`) proves the invariants above end to
   end on a real cluster: layering, confinement, claim stripping, isolation, revocation,
   feature-off equivalence, deletion purge, break-glass removal and caps under
   concurrency. Run it, and extend it, when you change any of these seams.
+- **The formal model is `spec/tenant-access-admin/`.** Module `TenantAccessAuthorization`
+  (over the authorization contract's abstract `Allowed`, `spec/auth-decision/`) checks
+  tenant-tier rule confinement, the reserved `t/` namespace, claim stripping whatever
+  the flag, feature-off inertness, authorize-before-disclose and the authorize, validate,
+  write order, each with a mutation that turns it red and detectors in
+  `spec/tenant-access-admin/RefinementAuthorization.md`. Change the model with the seam.
+  Module `TenantAccessMembership` checks the concurrency half: the last-admin guard
+  re-applied to the merged record inside the registry compare-and-set loop and
+  counting only admissible entries, removals stamped later than the slot they
+  supersede on a lagging silo, and admin-set, member-set and role-binding entries
+  that arrive by replication or restore never letting another tenant's group count,
+  with detectors in `spec/tenant-access-admin/RefinementMembership.md`.
+
+### Tenant tree-count admission (`src/lattice.tenancy`, consumed by `src/lattice.api.treeadmin`)
+- **Every registry row a tenant adds passes tree-count admission.** `MaxTreeCount`
+  bounds the rows under the tenant's prefix, read authoritatively from the registry at
+  the decision. A create, and an alias onto a logical id that has no registry row,
+  both pass `ITenantAdmissionController.IsTreeCreateAdmittedAsync` against that one
+  count, after authorization and before the registry write; a re-point of an existing
+  logical id adds no row and is not charged. Admission does not reserve, so concurrent
+  admissions can overshoot by the number in flight. The design, its mutations and its
+  detectors are `TenantTreeCount` in
+  [`spec/tenant-quotas/`](../../spec/tenant-quotas/RefinementTreeCount.md). In the
+  tree-admin facade the alias check is `LatticeTreeAdmin.SetTreeAliasAsync`; do not add a
+  verb that writes a registry row without it.
 
 ## Release-status note for security fixes
 

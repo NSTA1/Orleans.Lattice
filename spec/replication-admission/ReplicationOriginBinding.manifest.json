@@ -1,0 +1,13 @@
+{
+  "mutations": "mutations-origin-binding",
+  "refinement": "RefinementOriginBinding.md",
+  "nonBehaviouralActions": [],
+  "counts": {
+    "invariants": 2,
+    "properties": 0,
+    "actions": 1,
+    "mutations": 11,
+    "behaviourRows": 2,
+    "distinctStates": 1442
+  }
+}
