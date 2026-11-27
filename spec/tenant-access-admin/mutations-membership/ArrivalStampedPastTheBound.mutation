@@ -1,0 +1,13 @@
+# Pairs with TypeOK. A model-domain defect: an arrival stamped beyond
+# MaxStamp leaves the slot domain.
+MODULE: ArrivalStampedPastTheBound
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: an arriving slot carries a stamp past the model's stamp bound
+PERTURBS: ArriveEntry
+
+--- FIND
+    /\ slots' = [slots EXCEPT ![x][e] = MergeSlot(@, Slot(TRUE, PeerStamp))]
+--- REPLACE
+    /\ slots' = [slots EXCEPT ![x][e] = MergeSlot(@, Slot(TRUE, MaxStamp + 1))]
+--- END

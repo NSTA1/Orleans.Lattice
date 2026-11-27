@@ -1,0 +1,12 @@
+# Pairs with TypeOK. A served call that consumes no body-declared origin
+# reports an identity outside the header domain.
+MODULE: ReceiverActedIdentityLeavesDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: a peer-read call's acting identity leaves the header domain
+
+--- FIND
+        acted == IF gate # "pass" THEN NoHeader ELSE verb[2]
+--- REPLACE
+        acted == IF gate # "pass" THEN NoHeader ELSE IF verb[2] = NoHeader THEN "anonymous" ELSE verb[2]
+--- END

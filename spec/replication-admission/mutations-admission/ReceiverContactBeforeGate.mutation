@@ -1,0 +1,13 @@
+# Pairs with ContactOnlyWhenAdmitted. Contact is recorded for every run the
+# receiver sees, so a peer grows the telemetry state with tree ids it chose.
+MODULE: ReceiverContactBeforeGate
+TARGET: ContactOnlyWhenAdmitted
+CLASS: Invariant
+SUMMARY: inbound contact is recorded for a run the gate did not admit
+PERTURBS: ApplyRun
+
+--- FIND
+        record == result = "applied" /\ (<<t, o>> \in contact \/ Cardinality(contact) < Cap)
+--- REPLACE
+        record == (<<t, o>> \in contact \/ Cardinality(contact) < Cap)
+--- END
