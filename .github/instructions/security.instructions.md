@@ -195,7 +195,11 @@ gate will tell you if you forget.
   The gRPC receiver refuses a data-plane call that consumes one (push,
   content-manifest exchange, peer high-water-mark read), and every saga control
   call, unless the transport-stamped origin header is present and names the same
-  cluster; an absent header is refused rather than tolerated (#3893).
+  cluster; an absent header is refused rather than tolerated (#3893). A push is also
+  refused when any entry of its batch names an origin other than the batch's
+  (`ReplicationAdmittedPeer.EnsureEntriesFromCaller`), because the applier keys the
+  high-water mark, dedupe and inbound contact on each entry's own origin; no conforming
+  sender relays, so the sender is the only origin a receiver accepts from it (#6220).
 - `LatticeReplicationSecurityOptions.BindCredentialToOriginCluster` defaults to
   `true` (#4082). With it on, the receiver's gRPC authentication interceptor also
   requires the presented credential to equal the secret this cluster would itself
@@ -205,7 +209,8 @@ gate will tell you if you forget.
   proves only that the caller holds some accepted secret. A missing origin, an
   origin with no configured secret, and a mismatch are one indistinguishable
   `PermissionDenied`, compared in constant time. An estate running an asymmetric
-  per-peer secret scheme must set it to `false`, and must then not rely on a claimed
++
++  origin for any security decision.
   origin for any security decision.
 - Every method bound on the replication gRPC host is registered with one
   admitted-peer seam (`ReplicationAdmittedPeer`) under its admission class, and the

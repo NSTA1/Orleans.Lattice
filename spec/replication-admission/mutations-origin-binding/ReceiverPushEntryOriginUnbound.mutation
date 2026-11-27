@@ -1,0 +1,14 @@
+# Pairs with OriginAuthenticated. The code before the per-entry binding: Push
+# binds the batch's declared origin to the caller but not the origin each entry
+# names, so an entry claiming a third cluster advances or suppresses that
+# cluster's stream under the caller's credential.
+MODULE: ReceiverPushEntryOriginUnbound
+TARGET: OriginAuthenticated
+CLASS: Invariant
+SUMMARY: a pushed entry may name an origin other than the batch's
+
+--- FIND
+         ELSE IF m = "Push" /\ entry # body THEN <<"denied", NoHeader>>
+--- REPLACE
+         ELSE IF FALSE THEN <<"denied", NoHeader>>
+--- END
