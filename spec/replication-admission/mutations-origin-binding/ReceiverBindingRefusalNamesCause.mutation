@@ -1,0 +1,12 @@
+# Pairs with OriginAuthenticated. The binding refusal tells an unknown origin
+# apart from a mismatch, which lets a caller enumerate the configured peers.
+MODULE: ReceiverBindingRefusalNamesCause
+TARGET: OriginAuthenticated
+CLASS: Invariant
+SUMMARY: an origin with no configured secret draws a distinguishable refusal
+
+--- FIND
+    ELSE IF binding /\ ~Bound(hdr, cred) THEN "unbound"
+--- REPLACE
+    ELSE IF binding /\ ~Bound(hdr, cred) THEN (IF hdr # NoHeader /\ Secret(hdr) = NoSecret THEN "unknownOrigin" ELSE "unbound")
+--- END

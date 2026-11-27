@@ -1,0 +1,13 @@
+{
+  "mutations": "mutations-admission",
+  "refinement": "RefinementAdmission.md",
+  "nonBehaviouralActions": ["SetEnrollment"],
+  "counts": {
+    "invariants": 4,
+    "properties": 0,
+    "actions": 2,
+    "mutations": 7,
+    "behaviourRows": 4,
+    "distinctStates": 1740
+  }
+}

@@ -1,0 +1,12 @@
+# Pairs with OriginAuthenticated. The decision query keeps a body-declared
+# requester instead of overwriting it with the stamped origin.
+MODULE: ReceiverRequesterTakenFromBody
+TARGET: OriginAuthenticated
+CLASS: Invariant
+SUMMARY: GetDecision acts for the requester its body names
+
+--- FIND
+         ELSE <<"ok", BoundOrigin(hdr)>>
+--- REPLACE
+         ELSE <<"ok", IF m \in RequesterQuery /\ body # NoBody THEN body ELSE BoundOrigin(hdr)>>
+--- END

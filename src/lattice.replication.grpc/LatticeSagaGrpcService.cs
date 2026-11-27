@@ -226,11 +226,8 @@ internal sealed class LatticeSagaGrpcService : LatticeSagaGrpcServiceBase
         // LatticeReplicationGrpcService.EnsureOriginMatchesCaller - a gate
         // applied to one verb of a family and not its siblings is not a gate,
         // because the caller picks the verb.
-        var origin = GrpcRequestHeaders.Read(context, LatticeReplicationGrpcMetadataNames.OriginClusterIdHeader);
-        if (string.IsNullOrWhiteSpace(origin)
-            || !context.UserState.TryGetValue(LatticeReplicationGrpcAuthInterceptor.AuthenticatedPeerKey, out var authenticatedPeer)
-            || authenticatedPeer is not string peer
-            || !string.Equals(origin, peer, StringComparison.Ordinal))
+        var origin = ReplicationAdmittedPeer.CredentialBoundOrigin(context);
+        if (origin is null)
         {
             _logger.LogWarning(
                 "Saga control {Operation} rejected for saga {SagaId} - the call carries no credential-bound origin cluster.",

@@ -66,12 +66,13 @@ internal sealed class LatticeReplicationGrpcAuthInterceptor : Interceptor
         // unaffected. The full method name is "/{service}/{method}";
         // we match by service-name prefix to keep the interceptor
         // resilient to future RPC additions on the same services.
-        if (!IsLatticeReplicationMethod(GrpcRoutedMethod.Resolve(context)))
+        var method = GrpcRoutedMethod.Resolve(context);
+        if (!IsLatticeReplicationMethod(method))
         {
             return await continuation(request, context).ConfigureAwait(false);
         }
 
-        await EnforceAuthAsync(context).ConfigureAwait(false);
+        await EnforceAuthAsync(context, method).ConfigureAwait(false);
         return await continuation(request, context).ConfigureAwait(false);
     }
 
@@ -87,13 +88,14 @@ internal sealed class LatticeReplicationGrpcAuthInterceptor : Interceptor
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(continuation);
 
-        if (!IsLatticeReplicationMethod(GrpcRoutedMethod.Resolve(context)))
+        var method = GrpcRoutedMethod.Resolve(context);
+        if (!IsLatticeReplicationMethod(method))
         {
             await continuation(request, responseStream, context).ConfigureAwait(false);
             return;
         }
 
-        await EnforceAuthAsync(context).ConfigureAwait(false);
+        await EnforceAuthAsync(context, method).ConfigureAwait(false);
         await continuation(request, responseStream, context).ConfigureAwait(false);
     }
 
@@ -107,7 +109,8 @@ internal sealed class LatticeReplicationGrpcAuthInterceptor : Interceptor
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(continuation);
 
-        if (!IsLatticeReplicationMethod(GrpcRoutedMethod.Resolve(context)))
+        var method = GrpcRoutedMethod.Resolve(context);
+        if (!IsLatticeReplicationMethod(method))
         {
             return await continuation(requestStream, context).ConfigureAwait(false);
         }
@@ -115,7 +118,7 @@ internal sealed class LatticeReplicationGrpcAuthInterceptor : Interceptor
         // A streaming call has no single request message to describe, so the call
         // is identified by its method name alone. The authorization decision is
         // made before the first client message is read.
-        await EnforceAuthAsync(context).ConfigureAwait(false);
+        await EnforceAuthAsync(context, method).ConfigureAwait(false);
         return await continuation(requestStream, context).ConfigureAwait(false);
     }
 
@@ -131,17 +134,34 @@ internal sealed class LatticeReplicationGrpcAuthInterceptor : Interceptor
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(continuation);
 
-        if (!IsLatticeReplicationMethod(GrpcRoutedMethod.Resolve(context)))
+        var method = GrpcRoutedMethod.Resolve(context);
+        if (!IsLatticeReplicationMethod(method))
         {
             await continuation(requestStream, responseStream, context).ConfigureAwait(false);
             return;
         }
 
-        await EnforceAuthAsync(context).ConfigureAwait(false);
+        await EnforceAuthAsync(context, method).ConfigureAwait(false);
         await continuation(requestStream, responseStream, context).ConfigureAwait(false);
     }
-    private async Task EnforceAuthAsync(ServerCallContext context)
+    private async Task EnforceAuthAsync(ServerCallContext context, string method)
     {
+        // The admitted-peer seam must know how this method admits its caller. A method
+        // of the replication services it does not register is refused before any
+        // credential is consulted - even with authentication off - so a newly bound
+        // method or service cannot ship without naming its admission. The refusal is
+        // Unimplemented, the status an unbound method already gets, so a sender that probes
+        // a newer RPC and falls back on Unimplemented (GrpcPushTransport) keeps working.
+        if (!ReplicationAdmittedPeer.TryClassify(method, out _))
+        {
+            _logger.LogWarning(
+                "Replication: rejected inbound gRPC call to {Method} - the method is not registered with the admitted-peer seam.",
+                method);
+            throw new RpcException(new Status(
+                StatusCode.Unimplemented,
+                "The replication method is not registered with the admitted-peer seam."));
+        }
+
         var options = _options.CurrentValue;
         if (!options.RequireAuthentication)
         {
