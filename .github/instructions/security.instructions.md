@@ -186,6 +186,9 @@ gate will tell you if you forget.
   including the dead-letter decorator's single-entry and per-entry branches (#4021).
   The inbound rows are capped, because an admitted run's origin id is still the
   peer's own claim; a new pair beyond the cap is not recorded.
+- These are model-checked by `ReplicationAdmission` in `spec/replication-admission/`,
+  whose merge mode is an open set of write classes; its refinement note names the
+  detector test for each guard.
 
 ### Replication origin binding (`src/lattice.replication`, `src/lattice.replication.grpc`)
 - A body-declared origin cluster id is never an authorization input on its own.
@@ -204,6 +207,17 @@ gate will tell you if you forget.
   `PermissionDenied`, compared in constant time. An estate running an asymmetric
   per-peer secret scheme must set it to `false`, and must then not rely on a claimed
   origin for any security decision.
+- Every method bound on the replication gRPC host is registered with one
+  admitted-peer seam (`ReplicationAdmittedPeer`) under its admission class, and the
+  interceptor refuses a method of the replication services the seam does not
+  register (`Unimplemented`, before any credential). A new cross-cluster service
+  registers its methods and calls the seam's checks
+  (`ReplicationAdmittedPeer.EnsureDeclaredOriginIsCaller`,
+  `ReplicationAdmittedPeer.CredentialBoundOrigin`) rather than re-implementing
+  them. `ReplicationAdmittedPeerTests` enumerates every bound method and fails on an
+  unregistered one. This is model-checked by `ReplicationOriginBinding` in
+  `spec/replication-admission/`; its refinement note names the detector test for
+  each guard and the gaps it does not yet close.
 - A coordinated-restore participant acting on a **remote** coordinator's saga runs
   its restore steps under system origin (peer authority), because the operator was
   authorized on the coordinator cluster and the saga carries no user identity

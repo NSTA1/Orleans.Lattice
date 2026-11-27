@@ -1,0 +1,14 @@
+# Pairs with NonEnrolledDropped. A run for a tree not enrolled here is parked
+# instead of dropped, so a peer spawns a dead-letter activation per tree id it
+# names.
+MODULE: ReceiverDeadLettersNonEnrolled
+TARGET: NonEnrolledDropped
+CLASS: Invariant
+SUMMARY: a non-enrolled tree's run is dead-lettered
+PERTURBS: ApplyRun
+
+--- FIND
+        result == IF mode = NotEnrolled THEN "dropped"
+--- REPLACE
+        result == IF mode = NotEnrolled THEN "deadLettered"
+--- END

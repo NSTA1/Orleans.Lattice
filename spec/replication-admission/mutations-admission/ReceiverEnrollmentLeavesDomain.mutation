@@ -1,0 +1,12 @@
+# Pairs with TypeOK. Disabling a tree records a mode outside the model's
+# domain instead of the not-enrolled marker.
+MODULE: ReceiverEnrollmentLeavesDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: a disabled tree's enrollment leaves the mode domain
+
+--- FIND
+    /\ enrolled' = [enrolled EXCEPT !["t1"] = mode]
+--- REPLACE
+    /\ enrolled' = [enrolled EXCEPT !["t1"] = IF mode = NotEnrolled THEN "Off" ELSE mode]
+--- END
