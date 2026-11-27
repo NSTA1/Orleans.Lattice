@@ -34,7 +34,7 @@ namespace Orleans.Lattice.Api.TreeAdmin.Tests;
 /// </para>
 /// </remarks>
 [TestFixture]
-public sealed class LatticeTreeAdminTenantQuotaTests
+public sealed partial class LatticeTreeAdminTenantQuotaTests
 {
     private const string Tree = "orders";
     private const string AcmeTree = "t/acme/orders";

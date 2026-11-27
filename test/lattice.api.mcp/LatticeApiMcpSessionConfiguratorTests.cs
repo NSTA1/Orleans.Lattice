@@ -122,6 +122,47 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
     }
 
     [Test]
+    public async Task A_read_only_access_set_is_offered_the_read_tools_and_none_of_the_mutating_ones()
+    {
+        var dataGroup = new DataToolGroup(enableWrites: true);
+        var configurator = CreateConfigurator(
+            new LatticeCredential("alice"),
+            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Data).WithOperations(LatticeOperation.Read),
+            dataGroup);
+
+        var plan = await configurator.BuildSessionPlanAsync(ContextWith(), CancellationToken.None);
+        var names = ToolNames(plan.Tools);
+        var mutating = dataGroup.Tools
+            .Select(t => t.ProtocolTool.Name)
+            .Where(n => dataGroup.RequiredOperationsFor(n) != LatticeApiMcpGroupCapabilityMap.RequiredOperations(LatticeApiMcpGroup.Data))
+            .ToArray();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(mutating, Is.Not.Empty, "The fixture must offer mutating tools for the minimum to withhold.");
+            Assert.That(names, Does.Contain("lattice_data_get"));
+            Assert.That(names, Does.Contain("lattice_data_read_range"));
+            Assert.That(names.Intersect(mutating), Is.Empty,
+                "A bare Read grant must not reach a mutating data tool through the coarse group mask.");
+        });
+    }
+
+    [Test]
+    public async Task An_access_set_carrying_no_operations_is_offered_no_group_tool()
+    {
+        var dataGroup = new DataToolGroup(enableWrites: true);
+        var configurator = CreateConfigurator(
+            new LatticeCredential("alice"),
+            LatticeApiMcpAccessSet.None.With(LatticeApiMcpGroup.Data),
+            dataGroup);
+
+        var plan = await configurator.BuildSessionPlanAsync(ContextWith(), CancellationToken.None);
+
+        Assert.That(ToolNames(plan.Tools).Where(n => n.StartsWith("lattice_data_", StringComparison.Ordinal)), Is.Empty,
+            "Missing operation evidence is not permission: a group-only access set reaches no tool (#4082).");
+    }
+
+    [Test]
     public async Task Unauthenticated_session_gets_no_tools_and_no_groups()
     {
         var dataGroup = new FakeToolGroup(LatticeApiMcpGroup.Data, "data_read");

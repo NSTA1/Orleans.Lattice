@@ -1,0 +1,14 @@
+# Pairs with ActiveTenantValidated. The region catalog honours any asserted
+# tenant without re-resolving it, so a caller enumerates another tenant's
+# actionable region set.
+MODULE: RegionsTrustAssertedTenant
+TARGET: ActiveTenantValidated
+CLASS: Invariant
+SUMMARY: the region catalog honours the asserted tenant without ITenantContextResolver
+PERTURBS: CallRegions
+
+--- FIND
+        honoured == hdr # NoTenant /\ Resolve(c, hdr) = hdr
+--- REPLACE
+        honoured == hdr # NoTenant
+--- END
