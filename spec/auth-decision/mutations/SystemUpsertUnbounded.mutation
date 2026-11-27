@@ -1,0 +1,16 @@
+# Pairs with TypeOK: a system-origin write ignores the model's rule bound.
+
+MODULE: SystemUpsertUnbounded
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: a system-origin write ignores the model's rule bound
+PERTURBS: SystemUpsert
+
+--- FIND
+    /\ Cardinality(rules) < MaxRules
+    /\ rules' = rules \cup {r}
+    /\ last' = [Blank EXCEPT !.kind = "write", !.actor = "system", !.rule = r]
+--- REPLACE
+    /\ rules' = rules \cup {r}
+    /\ last' = [Blank EXCEPT !.kind = "write", !.actor = "system", !.rule = r]
+--- END
