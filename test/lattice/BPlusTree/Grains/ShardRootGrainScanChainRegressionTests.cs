@@ -28,7 +28,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// </para>
 /// </summary>
 [TestFixture]
-public class ShardRootGrainScanChainRegressionTests
+public partial class ShardRootGrainScanChainRegressionTests
 {
     private const string TreeId = "scan-chain-tree";
     private const string ShardKey = TreeId + "/0";
@@ -59,7 +59,7 @@ public class ShardRootGrainScanChainRegressionTests
     /// duplicate-range leaf <em>between</em> two row-bearing live leaves and
     /// require the walk to cross it and keep going.
     /// </summary>
-    private static ChainHarness BuildChain(LeafSpec[] specs, bool rootRightmost = false)
+    private static ChainHarness BuildChain(LeafSpec[] specs, bool rootRightmost = false, Action<ShardRootState>? configureState = null)
     {
         var n = specs.Length;
         var context = Substitute.For<IGrainContext>();
@@ -71,6 +71,7 @@ public class ShardRootGrainScanChainRegressionTests
             ids[i] = GrainId.Create("leaf", $"leaf{i}");
         state.State.RootNodeId = rootRightmost ? ids[n - 1] : ids[0];
         state.State.RootIsLeaf = true;
+        configureState?.Invoke(state.State);
 
         var factory = Substitute.For<IGrainFactory>();
         var leaves = new IBPlusLeafGrain[n];
@@ -86,6 +87,8 @@ public class ShardRootGrainScanChainRegressionTests
             leaf.GetKeysAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(),
                     Arg.Any<string?>(), Arg.Any<LatticePredicateNode?>())
                 .Returns(_ => Task.FromResult(keys.ToList()));
+            leaf.CountAsync(Arg.Any<string?>(), Arg.Any<string?>())
+                .Returns(_ => Task.FromResult(keys.Count));
             leaf.GetEntriesAsync(Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(),
                     Arg.Any<string?>(), Arg.Any<LatticePredicateNode?>())
                 .Returns(_ => Task.FromResult(entries.ToList()));
