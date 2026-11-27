@@ -218,6 +218,42 @@ public sealed class AdminAuditReconcilerTests
     }
 
     [Test]
+    public async Task Sweep_never_records_not_committed_from_a_fully_trimmed_wal_window()
+    {
+        // Commit, crash, replicated delete, then the WAL trim removes every entry:
+        // the empty window says nothing about what was written since the intent.
+        var (harness, _) = await PendingAsync(anchorExists: false);
+        harness.Anchor.History = new EntryHistoryPage
+        {
+            Source = EntryHistorySource.WalWindow,
+            Truncated = true,
+            EarliestAvailable = HybridLogicalClock.Zero,
+        };
+        harness.Time.Advance(harness.Options.AdminAuditMaxPendingAge);
+
+        await harness.Reconciler().SweepAsync(CancellationToken.None);
+
+        Assert.That(Final(harness).Outcome, Is.EqualTo(LatticeAdminAuditOutcome.Indeterminate));
+    }
+
+    [Test]
+    public async Task Sweep_never_records_not_committed_when_the_first_surviving_wal_entry_is_a_replay_with_an_older_clock()
+    {
+        var (harness, intent) = await PendingAsync(anchorExists: false);
+        harness.Anchor.History = new EntryHistoryPage
+        {
+            Source = EntryHistorySource.WalWindow,
+            Truncated = true,
+            EarliestAvailable = new HybridLogicalClock { WallClockTicks = (intent.TimestampUtc - TimeSpan.FromHours(1)).UtcTicks },
+        };
+        harness.Time.Advance(harness.Options.AdminAuditMaxPendingAge);
+
+        await harness.Reconciler().SweepAsync(CancellationToken.None);
+
+        Assert.That(Final(harness).Outcome, Is.EqualTo(LatticeAdminAuditOutcome.Indeterminate));
+    }
+
+    [Test]
     public async Task Sweep_only_removes_the_intent_when_the_caller_already_finalized_it()
     {
         var (harness, intent) = await PendingAsync();

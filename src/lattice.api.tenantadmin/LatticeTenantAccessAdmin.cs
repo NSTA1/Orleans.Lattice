@@ -257,15 +257,19 @@ internal sealed class LatticeTenantAccessAdmin : ILatticeTenantAccessAdmin
         // conditional write: the first racer to commit succeeds, and the second
         // re-reads that commit, re-merges, and is refused with nothing written. No
         // remove-then-re-grant, so no second write can fail and strand the tenant.
+        // Changed reports whether the subject was live in the stored record the merge
+        // folded into, so of two concurrent removals of one subject only one reports
+        // a change (#3638).
+        var probe = new TenantStoredRecordProbe(stored => stored.HasAdminSubject(subjectId));
         var merged = await TenantAdminSetCommit
-            .CommitAsync(_registry, record, subjectId, _clock, _writerId, cancellationToken)
+            .CommitAsync(_registry, record, subjectId, _clock, _writerId, cancellationToken, probe)
             .ConfigureAwait(false);
 
         return new TenantAdminSubjectChangeResult
         {
             TenantId = tenant.Value,
             SubjectId = subjectId,
-            Changed = true,
+            Changed = probe.Matched,
             Subjects = merged.AdminSubjects,
         };
     }

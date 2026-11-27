@@ -35,4 +35,24 @@ internal interface IGuardedTenantRegistry
     /// <exception cref="TenantRegistryConcurrencyException">The bounded attempt budget was exhausted; nothing was written.</exception>
     Task<TenantRecord> PutGuardedAsync(
         TenantRecord record, Action<TenantRecord> validateMerged, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Merges <paramref name="record"/> into the stored record exactly as
+    /// <see cref="ITenantRegistry.PutAsync"/> does, running the optional
+    /// <paramref name="validateMerged"/> as <see cref="PutGuardedAsync"/> does, and
+    /// evaluating <paramref name="probe"/> against the stored record each attempt
+    /// merges into. When the call returns, <see cref="TenantStoredRecordProbe.Matched"/>
+    /// reports the stored record of the attempt that committed (#3638).
+    /// </summary>
+    /// <param name="record">The record to merge in. Must not be <c>null</c>.</param>
+    /// <param name="probe">The probe to evaluate on the stored record. Must not be <c>null</c>.</param>
+    /// <param name="validateMerged">An optional validation of the merged record; throws to refuse the commit.</param>
+    /// <param name="cancellationToken">Cancels the write.</param>
+    /// <returns>The stored record after the merge.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="record"/> or <paramref name="probe"/> is <c>null</c>.</exception>
+    Task<TenantRecord> PutProbedAsync(
+        TenantRecord record,
+        TenantStoredRecordProbe probe,
+        Action<TenantRecord>? validateMerged,
+        CancellationToken cancellationToken = default);
 }

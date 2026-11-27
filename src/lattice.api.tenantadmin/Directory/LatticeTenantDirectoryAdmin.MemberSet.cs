@@ -155,11 +155,15 @@ internal sealed partial class LatticeTenantDirectoryAdmin
 
                     // Stamped later than the slot it removes as well as the local clock, so the
                     // removal wins the merge even when another silo's clock wrote the slot ahead
-                    // of this one, and Changed=true means the entry is really gone.
+                    // of this one. Changed reports whether the entry was live in the stored record
+                    // the merge folded into: a concurrent removal of the same entry passes the
+                    // check above too, and only one of the two removed anything (#3638).
                     record.RemoveMemberSubject(storedId, TenantRemovalStamp.ForMemberEntry(_clock, record, storedId), _writerId);
-                    await _registry.PutAsync(record, ct).ConfigureAwait(false);
+                    var (_, removed) = await TenantRecordProbedCommit
+                        .PutAsync(_registry, record, stored => stored.HasMemberSubject(storedId), ct)
+                        .ConfigureAwait(false);
 
-                    return MemberChange(tenant, subjectId, subjectKind, changed: true);
+                    return MemberChange(tenant, subjectId, subjectKind, changed: removed);
                 },
                 static r => r.Changed,
                 cancellationToken)

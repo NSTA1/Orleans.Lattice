@@ -99,6 +99,24 @@ internal sealed class LatticeTenantRegistry(
         }
     }
 
+    /// <inheritdoc />
+    public async Task<TenantRecord> PutProbedAsync(
+        TenantRecord record,
+        TenantStoredRecordProbe probe,
+        Action<TenantRecord>? validateMerged,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        ArgumentNullException.ThrowIfNull(probe);
+        var key = RequireTenantKey(record.Id);
+        await initializer.EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
+
+        using (LatticeSystemOrigin.Enter())
+        {
+            return await PutMergeAsync(Registry, key, record, cancellationToken, validateMerged, probe).ConfigureAwait(false);
+        }
+    }
+
     /// <summary>
     /// The optimistic-concurrency read-merge-write against a supplied
     /// <paramref name="registry"/> tree. Capture the stored record's version,
@@ -112,20 +130,26 @@ internal sealed class LatticeTenantRegistry(
     /// deterministically in a unit test against a substituted <see cref="ILattice"/>.
     /// When <paramref name="validateMerged"/> is supplied it runs on each attempt's
     /// merged record before the conditional write; a throw aborts with nothing
-    /// written (see <see cref="IGuardedTenantRegistry"/>).
+    /// written (see <see cref="IGuardedTenantRegistry"/>). When
+    /// <paramref name="probe"/> is supplied it observes each attempt's stored record
+    /// before the merge, so it reports the stored record of the attempt that committed.
     /// </summary>
     internal async Task<TenantRecord> PutMergeAsync(
         ILattice registry,
         string key,
         TenantRecord record,
         CancellationToken cancellationToken,
-        Action<TenantRecord>? validateMerged = null)
+        Action<TenantRecord>? validateMerged = null,
+        TenantStoredRecordProbe? probe = null)
     {
         for (var attempt = 1; ; attempt++)
         {
             var current = await registry
                 .GetWithVersionAsync(key, _serializer, cancellationToken)
                 .ConfigureAwait(false);
+
+            // Before the merge, which folds the incoming record into the stored one in place.
+            probe?.Observe(current.Value);
 
             // On a miss the version is HybridLogicalClock.Zero, which
             // SetIfVersionAsync treats as "create only if still absent".

@@ -160,7 +160,10 @@ internal static class AdminAuditEvidence
 
         var complete = result.Source switch
         {
-            EntryHistorySource.WalWindow => !(result.Truncated && result.EarliestAvailable.CompareTo(from) > 0),
+            // EarliestAvailable is the first surviving entry's clock, not the trim point:
+            // a fully trimmed partition reports Zero, and a replicated replay keeps its
+            // author's older clock, so neither bounds what the trim removed.
+            EntryHistorySource.WalWindow => !result.Truncated,
             EntryHistorySource.View => viewProvesAbsence,
             _ => false,
         };

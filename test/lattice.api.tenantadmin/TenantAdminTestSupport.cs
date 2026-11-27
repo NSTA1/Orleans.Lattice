@@ -400,6 +400,36 @@ internal static class TenantAdminTestSupport
             return Task.FromResult(stored.Clone());
         }
 
+        /// <summary>
+        /// Models the real registry's probed commit: the probe observes the stored
+        /// record (after any competing write the hook injects) before the merge.
+        /// </summary>
+        public Task<TenantRecord> PutProbedAsync(
+            TenantRecord record,
+            TenantStoredRecordProbe probe,
+            Action<TenantRecord>? validateMerged,
+            CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(record);
+            ArgumentNullException.ThrowIfNull(probe);
+            Puts++;
+            OnBeforeMerge(Puts);
+
+            _records.TryGetValue(record.Id.Value, out var stored);
+            probe.Observe(stored);
+            if (stored is null)
+            {
+                validateMerged?.Invoke(record);
+                stored = record.Clone();
+                _records[record.Id.Value] = stored;
+                return Task.FromResult(stored.Clone());
+            }
+
+            validateMerged?.Invoke(stored.Clone().MergeFrom(record));
+            stored.MergeFrom(record);
+            return Task.FromResult(stored.Clone());
+        }
+
         public Task<bool> DeleteAsync(TenantId tenant, CancellationToken cancellationToken = default)
         {
             Deletes++;
