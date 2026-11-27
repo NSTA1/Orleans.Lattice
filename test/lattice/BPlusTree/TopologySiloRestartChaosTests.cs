@@ -16,7 +16,7 @@ namespace Orleans.Lattice.Tests.BPlusTree;
 /// hosted there are torn down mid-phase and reactivated from durable state.
 /// <para>
 /// Faults a caller may legitimately see while a silo leaves and rejoins are
-/// tolerated (see <see cref="IsSiloChurnFault"/>); nothing else is. A batch whose
+/// tolerated (see <see cref="AtomicWriteSiloRestartChaosTests.IsSiloChurnFault"/>); nothing else is. A batch whose
 /// call faulted may or may not have committed, but it must have committed whole,
 /// and every batch whose call returned must survive the restart. After the change
 /// completes the tree must hold every key at the last committed round and count and
@@ -69,7 +69,8 @@ public class TopologySiloRestartChaosTests
         var tree = _cluster.Client.GetGrain<ILattice>(treeId);
 
         var probe = new AtomicRoundProbe(tree, "restart-tx",
-            isToleratedWriteFault: IsSiloChurnFault, isToleratedReadFault: IsSiloChurnFault);
+            isToleratedWriteFault: AtomicWriteSiloRestartChaosTests.IsSiloChurnFault,
+            isToleratedReadFault: AtomicWriteSiloRestartChaosTests.IsSiloChurnFault);
         await probe.SeedAsync();
         probe.StartReaders();
 
@@ -122,7 +123,7 @@ public class TopologySiloRestartChaosTests
                 default:
                     return await step(ct);
             }
-        }, PhaseBudget, tailRounds: 5, isToleratedStepFault: IsSiloChurnFault);
+        }, PhaseBudget, tailRounds: 5, isToleratedStepFault: AtomicWriteSiloRestartChaosTests.IsSiloChurnFault);
 
         await probe.StopReadersAsync();
         var problems = await probe.VerifyQuiescedAsync($"after {change}");
@@ -141,27 +142,6 @@ public class TopologySiloRestartChaosTests
             Assert.That(probe.RoundsCommitted, Is.GreaterThan(0));
             Assert.That(shards, Has.Count.EqualTo(expectedShards));
         });
-    }
-
-    /// <summary>
-    /// The faults a caller may see while a silo leaves and rejoins the cluster: a
-    /// request to a grain hosted on the departing silo is rejected or times out, its
-    /// activation times out while re-placing, or a saga it was coordinating is parked
-    /// for resumption on the next activation. Inner exceptions are searched, because a
-    /// saga or fan-out wraps the fault of the call that failed.
-    /// </summary>
-    private static bool IsSiloChurnFault(Exception ex)
-    {
-        for (var e = ex; e is not null; e = e.InnerException)
-        {
-            if (e is TimeoutException or SiloUnavailableException or OrleansMessageRejectionException
-                or ShardActivationTimeoutException or LatticeShuttingDownException)
-                return true;
-            if (e is InvalidOperationException && e.Message.Contains("rolled back", StringComparison.Ordinal))
-                return true;
-        }
-
-        return ex is AggregateException agg && agg.InnerExceptions.Any(IsSiloChurnFault);
     }
 
     private sealed class SiloConfigurator : ISiloConfigurator

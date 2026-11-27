@@ -121,6 +121,11 @@ public class AtomicWriteSiloRestartChaosTests
                 return true;
             if (e is InvalidOperationException && e.Message.Contains("rolled back", StringComparison.Ordinal))
                 return true;
+            // Orleans expires a request whose placement waited on a directory partition
+            // or silo that left; it is not the caller's own cancellation.
+            if (e is OperationCanceledException
+                && e.Message.StartsWith("Message expired before placement could complete", StringComparison.Ordinal))
+                return true;
             // Orleans' InMemoryReminderTable disables access at ApplicationServices stop.
             if (e is InvalidOperationException
                 && string.Equals(e.Message, "The reminder service is not currently available.", StringComparison.Ordinal))
