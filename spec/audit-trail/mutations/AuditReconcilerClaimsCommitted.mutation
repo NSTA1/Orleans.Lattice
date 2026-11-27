@@ -1,14 +1,14 @@
-# Pairs with ReconcilerNeverClaimsCommitted. A local revision since the base
-# may be another call's, so claiming it as this call's commit asserts what the
-# reconciler cannot prove.
+# Pairs with ReconcilerNeverClaimsCommitted. A revision since the intent may
+# be another writer's, so claiming a moved anchor as this call's commit
+# asserts what the reconciler cannot prove.
 MODULE: AuditReconcilerClaimsCommitted
 TARGET: ReconcilerNeverClaimsCommitted
 CLASS: Invariant
-SUMMARY: the reconciler claims a commit from a local revision
+SUMMARY: the reconciler claims a commit because the anchor moved
 PERTURBS: Reconcile
 
 --- FIND
-                     [] viewComplete /\ localSince -> "Indeterminate"
+        verdict == CASE movement = "Moved" -> "Indeterminate"
 --- REPLACE
-                     [] viewComplete /\ localSince -> "Committed"
+        verdict == CASE movement = "Moved" -> "Committed"
 --- END

@@ -14,7 +14,7 @@ states which production seams its detectors reach.
 
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 | --- | --- | --- | --- | --- | --- | --- |
-| `AdminAuditTrail` | 9 | 1 | 10 | 24 | 15 | 105,489 |
+| `AdminAuditTrail` | 9 | 1 | 10 | 24 | 15 | 116,154 |
 
 ## AdminAuditTrail
 

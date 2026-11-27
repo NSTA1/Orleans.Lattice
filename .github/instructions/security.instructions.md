@@ -489,8 +489,12 @@ gate will tell you if you forget.
   is written create-only by `AdminAuditStore.WriteFinalAsync`, by the caller or by the
   reconciler, never both. The actor is the resolved caller subject, never a request id.
 - **A record never claims more than the evidence proves.** Committed comes only from
-  the call's own result; no change only when nothing has written the anchor since the
-  intent; a fault that may follow the commit, or an accepted activation, stays pending.
+  the call's own result, taken from the store's merge against the stored record (for
+  tenant records, `IGuardedTenantRegistry.PutProbedAsync` with a
+  `TenantStoredRecordProbe`), never from the authorization read; no change only when
+  `AdminAuditEvidence.CheckMovementAsync` proves nothing has written the anchor since
+  the intent (a truncated or replay-headed history window is unproven, never unmoved);
+  a fault that may follow the commit, or an accepted activation, stays pending.
   The reconciler (`AdminAuditEvidence.ResolveAsync`) never records Committed, records
   not committed only past the maximum pending age, and resolves only its own region's
   intents. Every refusal, of a read or a mutation, writes one Denied record or is

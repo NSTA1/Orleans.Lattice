@@ -181,23 +181,20 @@ Crash(o) ==
 
 \* AdminAuditReconciler.SweepAsync with AdminAuditEvidence.ResolveAsync. Only
 \* this region's intents older than the lease are swept. One whose final row
-\* already exists is only removed. Otherwise: an anchor proven unmoved, by
-\* the same movement check as the caller's (a trimmed history window is
-\* unproven, never unmoved), proves no commit only once the
-\* intent is older than the maximum pending age; a local revision since the
-\* base is Indeterminate; complete history holding only replicated revisions
-\* proves no commit once the intent is past the maximum pending age; anything
-\* else waits, then is Indeterminate. Never Committed.
+\* already exists is only removed. Otherwise the same movement check as the
+\* caller's decides (AdminAuditEvidence.CheckMovementAsync; a trimmed or
+\* replay-headed history window is unproven, never unmoved): a moved anchor,
+\* by any writer, is Indeterminate; an unmoved one proves no commit only once
+\* the intent is older than the maximum pending age; an unproven one waits,
+\* then is Indeterminate. Never Committed.
 Reconcile(o) ==
     LET expired == op[o].age = "expired"
         movement == IF op[o].base # 0 THEN (IF Obs = op[o].base THEN "Unmoved" ELSE "Moved")
                     ELSE IF Obs # 0 THEN "Moved"
                     ELSE IF ~viewComplete THEN "Unproven"
                     ELSE IF Len(hist) = op[o].mark THEN "Unmoved" ELSE "Moved"
-        localSince == \E i \in (op[o].mark + 1)..Len(hist) : hist[i].origin = "local"
-        verdict == CASE movement = "Unmoved" -> IF expired THEN "NotCommitted" ELSE "wait"
-                     [] viewComplete /\ localSince -> "Indeterminate"
-                     [] viewComplete -> IF expired THEN "NotCommitted" ELSE "wait"
+        verdict == CASE movement = "Moved" -> "Indeterminate"
+                     [] movement = "Unmoved" -> IF expired THEN "NotCommitted" ELSE "wait"
                      [] OTHER -> IF expired THEN "Indeterminate" ELSE "wait"
     IN /\ o \in pending
        /\ o \in LocalOps
