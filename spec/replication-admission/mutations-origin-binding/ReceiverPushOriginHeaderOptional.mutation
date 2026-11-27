@@ -1,0 +1,13 @@
+# Pairs with OriginAuthenticated. An origin-bound verb tolerates an absent
+# stamped origin and trusts the body, so with binding off a caller pushes,
+# exchanges a manifest or reads a cursor under any origin it names.
+MODULE: ReceiverPushOriginHeaderOptional
+TARGET: OriginAuthenticated
+CLASS: Invariant
+SUMMARY: an origin-bound verb admits a call that carries no stamped origin
+
+--- FIND
+         ELSE IF hdr = NoHeader \/ hdr # body THEN <<"denied", NoHeader>>
+--- REPLACE
+         ELSE IF hdr # NoHeader /\ hdr # body THEN <<"denied", NoHeader>>
+--- END
