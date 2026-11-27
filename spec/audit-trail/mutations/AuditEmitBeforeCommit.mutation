@@ -8,10 +8,10 @@ SUMMARY: the final record is written as committed before the commit runs
 PERTURBS: Commit
 
 --- FIND
-       /\ op' = [op EXCEPT ![o] = [@ EXCEPT !.pc = "returned", !.landed = lands, !.live = (r = "undecided"), !.result = r]]
+       /\ op' = [op EXCEPT ![o] = [@ EXCEPT !.pc = "returned", !.landed = lands, !.changed = lands, !.live = (r = "undecided"), !.result = r]]
        /\ UNCHANGED <<pending, finals, env>>
 --- REPLACE
-       /\ op' = [op EXCEPT ![o] = [@ EXCEPT !.pc = "returned", !.landed = lands, !.live = (r = "undecided"), !.result = r]]
+       /\ op' = [op EXCEPT ![o] = [@ EXCEPT !.pc = "returned", !.landed = lands, !.changed = lands, !.live = (r = "undecided"), !.result = r]]
 \* MUTATION: the record is emitted as committed ahead of the commit.
        /\ finals' = finals \cup {Row(o, "Committed", op[o].actor, "caller", op[o].secret, op[o].long)}
        /\ pending' = pending \ {o}

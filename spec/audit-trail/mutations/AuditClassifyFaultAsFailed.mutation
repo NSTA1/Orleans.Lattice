@@ -8,9 +8,9 @@ SUMMARY: a fault that may follow the commit is recorded as a failure
 PERTURBS: Finalize
 
 --- FIND
-    LET outcome == CASE op[o].result \in {"infra", "undecided"} -> "Pending"
+        outcome == CASE op[o].result \in {"infra", "undecided"} -> "Pending"
                      [] op[o].result = "domain" -> "Failed"
 --- REPLACE
-    LET outcome == CASE op[o].result = "undecided" -> "Pending"
+        outcome == CASE op[o].result = "undecided" -> "Pending"
                      [] op[o].result \in {"domain", "infra"} -> "Failed"
 --- END

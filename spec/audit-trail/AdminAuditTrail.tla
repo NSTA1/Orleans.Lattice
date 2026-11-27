@@ -64,11 +64,11 @@ Ages == {"young", "leased", "expired"}
 Writers == {"caller", "reconciler", "replication"}
 
 Idle == [caller |-> NoCaller, kind |-> "none", pc |-> "idle", base |-> 0, mark |-> 0,
-         landed |-> FALSE, live |-> FALSE, result |-> "none", age |-> "young", meter |-> FALSE,
+         landed |-> FALSE, changed |-> FALSE, live |-> FALSE, result |-> "none", age |-> "young", meter |-> FALSE,
          actor |-> NoCaller, secret |-> FALSE, long |-> FALSE]
 \* The remote region's call: authorized there, its fate known only there.
 Remote == [caller |-> "admin", kind |-> "put", pc |-> "remote", base |-> 0, mark |-> 0,
-           landed |-> FALSE, live |-> FALSE, result |-> "none", age |-> "expired", meter |-> FALSE,
+           landed |-> FALSE, changed |-> FALSE, live |-> FALSE, result |-> "none", age |-> "expired", meter |-> FALSE,
            actor |-> "admin", secret |-> FALSE, long |-> FALSE]
 
 \* A final audit row: whose call, what it claims, who it attributes, which
@@ -129,30 +129,38 @@ BeginIntent(o, w) ==
 \* removal of an absent anchor writes nothing; a domain refusal writes
 \* nothing; an infrastructure fault strikes after the write, which the
 \* facade cannot tell from one before it; an accepted activation returns
-\* while it is still running.
+\* while it is still running. Whether the call changed anything (changed)
+\* comes from the store's merge against the record it holds at the commit,
+\* never from an earlier read, so of two concurrent removals of one entry only
+\* the one that removed it reports a change.
 Commit(o, r) ==
     LET lands == r \in {"ok", "infra"} /\ (op[o].kind = "put" \/ present)
     IN /\ op[o].pc = "intent"
        /\ hist' = IF lands THEN Append(hist, [origin |-> "local", op |-> o, kind |-> op[o].kind]) ELSE hist
        /\ present' = IF lands THEN op[o].kind = "put" ELSE present
-       /\ op' = [op EXCEPT ![o] = [@ EXCEPT !.pc = "returned", !.landed = lands, !.live = (r = "undecided"), !.result = r]]
+       /\ op' = [op EXCEPT ![o] = [@ EXCEPT !.pc = "returned", !.landed = lands, !.changed = lands, !.live = (r = "undecided"), !.result = r]]
        /\ UNCHANGED <<pending, finals, env>>
 
 \* LatticeAdminAudit.RunAsync and Classify, then
 \* DurableLatticeAdminAuditTrail.CompleteAsync: a fault that may follow the
 \* commit and an undecided result leave the intent Pending; a domain
 \* refusal is Failed. A normal return is Committed only when the call's own
-\* result reports that it wrote (landed); one that wrote nothing is NoChange
-\* only when nothing at all has written the anchor since the intent, and
-\* otherwise Indeterminate, because another writer's revision cannot be told
-\* apart from the call's own. AdminAuditStore.WriteFinalAsync writes the
+\* result reports a change; one that changed nothing is NoChange only when
+\* the anchor is proven unmoved since the intent (CheckMovementAsync: a present
+\* base at the same version, or an absent base whose complete history holds no
+\* revision since the intent), and otherwise Indeterminate: a moved anchor may
+\* be another writer's, and a trimmed history window proves nothing. AdminAuditStore.WriteFinalAsync writes the
 \* final row create-only and removes the intent; a failed write is counted
 \* and left to the reconciler.
 Finalize(o, w) ==
-    LET outcome == CASE op[o].result \in {"infra", "undecided"} -> "Pending"
+    LET movement == IF op[o].base # 0 /\ Obs = op[o].base THEN "Unmoved"
+                    ELSE IF op[o].base # 0 \/ Obs # 0 THEN "Moved"
+                    ELSE IF ~viewComplete THEN "Unproven"
+                    ELSE IF Len(hist) = op[o].mark THEN "Unmoved" ELSE "Moved"
+        outcome == CASE op[o].result \in {"infra", "undecided"} -> "Pending"
                      [] op[o].result = "domain" -> "Failed"
-                     [] op[o].landed -> "Committed"
-                     [] Len(hist) = op[o].mark -> "NoChange"
+                     [] op[o].changed -> "Committed"
+                     [] movement = "Unmoved" -> "NoChange"
                      [] OTHER -> "Indeterminate"
     IN /\ op[o].pc = "returned"
        /\ IF outcome = "Pending" \/ ~w
@@ -173,18 +181,21 @@ Crash(o) ==
 
 \* AdminAuditReconciler.SweepAsync with AdminAuditEvidence.ResolveAsync. Only
 \* this region's intents older than the lease are swept. One whose final row
-\* already exists is only removed. Otherwise: an anchor proven unmoved (a
-\* present base at the same version, or an absent base with complete history
-\* holding no revision since the intent) proves no commit only once the
+\* already exists is only removed. Otherwise: an anchor proven unmoved, by
+\* the same movement check as the caller's (a trimmed history window is
+\* unproven, never unmoved), proves no commit only once the
 \* intent is older than the maximum pending age; a local revision since the
 \* base is Indeterminate; complete history holding only replicated revisions
 \* proves no commit once the intent is past the maximum pending age; anything
 \* else waits, then is Indeterminate. Never Committed.
 Reconcile(o) ==
     LET expired == op[o].age = "expired"
-        unmoved == IF op[o].base # 0 THEN Obs = op[o].base ELSE Obs = 0 /\ viewComplete /\ Len(hist) = op[o].mark
+        movement == IF op[o].base # 0 THEN (IF Obs = op[o].base THEN "Unmoved" ELSE "Moved")
+                    ELSE IF Obs # 0 THEN "Moved"
+                    ELSE IF ~viewComplete THEN "Unproven"
+                    ELSE IF Len(hist) = op[o].mark THEN "Unmoved" ELSE "Moved"
         localSince == \E i \in (op[o].mark + 1)..Len(hist) : hist[i].origin = "local"
-        verdict == CASE unmoved -> IF expired THEN "NotCommitted" ELSE "wait"
+        verdict == CASE movement = "Unmoved" -> IF expired THEN "NotCommitted" ELSE "wait"
                      [] viewComplete /\ localSince -> "Indeterminate"
                      [] viewComplete -> IF expired THEN "NotCommitted" ELSE "wait"
                      [] OTHER -> IF expired THEN "Indeterminate" ELSE "wait"
@@ -266,7 +277,7 @@ RowRecs ==
 
 TypeOK ==
     /\ \A o \in AllOps : op[o].pc \in Pcs /\ op[o].result \in Results /\ op[o].age \in Ages
-    /\ \A o \in AllOps : op[o].landed \in BOOLEAN /\ op[o].live \in BOOLEAN /\ op[o].meter \in BOOLEAN
+    /\ \A o \in AllOps : op[o].landed \in BOOLEAN /\ op[o].changed \in BOOLEAN /\ op[o].live \in BOOLEAN /\ op[o].meter \in BOOLEAN
     /\ present \in BOOLEAN
     /\ Len(hist) <= 5
     /\ pending \subseteq AllOps

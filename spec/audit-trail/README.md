@@ -14,7 +14,7 @@ states which production seams its detectors reach.
 
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 | --- | --- | --- | --- | --- | --- | --- |
-| `AdminAuditTrail` | 9 | 1 | 10 | 22 | 15 | 106,619 |
+| `AdminAuditTrail` | 9 | 1 | 10 | 24 | 15 | 105,489 |
 
 ## AdminAuditTrail
 
@@ -39,7 +39,11 @@ The environment applies one replicated revision of the anchor
 (`ReplicateApply`), holds another region's replicated intent from the start,
 crashes the caller (`Crash`), settles an accepted activation (`Settle`), ages
 intents past the lease and then the maximum pending age (`Tick`), and fixes
-per behaviour whether the anchor's history is complete.
+per behaviour whether the anchor's history is complete. An incomplete history stands for a
+trimmed write-ahead-log window, or one whose first surviving entry is an
+old-clock replay: the movement check the caller and the reconciler share reads
+it as unproven, never unmoved. A call's change comes from the store's merge at
+the commit, so of two concurrent removals of one entry only one is committed.
 
 **Properties.**
 

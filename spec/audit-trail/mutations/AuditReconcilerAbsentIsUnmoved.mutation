@@ -9,7 +9,10 @@ SUMMARY: an anchor absent before and after is taken as proof that nothing commit
 PERTURBS: Reconcile
 
 --- FIND
-        unmoved == IF op[o].base # 0 THEN Obs = op[o].base ELSE Obs = 0 /\ viewComplete /\ Len(hist) = op[o].mark
+        movement == IF op[o].base # 0 THEN (IF Obs = op[o].base THEN "Unmoved" ELSE "Moved")
+                    ELSE IF Obs # 0 THEN "Moved"
+                    ELSE IF ~viewComplete THEN "Unproven"
+                    ELSE IF Len(hist) = op[o].mark THEN "Unmoved" ELSE "Moved"
 --- REPLACE
-        unmoved == Obs = op[o].base
+        movement == IF Obs = op[o].base THEN "Unmoved" ELSE "Moved"
 --- END

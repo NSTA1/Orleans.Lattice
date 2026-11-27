@@ -403,7 +403,7 @@ states as load-bearing, and appends its own row to this table when it lands.
 
 | Module | Surface | Mutants | Behaviour rows | Detector tests | Page |
 |--------|---------|---------|----------------|----------------|------|
-| `AdminAuditTrail` | Admin audit-trail completeness | 22 | 15 | 29 | [Admin audit-trail completeness](../../spec/audit-trail/README.md) |
+| `AdminAuditTrail` | Admin audit-trail completeness | 24 | 15 | 29 | [Admin audit-trail completeness](../../spec/audit-trail/README.md) |
 | `AuthDecision` | Authorization decision layering | 18 | 17 | 41 | [Authorization decision](../../spec/auth-decision/README.md) |
 | `McpToolAuthorization` | MCP tool authorization lock-step | 23 | 12 | 25 | [MCP tool authorization](../../spec/mcp-tool-auth/README.md) |
 | `TenantAccessAuthorization` | Delegated tenant access: authorization | 20 | 20 | 36 | [Delegated tenant-access administration](../../spec/tenant-access-admin/README.md) |

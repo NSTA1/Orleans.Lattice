@@ -9,8 +9,8 @@ SUMMARY: the caller decides no change from anchor equality alone
 PERTURBS: Finalize
 
 --- FIND
-                     [] op[o].landed -> "Committed"
-                     [] Len(hist) = op[o].mark -> "NoChange"
+                     [] op[o].changed -> "Committed"
+                     [] movement = "Unmoved" -> "NoChange"
                      [] OTHER -> "Indeterminate"
 --- REPLACE
                      [] Obs = op[o].base -> "NoChange"

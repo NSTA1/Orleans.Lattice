@@ -8,7 +8,7 @@ SUMMARY: an accepted, still-running activation is finalized when the facade retu
 PERTURBS: Finalize
 
 --- FIND
-    LET outcome == CASE op[o].result \in {"infra", "undecided"} -> "Pending"
+        outcome == CASE op[o].result \in {"infra", "undecided"} -> "Pending"
 --- REPLACE
-    LET outcome == CASE op[o].result = "infra" -> "Pending"
+        outcome == CASE op[o].result = "infra" -> "Pending"
 --- END

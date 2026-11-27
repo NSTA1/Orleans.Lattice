@@ -8,7 +8,7 @@ SUMMARY: an unmoved anchor proves no commit as soon as the lease has passed
 PERTURBS: Reconcile
 
 --- FIND
-        verdict == CASE unmoved -> IF expired THEN "NotCommitted" ELSE "wait"
+        verdict == CASE movement = "Unmoved" -> IF expired THEN "NotCommitted" ELSE "wait"
 --- REPLACE
-        verdict == CASE unmoved -> "NotCommitted"
+        verdict == CASE movement = "Unmoved" -> "NotCommitted"
 --- END

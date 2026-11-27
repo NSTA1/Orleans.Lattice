@@ -8,7 +8,7 @@ SUMMARY: a call that wrote nothing is committed whenever the anchor moved
 PERTURBS: Finalize
 
 --- FIND
-                     [] op[o].landed -> "Committed"
+                     [] op[o].changed -> "Committed"
 --- REPLACE
-                     [] op[o].landed \/ Obs # op[o].base -> "Committed"
+                     [] op[o].changed \/ Obs # op[o].base -> "Committed"
 --- END

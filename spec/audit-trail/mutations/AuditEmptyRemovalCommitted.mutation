@@ -8,7 +8,7 @@ SUMMARY: a removal of an anchor that never existed is committed
 PERTURBS: Finalize
 
 --- FIND
-                     [] op[o].landed -> "Committed"
+                     [] op[o].changed -> "Committed"
 --- REPLACE
-                     [] op[o].landed \/ op[o].base = 0 -> "Committed"
+                     [] op[o].changed \/ op[o].base = 0 -> "Committed"
 --- END
