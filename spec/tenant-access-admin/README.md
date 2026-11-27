@@ -16,7 +16,7 @@ manifest, mutation directory and refinement note. This README is shared.
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 | --- | --- | --- | --- | --- | --- | --- |
 | `TenantAccessAuthorization` | 7 | 1 | 13 | 20 | 20 | 3,398 |
-| `TenantAccessMembership` | 4 | 0 | 8 | 12 | 11 | 17,174 |
+| `TenantAccessMembership` | 4 | 0 | 8 | 13 | 11 | 17,176 |
 
 ## TenantAccessAuthorization
 
@@ -96,8 +96,9 @@ conferred anything.
 **Properties.**
 
 - `LastAdminGuard`: no interleaving of removals and group deletions leaves the
-  tenant's admin set empty, and a refused removal writes nothing. Like the
-  production guard, it counts every live admin entry.
+  tenant without an admin entry that counts for it, and a refused removal
+  writes nothing. An entry that never counts (another tenant's group) does not
+  hold the set open.
 - `RemovalWinsUnderSkew`: a committed removal supersedes the slot it read,
   even when the remover's clock lags the silo or peer that wrote the slot.
 - `NoCrossTenantMembership`: an admin-set, member-set or role-binding entry
@@ -111,7 +112,7 @@ and a malformed `t/` id, two concurrent callers, two silos, and three
 operations (a removal's begin, an add or an arrival) per behaviour; commits
 and decisions are free. Every property is a safety property, and three
 operations reach every counterexample the mutations target, the deepest being
-two racing removals, or an arrival followed by a removal. There are no liveness properties.
+an arrival followed by two racing removals. There are no liveness properties.
 
 ## Refinement and mutations
 

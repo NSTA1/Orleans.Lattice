@@ -23,6 +23,7 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
+- **Tenant access - Last-admin guard ignores foreign entries.** Another tenant's group or a malformed `t/` entry in a tenant's admin set, which only replication or restore can write, no longer lets the last real admin be removed. ([#6204](https://github.com/NSTA1/Orleans.Lattice/issues/6204)) (`Orleans.Lattice.Tenancy`, `Orleans.Lattice.Api.TenantAdmin`)
 - **MCP - Region discovery honours revoked grants.** `lattice_list_regions` re-checks at every call that the caller still holds a facade grant, so a session opened before its grants were revoked stops receiving region topology. ([#6205](https://github.com/NSTA1/Orleans.Lattice/issues/6205)) (`Orleans.Lattice.Api.Mcp`)
 - **Tree admin - Aliases count against the tree quota.** An alias that adds a new logical tree id now passes the tenant's `MaxTreeCount` admission like a create; re-pointing an existing logical tree is still not charged. ([#5333](https://github.com/NSTA1/Orleans.Lattice/issues/5333)) (`Orleans.Lattice.Api.TreeAdmin`)
 - **Replication - Lag reporting and re-seed.** `entries_behind` now reports the WAL tail minus the acknowledged watermark and keeps updating through an outage, and a receiver-requested export that already covers a lineage change no longer forces a second re-seed. ([#5587](https://github.com/NSTA1/Orleans.Lattice/issues/5587), [#5794](https://github.com/NSTA1/Orleans.Lattice/issues/5794)) (`Orleans.Lattice.Replication`)
