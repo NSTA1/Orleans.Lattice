@@ -66,6 +66,23 @@ public sealed class LatticeTenantRegionAdminConcurrencyTests
     }
 
     [Test]
+    public void SetResidencyAsync_while_the_tenant_is_deleted_does_not_recreate_it()
+    {
+        // The tenant's deletion completes inside this call's read-to-write window;
+        // the write back must be refused rather than re-create the tenant from the
+        // copy it read (issue #6230).
+        var registry = new DeletingTenantRegistry(Acme.Value!);
+        registry.Seed(SeededRecord(
+            ["region-a", "region-b"],
+            [("region-a", TenantRegionStatus.Online)]));
+        var admin = Admin(registry);
+
+        Assert.That(
+            async () => await admin.SetResidencyAsync("acme", ["region-a", "region-b"]),
+            Throws.TypeOf<TenantRecordNotFoundException>());
+        Assert.That(registry.Peek(Acme.Value!), Is.Null, "the deleted tenant stays deleted");
+    }
+    [Test]
     public void SetResidencyAsync_refuses_when_a_concurrent_removal_would_empty_residency()
     {
         // Both regions are resident. This caller drops region-b; a second caller

@@ -60,6 +60,7 @@ internal sealed class LatticeTenantAccessAdmin : ILatticeTenantAccessAdmin
     private readonly IOptionsMonitor<LatticeIdentityDirectoryOptions>? _identityDirectoryOptions;
     private readonly ITenantDirectoryStore? _tenantGroups;
     private readonly string? _writerId;
+    private readonly ILatticeAdminAuditTrail? _audit;
 
     /// <summary>
     /// Initializes a new <see cref="LatticeTenantAccessAdmin"/>.
@@ -83,7 +84,8 @@ internal sealed class LatticeTenantAccessAdmin : ILatticeTenantAccessAdmin
     /// entry exists, or <c>null</c> when none is supplied (a tenant-group admin entry
     /// is then refused, fail-closed, because it cannot be verified).
     /// </param>
-    /// <exception cref="ArgumentNullException">Any argument other than <paramref name="identityDirectory"/>, <paramref name="identityDirectoryOptions"/> or <paramref name="tenantGroups"/> is <c>null</c>.</exception>
+    /// <param name="auditTrail">The durable admin audit trail, or <c>null</c> when none is registered (#3638).</param>
+    /// <exception cref="ArgumentNullException">Any argument other than <paramref name="identityDirectory"/>, <paramref name="identityDirectoryOptions"/>, <paramref name="tenantGroups"/> or <paramref name="auditTrail"/> is <c>null</c>.</exception>
     public LatticeTenantAccessAdmin(
         ITenantRegistry registry,
         TenantRegionResidencyAuthorizer authorizer,
@@ -91,7 +93,8 @@ internal sealed class LatticeTenantAccessAdmin : ILatticeTenantAccessAdmin
         IOptions<ClusterOptions> clusterOptions,
         ILatticeIdentityDirectory? identityDirectory = null,
         IOptionsMonitor<LatticeIdentityDirectoryOptions>? identityDirectoryOptions = null,
-        ITenantDirectoryStore? tenantGroups = null)
+        ITenantDirectoryStore? tenantGroups = null,
+        ILatticeAdminAuditTrail? auditTrail = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(authorizer);
@@ -105,6 +108,7 @@ internal sealed class LatticeTenantAccessAdmin : ILatticeTenantAccessAdmin
         _identityDirectoryOptions = identityDirectoryOptions;
         _tenantGroups = tenantGroups;
         _writerId = clusterOptions.Value.ClusterId;
+        _audit = auditTrail;
     }
 
     /// <summary>
@@ -121,9 +125,7 @@ internal sealed class LatticeTenantAccessAdmin : ILatticeTenantAccessAdmin
 
         // The authorizer returns the record, so the read that proved authority is
         // the same read the projection is built from - no second registry hit.
-        var record = await _authorizer
-            .AuthorizeTenantAdminAsync(tenant, AdminSubjectsAction, cancellationToken)
-            .ConfigureAwait(false);
+        var record = await AuthorizeAsync(TenantAdminAudit.Read(tenant), tenant, cancellationToken).ConfigureAwait(false);
 
         return new TenantAdminSubjectReport
         {
@@ -139,10 +141,18 @@ internal sealed class LatticeTenantAccessAdmin : ILatticeTenantAccessAdmin
         var tenant = TenantAdminArguments.ParseTenantId(tenantId);
         ValidateSubjectId(subjectId);
 
-        var record = await _authorizer
-            .AuthorizeTenantAdminAsync(tenant, AdminSubjectsAction, cancellationToken)
-            .ConfigureAwait(false);
+        var audit = TenantAdminAudit.OnTenantRecord(
+            LatticeAdminAuditAction.TenantAdministratorAdd, tenant, LatticeAdminAuditTargetKind.TenantAdministrator, subjectId);
+        var record = await AuthorizeAsync(audit, tenant, cancellationToken).ConfigureAwait(false);
 
+        return await LatticeAdminAudit
+            .RunAsync(_audit, audit, ct => AddCoreAsync(tenant, subjectId, record, ct), static r => r.Changed, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<TenantAdminSubjectChangeResult> AddCoreAsync(
+        TenantId tenant, string subjectId, TenantRecord record, CancellationToken cancellationToken)
+    {
         TenantAdminArguments.ThrowIfReservedTenant(tenant, "add-admin-subject");
 
         // D4: an admin-set entry names a user, a cluster group, or one of this
@@ -202,10 +212,18 @@ internal sealed class LatticeTenantAccessAdmin : ILatticeTenantAccessAdmin
         var tenant = TenantAdminArguments.ParseTenantId(tenantId);
         ValidateSubjectId(subjectId);
 
-        var record = await _authorizer
-            .AuthorizeTenantAdminAsync(tenant, AdminSubjectsAction, cancellationToken)
-            .ConfigureAwait(false);
+        var audit = TenantAdminAudit.OnTenantRecord(
+            LatticeAdminAuditAction.TenantAdministratorRemove, tenant, LatticeAdminAuditTargetKind.TenantAdministrator, subjectId);
+        var record = await AuthorizeAsync(audit, tenant, cancellationToken).ConfigureAwait(false);
 
+        return await LatticeAdminAudit
+            .RunAsync(_audit, audit, ct => RemoveCoreAsync(tenant, subjectId, record, ct), static r => r.Changed, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<TenantAdminSubjectChangeResult> RemoveCoreAsync(
+        TenantId tenant, string subjectId, TenantRecord record, CancellationToken cancellationToken)
+    {
         TenantAdminArguments.ThrowIfReservedTenant(tenant, "remove-admin-subject");
 
         // Idempotent no-op: the subject holds no authority to revoke. Checked ahead
@@ -241,18 +259,33 @@ internal sealed class LatticeTenantAccessAdmin : ILatticeTenantAccessAdmin
         // conditional write: the first racer to commit succeeds, and the second
         // re-reads that commit, re-merges, and is refused with nothing written. No
         // remove-then-re-grant, so no second write can fail and strand the tenant.
+        // Changed reports whether the subject was live in the stored record the merge
+        // folded into, so of two concurrent removals of one subject only one reports
+        // a change (#3638).
+        var probe = new TenantStoredRecordProbe(stored => stored.HasAdminSubject(subjectId));
         var merged = await TenantAdminSetCommit
-            .CommitAsync(_registry, record, subjectId, _clock, _writerId, cancellationToken)
+            .CommitAsync(_registry, record, subjectId, _clock, _writerId, cancellationToken, probe)
             .ConfigureAwait(false);
 
         return new TenantAdminSubjectChangeResult
         {
             TenantId = tenant.Value,
             SubjectId = subjectId,
-            Changed = true,
+            Changed = probe.Matched,
             Subjects = merged.AdminSubjects,
         };
     }
+
+    /// <summary>
+    /// The tenant-tier authorization, with a refusal recorded to the admin audit trail
+    /// before it is rethrown (#3638).
+    /// </summary>
+    private Task<TenantRecord> AuthorizeAsync(LatticeAdminAuditRequest audit, TenantId tenant, CancellationToken cancellationToken) =>
+        LatticeAdminAudit.AuthorizeAsync(
+            _audit,
+            audit,
+            ct => _authorizer.AuthorizeTenantAdminAsync(tenant, AdminSubjectsAction, ct),
+            cancellationToken);
 
     private static TenantAdminSubjectChangeResult Unchanged(
         TenantId tenant, string subjectId, TenantRecord record) =>

@@ -90,6 +90,7 @@ internal sealed partial class LatticeTenantDirectoryAdmin : ILatticeTenantDirect
     private readonly IOptionsMonitor<LatticeIdentityDirectoryOptions>? _identityDirectoryOptions;
     private readonly ILogger _logger;
     private readonly string? _writerId;
+    private readonly ILatticeAdminAuditTrail? _audit;
 
     /// <summary>Initializes a new <see cref="LatticeTenantDirectoryAdmin"/>.</summary>
     /// <param name="registry">The tenancy registry holding the member and admin sets. Must not be <c>null</c>.</param>
@@ -113,7 +114,8 @@ internal sealed partial class LatticeTenantDirectoryAdmin : ILatticeTenantDirect
         Func<bool> delegatedAccessEnabled,
         ILatticeIdentityDirectory? identityDirectory = null,
         IOptionsMonitor<LatticeIdentityDirectoryOptions>? identityDirectoryOptions = null,
-        ILogger<LatticeTenantDirectoryAdmin>? logger = null)
+        ILogger<LatticeTenantDirectoryAdmin>? logger = null,
+        ILatticeAdminAuditTrail? auditTrail = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(authorizer);
@@ -133,6 +135,7 @@ internal sealed partial class LatticeTenantDirectoryAdmin : ILatticeTenantDirect
         _identityDirectoryOptions = identityDirectoryOptions;
         _logger = (ILogger?)logger ?? NullLogger.Instance;
         _writerId = clusterOptions.Value.ClusterId;
+        _audit = auditTrail;
     }
 
     /// <summary>
@@ -140,7 +143,22 @@ internal sealed partial class LatticeTenantDirectoryAdmin : ILatticeTenantDirect
     /// gate and the reserved-tenant refusal, in that order, and returns the record the
     /// authorization read.
     /// </summary>
-    private async Task<TenantRecord> AuthorizeAsync(TenantId tenant, string operation, CancellationToken cancellationToken)
+    private Task<TenantRecord> AuthorizeAsync(TenantId tenant, string operation, CancellationToken cancellationToken) =>
+        AuthorizeAsync(TenantAdminAudit.Read(tenant), tenant, operation, cancellationToken);
+
+    /// <summary>
+    /// The tenant-tier authorization for the audited call <paramref name="audit"/>: a
+    /// refusal is recorded to the admin audit trail before it is rethrown (#3638).
+    /// </summary>
+    private Task<TenantRecord> AuthorizeAsync(
+        LatticeAdminAuditRequest audit, TenantId tenant, string operation, CancellationToken cancellationToken) =>
+        LatticeAdminAudit.AuthorizeAsync(
+            _audit,
+            audit,
+            ct => new ValueTask<TenantRecord>(AuthorizeCoreAsync(tenant, operation, ct)),
+            cancellationToken);
+
+    private async Task<TenantRecord> AuthorizeCoreAsync(TenantId tenant, string operation, CancellationToken cancellationToken)
     {
         var record = await _authorizer
             .AuthorizeTenantAdminAsync(tenant, DirectoryAction, cancellationToken)

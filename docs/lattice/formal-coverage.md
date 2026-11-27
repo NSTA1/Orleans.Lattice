@@ -407,11 +407,11 @@ states as load-bearing, and appends its own row to this table when it lands.
 | `TenantAccessMembership` | Tenant-access membership under concurrency | 12 | 11 | 20 | [Tenant-access membership](../../spec/tenant-access-admin/README.md#tenantaccessmembership) |
 | `McpToolAuthorization` | MCP tool authorization lock-step | 23 | 12 | 25 | [MCP tool authorization](../../spec/mcp-tool-auth/README.md) |
 | `TenantAccessAuthorization` | Delegated tenant access: authorization | 20 | 20 | 36 | [Delegated tenant-access administration](../../spec/tenant-access-admin/README.md) |
-| `TenantGrants` | Cross-tenant grants | 25 | 20 | 36 | [Cross-tenant grants](../../spec/tenant-grants/README.md) |
 | `AppsInstall` | Installable apps | 16 | 15 | 33 | [Installable apps](../../spec/apps-install/README.md) |
 | `ReplicationOriginBinding` | Replication gRPC host admitted-peer seam and origin binding | 10 | 2 | 10 | [Replication receiver admission](../../spec/replication-admission/README.md) |
 | `ReplicationAdmission` | Replication receiver enrollment and merge-mode gate | 7 | 4 | 10 | [Replication receiver admission](../../spec/replication-admission/README.md) |
 | `RestorePeerAuthority` | Coordinated-restore participant peer authority, own-saga decision and cutover fence | 17 | 6 | 23 | [Replication receiver admission](../../spec/replication-admission/README.md) |
+| `TenantGrants` | Cross-tenant grants | 26 | 21 | 40 | [Cross-tenant grants](../../spec/tenant-grants/README.md) |
 
 ## What each area covers, and what it does not
 
@@ -688,13 +688,13 @@ gaps, states its full scope.
     granting tenant indistinguishable from an unoffered grant, and a refused read
     told only the stage that refused it; the record join
     under a concurrent or replicated copy; tenant deletion removing the grants
-    issued to the tenant, so a tenant created under its id inherits none; and
+    issued to the tenant, so a tenant created under its id inherits none, and a
+    grant write racing the deletion never re-creating the tenant; and
     cross-tenant read resolution, admitted only under the reader's own
     authorization, its right to act as the grantee and an active grant covering
     the tree, with the staleness after a returned revocation bounded by the
     tenant-isolation publication window.
-  - **Does not cover:** suspension; a grant write racing the granting tenant's
-    deletion; more than one grant, the
+  - **Does not cover:** suspension; more than one grant, the
     operation set and the stamp tiebreak; the writer's own snapshot, silo
     crashes and epoch grain re-activation, which the tenant-isolation area
     covers; cross-cluster replication lag; the single-step host path; and the

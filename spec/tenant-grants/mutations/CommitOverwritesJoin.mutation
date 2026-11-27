@@ -10,7 +10,7 @@ PERTURBS: CommitCall
 BOUNDS: MaxWrites = 4
 
 --- FIND
-    /\ Commit(fl.verb, fl.caller, fl.auth, fl.present, fl.preActive, fl.cp, Merge(grant, fl.cp), fl.target)
+       THEN Commit(fl.verb, fl.caller, fl.auth, fl.present, fl.preActive, fl.cp, Merge(grant, fl.cp), fl.target)
 --- REPLACE
-    /\ Commit(fl.verb, fl.caller, fl.auth, fl.present, fl.preActive, fl.cp, fl.cp, fl.target)
+       THEN Commit(fl.verb, fl.caller, fl.auth, fl.present, fl.preActive, fl.cp, fl.cp, fl.target)
 --- END

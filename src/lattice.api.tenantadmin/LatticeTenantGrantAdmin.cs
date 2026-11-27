@@ -74,6 +74,7 @@ internal sealed class LatticeTenantGrantAdmin : ILatticeTenantGrantAdmin
     private readonly TenantRegionResidencyAuthorizer _authorizer;
     private readonly ITenantAdminClock _clock;
     private readonly string? _writerId;
+    private readonly ILatticeAdminAuditTrail? _audit;
 
     /// <summary>
     /// Initializes a new <see cref="LatticeTenantGrantAdmin"/>.
@@ -87,7 +88,8 @@ internal sealed class LatticeTenantGrantAdmin : ILatticeTenantGrantAdmin
         ITenantRegistry registry,
         TenantRegionResidencyAuthorizer authorizer,
         ITenantAdminClock clock,
-        IOptions<ClusterOptions> clusterOptions)
+        IOptions<ClusterOptions> clusterOptions,
+        ILatticeAdminAuditTrail? auditTrail = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(authorizer);
@@ -98,6 +100,7 @@ internal sealed class LatticeTenantGrantAdmin : ILatticeTenantGrantAdmin
         _authorizer = authorizer;
         _clock = clock;
         _writerId = clusterOptions.Value.ClusterId;
+        _audit = auditTrail;
     }
 
     /// <inheritdoc />
@@ -108,9 +111,7 @@ internal sealed class LatticeTenantGrantAdmin : ILatticeTenantGrantAdmin
 
         // The authorizer returns the record, so the read that proved authority is
         // the same read the issued projection is built from - no second hit.
-        var record = await _authorizer
-            .AuthorizeTenantAdminAsync(tenant, GrantsAction, cancellationToken)
-            .ConfigureAwait(false);
+        var record = await AuthorizeAsync(TenantAdminAudit.Read(tenant), tenant, cancellationToken).ConfigureAwait(false);
 
         return new TenantGrantReport
         {
@@ -142,10 +143,27 @@ internal sealed class LatticeTenantGrantAdmin : ILatticeTenantGrantAdmin
         // Offering exposes the granting tenant's own data, so it is that tenant's
         // admins (or an operator) who may do it - and their record is the one the
         // offer is written to, so this single read serves both.
-        var record = await _authorizer
-            .AuthorizeTenantAdminAsync(granter, GrantsAction, cancellationToken)
-            .ConfigureAwait(false);
+        var audit = GrantRequest(LatticeAdminAuditAction.GrantOffer, granter, granter, grantee, scope, operations);
+        var record = await AuthorizeAsync(audit, granter, cancellationToken).ConfigureAwait(false);
 
+        return await LatticeAdminAudit
+            .RunAsync(
+                _audit,
+                audit,
+                ct => OfferCoreAsync(record, granter, grantee, scope, engineOperations, ct),
+                static r => r.Changed,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<TenantGrantChangeResult> OfferCoreAsync(
+        TenantRecord record,
+        TenantId granter,
+        TenantId grantee,
+        string scope,
+        TenantGrantOperations engineOperations,
+        CancellationToken cancellationToken)
+    {
         TenantAdminArguments.ThrowIfReservedTenant(granter, "offer-cross-tenant-grant");
         TenantAdminArguments.ThrowIfReservedTenant(grantee, "offer-cross-tenant-grant");
 
@@ -210,18 +228,32 @@ internal sealed class LatticeTenantGrantAdmin : ILatticeTenantGrantAdmin
             .TryAuthorizeTenantAdminAsync(granter, cancellationToken)
             .ConfigureAwait(false);
 
+        var actingTenant = granter;
         if (record is null)
         {
-            await _authorizer
-                .AuthorizeTenantAdminAsync(grantee, GrantsAction, cancellationToken)
+            actingTenant = grantee;
+            await AuthorizeAsync(
+                    GrantRequest(LatticeAdminAuditAction.GrantRevoke, grantee, granter, grantee, scope, operations: null),
+                    grantee,
+                    cancellationToken)
                 .ConfigureAwait(false);
-
-            record = await _registry.GetAsync(granter, cancellationToken).ConfigureAwait(false)
-                ?? throw new TenantGrantNotFoundException(granter.Value, grantee.Value, scope);
         }
 
-        return await TransitionAsync(
-            record, granter, grantee, scope, TenantGrantState.Revoked, cancellationToken).ConfigureAwait(false);
+        var audit = GrantRequest(LatticeAdminAuditAction.GrantRevoke, actingTenant, granter, grantee, scope, operations: null);
+        return await LatticeAdminAudit
+            .RunAsync(
+                _audit,
+                audit,
+                async ct =>
+                {
+                    var current = record
+                        ?? await _registry.GetAsync(granter, ct).ConfigureAwait(false)
+                        ?? throw new TenantGrantNotFoundException(granter.Value, grantee.Value, scope);
+                    return await TransitionAsync(current, granter, grantee, scope, TenantGrantState.Revoked, ct).ConfigureAwait(false);
+                },
+                static r => r.Changed,
+                cancellationToken)
+            .ConfigureAwait(false);
     }
 
     /// <summary>
@@ -242,15 +274,66 @@ internal sealed class LatticeTenantGrantAdmin : ILatticeTenantGrantAdmin
         var (granter, grantee) = ParsePair(granterTenantId, granteeTenantId);
         ValidateScope(scope);
 
-        await _authorizer
-            .AuthorizeTenantAdminAsync(grantee, GrantsAction, cancellationToken)
-            .ConfigureAwait(false);
+        var audit = GrantRequest(
+            target == TenantGrantState.Active ? LatticeAdminAuditAction.GrantApprove : LatticeAdminAuditAction.GrantReject,
+            grantee,
+            granter,
+            grantee,
+            scope,
+            operations: null);
+        await AuthorizeAsync(audit, grantee, cancellationToken).ConfigureAwait(false);
 
-        var record = await _registry.GetAsync(granter, cancellationToken).ConfigureAwait(false)
-            ?? throw new TenantGrantNotFoundException(granter.Value, grantee.Value, scope);
-
-        return await TransitionAsync(record, granter, grantee, scope, target, cancellationToken)
+        return await LatticeAdminAudit
+            .RunAsync(
+                _audit,
+                audit,
+                async ct =>
+                {
+                    var record = await _registry.GetAsync(granter, ct).ConfigureAwait(false)
+                        ?? throw new TenantGrantNotFoundException(granter.Value, grantee.Value, scope);
+                    return await TransitionAsync(record, granter, grantee, scope, target, ct).ConfigureAwait(false);
+                },
+                static r => r.Changed,
+                cancellationToken)
             .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// The tenant-tier authorization of <paramref name="tenant"/>, with a refusal
+    /// recorded to the admin audit trail before it is rethrown (#3638).
+    /// </summary>
+    private Task<TenantRecord> AuthorizeAsync(LatticeAdminAuditRequest audit, TenantId tenant, CancellationToken cancellationToken) =>
+        LatticeAdminAudit.AuthorizeAsync(
+            _audit,
+            audit,
+            ct => _authorizer.AuthorizeTenantAdminAsync(tenant, GrantsAction, ct),
+            cancellationToken);
+
+    /// <summary>
+    /// The admin audit request for a grant step: filed under the acting tenant's
+    /// partition and anchored at the granter's record, which holds the grant.
+    /// </summary>
+    private static LatticeAdminAuditRequest GrantRequest(
+        LatticeAdminAuditAction action,
+        TenantId actingTenant,
+        TenantId granter,
+        TenantId grantee,
+        string scope,
+        TenantGrantAccess? operations)
+    {
+        var detail = new Dictionary<string, string>(2, StringComparer.Ordinal) { ["scope"] = scope };
+        if (operations is { } access)
+        {
+            detail["operations"] = access.ToString();
+        }
+
+        return TenantAdminAudit.Anchored(
+            action,
+            actingTenant,
+            LatticeAdminAuditTargetKind.Grant,
+            string.Concat(granter.Value, "/", grantee.Value),
+            TenantAuditAnchors.Tenant(granter.Value!),
+            detail);
     }
 
     /// <summary>
@@ -311,7 +394,34 @@ internal sealed class LatticeTenantGrantAdmin : ILatticeTenantGrantAdmin
         TenantGrantState target,
         CancellationToken cancellationToken)
     {
-        var merged = await _registry.PutAsync(record, cancellationToken).ConfigureAwait(false);
+        // Changed comes from the stored record this commit merged into, not from the
+        // caller's earlier read: a concurrent identical transition (two revokes) passes
+        // both callers' pre-write checks, and only the one whose merge found the grant
+        // not yet in the target state changed anything (#3638).
+        // The call mutated the record, so it holds the grant as intended.
+        record.TryGetGrant(grantId, out var intended);
+        var intendedOperations = intended.Operations;
+        TenantRecord merged;
+        bool changed;
+        try
+        {
+            (merged, changed) = await TenantRecordProbedCommit
+                .PutAsync(
+                    _registry,
+                    record,
+                    stored => !(stored.TryGetGrant(grantId, out var prior)
+                        && prior.State == target
+                        && prior.Operations == intendedOperations),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (TenantRecordNotFoundException)
+        {
+            // The granting tenant was deleted after its record was read. The update
+            // is refused rather than re-creating it, and the outcome is reported
+            // exactly as an unoffered grant, so the grantee learns nothing more.
+            throw new TenantGrantNotFoundException(granter.Value, grantee.Value, scope);
+        }
 
         if (!merged.TryGetGrant(grantId, out var committed))
         {
@@ -343,7 +453,7 @@ internal sealed class LatticeTenantGrantAdmin : ILatticeTenantGrantAdmin
         return new TenantGrantChangeResult
         {
             Grant = TenantGrantMapping.Describe(granter.Value, committed),
-            Changed = true,
+            Changed = changed,
         };
     }
 

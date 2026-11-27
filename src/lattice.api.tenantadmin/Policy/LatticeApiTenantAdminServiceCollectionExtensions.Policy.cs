@@ -42,6 +42,7 @@ public static partial class LatticeApiTenantAdminServiceCollectionExtensions
             sp.GetService<DelegatedTenantAccessFlag>() is { } flag ? flag.ReadIsEnabled : static () => false,
             sp.GetService<ILatticeMembershipContext>(),
             sp.GetService<ITenantMembershipUsage>(),
-            sp.GetService<ILogger<LatticeTenantPolicyAdmin>>()));
+            sp.GetService<ILogger<LatticeTenantPolicyAdmin>>(),
+            sp.GetService<ILatticeAdminAuditTrail>()));
     }
 }

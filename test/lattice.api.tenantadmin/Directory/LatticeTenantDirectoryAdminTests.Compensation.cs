@@ -247,6 +247,47 @@ public sealed partial class LatticeTenantDirectoryAdminTests
     }
 
     /// <summary>A clock far behind the stamps the tests seed, as on a silo whose wall clock is slow.</summary>
+    // ---- concurrent removals report one change (#3638) -----------------------
+
+    [Test]
+    public async Task RemoveMemberAsync_reports_no_change_when_a_concurrent_removal_of_the_same_member_committed_first()
+    {
+        var registry = new ScriptedRegistry
+        {
+            OnPut = (put, self) =>
+            {
+                if (put == 1)
+                {
+                    // The other racer read the same record, passed the same check, and
+                    // committed its removal inside this call's read-to-write window.
+                    self.Peek(Tenant)!.RemoveMemberSubject("user-x", Stamp(80), "racer");
+                }
+            },
+        };
+        var harness = new Harness(new LatticeSubject(Alice), true, null, false, registry: registry);
+        harness.Committed(Tenant).AddMemberSubject("user-x", Stamp(60), "seed");
+
+        var result = await harness.Admin.RemoveMemberAsync(Tenant, "user-x");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Changed, Is.False, "only the racer's removal removed the member");
+            Assert.That(harness.Committed(Tenant).HasMemberSubject("user-x"), Is.False);
+        });
+    }
+
+    [Test]
+    public async Task RemoveMemberAsync_reports_a_change_when_its_own_merge_removed_the_member()
+    {
+        var registry = new ScriptedRegistry();
+        var harness = new Harness(new LatticeSubject(Alice), true, null, false, registry: registry);
+        harness.Committed(Tenant).AddMemberSubject("user-x", Stamp(60), "seed");
+
+        var result = await harness.Admin.RemoveMemberAsync(Tenant, "user-x");
+
+        Assert.That(result.Changed, Is.True);
+    }
+
     private sealed class BehindClock : ITenantAdminClock
     {
         private long _next = 100;

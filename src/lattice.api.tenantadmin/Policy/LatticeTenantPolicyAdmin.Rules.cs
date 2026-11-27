@@ -39,14 +39,43 @@ internal sealed partial class LatticeTenantPolicyAdmin
         var tenant = TenantAdminArguments.ParseTenantId(tenantId);
         ArgumentNullException.ThrowIfNull(rule);
 
-        var record = await AuthorizeAsync(tenant, nameof(PutRuleAsync), answersWhileDisabled: false, cancellationToken)
+        var request = new LatticeAdminAuditRequest(
+            LatticeAdminAuditAction.RuleUpsert,
+            LatticeAdminAuditRequest.TenantScope(tenant.Value!),
+            LatticeAdminAuditTargetKind.Rule,
+            rule.RuleId,
+            Detail: RuleDetail(rule));
+        var record = await AuthorizeAsync(request, tenant, nameof(PutRuleAsync), answersWhileDisabled: false, cancellationToken)
             .ConfigureAwait(false);
         var scope = TenantPolicyScope.For(tenant);
+
+        // The anchor is the stored rule, known only once the draft has been mapped;
+        // a draft that cannot be mapped is still recorded, as a failed call.
+        LatticeAuthorizationRule mapped;
+        try
+        {
+            mapped = scope.ToStoredRule(rule);
+        }
+        catch (ArgumentException ex)
+        {
+            return await LatticeAdminAudit
+                .RunAsync<TenantRuleView>(_audit, request, _ => Task.FromException<TenantRuleView>(ex), changed: null, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        var audit = request with { Anchor = PolicyAuditAnchors.Rule(mapped.Scope.TreeId, mapped.RuleId) };
+        return await LatticeAdminAudit
+            .RunAsync(_audit, audit, ct => PutRuleCoreAsync(tenant, record, scope, mapped, ct), changed: null, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<TenantRuleView> PutRuleCoreAsync(
+        TenantId tenant, TenantRecord record, TenantPolicyScope scope, LatticeAuthorizationRule stored, CancellationToken cancellationToken)
+    {
         var cap = record.Quotas.EffectiveMaxTenantRules;
 
         // The friendly, typed confinement verdict comes first; the store's own guards
         // re-check the composed rule as the backstop.
-        var stored = scope.ToStoredRule(rule);
         var treeId = stored.Scope.TreeId;
 
         using (LatticeAccessGateContext.EnterSystemOrigin())
@@ -142,6 +171,15 @@ internal sealed partial class LatticeTenantPolicyAdmin
         return survivor;
     }
 
+    /// <summary>The allow-listed detail of a tenant rule write: its shape, never its subject or key.</summary>
+    private static Dictionary<string, string> RuleDetail(TenantRuleDraft rule) =>
+        new(3, StringComparer.Ordinal)
+        {
+            ["effect"] = rule.Effect.ToString(),
+            ["operations"] = rule.Operations.ToString(),
+            ["scopeKind"] = rule.ScopeKind.ToString(),
+        };
+
     private static bool ContainsTree(IReadOnlyList<LatticeAuthorizationRule> rules, string treeId)
     {
         foreach (var rule in rules)
@@ -180,23 +218,37 @@ internal sealed partial class LatticeTenantPolicyAdmin
         var tenant = TenantAdminArguments.ParseTenantId(tenantId);
         ArgumentException.ThrowIfNullOrEmpty(ruleId);
 
-        await AuthorizeAsync(tenant, nameof(RemoveRuleAsync), answersWhileDisabled: false, cancellationToken)
+        var audit = new LatticeAdminAuditRequest(
+            LatticeAdminAuditAction.RuleRemove,
+            LatticeAdminAuditRequest.TenantScope(tenant.Value!),
+            LatticeAdminAuditTargetKind.Rule,
+            ruleId);
+        await AuthorizeAsync(audit, tenant, nameof(RemoveRuleAsync), answersWhileDisabled: false, cancellationToken).ConfigureAwait(false);
+
+        return await LatticeAdminAudit
+            .RunAsync(
+                _audit,
+                audit,
+                async ct =>
+                {                    var scope = TenantPolicyScope.For(tenant);
+
+                    using (LatticeAccessGateContext.EnterSystemOrigin())
+                    {
+                        // Only a tenant:{T}: id is ever addressed, so a platform rule can never be
+                        // removed through this surface.
+                        var census = await CensusAsync(scope, scope.ComposeRuleId(ruleId), ct).ConfigureAwait(false);
+                        var removed = false;
+                        foreach (var match in census.Matches)
+                        {
+                            removed |= await _store.RemoveRuleAsync(match.Scope.TreeId, match.RuleId, ct).ConfigureAwait(false);
+                        }
+
+                        return removed;
+                    }
+                },
+                static removed => removed,
+                cancellationToken)
             .ConfigureAwait(false);
-        var scope = TenantPolicyScope.For(tenant);
-
-        using (LatticeAccessGateContext.EnterSystemOrigin())
-        {
-            // Only a tenant:{T}: id is ever addressed, so a platform rule can never be
-            // removed through this surface.
-            var census = await CensusAsync(scope, scope.ComposeRuleId(ruleId), cancellationToken).ConfigureAwait(false);
-            var removed = false;
-            foreach (var match in census.Matches)
-            {
-                removed |= await _store.RemoveRuleAsync(match.Scope.TreeId, match.RuleId, cancellationToken).ConfigureAwait(false);
-            }
-
-            return removed;
-        }
     }
 
     /// <inheritdoc />

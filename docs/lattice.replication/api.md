@@ -293,7 +293,7 @@ The saga service-provider interfaces let a host join the coordinated cross-clust
 | `SagaControlRequest` | readonly record struct | The request every saga control call carries. `RequesterClusterId` names the participant asking a `GetDecision` query; the receiving transport overwrites it with the authenticated origin, and the coordinator checks it against the saga's recorded participants. | `SagaId`, `TargetTree`, `ManifestId`, `CoordinatorClusterId`, `SetId`, `RequesterClusterId` |
 | `SagaControlResponse` | readonly record struct | A participant cluster's answer to a saga control call. | `SagaId`, `Phase`, `Vote`, `Detail` |
 | `SagaParticipantPrepareResult` | readonly record struct | An `ISagaParticipant` prepare vote. | `Vote`, `Detail` |
-| `LatticeSystemTreeNames` | static class | The reserved system-tree names the replication package owns. | `MembershipGroups`, `MembershipEdges`, `AuthPolicy`, `AuthAudit`, `ReplicationConfig`, `ReplicationConfigMapKey`, `BuildEnrolmentMap`, `BuildReplicationConfigEnrolmentMap` |
+| `LatticeSystemTreeNames` | static class | The reserved system-tree names the replication package owns. | `MembershipGroups`, `MembershipEdges`, `AuthPolicy`, `AuthAudit`, `AdminAudit`, `ReplicationConfig`, `ReplicationConfigMapKey`, `BuildEnrolmentMap`, `BuildReplicationConfigEnrolmentMap` |
 
 ## Tenant isolation and runtime configuration authority
 
@@ -1533,6 +1533,7 @@ The following inventory includes directly declared public members and overloads,
 - `public const string MembershipEdges`
 - `public const string AuthPolicy`
 - `public const string AuthAudit`
+- `public const string AdminAudit`
 - `public const string ReplicationConfig`
 - `public const string ReplicationConfigMapKey`
 - `public static IReadOnlyDictionary<string, LatticeMergeMode> BuildReplicationConfigEnrolmentMap()`

@@ -87,7 +87,7 @@ internal sealed class TenantDirectoryClusterFixture
             record.AddAdminSubject(subject, new HybridLogicalClock { WallClockTicks = ticks++ }, "seed");
         }
 
-        await Registry.PutAsync(record);
+        await Registry.CreateAsync(record);
     }
 
     /// <summary>The caller's resolved groups, as the membership context would resolve them.</summary>

@@ -134,7 +134,7 @@ internal sealed class TenantAccessConformanceClusterFixture
         record.AddAdminSubject(admin, NextStamp(), "seed");
         using (LatticeSystemOrigin.Enter())
         {
-            await Registry.PutAsync(record);
+            await Registry.CreateAsync(record);
         }
 
         return tenant;
@@ -147,7 +147,7 @@ internal sealed class TenantAccessConformanceClusterFixture
         {
             var record = (await Registry.GetAsync(tenant))!;
             record.AddAdminSubject(subjectId, NextStamp(), "seed");
-            await Registry.PutAsync(record);
+            await Registry.CreateAsync(record);
         }
     }
 

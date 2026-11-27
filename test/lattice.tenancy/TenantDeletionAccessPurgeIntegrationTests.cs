@@ -109,8 +109,8 @@ public sealed class TenantDeletionAccessPurgeIntegrationTests
         var granter = TenantId.Parse("delgrant-owner");
         var bystander = TenantId.Parse("delgrant-other");
 
-        await Registry.PutAsync(TenantRecord.Create(deleted, TenantStatus.Active, TenantQuotas.Unbounded, TenantPlacement.Shared, Clock(10), "test"));
-        await Registry.PutAsync(TenantRecord.Create(bystander, TenantStatus.Active, TenantQuotas.Unbounded, TenantPlacement.Shared, Clock(10), "test"));
+        await Registry.CreateAsync(TenantRecord.Create(deleted, TenantStatus.Active, TenantQuotas.Unbounded, TenantPlacement.Shared, Clock(10), "test"));
+        await Registry.CreateAsync(TenantRecord.Create(bystander, TenantStatus.Active, TenantQuotas.Unbounded, TenantPlacement.Shared, Clock(10), "test"));
         var owner = TenantRecord.Create(granter, TenantStatus.Active, TenantQuotas.Unbounded, TenantPlacement.Shared, Clock(10), "test");
         var approved = CrossTenantGrant.Create(deleted.Value, TenantGranteeKind.Tenant, "t/delgrant-owner/orders", TenantGrantOperations.Read);
         owner.OfferGrant(approved, Clock(11), "test");
@@ -123,12 +123,12 @@ public sealed class TenantDeletionAccessPurgeIntegrationTests
             CrossTenantGrant.Create(bystander.Value, TenantGranteeKind.Tenant, "t/delgrant-owner/orders", TenantGrantOperations.Read),
             Clock(14),
             "test");
-        await Registry.PutAsync(owner);
+        await Registry.CreateAsync(owner);
 
         Assert.That(await Registry.DeleteAsync(deleted), Is.True);
 
         // An unrelated customer is later provisioned under the freed id.
-        await Registry.PutAsync(TenantRecord.Create(deleted, TenantStatus.Active, TenantQuotas.Unbounded, TenantPlacement.Shared, Clock(20), "test"));
+        await Registry.CreateAsync(TenantRecord.Create(deleted, TenantStatus.Active, TenantQuotas.Unbounded, TenantPlacement.Shared, Clock(20), "test"));
         var remaining = (await Registry.GetAsync(granter))!.Grants;
 
         Assert.Multiple(() =>
@@ -164,7 +164,7 @@ public sealed class TenantDeletionAccessPurgeIntegrationTests
         var record = TenantRecord.Create(tenant, TenantStatus.Active, TenantQuotas.Unbounded, TenantPlacement.Shared, Clock(10), "test");
         record.AddMemberSubject($"{name}-carol", Clock(11), "test");
         record.AddMemberSubject(ops, Clock(12), "test");
-        await Registry.PutAsync(record);
+        await Registry.CreateAsync(record);
 
         using (LatticeSystemOrigin.Enter())
         {

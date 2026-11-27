@@ -39,8 +39,11 @@ public interface ITenantRegistry
     IAsyncEnumerable<TenantRecord> ListAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Merges <paramref name="record"/> into the stored record for its tenant
-    /// (creating it when absent) and persists the merged result. Because the
+    /// Merges <paramref name="record"/> into the stored record for its tenant and
+    /// persists the merged result. The record must already be stored: an update
+    /// never creates one, so a caller that read a record before its tenant was
+    /// deleted cannot re-create the tenant from that stale copy. Use
+    /// <see cref="CreateAsync"/> to register a tenant. Because the
     /// write is a last-writer-wins join, replaying an older write never regresses
     /// a field and re-applying the same write is idempotent. The merge is written
     /// back conditionally on the version it was read at and, if a competing writer
@@ -52,8 +55,29 @@ public interface ITenantRegistry
     /// <returns>The stored record after the merge.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="record"/> is <c>null</c>.</exception>
     /// <exception cref="ArgumentException"><paramref name="record"/> carries the uninitialised <c>default(TenantId)</c>.</exception>
+    /// <exception cref="TenantRecordNotFoundException">No record is stored for the tenant, for example because it was deleted after <paramref name="record"/> was read.</exception>
     /// <exception cref="TenantRegistryConcurrencyException">Competing writers to the same tenant kept advancing its record, so every attempt lost the conditional write and the bounded attempt budget was exhausted without the merge landing.</exception>
     Task<TenantRecord> PutAsync(TenantRecord record, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Registers <paramref name="record"/>: creates the stored record for its tenant
+    /// when none exists, and otherwise merges into it exactly as
+    /// <see cref="PutAsync"/> does. The one write that may create a record; tenant
+    /// creation and seeding use it, and every update of an existing tenant uses
+    /// <see cref="PutAsync"/>.
+    /// </summary>
+    /// <remarks>
+    /// The default implementation calls <see cref="PutAsync"/>, which is correct for
+    /// an implementation whose <see cref="PutAsync"/> still creates an absent record.
+    /// </remarks>
+    /// <param name="record">The record to register. Must not be <c>null</c>.</param>
+    /// <param name="cancellationToken">Cancels the write.</param>
+    /// <returns>The stored record after the write.</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="record"/> is <c>null</c>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="record"/> carries the uninitialised <c>default(TenantId)</c>.</exception>
+    /// <exception cref="TenantRegistryConcurrencyException">Competing writers kept winning the conditional write until the bounded attempt budget was exhausted.</exception>
+    Task<TenantRecord> CreateAsync(TenantRecord record, CancellationToken cancellationToken = default) =>
+        PutAsync(record, cancellationToken);
 
     /// <summary>
     /// Removes the record for a tenant from the registry. Removing an unknown

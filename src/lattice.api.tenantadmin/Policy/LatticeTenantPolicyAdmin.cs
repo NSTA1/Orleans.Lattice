@@ -76,6 +76,7 @@ internal sealed partial class LatticeTenantPolicyAdmin : ILatticeTenantPolicyAdm
     private readonly ILatticeMembershipContext? _membership;
     private readonly ITenantMembershipUsage? _membershipUsage;
     private readonly ILogger _logger;
+    private readonly ILatticeAdminAuditTrail? _audit;
 
     /// <summary>Initializes a new <see cref="LatticeTenantPolicyAdmin"/>.</summary>
     /// <param name="authorizer">The tenant-tier fail-closed authorization seam. Must not be <see langword="null"/>.</param>
@@ -97,7 +98,8 @@ internal sealed partial class LatticeTenantPolicyAdmin : ILatticeTenantPolicyAdm
         Func<bool> isEnabled,
         ILatticeMembershipContext? membership = null,
         ITenantMembershipUsage? membershipUsage = null,
-        ILogger<LatticeTenantPolicyAdmin>? logger = null)
+        ILogger<LatticeTenantPolicyAdmin>? logger = null,
+        ILatticeAdminAuditTrail? auditTrail = null)
     {
         ArgumentNullException.ThrowIfNull(authorizer);
         ArgumentNullException.ThrowIfNull(store);
@@ -115,6 +117,7 @@ internal sealed partial class LatticeTenantPolicyAdmin : ILatticeTenantPolicyAdm
         _membership = membership;
         _membershipUsage = membershipUsage;
         _logger = (ILogger?)logger ?? NullLogger.Instance;
+        _audit = auditTrail;
     }
 
     /// <summary>
@@ -128,7 +131,27 @@ internal sealed partial class LatticeTenantPolicyAdmin : ILatticeTenantPolicyAdm
     /// <param name="answersWhileDisabled">Whether the operation answers while the feature is off.</param>
     /// <param name="cancellationToken">Cancels the authorization.</param>
     /// <returns>The authorized tenant's record.</returns>
-    private async ValueTask<TenantRecord> AuthorizeAsync(
+    private ValueTask<TenantRecord> AuthorizeAsync(
+        TenantId tenant, string operation, bool answersWhileDisabled, CancellationToken cancellationToken) =>
+        new(AuthorizeAsync(TenantAdminAudit.Read(tenant), tenant, operation, answersWhileDisabled, cancellationToken));
+
+    /// <summary>
+    /// The shared prologue for the audited call <paramref name="audit"/>: a refusal is
+    /// recorded to the admin audit trail before it is rethrown (#3638).
+    /// </summary>
+    private Task<TenantRecord> AuthorizeAsync(
+        LatticeAdminAuditRequest audit,
+        TenantId tenant,
+        string operation,
+        bool answersWhileDisabled,
+        CancellationToken cancellationToken) =>
+        LatticeAdminAudit.AuthorizeAsync(
+            _audit,
+            audit,
+            ct => AuthorizeCoreAsync(tenant, operation, answersWhileDisabled, ct),
+            cancellationToken);
+
+    private async ValueTask<TenantRecord> AuthorizeCoreAsync(
         TenantId tenant, string operation, bool answersWhileDisabled, CancellationToken cancellationToken)
     {
         var record = await _authorizer
