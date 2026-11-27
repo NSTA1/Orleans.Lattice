@@ -1,0 +1,13 @@
+# Pairs with RemovalWinsUnderSkew. A member-set removal stamped by the local
+# clock alone loses the merge to a slot a leading silo or peer wrote.
+MODULE: MemberRemovalStampedWithLocalClock
+TARGET: RemovalWinsUnderSkew
+CLASS: Invariant
+SUMMARY: the member-set removal is stamped with the lagging silo's clock
+PERTURBS: BeginRemoveMember
+
+--- FIND
+                   stamp |-> [x \in Sets |-> IF x = "member" THEN RemovalStamp(clock[s], slots["member"][e]) ELSE 0],
+--- REPLACE
+                   stamp |-> [x \in Sets |-> IF x = "member" THEN clock[s] + 1 ELSE 0],
+--- END
