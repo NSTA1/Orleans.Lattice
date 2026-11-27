@@ -225,6 +225,8 @@ public sealed partial class TlcCiShardTests
                         ? TlcCiShard.SchemaView
                         : module.Name == "BackupRetention"
                         ? TlcCiShard.BackupRetention
+                        : module.Name == "TenantIsolation"
+                        ? TlcCiShard.TenantIsolationVariants
                         : new[] { "auth-decision", "tenant-access-admin", "tenant-grants", "apps-install", "mcp-tool-auth", "replication-admission", "audit-trail" }
                             .Contains(Path.GetFileName(module.Directory))
                         ? TlcCiShard.Security

@@ -439,8 +439,8 @@ gate will tell you if you forget.
   activation granted leases still live. It may end that grace early only once every
   member has leased from it, or has been seen dead by it for one lease plus the margin:
   a silo falsely declared dead keeps serving on a lease from the previous activation
-  until it learns it is dead. `AppRegistryEpochGrain` implements this rule; the
-  tenant-policy grain still releases on a death at once (#5719). Model-checked by
+  until it learns it is dead (#5719). Both grains record the first sighting of each
+  death per activation and measure the window from it. Model-checked by
   `spec/tenant-isolation/` (`TenantIsolation`: `NoStaleAuthority` and
   `NoEarlyGraceRelease`); its refinement note names the detector for each guard.
 - **The conformance suite is the regression guard.** `TenantAccessConformanceTests`
