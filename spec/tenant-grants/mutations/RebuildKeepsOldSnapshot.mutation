@@ -1,0 +1,13 @@
+# Pairs with RevocationTakesEffect. A rebuild that regains authority without
+# reading the registry re-trusts the snapshot the push invalidated.
+MODULE: RebuildKeepsOldSnapshot
+TARGET: RevocationTakesEffect
+CLASS: Invariant
+SUMMARY: once compiled, the rebuild regains authority over the snapshot it already held
+PERTURBS: Rebuild
+
+--- FIND
+    /\ seen' = grant
+--- REPLACE
+    /\ seen' = IF seen.ex THEN seen ELSE grant
+--- END

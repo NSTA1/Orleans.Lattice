@@ -1,0 +1,16 @@
+# Pairs with RevocationTakesEffect. A peer that acknowledges the push but
+# keeps trusting its snapshot serves the revoked grant after the write
+# returned.
+MODULE: DeliverKeepsTrust
+TARGET: RevocationTakesEffect
+CLASS: Invariant
+SUMMARY: the peer acknowledges the epoch push without marking its snapshot out of date
+PERTURBS: Deliver
+
+--- FIND
+    /\ captured' = FALSE
+    /\ trusted' = FALSE
+--- REPLACE
+    /\ captured' = FALSE
+    /\ trusted' = trusted
+--- END

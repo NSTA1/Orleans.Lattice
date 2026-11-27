@@ -1,0 +1,13 @@
+# Pairs with ReadRequiresActiveGrant. A grant covers only the trees under its
+# scope; ignoring it opens every tree of the granting tenant.
+MODULE: ReadIgnoresGrantScope
+TARGET: ReadRequiresActiveGrant
+CLASS: Invariant
+SUMMARY: the grant resolution admits a tree outside the grant's scope
+PERTURBS: Read
+
+--- FIND
+        grantOk == status["A"] = "active" /\ Live(x) /\ x.st = "active" /\ n = "orders"
+--- REPLACE
+        grantOk == status["A"] = "active" /\ Live(x) /\ x.st = "active"
+--- END
