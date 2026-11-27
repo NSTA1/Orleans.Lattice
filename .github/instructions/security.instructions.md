@@ -96,7 +96,9 @@ gate will tell you if you forget.
   in a permissive authorizer. This is secure-by-default; do not add an implicit
   allow fallback.
 - The `lattice_capabilities` meta-tool is the only ungated advertisement; do not
-  widen the ungated set.
+  widen the ungated set. `lattice_list_regions` is advertised only to a caller
+  holding a facade grant, and its invocation re-checks that grant as well as the
+  authorizer, because a session's tool collection outlives a revocation (#6205).
 - Discovery must not advertise a capability the caller does not hold. The two
   scopeless operations, which name no tree (`LatticeOperation.Telemetry` and
   `LatticeOperation.AppInstall`), are carried only from an Allow rule written at
