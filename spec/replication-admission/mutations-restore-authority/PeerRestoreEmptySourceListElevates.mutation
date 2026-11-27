@@ -9,5 +9,5 @@ PERTURBS: Prepare
 --- FIND
           ELSE IF up /\ ~SourcesEnrolled(b, t)
 --- REPLACE
-          ELSE IF up /\ Sources(b, t) # {} /\ ~SourcesEnrolled(b, t)
+          ELSE IF up /\ (\A m \in t : Sources(b, m) # {}) /\ ~SourcesEnrolled(b, t)
 --- END

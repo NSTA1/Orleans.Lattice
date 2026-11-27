@@ -7,9 +7,9 @@ SUMMARY: a prepare builds a tree this cluster does not replicate under peer auth
 PERTURBS: Prepare
 
 --- FIND
-       /\ prepCoord' = c
-       /\ IF ~Hosted(t)
+Prepare(ch, bound, claimed, ts, b) ==
+    LET t == Members(ts)
 --- REPLACE
-       /\ prepCoord' = c
-       /\ IF FALSE
+Prepare(ch, bound, claimed, ts, b) ==
+    LET t == ts
 --- END

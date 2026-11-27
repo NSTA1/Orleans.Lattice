@@ -31,9 +31,10 @@ Channels == {"grpc", "local"}
 
 \* ---- Trees and backups ----
 Trees == {"t1", "t2"}
-NoShadow == "none"
-\* The trees a backup's chain was captured from. "bSelf" is a backup of the
-\* restore target itself, "bOther" of t2, "bEmpty" a report naming no source;
+Targets == SUBSET Trees \ {{}}
+NoShadow == {}
+\* The trees a backup's chain was captured from, for each restored tree. "bSelf"
+\* is a backup of the restored tree itself, "bOther" of t2, "bEmpty" a report naming no source;
 \* "bMissing" does not exist, so its admission probe fails.
 Backups == {"bSelf", "bOther", "bEmpty", "bMissing"}
 Exists(b) == b # "bMissing"
@@ -44,12 +45,12 @@ Decisions == {"none", "commit", "abort"}
 VARIABLES wired, enrolled, topology, decision, prepCoord, cache, fence, obs
 vars == <<wired, enrolled, topology, decision, prepCoord, cache, fence, obs>>
 
-NoObs == [kind |-> "none", step |-> "none", ch |-> "none", coord |-> NoCluster, bound |-> NoCluster,
-          target |-> "none", backup |-> "none", auth |-> "none", durable |-> "none", readOk |-> FALSE,
+NoObs == [kind |-> "none", swapped |-> {}, step |-> "none", ch |-> "none", coord |-> NoCluster, bound |-> NoCluster,
+          target |-> {}, backup |-> "none", auth |-> "none", durable |-> "none", readOk |-> FALSE,
           cached |-> FALSE, built |-> FALSE, engaged |-> FALSE, reply |-> "none"]
 
-Obs(kind, step, ch, coord, bound, t, b, auth, durable, readOk, cached, built, engaged, reply) ==
-    [kind |-> kind, step |-> step, ch |-> ch, coord |-> coord, bound |-> bound, target |-> t,
+Obs(kind, sw, step, ch, coord, bound, t, b, auth, durable, readOk, cached, built, engaged, reply) ==
+    [kind |-> kind, swapped |-> sw, step |-> step, ch |-> ch, coord |-> coord, bound |-> bound, target |-> t,
      backup |-> b, auth |-> auth, durable |-> durable, readOk |-> readOk, cached |-> cached,
      built |-> built, engaged |-> engaged, reply |-> reply]
 
@@ -69,14 +70,18 @@ Admitted(step, ch, bound, claimed) ==
 \* gRPC saga service overwrites it with the credential-bound origin.
 Coord(ch, bound, claimed) == IF ch = "grpc" THEN bound ELSE claimed
 
-\* RestoreParticipant.IsHostedTarget: a no-op when the membership seam is not wired.
-Hosted(t) == ~wired \/ t \in enrolled
+\* The requested trees this cluster hosts: RestoreParticipant.IsHostedTarget for
+\* a single tree and RestoreParticipant.FilterHostedMembers for a set, each a
+\* no-op when the membership seam is not wired.
+Members(ts) == IF wired THEN ts \cap enrolled ELSE ts
+Hosted(t) == t # {}
 
 \* RestoreParticipant.HasPeerAuthority.
 HasPeerAuthority(c) == wired /\ c \notin {Self, NoCluster} /\ c \in topology
 
-\* RestoreParticipant.SourcesEnrolled: an empty source list refuses.
-SourcesEnrolled(b, t) == Sources(b, t) # {} /\ Sources(b, t) \subseteq enrolled \cup {t}
+\* RestoreParticipant.SourcesEnrolled, for every restored tree: an empty source
+\* list refuses.
+SourcesEnrolled(b, t) == \A m \in t : Sources(b, m) # {} /\ Sources(b, m) \subseteq enrolled \cup {m}
 
 \* Whether the step names this cluster's own saga (needs the options seam).
 Own(c) == wired /\ c = Self
@@ -93,31 +98,35 @@ Init ==
     /\ obs = NoObs
 
 \* A participant receives a prepare: the hosting gate, then the admission probe
-\* and the captured-source confinement, then the unfenced shadow build.
-Prepare(ch, bound, claimed, t, b) ==
-    LET c == Coord(ch, bound, claimed)
+\* and the captured-source confinement, then the unfenced shadow build of every
+\* hosted tree.
+Prepare(ch, bound, claimed, ts, b) ==
+    LET t == Members(ts)
+        c == Coord(ch, bound, claimed)
         up == HasPeerAuthority(c)
         auth == IF up THEN "peer" ELSE "ambient"
     IN /\ Admitted("prepare", ch, bound, claimed)
        /\ prepCoord' = c
        /\ IF ~Hosted(t)
-          THEN /\ obs' = Obs("refused", "prepare", ch, c, bound, t, b, "none", "none", FALSE, FALSE, FALSE, FALSE, "notReplicated")
+          THEN /\ obs' = Obs("refused", {}, "prepare", ch, c, bound, t, b, "none", "none", FALSE, FALSE, FALSE, FALSE, "notReplicated")
                /\ UNCHANGED cache
           ELSE IF ~Exists(b)
-          THEN /\ obs' = Obs("refused", "prepare", ch, c, bound, t, b, auth, "none", FALSE, FALSE, FALSE, FALSE, IF up THEN "peerRefusal" ELSE "probeFailed")
+          THEN /\ obs' = Obs("refused", {}, "prepare", ch, c, bound, t, b, auth, "none", FALSE, FALSE, FALSE, FALSE, IF up THEN "peerRefusal" ELSE "probeFailed")
                /\ UNCHANGED cache
           ELSE IF up /\ ~SourcesEnrolled(b, t)
-          THEN /\ obs' = Obs("refused", "prepare", ch, c, bound, t, b, auth, "none", FALSE, FALSE, FALSE, FALSE, "peerRefusal")
+          THEN /\ obs' = Obs("refused", {}, "prepare", ch, c, bound, t, b, auth, "none", FALSE, FALSE, FALSE, FALSE, "peerRefusal")
                /\ UNCHANGED cache
-          ELSE /\ obs' = Obs("build", "prepare", ch, c, bound, t, b, auth, "none", FALSE, FALSE, TRUE, FALSE, "commit")
+          ELSE /\ obs' = Obs("build", {}, "prepare", ch, c, bound, t, b, auth, "none", FALSE, FALSE, TRUE, FALSE, "commit")
                /\ cache' = t
        /\ UNCHANGED <<wired, enrolled, topology, decision, fence>>
 
 \* A participant receives a commit: the hosting gate, the step's authority,
-\* a rebuild when the cached shadow was lost, then the fenced cutover. A
-\* commit names the target the shadow was built for.
-Commit(ch, bound, claimed, t, b, readOk, cutOk) ==
-    LET c == Coord(ch, bound, claimed)
+\* a rebuild when the cached shadows were lost, then the fenced cutover of the
+\* hosted trees. A commit names the targets the shadows were built for, and
+\* swaps a cached shadow only for a tree it still hosts.
+Commit(ch, bound, claimed, ts, b, readOk, cutOk) ==
+    LET t == Members(ts)
+        c == Coord(ch, bound, claimed)
         up == HasPeerAuthority(c)
         read == IF readOk THEN decision ELSE "unreadable"
         auth == IF up THEN "peer"
@@ -128,36 +137,39 @@ Commit(ch, bound, claimed, t, b, readOk, cutOk) ==
         cached == cache # NoShadow
         dur == IF Own(c) /\ ~up THEN decision ELSE "none"
         rok == readOk /\ Own(c) /\ ~up
+        sw == IF cached THEN cache \cap t ELSE t
     IN /\ Admitted("commit", ch, bound, claimed)
-       /\ cached => t = cache /\ b = "bSelf"
+       /\ cached => cache \subseteq ts /\ b = "bSelf"
+       /\ sw = {} => cutOk
        /\ IF ~Hosted(t)
           THEN /\ fence' = "off"
-               /\ obs' = Obs("refused", "commit", ch, c, bound, t, b, "none", dur, rok, cached, FALSE, FALSE, "notReplicated")
+               /\ obs' = Obs("refused", {}, "commit", ch, c, bound, t, b, "none", dur, rok, cached, FALSE, FALSE, "notReplicated")
                /\ UNCHANGED cache
           ELSE IF auth = "refused"
-          THEN /\ obs' = Obs("refused", "commit", ch, c, bound, t, b, auth, dur, rok, cached, FALSE, FALSE, "undecided")
+          THEN /\ obs' = Obs("refused", {}, "commit", ch, c, bound, t, b, auth, dur, rok, cached, FALSE, FALSE, "undecided")
                /\ UNCHANGED <<cache, fence>>
           ELSE IF ~cached /\ up /\ ~SourcesEnrolled(b, t)
           THEN /\ fence' = "off"
-               /\ obs' = Obs("refused", "commit", ch, c, bound, t, b, auth, dur, rok, cached, FALSE, FALSE, "notReplicated")
+               /\ obs' = Obs("refused", {}, "commit", ch, c, bound, t, b, auth, dur, rok, cached, FALSE, FALSE, "notReplicated")
                /\ UNCHANGED cache
           ELSE IF ~cached /\ ~Exists(b)
-          THEN /\ obs' = Obs("failed", "commit", ch, c, bound, t, b, auth, dur, rok, cached, FALSE, FALSE, "buildFailed")
+          THEN /\ obs' = Obs("failed", {}, "commit", ch, c, bound, t, b, auth, dur, rok, cached, FALSE, FALSE, "buildFailed")
                /\ UNCHANGED <<cache, fence>>
           ELSE IF cutOk
           THEN /\ fence' = "unblocked"
-               /\ cache' = t
-               /\ obs' = Obs("swap", "commit", ch, c, bound, t, b, auth, dur, rok, cached, ~cached, TRUE, "committed")
+               /\ cache' = sw
+               /\ obs' = Obs("swap", sw, "commit", ch, c, bound, t, b, auth, dur, rok, cached, ~cached, TRUE, "committed")
           ELSE /\ fence' = "unblocked"
-               /\ cache' = t
-               /\ obs' = Obs("cutoverFailed", "commit", ch, c, bound, t, b, auth, dur, rok, cached, ~cached, TRUE, "cutoverFailed")
+               /\ cache' = sw
+               /\ obs' = Obs("cutoverFailed", sw, "commit", ch, c, bound, t, b, auth, dur, rok, cached, ~cached, TRUE, "cutoverFailed")
        /\ UNCHANGED <<wired, enrolled, topology, decision, prepCoord>>
 
 \* A participant receives an abort, from the coordinator or from its own grain
 \* after a fence expiry: the hosting gate, the step's authority, then the
 \* compensation (revert, shadow garbage collection, fence lift).
-Abort(ch, bound, claimed, t, readOk) ==
-    LET c == Coord(ch, bound, claimed)
+Abort(ch, bound, claimed, ts, readOk) ==
+    LET t == Members(ts)
+        c == Coord(ch, bound, claimed)
         up == HasPeerAuthority(c)
         read == IF readOk THEN decision ELSE "unreadable"
         cached == cache # NoShadow
@@ -168,12 +180,12 @@ Abort(ch, bound, claimed, t, readOk) ==
         dur == IF Own(c) /\ ~up THEN decision ELSE "none"
         rok == readOk /\ Own(c) /\ ~up
     IN /\ Admitted("abort", ch, bound, claimed)
-       /\ cached => t = cache
+       /\ cached => cache \subseteq ts
        /\ fence' = "off"
        /\ IF ~Hosted(t)
-          THEN /\ obs' = Obs("refused", "abort", ch, c, bound, t, "none", "none", dur, rok, cached, FALSE, FALSE, "notReplicated")
+          THEN /\ obs' = Obs("refused", {}, "abort", ch, c, bound, t, "none", "none", dur, rok, cached, FALSE, FALSE, "notReplicated")
                /\ UNCHANGED cache
-          ELSE /\ obs' = Obs("compensate", "abort", ch, c, bound, t, "none", auth, dur, rok, cached, FALSE, FALSE, "aborted")
+          ELSE /\ obs' = Obs("compensate", {}, "abort", ch, c, bound, t, "none", auth, dur, rok, cached, FALSE, FALSE, "aborted")
                /\ cache' = NoShadow
        /\ UNCHANGED <<wired, enrolled, topology, decision, prepCoord>>
 
@@ -211,9 +223,9 @@ SetTopology(p) ==
     /\ UNCHANGED <<wired, enrolled, decision, prepCoord, cache, fence>>
 
 Next ==
-    \/ \E ch \in Channels, bound \in Peers \cup {NoCluster}, claimed \in Clusters \cup {NoCluster}, t \in Trees, b \in Backups : Prepare(ch, bound, claimed, t, b)
-    \/ \E ch \in Channels, bound \in Peers \cup {NoCluster}, claimed \in Clusters \cup {NoCluster}, t \in Trees, b \in Backups, r \in BOOLEAN, ok \in BOOLEAN : Commit(ch, bound, claimed, t, b, r, ok)
-    \/ \E ch \in Channels, bound \in Peers \cup {NoCluster}, claimed \in Clusters \cup {NoCluster}, t \in Trees, r \in BOOLEAN : Abort(ch, bound, claimed, t, r)
+    \/ \E ch \in Channels, bound \in Peers \cup {NoCluster}, claimed \in Clusters \cup {NoCluster}, ts \in Targets, b \in Backups : Prepare(ch, bound, claimed, ts, b)
+    \/ \E ch \in Channels, bound \in Peers \cup {NoCluster}, claimed \in Clusters \cup {NoCluster}, ts \in Targets, b \in Backups, r \in BOOLEAN, ok \in BOOLEAN : Commit(ch, bound, claimed, ts, b, r, ok)
+    \/ \E ch \in Channels, bound \in Peers \cup {NoCluster}, claimed \in Clusters \cup {NoCluster}, ts \in Targets, r \in BOOLEAN : Abort(ch, bound, claimed, ts, r)
     \/ \E d \in {"commit", "abort"} : Decide(d)
     \/ LoseCache
     \/ FenceExpires
@@ -229,13 +241,14 @@ TypeOK ==
     /\ topology \subseteq Peers
     /\ decision \in Decisions
     /\ prepCoord \in Clusters \cup {NoCluster}
-    /\ cache \in Trees \cup {NoShadow}
+    /\ cache \subseteq Trees
     /\ fence \in {"off", "engaged", "unblocked"}
     /\ obs.auth \in {"none", "peer", "decided", "ambient", "refused"}
 
 \* PeerAuthorityBounded: a step runs with peer authority only when every seam
 \* is wired, its coordinator is a remote cluster of the current topology and,
-\* over gRPC, the credential-bound origin, and its target is enrolled here; a
+\* over gRPC, the credential-bound origin, and every tree it restores or swaps
+\* is enrolled here, a swap only inside the write fence over those trees; a
 \* build under peer authority replays only the target or trees enrolled here,
 \* and an empty source list refuses; and an elevated prepare refuses a missing
 \* backup and one it may not restore with one answer, so the elevated probe is
@@ -246,10 +259,11 @@ PeerAuthorityBounded ==
          /\ obs.coord \notin {Self, NoCluster}
          /\ obs.coord \in topology
          /\ (obs.ch = "grpc" => obs.coord = obs.bound)
-         /\ obs.target \in enrolled
+         /\ obs.target \subseteq enrolled
+         /\ obs.swapped \subseteq enrolled
+         /\ obs.swapped \subseteq obs.target
     /\ (obs.auth = "peer" /\ obs.built) =>
-         /\ Sources(obs.backup, obs.target) # {}
-         /\ Sources(obs.backup, obs.target) \subseteq enrolled \cup {obs.target}
+         \A m \in obs.target : Sources(obs.backup, m) # {} /\ Sources(obs.backup, m) \subseteq enrolled \cup {m}
     /\ (obs.step = "prepare" /\ obs.auth = "peer" /\ obs.kind = "refused") => obs.reply = "peerRefusal"
 
 \* OwnSagaCommitNeedsDurableDecision: a commit of this cluster's own saga
@@ -268,5 +282,5 @@ OwnSagaCommitNeedsDurableDecision ==
 \* failure propagates, and leaves the shadow cached, so a redelivered decision
 \* can finish.
 NoStrandedFence ==
-    obs.kind = "cutoverFailed" => fence # "engaged" /\ cache = obs.target
+    obs.kind = "cutoverFailed" => fence # "engaged" /\ cache = obs.swapped
 =============================================================================

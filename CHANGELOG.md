@@ -12,6 +12,7 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Security
 
+- **Replication - Set restore commits only hosted members.** A peer-coordinated backup-set restore no longer cuts over a member tree this cluster stopped replicating after prepare; that member is skipped, logged and its shadow collected, and only hosted members flip inside the write fence. ([#6233](https://github.com/NSTA1/Orleans.Lattice/issues/6233)) (`Orleans.Lattice.Replication`)
 - **Auth - Replicated rules cannot cross tenants.** An operator rule that names a tenant group on a tree outside that group's tenant, arriving by replication or restore, is now dropped when the policy compiles instead of taking effect. ([#6210](https://github.com/NSTA1/Orleans.Lattice/issues/6210)) (`Orleans.Lattice.Auth`)
 
 ### Added

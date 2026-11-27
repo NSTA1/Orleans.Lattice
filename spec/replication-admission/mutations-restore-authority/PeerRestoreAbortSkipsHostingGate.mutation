@@ -7,9 +7,9 @@ SUMMARY: an abort compensates a tree this cluster does not replicate under peer 
 PERTURBS: Abort
 
 --- FIND
-       /\ fence' = "off"
-       /\ IF ~Hosted(t)
+Abort(ch, bound, claimed, ts, readOk) ==
+    LET t == Members(ts)
 --- REPLACE
-       /\ fence' = "off"
-       /\ IF FALSE
+Abort(ch, bound, claimed, ts, readOk) ==
+    LET t == ts
 --- END
