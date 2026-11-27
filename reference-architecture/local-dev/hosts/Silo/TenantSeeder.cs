@@ -140,7 +140,7 @@ internal sealed class TenantSeeder(
                 record.AddAdminSubject(subjectId, clock, writerId);
             }
 
-            await registry.PutAsync(record, cancellationToken).ConfigureAwait(false);
+            await registry.CreateAsync(record, cancellationToken).ConfigureAwait(false);
             logger.LogDebug(
                 "Seeded demo tenant '{TenantId}' with {AdminCount} admin subject(s).",
                 tenantId.Value,

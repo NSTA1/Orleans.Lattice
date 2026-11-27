@@ -102,4 +102,45 @@ public sealed class LatticeTenancyOptionsValidatorTests
     {
         Assert.That(() => Validator.Validate(null, null!), Throws.ArgumentNullException);
     }
+
+    [TestCase(0)]
+    [TestCase(-1)]
+    public void Validate_non_positive_false_death_interval_fails(int seconds)
+    {
+        var result = Validator.Validate(null, new LatticeTenancyOptions { FalseDeathReinvalidationInterval = TimeSpan.FromSeconds(seconds) });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeTenancyOptions.FalseDeathReinvalidationInterval)));
+        });
+    }
+
+    [Test]
+    public void Validate_false_death_horizon_shorter_than_the_interval_fails()
+    {
+        var result = Validator.Validate(null, new LatticeTenancyOptions
+        {
+            FalseDeathReinvalidationInterval = TimeSpan.FromSeconds(10),
+            FalseDeathHorizon = TimeSpan.FromSeconds(9),
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failed, Is.True);
+            Assert.That(result.FailureMessage, Does.Contain(nameof(LatticeTenancyOptions.FalseDeathHorizon)));
+        });
+    }
+
+    [Test]
+    public void Validate_false_death_horizon_equal_to_the_interval_succeeds()
+    {
+        var result = Validator.Validate(null, new LatticeTenancyOptions
+        {
+            FalseDeathReinvalidationInterval = TimeSpan.FromSeconds(10),
+            FalseDeathHorizon = TimeSpan.FromSeconds(10),
+        });
+
+        Assert.That(result.Succeeded, Is.True);
+    }
 }

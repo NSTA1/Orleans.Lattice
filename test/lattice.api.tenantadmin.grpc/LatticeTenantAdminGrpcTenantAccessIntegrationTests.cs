@@ -331,7 +331,7 @@ public sealed class LatticeTenantAdminGrpcTenantAccessIntegrationTests
         record.AddAdminSubject(Admin, new HybridLogicalClock { WallClockTicks = 2 }, "seed");
         using (LatticeSystemOrigin.Enter())
         {
-            await Silo.GetRequiredService<ITenantRegistry>().PutAsync(record);
+            await Silo.GetRequiredService<ITenantRegistry>().CreateAsync(record);
         }
 
         return tenantId;

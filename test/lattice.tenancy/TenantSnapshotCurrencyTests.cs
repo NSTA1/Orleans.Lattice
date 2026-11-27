@@ -1,5 +1,3 @@
-using System.Collections.Immutable;
-using System.Net;
 using Microsoft.Extensions.Time.Testing;
 
 namespace Orleans.Lattice.Tenancy.Tests;
@@ -7,9 +5,9 @@ namespace Orleans.Lattice.Tenancy.Tests;
 /// <summary>
 /// Unit tests for <see cref="TenantSnapshotCurrency"/>, the cross-silo currency
 /// state every per-silo tenant-registry snapshot composes (issues #4030, #4051,
-/// #4052), and for the epoch grain's fresh-incarnation early grace release
-/// (<see cref="TenantPolicyEpochGrain.EveryLiveSiloHasLeased"/> and
-/// <see cref="TenantPolicyEpochLedger{TSubscriber}.ReleaseGrace"/>). Fake clocks
+/// #4052), and for the ledger's fresh-incarnation early grace release
+/// (<see cref="TenantPolicyEpochLedger{TSubscriber}.ReleaseGrace"/>; when the grain
+/// may call it is <see cref="TenantPolicyEpochGrainGraceTests"/>). Fake clocks
 /// only; nothing sleeps.
 /// </summary>
 [TestFixture]
@@ -134,43 +132,6 @@ public sealed class TenantSnapshotCurrencyTests
     }
 
     // ---- fresh-incarnation early grace release ------------------------------
-
-    private static SiloAddress Silo(int port) => SiloAddress.New(new IPEndPoint(IPAddress.Loopback, port), 1);
-
-    private static ClusterMembershipSnapshot Membership(params (int Port, SiloStatus Status)[] members) =>
-        new(
-            members.ToImmutableDictionary(m => Silo(m.Port), m => new ClusterMember(Silo(m.Port), m.Status, $"silo-{m.Port}")),
-            new MembershipVersion(1));
-
-    [Test]
-    public void EveryLiveSiloHasLeased_is_true_only_when_every_non_dead_silo_leased()
-    {
-        var snapshot = Membership((1, SiloStatus.Active), (2, SiloStatus.Joining), (3, SiloStatus.Dead));
-
-        Assert.Multiple(() =>
-        {
-            Assert.That(TenantPolicyEpochGrain.EveryLiveSiloHasLeased(snapshot, new HashSet<SiloAddress> { Silo(1), Silo(2) }), Is.True,
-                "a dead silo cannot hold authority");
-            Assert.That(TenantPolicyEpochGrain.EveryLiveSiloHasLeased(snapshot, new HashSet<SiloAddress> { Silo(1) }), Is.False,
-                "a joining silo may hold a lease from the previous activation");
-        });
-    }
-
-    [Test]
-    public void EveryLiveSiloHasLeased_empty_membership_proves_nothing()
-    {
-        Assert.That(TenantPolicyEpochGrain.EveryLiveSiloHasLeased(Membership(), new HashSet<SiloAddress>()), Is.False);
-    }
-
-    [Test]
-    public void EveryLiveSiloHasLeased_null_arguments_throw()
-    {
-        Assert.Multiple(() =>
-        {
-            Assert.That(() => TenantPolicyEpochGrain.EveryLiveSiloHasLeased(null!, new HashSet<SiloAddress>()), Throws.ArgumentNullException);
-            Assert.That(() => TenantPolicyEpochGrain.EveryLiveSiloHasLeased(Membership((1, SiloStatus.Active)), null!), Throws.ArgumentNullException);
-        });
-    }
 
     [Test]
     public async Task ReleaseGrace_lets_a_fresh_incarnations_advance_complete_before_one_lease()

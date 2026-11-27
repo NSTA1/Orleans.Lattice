@@ -1,0 +1,17 @@
+# Pairs with RevocationTakesEffect. A re-publish that neither tells nor
+# waits out the peer settles the debt without closing the window.
+MODULE: RetryCapturesNothing
+TARGET: RevocationTakesEffect
+CLASS: Invariant
+SUMMARY: the re-publish captures no peer lease
+PERTURBS: Retry
+
+--- FIND
+    /\ wstate' = "pub"
+    /\ captured' = trusted
+    /\ ack' = {}
+--- REPLACE
+    /\ wstate' = "pub"
+    /\ captured' = FALSE
+    /\ ack' = {}
+--- END

@@ -1,0 +1,14 @@
+# Pairs with NonDisclosure. The enforcer before #6231: a refused active-tenant
+# validation said whether the asserted tenant was registered, so any subject
+# could probe tenant ids by asserting them.
+MODULE: ReadReasonNamesUnregisteredActiveTenant
+TARGET: NonDisclosure
+CLASS: Invariant
+SUMMARY: a refused active-tenant validation reports an unregistered tenant apart from a non-member
+PERTURBS: Read
+
+--- FIND
+        activeTenantReason == "activeTenant"
+--- REPLACE
+        activeTenantReason == IF status["B"] = "active" THEN "activeTenant" ELSE "activeTenantUnregistered"
+--- END

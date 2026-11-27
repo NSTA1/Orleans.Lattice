@@ -1,0 +1,13 @@
+# Pairs with TwoPartyActivation. An approval accepted from the granting
+# tenant's admin lets one tenant both offer and approve its own grant.
+MODULE: ApprovalFromGrantingSide
+TARGET: TwoPartyActivation
+CLASS: Invariant
+SUMMARY: approve and reject authorize the granting tenant's admin instead of the grantee's
+PERTURBS: Answer
+
+--- FIND
+        a == AuthorizeAdmin(c, "B")
+--- REPLACE
+        a == AuthorizeAdmin(c, "A")
+--- END

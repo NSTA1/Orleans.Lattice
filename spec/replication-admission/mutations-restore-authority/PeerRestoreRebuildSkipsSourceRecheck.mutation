@@ -1,0 +1,13 @@
+# Pairs with PeerAuthorityBounded. A commit whose cache was lost rebuilds under
+# peer authority from sources it trusts from the earlier prepare.
+MODULE: PeerRestoreRebuildSkipsSourceRecheck
+TARGET: PeerAuthorityBounded
+CLASS: Invariant
+SUMMARY: a commit that lost its shadow rebuilds without re-checking the backup's sources
+PERTURBS: Commit
+
+--- FIND
+          ELSE IF ~cached /\ up /\ ~SourcesEnrolled(b, t)
+--- REPLACE
+          ELSE IF FALSE
+--- END

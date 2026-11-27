@@ -1,0 +1,14 @@
+# Pairs with TypeOK. The fence grain's self-lift records a fence state outside
+# the model's domain instead of the lifted fence.
+MODULE: PeerRestoreFenceLeavesDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: an expired fence records a state outside the fence domain
+
+--- FIND
+    /\ fence' = "off"
+    /\ obs' = NoObs
+--- REPLACE
+    /\ fence' = "expired"
+    /\ obs' = NoObs
+--- END

@@ -59,7 +59,7 @@ public sealed class LatticeTenantRegionSplitClusterIdIntegrationTests
     public async Task Tenant_resident_in_the_replication_region_reaches_online_when_the_orleans_cluster_id_differs()
     {
         var tenant = TenantId.Parse("acme");
-        await SiloServices.GetRequiredService<ITenantRegistry>().PutAsync(TenantRecord.Create(
+        await SiloServices.GetRequiredService<ITenantRegistry>().CreateAsync(TenantRecord.Create(
             tenant,
             TenantStatus.Active,
             new TenantQuotas { MaxKeys = 1000 },

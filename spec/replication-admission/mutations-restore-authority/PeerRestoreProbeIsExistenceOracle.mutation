@@ -1,0 +1,13 @@
+# Pairs with PeerAuthorityBounded. The elevated probe's failure reason reaches the
+# peer, so its answer differs between a missing backup and one it may not restore.
+MODULE: PeerRestoreProbeIsExistenceOracle
+TARGET: PeerAuthorityBounded
+CLASS: Invariant
+SUMMARY: an elevated prepare reports why the admission probe failed, telling a missing backup from a refused one
+PERTURBS: Prepare
+
+--- FIND
+IF up THEN "peerRefusal" ELSE "probeFailed")
+--- REPLACE
+"probeFailed")
+--- END

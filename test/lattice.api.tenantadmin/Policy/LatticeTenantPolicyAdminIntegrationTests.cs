@@ -361,7 +361,7 @@ public sealed class LatticeTenantPolicyAdminIntegrationTests
         record.AddAdminSubject(admin, new HybridLogicalClock { WallClockTicks = 2 }, "seed");
         using (LatticeSystemOrigin.Enter())
         {
-            await _fixture.Registry.PutAsync(record);
+            await _fixture.Registry.CreateAsync(record);
         }
 
         return tenant;
@@ -373,7 +373,7 @@ public sealed class LatticeTenantPolicyAdminIntegrationTests
         {
             var record = (await _fixture.Registry.GetAsync(tenant))!;
             record.AddMemberSubject(subjectOrGroupId, new HybridLogicalClock { WallClockTicks = 10 }, "seed");
-            await _fixture.Registry.PutAsync(record);
+            await _fixture.Registry.CreateAsync(record);
         }
     }
 

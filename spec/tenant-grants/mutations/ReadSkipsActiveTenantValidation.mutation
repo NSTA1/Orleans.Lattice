@@ -1,0 +1,13 @@
+# Pairs with ReadRequiresActiveGrant. The active tenant is an assertion; a
+# crossing that does not validate it lets any subject consume B's grants.
+MODULE: ReadSkipsActiveTenantValidation
+TARGET: ReadRequiresActiveGrant
+CLASS: Invariant
+SUMMARY: the crossing branch does not validate the reader's right to act as the grantee
+PERTURBS: Read
+
+--- FIND
+        actsAsB == rdr \in Members /\ status["B"] = "active"
+--- REPLACE
+        actsAsB == status["B"] = "active"
+--- END

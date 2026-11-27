@@ -78,6 +78,47 @@ public sealed class LatticeTenancyOptions
     public TimeSpan PolicySnapshotLeaseDuration { get; set; } = TimeSpan.FromSeconds(10);
 
     /// <summary>
+    /// How often each silo re-invalidates its tenant-registry snapshots while a
+    /// false-death horizon is open (see <see cref="FalseDeathHorizon"/>). Defaults
+    /// to ten seconds. Must be strictly positive and no longer than the horizon.
+    /// </summary>
+    /// <remarks>
+    /// A registry write committed by a silo after membership declared it dead, and
+    /// never published because the silo then stopped, is picked up by every other
+    /// silo within one interval of the write. Each re-invalidation makes the
+    /// snapshot non-authoritative only until its rebuild lands.
+    /// </remarks>
+    public TimeSpan FalseDeathReinvalidationInterval { get; set; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>
+    /// How long after a silo first sees another silo declared dead it keeps
+    /// re-invalidating its tenant-registry snapshots, or <c>null</c> (the default) to
+    /// derive it from Orleans cluster membership as
+    /// <c>ClusterMembershipOptions.TableRefreshTimeout</c> plus
+    /// <c>ClusterMembershipOptions.ProbeTimeout</c>, never shorter than
+    /// <see cref="FalseDeathReinvalidationInterval"/>.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Membership can declare a live silo dead. That silo keeps running until it
+    /// reads its own death from the membership table or is refused by its peers, and
+    /// until then it can commit a tenant-registry write whose publication fails. The
+    /// declaration came before that write, so the one invalidation it triggers on
+    /// every other silo does not cover it. Re-invalidating on a fixed cadence for the
+    /// horizon does.
+    /// </para>
+    /// <para>
+    /// The guarantee assumes a silo falsely declared dead stops within the horizon.
+    /// Orleans stops such a silo once it reads the table (every
+    /// <c>TableRefreshTimeout</c>) or a probe is refused, which is what the derived
+    /// default covers. Set it longer if the host lengthens those timeouts without
+    /// configuring them through <c>ClusterMembershipOptions</c>. When set, it must be
+    /// at least <see cref="FalseDeathReinvalidationInterval"/>.
+    /// </para>
+    /// </remarks>
+    public TimeSpan? FalseDeathHorizon { get; set; }
+
+    /// <summary>
     /// Whether delegated tenant access administration is enabled: tenant groups,
     /// tenant member sets, group entries in a tenant's admin set, and tenant-tier
     /// rules. Defaults to <c>false</c>.

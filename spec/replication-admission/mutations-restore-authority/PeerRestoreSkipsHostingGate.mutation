@@ -1,0 +1,15 @@
+# Pairs with PeerAuthorityBounded. Prepare skips the hosting gate, so a peer picks
+# a cluster-local tree as the target the shadow cutover overwrites.
+MODULE: PeerRestoreSkipsHostingGate
+TARGET: PeerAuthorityBounded
+CLASS: Invariant
+SUMMARY: a prepare builds a tree this cluster does not replicate under peer authority
+PERTURBS: Prepare
+
+--- FIND
+Prepare(ch, bound, claimed, ts, b) ==
+    LET t == Members(ts)
+--- REPLACE
+Prepare(ch, bound, claimed, ts, b) ==
+    LET t == ts
+--- END

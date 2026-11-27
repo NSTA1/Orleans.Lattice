@@ -45,7 +45,7 @@ public sealed class TenantGateEnforcerActiveTenantLagTests
         var decision = await world.EnforceAsync(OwnedTree, "bob");
 
         Assert.That(decision.Allowed, Is.False, "a subject removed from the tenant must not keep acting as it on its own trees");
-        Assert.That(decision.Reason, Does.Contain("not an admin of tenant 'beta'"));
+        Assert.That(decision.Reason, Is.EqualTo(TenantGateEnforcer.ActiveTenantDeniedReason));
 
         await world.ReleaseRebuildAsync();
         Assert.That((await world.EnforceAsync(OwnedTree, "bob")).Allowed, Is.False, "the removal holds once the rebuild lands");
@@ -63,7 +63,7 @@ public sealed class TenantGateEnforcerActiveTenantLagTests
         var decision = await world.EnforceAsync(OwnedTree, "bob");
 
         Assert.That(decision.Allowed, Is.False, "a just-suspended tenant must not keep serving its own trees");
-        Assert.That(decision.Reason, Does.Contain("is not active"));
+        Assert.That(decision.Reason, Is.EqualTo(TenantGateEnforcer.ActiveTenantDeniedReason));
     }
 
     [Test]
@@ -78,7 +78,7 @@ public sealed class TenantGateEnforcerActiveTenantLagTests
         var decision = await world.EnforceAsync(OwnedTree, "bob");
 
         Assert.That(decision.Allowed, Is.False, "a just-deleted tenant must not keep serving its own trees");
-        Assert.That(decision.Reason, Does.Contain("Tenant 'beta' is not registered"));
+        Assert.That(decision.Reason, Is.EqualTo(TenantGateEnforcer.ActiveTenantDeniedReason));
     }
 
     [Test]
@@ -162,7 +162,7 @@ public sealed class TenantGateEnforcerActiveTenantLagTests
         var decision = await enforcer.EnforceAsync(in request);
 
         Assert.That(decision.Allowed, Is.False, "a record keyed to another tenant never confirms the asserted one");
-        Assert.That(decision.Reason, Does.Contain("Tenant 'beta' is not registered"));
+        Assert.That(decision.Reason, Is.EqualTo(TenantGateEnforcer.ActiveTenantDeniedReason));
     }
 
     [Test]
@@ -194,7 +194,7 @@ public sealed class TenantGateEnforcerActiveTenantLagTests
         var decision = await world.EnforceAsync(SharedTree, "bob");
 
         Assert.That(decision.Allowed, Is.False, "a confirmed grant never stands in for the subject's right to act as the grantee");
-        Assert.That(decision.Reason, Does.Contain("not an admin of tenant 'beta'"));
+        Assert.That(decision.Reason, Is.EqualTo(TenantGateEnforcer.ActiveTenantDeniedReason));
     }
 
     [Test]
@@ -208,7 +208,7 @@ public sealed class TenantGateEnforcerActiveTenantLagTests
         var decision = await world.EnforceAsync(SharedTree, "bob");
 
         Assert.That(decision.Allowed, Is.False);
-        Assert.That(decision.Reason, Does.Contain("is not active"));
+        Assert.That(decision.Reason, Is.EqualTo(TenantGateEnforcer.ActiveTenantDeniedReason));
     }
 
     [Test]
@@ -222,7 +222,7 @@ public sealed class TenantGateEnforcerActiveTenantLagTests
         var decision = await world.EnforceAsync(SharedTree, "bob");
 
         Assert.That(decision.Allowed, Is.False, "a confirmed membership never stands in for the grant");
-        Assert.That(decision.Reason, Does.Contain("no active grant"));
+        Assert.That(decision.Reason, Is.EqualTo(TenantGateEnforcer.CrossingDeniedReason));
     }
 
     [Test]
@@ -285,7 +285,7 @@ public sealed class TenantGateEnforcerActiveTenantLagTests
 
         Assert.That(pending.IsCompletedSuccessfully, Is.True);
         Assert.That(pending.Result.Allowed, Is.False);
-        Assert.That(pending.Result.Reason, Does.Contain("not an admin"));
+        Assert.That(pending.Result.Reason, Is.EqualTo(TenantGateEnforcer.ActiveTenantDeniedReason));
         Assert.That(world.Registry.PointReads, Is.EqualTo(reads));
     }
 

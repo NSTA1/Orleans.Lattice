@@ -153,7 +153,9 @@ internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
             record.AddAdminSubject(subjectId, _clock.Next(), _writerId);
         }
 
-        await _registry.PutAsync(record, cancellationToken).ConfigureAwait(false);
+        // The one facade write that creates a record; every other write is an
+        // update the registry refuses once the tenant is gone.
+        await _registry.CreateAsync(record, cancellationToken).ConfigureAwait(false);
 
         return new TenantCreationResult
         {

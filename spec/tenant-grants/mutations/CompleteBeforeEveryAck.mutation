@@ -1,0 +1,13 @@
+# Pairs with RevocationTakesEffect. Returning before the captured peer was
+# told or waited out acknowledges a revocation the peer has not seen.
+MODULE: CompleteBeforeEveryAck
+TARGET: RevocationTakesEffect
+CLASS: Invariant
+SUMMARY: the write returns covered while the peer is still captured
+PERTURBS: Complete
+
+--- FIND
+    /\ ~captured
+--- REPLACE
+    /\ TRUE
+--- END

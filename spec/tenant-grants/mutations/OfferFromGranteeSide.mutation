@@ -1,0 +1,13 @@
+# Pairs with AdminScopedToOwnSide. Offering exposes the granting tenant's
+# data, so the grantee's admin must not be able to offer it.
+MODULE: OfferFromGranteeSide
+TARGET: AdminScopedToOwnSide
+CLASS: Invariant
+SUMMARY: the offer authorizes the grantee tenant's admin instead of the granting tenant's
+PERTURBS: Offer
+
+--- FIND
+    LET a == AuthorizeAdmin(c, "A")
+--- REPLACE
+    LET a == AuthorizeAdmin(c, "B")
+--- END

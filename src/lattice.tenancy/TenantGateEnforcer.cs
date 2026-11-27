@@ -289,7 +289,7 @@ internal sealed class TenantGateEnforcer(
             var validation = engine.ValidateActiveTenantAs(subjectId, request.Subject.GroupIds, activeTenant);
             if (!validation.Allowed)
             {
-                return Deny(validation.Reason);
+                return DenyActiveTenant(subjectId, activeTenant, validation.Reason);
             }
 
             if (activeTenant.Equals(owner.Tenant))
@@ -309,7 +309,7 @@ internal sealed class TenantGateEnforcer(
                 ToGrantOperations(request.Operation));
             return grant.Allowed
                 ? EnforceResidency(activeTenant)
-                : Deny(grant.Reason);
+                : DenyCrossing(subjectId, activeTenant, owner.Tenant, grant.Reason);
         }
 
         // (2) No active tenant selected on a tenant-owned tree. Fail closed
@@ -382,7 +382,7 @@ internal sealed class TenantGateEnforcer(
             pending.ActiveTenant);
         if (!validation.Allowed)
         {
-            return Deny(validation.Reason);
+            return DenyActiveTenant(pending.SubjectId, pending.ActiveTenant, validation.Reason);
         }
 
         if (pending.IsCrossing)
@@ -395,7 +395,7 @@ internal sealed class TenantGateEnforcer(
                 pending.Operation);
             if (!grant.Allowed)
             {
-                return Deny(grant.Reason);
+                return DenyCrossing(pending.SubjectId, pending.ActiveTenant, pending.Owner, grant.Reason);
             }
         }
 
@@ -527,6 +527,67 @@ internal sealed class TenantGateEnforcer(
     /// <summary><c>true</c> when <paramref name="decision"/> is the <see cref="ResidencyConfirmationRequired"/> marker.</summary>
     private static bool IsResidencyMarker(in LatticeAccessDecision decision) =>
         !decision.Allowed && ReferenceEquals(decision.Reason, ResidencyConfirmationRequiredReason);
+
+    /// <summary>
+    /// The one reason a caller is given when it may not act as the active tenant it
+    /// asserted, whatever the cause: the tenant is not registered, is suspended, or
+    /// does not admit the subject. It names no tenant, so the denial cannot be used
+    /// to probe for tenants or their status (issue #6231).
+    /// </summary>
+    internal const string ActiveTenantDeniedReason =
+        "Tenant isolation denied the request: the subject may not act as the asserted active tenant.";
+
+    /// <summary>
+    /// The one reason a caller is given when a crossing into another tenant's tree is
+    /// refused, whatever the cause: the owning tenant is not registered, is suspended,
+    /// or holds no active grant covering the tree and operation. It names no tenant
+    /// (issue #6231).
+    /// </summary>
+    internal const string CrossingDeniedReason =
+        "Tenant isolation denied the request: no active cross-tenant grant admits it.";
+
+    private static readonly LatticeAccessDecision ActiveTenantDenied = LatticeAccessDecision.Deny(ActiveTenantDeniedReason);
+
+    private static readonly LatticeAccessDecision CrossingDenied = LatticeAccessDecision.Deny(CrossingDeniedReason);
+
+    /// <summary>
+    /// Refuses a subject acting as an active tenant it may not act as. The caller sees
+    /// only <see cref="ActiveTenantDeniedReason"/>; the engine's specific cause stays in
+    /// the server log, at debug level, so an operator can diagnose the refusal.
+    /// </summary>
+    private LatticeAccessDecision DenyActiveTenant(string subjectId, TenantId activeTenant, string? detail)
+    {
+        if (logger.IsEnabled(LogLevel.Debug))
+        {
+            logger.LogDebug(
+                "Tenant isolation refused subject '{SubjectId}' acting as tenant '{ActiveTenant}': {Detail}",
+                subjectId,
+                activeTenant.Value,
+                detail);
+        }
+
+        return ActiveTenantDenied;
+    }
+
+    /// <summary>
+    /// Refuses a crossing into <paramref name="owner"/>'s tree. The caller sees only
+    /// <see cref="CrossingDeniedReason"/>; the engine's specific cause stays in the
+    /// server log, at debug level.
+    /// </summary>
+    private LatticeAccessDecision DenyCrossing(string subjectId, TenantId activeTenant, TenantId owner, string? detail)
+    {
+        if (logger.IsEnabled(LogLevel.Debug))
+        {
+            logger.LogDebug(
+                "Tenant isolation refused subject '{SubjectId}' acting as tenant '{ActiveTenant}' a crossing into tenant '{Owner}': {Detail}",
+                subjectId,
+                activeTenant.Value,
+                owner.Value,
+                detail);
+        }
+
+        return CrossingDenied;
+    }
 
     /// <summary>
     /// Builds a deny decision, falling back to a generic default-deny reason when

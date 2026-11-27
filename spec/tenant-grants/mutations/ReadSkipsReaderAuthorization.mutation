@@ -1,0 +1,13 @@
+# Pairs with ReadRequiresActiveGrant. A grant between tenants is not the
+# reader's own authorization; the policy decision must still allow it.
+MODULE: ReadSkipsReaderAuthorization
+TARGET: ReadRequiresActiveGrant
+CLASS: Invariant
+SUMMARY: the crossing read is admitted on the grant without the reader's own policy allow
+PERTURBS: Read
+
+--- FIND
+        pol == Allowed(rdr, ReadOp, ReadScope)
+--- REPLACE
+        pol == TRUE
+--- END

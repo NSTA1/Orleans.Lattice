@@ -75,7 +75,7 @@ once, either here or in the
 | Shared alias routing and revert | 2 | 25 | 40 | 22 | [Aliasing](../../spec/aliasing/README.md) |
 | Tenant quotas | 3 | 34 | 32 | 39 | [Quota admission](../../spec/tenant-quotas/README.md) |
 | Tenant rate budgets | 1 | 14 | 23 | 22 | [Rate-budget leases](../../spec/tenant-rate-budget/README.md) |
-| Tenant isolation | 1 | 27 | 28 | 34 | [Isolation epochs and leases](../../spec/tenant-isolation/README.md) |
+| Tenant isolation | 1 | 31 | 29 | 40 | [Isolation epochs and leases](../../spec/tenant-isolation/README.md) |
 | Scheduling and progress | 10 | 203 | 251 | 133 | [Verified Scheduling and Progress](verified-scheduling.md) |
 | Schema enforcement and versioning | 9 | 150 | 178 | 301 | [Schema enforcement and versioning](../../spec/schema/README.md) |
 | Schema and view composition | 1 | 23 | 23 | 28 | [Schema and view composition](../../spec/schema-view/README.md) |
@@ -404,11 +404,13 @@ states as load-bearing, and appends its own row to this table when it lands.
 | Module | Surface | Mutants | Behaviour rows | Detector tests | Page |
 |--------|---------|---------|----------------|----------------|------|
 | `AuthDecision` | Authorization decision layering | 18 | 17 | 41 | [Authorization decision](../../spec/auth-decision/README.md) |
-| `TenantAccessMembership` | Tenant-access membership under concurrency | 13 | 11 | 23 | [Tenant-access membership](../../spec/tenant-access-admin/README.md#tenantaccessmembership) |
+| `TenantAccessMembership` | Tenant-access membership under concurrency | 12 | 11 | 20 | [Tenant-access membership](../../spec/tenant-access-admin/README.md#tenantaccessmembership) |
 | `McpToolAuthorization` | MCP tool authorization lock-step | 23 | 12 | 25 | [MCP tool authorization](../../spec/mcp-tool-auth/README.md) |
 | `TenantAccessAuthorization` | Delegated tenant access: authorization | 20 | 20 | 36 | [Delegated tenant-access administration](../../spec/tenant-access-admin/README.md) |
-| `ReplicationOriginBinding` | Replication gRPC host admitted-peer seam and origin binding | 11 | 2 | 11 | [Replication receiver admission](../../spec/replication-admission/README.md) |
+| `ReplicationOriginBinding` | Replication gRPC host admitted-peer seam and origin binding | 10 | 2 | 10 | [Replication receiver admission](../../spec/replication-admission/README.md) |
 | `ReplicationAdmission` | Replication receiver enrollment and merge-mode gate | 7 | 4 | 10 | [Replication receiver admission](../../spec/replication-admission/README.md) |
+| `RestorePeerAuthority` | Coordinated-restore participant peer authority, own-saga decision and cutover fence | 17 | 6 | 23 | [Replication receiver admission](../../spec/replication-admission/README.md) |
+| `TenantGrants` | Cross-tenant grants | 26 | 21 | 40 | [Cross-tenant grants](../../spec/tenant-grants/README.md) |
 
 ## What each area covers, and what it does not
 
@@ -656,8 +658,8 @@ gaps, states its full scope.
     tracked by design - a write whose publication failed, until the re-publish
     lands, and a crashed writer, until membership declares it dead; a silo
     clock slower than the epoch coordinator's by more than the ledger margin
-    over one lease; more than one write or two silos; liveness after a false
-    death declaration, which does not hold; and rate budgets and
+    over one lease; a silo falsely declared dead that outlives the false-death
+    horizon; more than one write or two silos; and rate budgets and
     footprint quotas, which the two areas above cover.
 
 - **Delegated tenant access** ([`spec/tenant-access-admin/`](../../spec/tenant-access-admin/README.md)).
@@ -676,13 +678,33 @@ gaps, states its full scope.
     last-admin guard and removal stamps; group deletion and its cascade;
     membership records arriving by replication or restore; app rules on
     app-owned trees; and the compiled snapshot's rebuild after a flip.
+- **Cross-tenant grants** ([`spec/tenant-grants/`](../../spec/tenant-grants/README.md)).
+  - **Covers:** the two-party grant agreement against the authorization
+    contract's abstract `Allowed`: a grant active only once the granting side
+    offered and the grantee side approved that agreement generation, each
+    step written with its own side's authority, either party able to revoke,
+    an unauthorized caller told only that it was denied and an unregistered
+    granting tenant indistinguishable from an unoffered grant, and a refused read
+    told only the stage that refused it; the record join
+    under a concurrent or replicated copy; tenant deletion removing the grants
+    issued to the tenant, so a tenant created under its id inherits none, and a
+    grant write racing the deletion never re-creating the tenant; and
+    cross-tenant read resolution, admitted only under the reader's own
+    authorization, its right to act as the grantee and an active grant covering
+    the tree, with the staleness after a returned revocation bounded by the
+    tenant-isolation publication window.
+  - **Does not cover:** suspension; more than one grant, the
+    operation set and the stamp tiebreak; the writer's own snapshot, silo
+    crashes and epoch grain re-activation, which the tenant-isolation area
+    covers; cross-cluster replication lag; the single-step host path; and the
+    grant listing.
 
 - **Tenant-access membership** ([`spec/tenant-access-admin/`](../../spec/tenant-access-admin/README.md#tenantaccessmembership)).
   - **Covers:** the concurrency half of delegated tenant-access
     administration: concurrent admin-set and member-set removals and tenant
     group deletion through the registry's compare-and-set loop, with the
-    last-admin guard re-applied to the merged record and counting only
-    entries that admit anyone; removals stamped on a silo whose clock lags the slot's writer; and admin-set, member-set and
+    last-admin guard re-applied to the merged record; removals stamped on a
+    silo whose clock lags the slot's writer; and admin-set, member-set and
     role-binding entries arriving by replication or restore, another tenant's
     group included, never conferring anything.
   - **Does not cover:** the compare-and-set loop's retries and attempt budget
@@ -823,7 +845,7 @@ area's list is the authoritative one. The separately listed interrupted-shadow d
 | Anti-entropy remediation | #4859, #4862, #4863, #5530 | [`spec/anti-entropy/`](../../spec/anti-entropy/README.md) |
 | Shared alias routing and revert | #4860 | [`spec/aliasing/`](../../spec/aliasing/README.md#defect-found) |
 | Tenant rate budgets | A late collaborator response installed after its cycle was cancelled (no issue number) | [`spec/tenant-rate-budget/`](../../spec/tenant-rate-budget/README.md#defect-found) |
-| Tenant isolation | #4806 | [`spec/tenant-isolation/`](../../spec/tenant-isolation/README.md#defects-this-specification-found) |
+| Tenant isolation | #4806, #5719, #6216 | [`spec/tenant-isolation/`](../../spec/tenant-isolation/README.md#defects-this-specification-found) |
 | Scheduling and progress | #4976, #4977, #4979, #4985, #4986, #4992 | [Scheduling defects](verified-scheduling.md#defects-found-during-the-bucket) |
 
 ## CI partition and non-vacuity

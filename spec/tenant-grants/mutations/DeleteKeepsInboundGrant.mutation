@@ -1,0 +1,14 @@
+# Pairs with TwoPartyActivation. Grants match the grantee by id alone, so a
+# grant left on the granting tenant's record is inherited by a tenant later
+# created under the deleted one's id.
+MODULE: DeleteKeepsInboundGrant
+TARGET: TwoPartyActivation
+CLASS: Invariant
+SUMMARY: deleting the grantee leaves the grant issued to it on the granting tenant's record
+PERTURBS: DeleteTenant
+
+--- FIND
+                ELSE IF Live(grant) THEN Slot(grant.gen, "removed") ELSE grant
+--- REPLACE
+                ELSE grant
+--- END
