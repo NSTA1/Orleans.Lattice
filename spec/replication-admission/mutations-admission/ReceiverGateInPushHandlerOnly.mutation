@@ -1,0 +1,14 @@
+# Pairs with NonEnrolledDropped. The enrollment gate lives in the gRPC push
+# handler, so a run replayed from the causal buffer or the dead-letter queue
+# reaches the tree ungated.
+MODULE: ReceiverGateInPushHandlerOnly
+TARGET: NonEnrolledDropped
+CLASS: Invariant
+SUMMARY: only the push path is gated; a replayed run is applied unconditionally
+PERTURBS: ApplyRun
+
+--- FIND
+        result == IF mode = NotEnrolled THEN "dropped"
+--- REPLACE
+        result == IF p = "replay" THEN "applied" ELSE IF mode = NotEnrolled THEN "dropped"
+--- END

@@ -380,6 +380,30 @@ public class LatticeReplicationGrpcServiceEnrollmentTests
     }
 
     [Test]
+    public void Push_refuses_a_call_with_no_stamped_origin_header()
+    {
+        // Push is the verb that advances the high-water mark with entries, so its
+        // absent-header refusal is pinned on its own: a per-verb early return for a
+        // missing header would otherwise stay green while its siblings refuse.
+        var applier = Substitute.For<IReplicationApplier>();
+        var svc = CreateService(Substitute.For<IGrainFactory>(), EnrolledOnly(), applier);
+        var box = new ReplicationBatchEnvelopeBox
+        {
+            Value = new ReplicationBatchEnvelope
+            {
+                TreeName = EnrolledTree,
+                OriginClusterId = "site-a",
+                Entries = [],
+            },
+        };
+
+        AssertPermissionDenied(async () => await svc.Push(box, NoHeaders()));
+
+        applier.DidNotReceive().ApplyBatchAsync(
+            Arg.Any<IReadOnlyList<WalRecord>>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public void GetPeerHighWaterMark_refuses_an_origin_that_disagrees_with_the_stamped_header()
     {
         // The cursor is per-origin state; reading it back for an origin other than
