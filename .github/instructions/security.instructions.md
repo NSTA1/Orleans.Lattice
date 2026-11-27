@@ -125,6 +125,9 @@ gate will tell you if you forget.
   its size (#4056). Unknown argument names are further reduced to a safe character
   set, truncated, and capped in number (#3972). An authorization denial is never
   marked as a client error; it surfaces as a denial.
+- These are model-checked by `spec/mcp-tool-auth/` (`McpToolAuthorization`), over
+  the `Allowed(caller, op, scope)` contract of `spec/auth-decision/`; its
+  refinement note names the detector test for each guard.
 
 ### Telemetry metric-name allow-list (`src/lattice.api.telemetry`, consumed by `src/lattice.api.mcp.telemetry`)
 - The PromQL `__name__` / metric-name allow-list fails closed: an unparseable,
@@ -421,6 +424,24 @@ gate will tell you if you forget.
   end on a real cluster: layering, confinement, claim stripping, isolation, revocation,
   feature-off equivalence, deletion purge, break-glass removal and caps under
   concurrency. Run it, and extend it, when you change any of these seams.
+- **The formal model is `spec/tenant-access-admin/`.** Module `TenantAccessAuthorization`
+  (over the authorization contract's abstract `Allowed`, `spec/auth-decision/`) checks
+  tenant-tier rule confinement, the reserved `t/` namespace, claim stripping whatever
+  the flag, feature-off inertness, authorize-before-disclose and the authorize, validate,
+  write order, each with a mutation that turns it red and detectors in
+  `spec/tenant-access-admin/RefinementAuthorization.md`. Change the model with the seam.
+
+### Tenant tree-count admission (`src/lattice.tenancy`, consumed by `src/lattice.api.treeadmin`)
+- **Every registry row a tenant adds passes tree-count admission.** `MaxTreeCount`
+  bounds the rows under the tenant's prefix, read authoritatively from the registry at
+  the decision. A create, and an alias onto a logical id that has no registry row,
+  both pass `ITenantAdmissionController.IsTreeCreateAdmittedAsync` against that one
+  count, after authorization and before the registry write; a re-point of an existing
+  logical id adds no row and is not charged. Admission does not reserve, so concurrent
+  admissions can overshoot by the number in flight. The design, its mutations and its
+  detectors are `TenantTreeCount` in
+  [`spec/tenant-quotas/`](../../spec/tenant-quotas/RefinementTreeCount.md); the
+  tree-admin alias seam does not yet charge a new logical id (#5333).
 
 ## Release-status note for security fixes
 
