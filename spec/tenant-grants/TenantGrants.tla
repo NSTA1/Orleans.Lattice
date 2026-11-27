@@ -111,7 +111,7 @@ NoCall == [verb |-> "none"]
 Obs ==
     {NoObs}
     \cup [kind : {"call"}, scoped : BOOLEAN, discreet : BOOLEAN, untrapped : BOOLEAN]
-    \cup [kind : {"read"}, requires : BOOLEAN, effect : BOOLEAN]
+    \cup [kind : {"read"}, requires : BOOLEAN, effect : BOOLEAN, discreet : BOOLEAN]
     \cup [kind : {"probe"}, discreet : BOOLEAN]
 Calls ==
     {NoCall}
@@ -175,13 +175,21 @@ Entitled(rdr, n, x) ==
     /\ Allowed(rdr, ReadOp, ReadScope)
     /\ rdr \in Members /\ status["B"] = "active"
     /\ status["A"] = "active" /\ Live(x) /\ x.st = "active" /\ n = "orders"
-\* ReadRequiresActiveGrant's and RevocationTakesEffect's verdicts on a read
-\* that saw the grant as slot x: an admitted read is entitled, and sees a
-\* closed agreement as active only while a failed publication is owed.
-ReadObs(admitted, rdr, n, x) ==
+\* The reasons a refused read may be given: the policy decision's, the
+\* unconfirmable window's, one for any active-tenant refusal and one for any
+\* refused crossing. None depends on whether a tenant is registered.
+ReasonClasses == {"policy", "unconfirmed", "activeTenant", "crossing"}
+
+\* ReadRequiresActiveGrant's, RevocationTakesEffect's and NonDisclosure's
+\* verdicts on a read that saw the grant as slot x and was refused with
+\* reason: an admitted read is entitled, sees a closed agreement as active
+\* only while a failed publication is owed, and a refused one is told only
+\* the stage that refused it.
+ReadObs(admitted, reason, rdr, n, x) ==
     [kind |-> "read",
      requires |-> admitted => Entitled(rdr, n, x),
-     effect |-> (admitted /\ x.gen \in closed) => owed]
+     effect |-> (admitted /\ x.gen \in closed) => owed,
+     discreet |-> ~admitted => reason \in ReasonClasses]
 
 Init ==
     /\ status = [t \in Tenants |-> "active"]
@@ -306,7 +314,11 @@ Read(s, rdr, n, r) ==
         actsAsB == rdr \in Members /\ status["B"] = "active"
         grantOk == status["A"] = "active" /\ Live(x) /\ x.st = "active" /\ n = "orders"
         admitted == pol /\ decided /\ actsAsB /\ grantOk
-    IN /\ obs' = ReadObs(admitted, rdr, n, x)
+        activeTenantReason == "activeTenant"
+        crossingReason == "crossing"
+        reason == IF ~pol THEN "policy" ELSE IF ~decided THEN "unconfirmed"
+                  ELSE IF ~actsAsB THEN activeTenantReason ELSE crossingReason
+    IN /\ obs' = ReadObs(admitted, reason, rdr, n, x)
        /\ UNCHANGED <<status, incB, grant, seen, trusted, wstate, owed, captured, ack,
                       closed, offers, approvals, fl, budget, failures>>
 
@@ -489,10 +501,11 @@ RevocationTakesEffect ==
 
 \* An unauthorized caller is told only that it was denied, and an authorized
 \* one cannot tell an unoffered grant from an unregistered granting tenant
-\* (CallDiscreet); the existence probe never reveals a tree to a reader a
-\* read would refuse.
+\* (CallDiscreet); a refused read is told only the stage that refused it,
+\* never whether a tenant is registered (ReadObs); the existence probe never
+\* reveals a tree to a reader a read would refuse.
 NonDisclosure ==
-    obs.kind \in {"call", "probe"} => obs.discreet
+    obs.kind \in {"call", "probe", "read"} => obs.discreet
 
 \* Either party can always walk away (CallUntrapped).
 NoUnilateralTrap ==
