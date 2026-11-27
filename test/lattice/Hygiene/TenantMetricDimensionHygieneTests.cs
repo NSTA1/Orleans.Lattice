@@ -127,6 +127,7 @@ public sealed class TenantMetricDimensionHygieneTests
     /// </remarks>
     private static readonly string[] PlatformSentinelInstruments =
     [
+        "AdminAuditWriteFailures",
         "ApplyParallelRuns",
         "AtomicActionCompleted",
         "AtomicActionDuration",

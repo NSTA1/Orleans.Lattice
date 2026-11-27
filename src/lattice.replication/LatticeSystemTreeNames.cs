@@ -58,6 +58,17 @@ public static class LatticeSystemTreeNames
     public const string AuthAudit = "sys-auth-audit";
 
     /// <summary>
+    /// The durable admin audit tree (mirrors <c>AuthConstants.AdminAuditTree</c>):
+    /// one record per privileged administrative decision or mutation, plus the
+    /// pending intents of calls still in flight. Enrolled with the audit tree, opt-in
+    /// (see <c>ReplicateLatticeSystemTrees</c>). Every record has a unique key and is
+    /// authored once by the region that ran the call, so it replicates
+    /// last-writer-wins; a replicated record is applied as data and never re-audited,
+    /// and each region resolves only its own pending intents.
+    /// </summary>
+    public const string AdminAudit = "sys-auth-admin-audit";
+
+    /// <summary>
     /// The replicated runtime replication-configuration tree. Unlike the
     /// membership and policy trees, this tree is <b>self-referential</b>: it
     /// holds the per-tree map that decides which user trees replicate and under
@@ -105,9 +116,10 @@ public static class LatticeSystemTreeNames
     /// <summary>
     /// Builds the reserved-tree to <see cref="LatticeMergeMode"/> enrolment map.
     /// The membership and policy trees are always included; the append-only audit
-    /// tree is included only when <paramref name="includeAudit"/> is <c>true</c>.
+    /// tree and the admin audit tree are included only when
+    /// <paramref name="includeAudit"/> is <c>true</c>.
     /// </summary>
-    /// <param name="includeAudit">Whether to enrol the append-only audit tree.</param>
+    /// <param name="includeAudit">Whether to enrol the append-only audit tree and the admin audit tree.</param>
     /// <returns>An ordinal-keyed map of reserved tree id to its replication merge mode.</returns>
     public static IReadOnlyDictionary<string, LatticeMergeMode> BuildEnrolmentMap(bool includeAudit)
     {
@@ -121,6 +133,7 @@ public static class LatticeSystemTreeNames
         if (includeAudit)
         {
             map[AuthAudit] = LatticeMergeMode.OrSet;
+            map[AdminAudit] = LatticeMergeMode.LwwRegister;
         }
 
         return map;

@@ -238,7 +238,7 @@ internal sealed class LatticeAuthorizationPolicyStore(
         }
     }
 
-    private static string RuleKey(string treeId, string ruleId) =>
+    internal static string RuleKey(string treeId, string ruleId) =>
         string.Create(
             treeId.Length + 1 + ruleId.Length,
             (treeId, ruleId),

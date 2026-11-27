@@ -58,6 +58,7 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
     private readonly ITenantAdmissionController? _admission;
     private readonly LatticeOperationRunner? _operationRunner;
     private readonly RuntimeViewProjectionProviderCatalog? _viewProviders;
+    private readonly ILatticeAdminAuditTrail? _audit;
 
     /// <summary>Initializes a new <see cref="LatticeTreeAdmin"/>.</summary>
     /// <param name="schemaControl">
@@ -131,7 +132,8 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
         ILatticeTagIndexFactory? tagIndexFactory = null,
         ITenantAdmissionController? admission = null,
         LatticeOperationRunner? operationRunner = null,
-        RuntimeViewProjectionProviderCatalog? viewProviders = null)
+        RuntimeViewProjectionProviderCatalog? viewProviders = null,
+        ILatticeAdminAuditTrail? auditTrail = null)
     {
         ArgumentNullException.ThrowIfNull(schemaControl);
         ArgumentNullException.ThrowIfNull(grainFactory);
@@ -150,6 +152,7 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
         _admission = admission;
         _operationRunner = operationRunner;
         _viewProviders = viewProviders;
+        _audit = auditTrail;
     }
 
     /// <summary>
@@ -739,28 +742,49 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
             throw new ArgumentException(
                 "The physical tree id must differ from the logical tree id.", nameof(physicalTreeId));
         }
-        await _authorizer.AuthorizeTreeAdminAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
+        // The alias is recorded to the admin audit trail (#3638), filed under the
+        // owning tenant's partition for a tenant tree, anchored at the logical tree's
+        // registry row, which every alias write rewrites.
+        var audit = new LatticeAdminAuditRequest(
+            LatticeAdminAuditAction.AliasSet,
+            LatticeTenantTrees.TryGetTenant(effectiveTreeId, out var owner)
+                ? LatticeAdminAuditRequest.TenantScope(owner.Value!)
+                : LatticeAdminAuditRequest.ClusterScope,
+            LatticeAdminAuditTargetKind.Alias,
+            effectiveTreeId,
+            new LatticeAdminAuditAnchor(LatticeConstants.RegistryTreeId, effectiveTreeId),
+            new Dictionary<string, string>(1, StringComparer.Ordinal) { ["physicalTreeId"] = effectivePhysicalTreeId });
+        await LatticeAdminAudit
+            .AuthorizeAsync(
+                _audit,
+                audit,
+                async ct =>
+                {
+                    await _authorizer.AuthorizeTreeAdminAsync(effectiveTreeId, ct).ConfigureAwait(false);
 
-        // The alias TARGET is a second, independent authorization boundary, and it is
-        // the one that decides where the data plane actually lands. Every data-plane
-        // gate - LatticeGrain's access-gate enforcement, and the access-gate request
-        // this facade's own verbs build - is evaluated against the LOGICAL tree id,
-        // *before* the registry resolves the alias; the physical shard and leaf grains
-        // deliberately enforce no policy of their own because they are documented as
-        // reachable only through an already-authorized logical identity. Authorizing
-        // only the logical id therefore transplants an authorized logical identity
-        // onto an arbitrary physical tree: a caller holding Admin on a single tree it
-        // legitimately owns could alias that tree onto a tree it holds nothing on and
-        // then read and rewrite the target's contents through the ordinary data-plane
-        // surface, under its own tree's policy.
-        //
-        // The registry's own ThrowIfAliasEscalatesNamespace guard is namespace-shaped
-        // (it refuses a '_lattice_' target, an ordinary -> 'sys-' crossing, and a
-        // foreign-tenant target), so two ordinary same-namespace ids pass it
-        // unconditionally - which is exactly the ordinary-to-ordinary case this check
-        // closes. It mirrors the assertion the backup engine already makes at its own
-        // alias-swap seam (LatticeBackupRestoreService.AssertPhysicalBelongsToTargetAsync).
-        await _authorizer.AuthorizeTreeAdminAsync(effectivePhysicalTreeId, cancellationToken).ConfigureAwait(false);
+                    // The alias TARGET is a second, independent authorization boundary, and it is
+                    // the one that decides where the data plane actually lands. Every data-plane
+                    // gate - LatticeGrain's access-gate enforcement, and the access-gate request
+                    // this facade's own verbs build - is evaluated against the LOGICAL tree id,
+                    // *before* the registry resolves the alias; the physical shard and leaf grains
+                    // deliberately enforce no policy of their own because they are documented as
+                    // reachable only through an already-authorized logical identity. Authorizing
+                    // only the logical id therefore transplants an authorized logical identity
+                    // onto an arbitrary physical tree: a caller holding Admin on a single tree it
+                    // legitimately owns could alias that tree onto a tree it holds nothing on and
+                    // then read and rewrite the target's contents through the ordinary data-plane
+                    // surface, under its own tree's policy.
+                    //
+                    // The registry's own ThrowIfAliasEscalatesNamespace guard is namespace-shaped
+                    // (it refuses a '_lattice_' target, an ordinary -> 'sys-' crossing, and a
+                    // foreign-tenant target), so two ordinary same-namespace ids pass it
+                    // unconditionally - which is exactly the ordinary-to-ordinary case this check
+                    // closes. It mirrors the assertion the backup engine already makes at its own
+                    // alias-swap seam (LatticeBackupRestoreService.AssertPhysicalBelongsToTargetAsync).
+                    await _authorizer.AuthorizeTreeAdminAsync(effectivePhysicalTreeId, ct).ConfigureAwait(false);
+                },
+                cancellationToken)
+            .ConfigureAwait(false);
 
         // An alias onto a logical id with no registry row adds a row, which is what
         // MaxTreeCount bounds, so it is admitted exactly as a create (#5333): the same
@@ -774,11 +798,17 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
         // carried onto the logical entry in the same registry write as the alias
         // (#4263, #4336), and the previous copy is armed to redirect routing
         // activations that still cache it onto the target.
-        await AliasCutoverShardMaps.CarryAcrossExplicitAliasAsync(
-            _grainFactory,
-            effectiveTreeId,
-            effectivePhysicalTreeId,
-            cancellationToken).ConfigureAwait(false);
+        await LatticeAdminAudit
+            .RunAsync(
+                _audit,
+                audit,
+                ct => AliasCutoverShardMaps.CarryAcrossExplicitAliasAsync(
+                    _grainFactory,
+                    effectiveTreeId,
+                    effectivePhysicalTreeId,
+                    ct),
+                cancellationToken)
+            .ConfigureAwait(false);
 
         // Both registry writers on this path (SetAliasAsync for a re-set,
         // SwapAliasAsync for a move) stamp exactly this physical id onto the

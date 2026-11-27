@@ -81,13 +81,23 @@ internal sealed partial class LatticeMembershipDirectory(
     }
 
     /// <inheritdoc />
-    public async Task RemoveGroupAsync(string groupId, CancellationToken cancellationToken = default)
+    public Task RemoveGroupAsync(string groupId, CancellationToken cancellationToken = default) =>
+        RemoveGroupReportingAsync(groupId, cancellationToken);
+
+    /// <summary>
+    /// <see cref="RemoveGroupAsync"/>, reporting whether a group record was actually
+    /// removed (the admin audit trail records a commit only on the store's own report).
+    /// </summary>
+    /// <param name="groupId">The group id.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns><see langword="true"/> when a group record was removed.</returns>
+    internal async Task<bool> RemoveGroupReportingAsync(string groupId, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(groupId);
         await initializer.EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            await Groups.DeleteAsync(groupId, cancellationToken).ConfigureAwait(false);
+            return await Groups.DeleteAsync(groupId, cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -112,7 +122,18 @@ internal sealed partial class LatticeMembershipDirectory(
     }
 
     /// <inheritdoc />
-    public async Task RemoveMemberAsync(string groupId, string memberId, CancellationToken cancellationToken = default)
+    public Task RemoveMemberAsync(string groupId, string memberId, CancellationToken cancellationToken = default) =>
+        RemoveMemberReportingAsync(groupId, memberId, cancellationToken);
+
+    /// <summary>
+    /// <see cref="RemoveMemberAsync"/>, reporting whether a membership edge was actually
+    /// removed (the admin audit trail records a commit only on the store's own report).
+    /// </summary>
+    /// <param name="groupId">The group id.</param>
+    /// <param name="memberId">The member id.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns><see langword="true"/> when either edge row was removed.</returns>
+    internal async Task<bool> RemoveMemberReportingAsync(string groupId, string memberId, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(groupId);
         ArgumentNullException.ThrowIfNull(memberId);
@@ -120,8 +141,9 @@ internal sealed partial class LatticeMembershipDirectory(
 
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            await Edges.DeleteAsync(ForwardKey(memberId, groupId), cancellationToken).ConfigureAwait(false);
-            await Edges.DeleteAsync(ReverseKey(groupId, memberId), cancellationToken).ConfigureAwait(false);
+            var forward = await Edges.DeleteAsync(ForwardKey(memberId, groupId), cancellationToken).ConfigureAwait(false);
+            var reverse = await Edges.DeleteAsync(ReverseKey(groupId, memberId), cancellationToken).ConfigureAwait(false);
+            return forward | reverse;
         }
     }
 
@@ -265,7 +287,7 @@ internal sealed partial class LatticeMembershipDirectory(
                 state.groupId.AsSpan().CopyTo(span[pos..]);
             });
 
-    private static string ReverseKey(string groupId, string memberId) =>
+    internal static string ReverseKey(string groupId, string memberId) =>
         string.Create(
             2 + groupId.Length + 1 + memberId.Length,
             (groupId, memberId),

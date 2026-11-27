@@ -35,56 +35,71 @@ internal sealed partial class LatticeAppsControl : ILatticeAppRoleBindings
         var bindings = AppsControlMapping.ToEngineBindings(request.RoleBindings);
         var tenant = await ResolveTenantAsync(cancellationToken).ConfigureAwait(false);
 
-        await AuthorizeAsync(cancellationToken).ConfigureAwait(false);
+        var audit = AppRequest(
+            LatticeAdminAuditAction.AppRoleBindingsUpdate,
+            tenant,
+            slug,
+            new Dictionary<string, string>(1, StringComparer.Ordinal) { ["version"] = version.ToString() });
+        await AuthorizeAsync(audit, cancellationToken).ConfigureAwait(false);
 
-        var current = await _registry.GetAsync(tenant, slug, cancellationToken).ConfigureAwait(false);
-        if (current is null || current.State == AppRegistryLifecycleState.Uninstalled)
-        {
-            throw AppsControlFailures.NotInstalled(slug);
-        }
+        return await LatticeAdminAudit
+            .RunAsync(
+                _audit,
+                audit,
+                async ct =>
+                {
+                    var current = await _registry.GetAsync(tenant, slug, ct).ConfigureAwait(false);
+                    if (current is null || current.State == AppRegistryLifecycleState.Uninstalled)
+                    {
+                        throw AppsControlFailures.NotInstalled(slug);
+                    }
 
-        if (current.Version != version)
-        {
-            throw new InvalidOperationException(
-                $"The role bindings name version '{version}' of app '{slug}', but version '{current.Version}' is installed; "
-                + "role bindings are pinned to the installed version.");
-        }
+                    if (current.Version != version)
+                    {
+                        throw new InvalidOperationException(
+                            $"The role bindings name version '{version}' of app '{slug}', but version '{current.Version}' is installed; "
+                            + "role bindings are pinned to the installed version.");
+                    }
 
-        // The upgrade below re-pins the kept ceiling to the version; a ceiling that was never
-        // consented for this version must be re-consented, not adopted by a re-binding.
-        if (!current.IsCeilingPinnedToVersion)
-        {
-            throw new InvalidOperationException(
-                $"The consent of app '{slug}' was not recorded for the installed version; re-consent before changing its role bindings.");
-        }
+                    // The upgrade below re-pins the kept ceiling to the version; a ceiling that was never
+                    // consented for this version must be re-consented, not adopted by a re-binding.
+                    if (!current.IsCeilingPinnedToVersion)
+                    {
+                        throw new InvalidOperationException(
+                            $"The consent of app '{slug}' was not recorded for the installed version; re-consent before changing its role bindings.");
+                    }
 
-        var resolved = await _source.ResolveInstalledAsync(current, cancellationToken).ConfigureAwait(false);
-        var manifest = AppsControlFailures.RequireResolved(slug, version, resolved);
-        ThrowIfUndeclaredRoles(manifest, bindings);
+                    var resolved = await _source.ResolveInstalledAsync(current, ct).ConfigureAwait(false);
+                    var manifest = AppsControlFailures.RequireResolved(slug, version, resolved);
+                    ThrowIfUndeclaredRoles(manifest, bindings);
 
-        var transition = await _registry.UpgradeAsync(
-            new AppRegistryInstallRequest
-            {
-                Tenant = tenant,
-                Identity = new AppIdentity { Slug = slug, Version = current.Version, Provenance = current.Provenance },
-                Ceiling = current.Ceiling,
-                RoleBindings = bindings,
-                ExpectedVersion = current.Version,
-                ExpectedRevision = current.Revision,
-            },
-            cancellationToken).ConfigureAwait(false);
-        if (!transition.Succeeded || transition.Record is not { } record)
-        {
-            throw AppsControlFailures.FromTransition(slug, "change the role bindings of", transition);
-        }
+                    var transition = await _registry.UpgradeAsync(
+                        new AppRegistryInstallRequest
+                        {
+                            Tenant = tenant,
+                            Identity = new AppIdentity { Slug = slug, Version = current.Version, Provenance = current.Provenance },
+                            Ceiling = current.Ceiling,
+                            RoleBindings = bindings,
+                            ExpectedVersion = current.Version,
+                            ExpectedRevision = current.Revision,
+                        },
+                        ct).ConfigureAwait(false);
+                    if (!transition.Succeeded || transition.Record is not { } record)
+                    {
+                        throw AppsControlFailures.FromTransition(slug, "change the role bindings of", transition);
+                    }
 
-        if (record.State == AppRegistryLifecycleState.Enabled)
-        {
-            await ReapplyAsync(tenant, slug, "The role bindings were recorded, but re-applying the enabled app failed. ", cancellationToken)
-                .ConfigureAwait(false);
-        }
+                    if (record.State == AppRegistryLifecycleState.Enabled)
+                    {
+                        await ReapplyAsync(tenant, slug, "The role bindings were recorded, but re-applying the enabled app failed. ", ct)
+                            .ConfigureAwait(false);
+                    }
 
-        return ToRoleBindingsReport(record);
+                    return ToRoleBindingsReport(record);
+                },
+                changed: null,
+                cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private static AppRoleBindingsReport ToRoleBindingsReport(AppRegistryRecord record) =>

@@ -105,6 +105,35 @@ public sealed class LatticeTenantRegistryConcurrencyTests
     }
 
     [Test]
+    public async Task PutMergeAsync_probe_reports_the_stored_record_of_the_attempt_that_committed()
+    {
+        var (registry, serializer) = Create();
+        var lattice = Substitute.For<ILattice>();
+
+        // The first read still holds grant A; a competing removal commits before the
+        // write, so the retry merges into a record that no longer holds it (#3638).
+        var read0 = Base();
+        read0.AddGrant(GrantA, Clock(20), "seed");
+        var read1 = Base();
+        read1.AddGrant(GrantA, Clock(20), "seed");
+        read1.RemoveGrant(GrantA.GrantId, Clock(25), "competitor");
+        lattice.GetWithVersionAsync(Acme.Value!, Arg.Any<CancellationToken>()).Returns(
+            new VersionedValue { Value = serializer.Serialize(read0), Version = Clock(1) },
+            new VersionedValue { Value = serializer.Serialize(read1), Version = Clock(2) });
+        lattice.SetIfVersionAsync(Acme.Value!, Arg.Any<byte[]>(), Arg.Any<HybridLogicalClock>(), Arg.Any<CancellationToken>())
+            .Returns(false, true);
+
+        var incoming = Base();
+        incoming.AddGrant(GrantA, Clock(20), "seed");
+        incoming.RemoveGrant(GrantA.GrantId, Clock(30), "me");
+        var probe = new TenantStoredRecordProbe(stored => stored.TryGetGrant(GrantA.GrantId, out _));
+
+        await registry.PutMergeAsync(lattice, Acme.Value!, incoming, CancellationToken.None, probe: probe);
+
+        Assert.That(probe.Matched, Is.False, "the committed attempt merged into a record without the grant");
+    }
+
+    [Test]
     public async Task PutMergeAsync_with_create_creates_the_record_when_the_key_is_absent()
     {
         var (registry, _) = Create();

@@ -104,7 +104,8 @@ public static partial class LatticeApiTenantAdminServiceCollectionExtensions
             sp.GetRequiredService<IOptions<ClusterOptions>>(),
             sp.GetService<ILatticeMembershipContext>(),
             sp.GetService<ILatticeIdentityDirectory>(),
-            sp.GetService<IOptionsMonitor<LatticeIdentityDirectoryOptions>>()));
+            sp.GetService<IOptionsMonitor<LatticeIdentityDirectoryOptions>>(),
+            sp.GetService<ILatticeAdminAuditTrail>()));
 
         // T20 per-tenant region residency. The two-tier fail-closed authorizer
         // (operator authorizes the allowed set; tenant-admin sets residency within
@@ -141,7 +142,8 @@ public static partial class LatticeApiTenantAdminServiceCollectionExtensions
             sp.GetRequiredService<ITenantAdminClock>(),
             sp.GetRequiredService<IOptions<ClusterOptions>>(),
             sp.GetService<ILatticeIdentityDirectory>(),
-            sp.GetService<IOptionsMonitor<LatticeIdentityDirectoryOptions>>()));
+            sp.GetService<IOptionsMonitor<LatticeIdentityDirectoryOptions>>(),
+            auditTrail: sp.GetService<ILatticeAdminAuditTrail>()));
 
         // N2 cross-tenant grant administration. The two-step agreement surface -
         // the granting tenant offers, the grantee approves or rejects, and either
@@ -156,7 +158,8 @@ public static partial class LatticeApiTenantAdminServiceCollectionExtensions
             sp.GetRequiredService<ITenantRegistry>(),
             sp.GetRequiredService<TenantRegionResidencyAuthorizer>(),
             sp.GetRequiredService<ITenantAdminClock>(),
-            sp.GetRequiredService<IOptions<ClusterOptions>>()));
+            sp.GetRequiredService<IOptions<ClusterOptions>>(),
+            sp.GetService<ILatticeAdminAuditTrail>()));
 
         // T21 tenant self-awareness. The read-only counterpart to the lifecycle
         // facade: it projects the caller's current tenant, the tenants it may

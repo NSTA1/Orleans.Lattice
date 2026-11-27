@@ -8,8 +8,8 @@ namespace Orleans.Lattice.Auth;
 /// an undefined default effect, a null-or-empty or reserved bootstrap
 /// administrator id, a
 /// null-or-empty strict-consistency tree id, an undefined audit verbosity, an
-/// out-of-range audit sampling ratio, and a non-positive audit-trail
-/// time-to-live.
+/// out-of-range audit sampling ratio, a non-positive audit-trail
+/// time-to-live, and non-positive or inconsistent admin audit trail timings.
 /// </summary>
 internal sealed class LatticeAuthOptionsValidator : IValidateOptions<LatticeAuthOptions>
 {
@@ -70,6 +70,28 @@ internal sealed class LatticeAuthOptionsValidator : IValidateOptions<LatticeAuth
         if (options.AuditTrailTimeToLive is { } auditTtl && auditTtl <= TimeSpan.Zero)
         {
             failures.Add($"{nameof(LatticeAuthOptions.AuditTrailTimeToLive)} must be strictly positive when supplied.");
+        }
+
+        if (options.AdminAuditTrailTimeToLive is { } adminTtl && adminTtl <= TimeSpan.Zero)
+        {
+            failures.Add($"{nameof(LatticeAuthOptions.AdminAuditTrailTimeToLive)} must be strictly positive when supplied.");
+        }
+
+        if (options.AdminAuditReconcileLease <= TimeSpan.Zero)
+        {
+            failures.Add($"{nameof(LatticeAuthOptions.AdminAuditReconcileLease)} must be strictly positive.");
+        }
+
+        if (options.AdminAuditMaxPendingAge <= options.AdminAuditReconcileLease)
+        {
+            failures.Add(
+                $"{nameof(LatticeAuthOptions.AdminAuditMaxPendingAge)} must be strictly greater than "
+                + $"{nameof(LatticeAuthOptions.AdminAuditReconcileLease)}.");
+        }
+
+        if (options.AdminAuditReconcileInterval <= TimeSpan.Zero)
+        {
+            failures.Add($"{nameof(LatticeAuthOptions.AdminAuditReconcileInterval)} must be strictly positive.");
         }
 
         return failures.Count > 0

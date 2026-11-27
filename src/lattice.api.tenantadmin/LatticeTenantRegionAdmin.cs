@@ -61,6 +61,7 @@ internal sealed class LatticeTenantRegionAdmin : ILatticeTenantRegionAdmin
     private readonly string? _writerId;
     private readonly TenantRegionLifecycleDriver _lifecycle;
     private readonly TenantRegionBackfillService? _backfill;
+    private readonly ILatticeAdminAuditTrail? _audit;
 
     /// <summary>
     /// Initializes a new <see cref="LatticeTenantRegionAdmin"/>.
@@ -78,7 +79,8 @@ internal sealed class LatticeTenantRegionAdmin : ILatticeTenantRegionAdmin
         ITenantAdminClock clock,
         IOptions<ClusterOptions> clusterOptions,
         TenantRegionLifecycleDriver? lifecycle = null,
-        TenantRegionBackfillService? backfill = null)
+        TenantRegionBackfillService? backfill = null,
+        ILatticeAdminAuditTrail? auditTrail = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(authorizer);
@@ -91,6 +93,7 @@ internal sealed class LatticeTenantRegionAdmin : ILatticeTenantRegionAdmin
         _writerId = clusterOptions.Value.ClusterId;
         _lifecycle = lifecycle ?? new TenantRegionLifecycleDriver(registry, clusterOptions);
         _backfill = backfill;
+        _audit = auditTrail;
     }
 
     /// <inheritdoc />
@@ -100,7 +103,23 @@ internal sealed class LatticeTenantRegionAdmin : ILatticeTenantRegionAdmin
         var tenant = TenantAdminArguments.ParseTenantId(tenantId);
         var desired = ValidateRegionSet(allowedRegions, nameof(allowedRegions));
 
-        await _authorizer.AuthorizeOperatorAsync(cancellationToken).ConfigureAwait(false);
+        var audit = TenantAdminAudit.OnTenantRecord(
+            LatticeAdminAuditAction.TenantRegionsAllow,
+            tenant,
+            LatticeAdminAuditTargetKind.TenantRegion,
+            tenant.Value,
+            RegionDetail(desired));
+        await LatticeAdminAudit
+            .AuthorizeAsync(_audit, audit, ct => _authorizer.AuthorizeOperatorAsync(ct), cancellationToken)
+            .ConfigureAwait(false);
+        return await LatticeAdminAudit
+            .RunAsync(_audit, audit, ct => AuthorizeAllowedRegionsCoreAsync(tenant, desired, ct), changed: null, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<TenantRegionAuthorizationResult> AuthorizeAllowedRegionsCoreAsync(
+        TenantId tenant, HashSet<string> desired, CancellationToken cancellationToken)
+    {
 
         var record = await _registry.GetAsync(tenant, cancellationToken).ConfigureAwait(false)
             ?? throw new TenantNotFoundException(tenant.Value);
@@ -157,7 +176,28 @@ internal sealed class LatticeTenantRegionAdmin : ILatticeTenantRegionAdmin
         var tenant = TenantAdminArguments.ParseTenantId(tenantId);
         var desired = ValidateRegionSet(residencyRegions, nameof(residencyRegions));
 
-        var record = await _authorizer.AuthorizeTenantAdminAsync(tenant, cancellationToken).ConfigureAwait(false);
+        var audit = TenantAdminAudit.OnTenantRecord(
+            LatticeAdminAuditAction.TenantResidencySet,
+            tenant,
+            LatticeAdminAuditTargetKind.TenantRegion,
+            tenant.Value,
+            RegionDetail(desired));
+        var record = await LatticeAdminAudit
+            .AuthorizeAsync(_audit, audit, ct => _authorizer.AuthorizeTenantAdminAsync(tenant, ct), cancellationToken)
+            .ConfigureAwait(false);
+        return await LatticeAdminAudit
+            .RunAsync(
+                _audit,
+                audit,
+                ct => SetResidencyCoreAsync(tenant, desired, record, ct),
+                static r => r.AddedRegions.Count + r.RemovedRegions.Count > 0,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<TenantResidencyChangeResult> SetResidencyCoreAsync(
+        TenantId tenant, HashSet<string> desired, TenantRecord record, CancellationToken cancellationToken)
+    {
 
         // Last-resident-region guard: a tenant must always be resident somewhere, so
         // an empty residency set is refused whenever the tenant is currently resident.
@@ -292,7 +332,9 @@ internal sealed class LatticeTenantRegionAdmin : ILatticeTenantRegionAdmin
         string tenantId, CancellationToken cancellationToken = default)
     {
         var tenant = TenantAdminArguments.ParseTenantId(tenantId);
-        var record = await _authorizer.AuthorizeTenantAdminAsync(tenant, cancellationToken).ConfigureAwait(false);
+        var record = await LatticeAdminAudit
+            .AuthorizeAsync(_audit, TenantAdminAudit.Read(tenant), ct => _authorizer.AuthorizeTenantAdminAsync(tenant, ct), cancellationToken)
+            .ConfigureAwait(false);
 
         var regions = TenantLifecycleMapping.DescribeRegions(record).ToArray();
         if (_backfill is not null)
@@ -327,10 +369,34 @@ internal sealed class LatticeTenantRegionAdmin : ILatticeTenantRegionAdmin
     {
         var tenant = TenantAdminArguments.ParseTenantId(tenantId);
         ArgumentException.ThrowIfNullOrEmpty(regionId);
-        await _authorizer.AuthorizeOperatorAsync(cancellationToken).ConfigureAwait(false);
-        await _lifecycle.AdvanceForOperatorAsync(
-            tenant, regionId, acknowledgeDataInPlace, cancellationToken).ConfigureAwait(false);
+        var audit = TenantAdminAudit.OnTenantRecord(
+            LatticeAdminAuditAction.TenantRegionAdvance,
+            tenant,
+            LatticeAdminAuditTargetKind.TenantRegion,
+            string.Concat(tenant.Value, "/", regionId),
+            new Dictionary<string, string>(1, StringComparer.Ordinal)
+            {
+                ["acknowledgeDataInPlace"] = acknowledgeDataInPlace ? "true" : "false",
+            });
+        await LatticeAdminAudit
+            .AuthorizeAsync(_audit, audit, ct => _authorizer.AuthorizeOperatorAsync(ct), cancellationToken)
+            .ConfigureAwait(false);
+        await LatticeAdminAudit
+            .RunAsync(
+                _audit,
+                audit,
+                ct => _lifecycle.AdvanceForOperatorAsync(tenant, regionId, acknowledgeDataInPlace, ct),
+                cancellationToken)
+            .ConfigureAwait(false);
         return await GetTenantRegionStatusAsync(tenant.Value, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>The allow-listed detail of a region-set call: the requested region ids, sorted.</summary>
+    private static Dictionary<string, string> RegionDetail(HashSet<string> regions)
+    {
+        var sorted = new List<string>(regions);
+        sorted.Sort(OrdinalStringOrder.Comparison);
+        return new Dictionary<string, string>(1, StringComparer.Ordinal) { ["regions"] = string.Join(",", sorted) };
     }
 
     private static HashSet<string> ValidateRegionSet(IReadOnlyCollection<string> regions, string parameterName)

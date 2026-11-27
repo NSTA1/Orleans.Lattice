@@ -25,7 +25,7 @@ internal sealed partial class LatticeAppsControl
         try
         {
             var tenant = await ResolveTenantAsync(cancellationToken).ConfigureAwait(false);
-            await AuthorizeAsync(cancellationToken).ConfigureAwait(false);
+            await AuthorizeAsync(ReadRequest(tenant), cancellationToken).ConfigureAwait(false);
 
             var apps = ImmutableArray.CreateBuilder<AppSummary>();
             await foreach (var record in _registry.ListForTenantAsync(tenant, cancellationToken).ConfigureAwait(false))
@@ -67,7 +67,7 @@ internal sealed partial class LatticeAppsControl
             var slug = AppsControlMapping.ParseSlug(appSlug, nameof(appSlug));
             AppVersion? requested = version is null ? null : AppsControlMapping.ParseVersion(version, nameof(version));
             var tenant = await ResolveTenantAsync(cancellationToken).ConfigureAwait(false);
-            await AuthorizeAsync(cancellationToken).ConfigureAwait(false);
+            await AuthorizeAsync(ReadRequest(tenant), cancellationToken).ConfigureAwait(false);
 
             var record = await _registry.GetAsync(tenant, slug, cancellationToken).ConfigureAwait(false);
             var live = record is { State: not AppRegistryLifecycleState.Uninstalled };
@@ -132,7 +132,7 @@ internal sealed partial class LatticeAppsControl
         {
             var slug = AppsControlMapping.ParseSlug(appSlug, nameof(appSlug));
             var tenant = await ResolveTenantAsync(cancellationToken).ConfigureAwait(false);
-            await AuthorizeAsync(cancellationToken).ConfigureAwait(false);
+            await AuthorizeAsync(ReadRequest(tenant), cancellationToken).ConfigureAwait(false);
 
             var record = await _registry.GetAsync(tenant, slug, cancellationToken).ConfigureAwait(false);
             return record is null || record.State == AppRegistryLifecycleState.Uninstalled ? null : ToConsentReport(record);

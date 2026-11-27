@@ -44,6 +44,11 @@ internal static class TenantAdminSetCommit
     /// <param name="clock">The facade's clock, used only by the fallback's self-heal.</param>
     /// <param name="writerId">The writer id, used only by the fallback's self-heal.</param>
     /// <param name="cancellationToken">Cancels the write.</param>
+    /// <param name="probe">
+    /// An optional probe evaluated on the stored record the commit merged into. A
+    /// host-supplied registry without the guarded commit cannot report that record,
+    /// so the probe is assumed to match, as the caller's own read showed.
+    /// </param>
     /// <returns>The committed record.</returns>
     /// <exception cref="TenantLastAdminSubjectException">The committed admin set would have been empty; nothing was removed.</exception>
     internal static async Task<TenantRecord> CommitAsync(
@@ -52,7 +57,8 @@ internal static class TenantAdminSetCommit
         string removedAdminEntry,
         ITenantAdminClock clock,
         string? writerId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        TenantStoredRecordProbe? probe = null)
     {
         var tenantId = record.Id.Value;
         void Guard(TenantRecord merged)
@@ -65,10 +71,14 @@ internal static class TenantAdminSetCommit
 
         if (registry is IGuardedTenantRegistry guarded)
         {
-            return await guarded.PutGuardedAsync(record, Guard, cancellationToken).ConfigureAwait(false);
+            return probe is null
+                ? await guarded.PutGuardedAsync(record, Guard, cancellationToken).ConfigureAwait(false)
+                : await guarded.PutProbedAsync(record, probe, Guard, cancellationToken).ConfigureAwait(false);
         }
 
-        if (await registry.GetAsync(record.Id, cancellationToken).ConfigureAwait(false) is { } current)
+        var fresh = await registry.GetAsync(record.Id, cancellationToken).ConfigureAwait(false);
+        probe?.AssumeMatched();
+        if (fresh is { } current)
         {
             Guard(current.Clone().MergeFrom(record));
         }
