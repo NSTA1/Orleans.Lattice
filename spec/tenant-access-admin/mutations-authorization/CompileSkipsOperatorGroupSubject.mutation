@@ -1,0 +1,15 @@
+# Pairs with TenantRuleConfinement. This is the compiler as it stood when
+# #6210 was found: CompiledTenantPartition.Build re-validates an arriving
+# tenant rule, but an operator rule is compiled as found, so one naming another
+# tenant's group on this tenant's tree, arriving by replication or restore,
+# takes effect with an operator-final verdict.
+MODULE: CompileSkipsOperatorGroupSubject
+TARGET: TenantRuleConfinement
+CLASS: Invariant
+SUMMARY: the snapshot compiler re-validates only tenant-tier rules, not an operator rule's tenant group subject
+
+--- FIND
+CompileAdmits(r) == (r.layer = "tenant" => TenantRuleShapeOk(r)) /\ GroupSubjectOk(r)
+--- REPLACE
+CompileAdmits(r) == r.layer = "tenant" => TenantRuleShapeOk(r)
+--- END

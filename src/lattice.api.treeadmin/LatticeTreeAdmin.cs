@@ -245,6 +245,31 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
     }
 
     /// <summary>
+    /// Admits an alias assignment against the tenant's tree quota when, and only
+    /// when, it adds a registry row: an alias onto a logical id that has no row is
+    /// charged exactly as a create through <see cref="AdmitTenantCreateAsync"/>,
+    /// and a re-point of an existing logical id is not charged. Inert, with no
+    /// registry read, unless an active admission controller applies to the caller.
+    /// </summary>
+    /// <remarks>Must be called only after the alias's authorizations have admitted the call.</remarks>
+    /// <param name="effectiveTreeId">The composed, tenant-scoped logical tree id being aliased.</param>
+    /// <param name="cancellationToken">Cancels the admission evaluation.</param>
+    /// <exception cref="LatticeTenantAccessDeniedException">The tenant's quota does not admit the new logical id.</exception>
+    private async ValueTask AdmitTenantAliasAsync(string effectiveTreeId, CancellationToken cancellationToken)
+    {
+        if (_admission is not { IsActive: true } || LatticeAccessGateContext.IsSystemOrigin)
+        {
+            return;
+        }
+
+        var exists = await _grainFactory.GetLatticeRegistry().ExistsAsync(effectiveTreeId).ConfigureAwait(false);
+        if (!exists)
+        {
+            await AdmitTenantCreateAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>
     /// Scopes a caller-supplied materialised-view name to the caller's active
     /// tenant, so two tenants using the same unqualified view name address
     /// different maintainers and different view trees.
@@ -736,6 +761,14 @@ internal sealed partial class LatticeTreeAdmin : ILatticeTreeAdmin, ILatticeTree
         // closes. It mirrors the assertion the backup engine already makes at its own
         // alias-swap seam (LatticeBackupRestoreService.AssertPhysicalBelongsToTargetAsync).
         await _authorizer.AuthorizeTreeAdminAsync(effectivePhysicalTreeId, cancellationToken).ConfigureAwait(false);
+
+        // An alias onto a logical id with no registry row adds a row, which is what
+        // MaxTreeCount bounds, so it is admitted exactly as a create (#5333): the same
+        // authoritative count, charged for the composed logical id, strictly after
+        // both authorizations and before the registry write. A re-point of an existing
+        // logical id rewrites its row and is not charged, so a tenant at its cap can
+        // still move an alias. Decided in spec/tenant-quotas/RefinementTreeCount.md.
+        await AdmitTenantAliasAsync(effectiveTreeId, cancellationToken).ConfigureAwait(false);
 
         // Routing reads the shard map under the logical id, so the target's map is
         // carried onto the logical entry in the same registry write as the alias
