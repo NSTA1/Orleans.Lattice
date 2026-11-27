@@ -1,0 +1,14 @@
+# Pairs with DenialNotClientError. The app tool's invocation-time refusal is
+# marked as a client error, so a revoked caller is told it made a mistake and
+# the refusal is counted and logged as one.
+MODULE: AppDenialAsClientError
+TARGET: DenialNotClientError
+CLASS: Invariant
+SUMMARY: the app tool's invocation refusal is answered as a client error
+PERTURBS: CallAppTool
+
+--- FIND
+ELSE IF bad THEN "clientError" ELSE IF permitted THEN "ok" ELSE "denied"
+--- REPLACE
+ELSE IF bad THEN "clientError" ELSE IF permitted THEN "ok" ELSE "clientError"
+--- END
