@@ -1,0 +1,11 @@
+MODULE: AliasSeparateCounter
+TARGET: TruthfulAlias
+CLASS: Invariant
+SUMMARY: alias admission counts only aliases, not the creates sharing the quota
+PERTURBS: CheckAlias
+
+--- FIND
+         IF Cardinality(owned) + 1 > Effective THEN "refused" ELSE "admitted"]
+--- REPLACE
+         IF Cardinality(owned \cap Aliases) + 1 > Effective THEN "refused" ELSE "admitted"]
+--- END

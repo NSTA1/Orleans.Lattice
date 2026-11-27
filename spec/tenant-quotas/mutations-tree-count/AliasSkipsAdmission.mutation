@@ -1,0 +1,11 @@
+MODULE: AliasSkipsAdmission
+TARGET: TruthfulAlias
+CLASS: Invariant
+SUMMARY: an alias onto a new logical id registers without tree-count admission
+PERTURBS: CheckAlias
+
+--- FIND
+         IF Cardinality(owned) + 1 > Effective THEN "refused" ELSE "admitted"]
+--- REPLACE
+         "admitted"]
+--- END
