@@ -2118,8 +2118,16 @@ internal sealed partial class BPlusLeafGrain
             }
             else
             {
+                var saveStarted = AwaitDiagnostics.Enabled ? Stopwatch.GetTimestamp() : 0L;
                 kept = await snapshotGrain.SaveAsync(blob, cancellationToken)
                     == LeafSnapshotSaveOutcome.Kept;
+                if (saveStarted != 0L)
+                {
+                    // #6166: snapshot saves, against the drives and seeds that make them.
+                    AwaitDiagnostics.Count("leaf.snapshot.save");
+                    AwaitDiagnostics.Add("leaf.snapshot.save.ms", (long)Stopwatch.GetElapsedTime(saveStarted).TotalMilliseconds);
+                    AwaitDiagnostics.Add("leaf.snapshot.save.rows", Cache.Count);
+                }
             }
 
             if (!kept)
