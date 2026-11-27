@@ -1,0 +1,12 @@
+# Pairs with TypeOK. A policy change moves the snapshot outside the declared
+# set of snapshots.
+MODULE: PolicyLeavesDomain
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: a policy change writes a snapshot outside Policies
+
+--- FIND
+    /\ policy' \in Policies \ {policy}
+--- REPLACE
+    /\ policy' \in (Policies \cup {"P3"}) \ {policy}
+--- END

@@ -1,0 +1,12 @@
+# Pairs with FailClosed. The authorizer AddLatticeMcp registers by default
+# admits every tool, so a host that opted nothing in is fully open.
+MODULE: DefaultAuthorizerAdmits
+TARGET: FailClosed
+CLASS: Invariant
+SUMMARY: the default registered authorizer allows instead of denying
+
+--- FIND
+      [] authz = "denyAll" -> FALSE
+--- REPLACE
+      [] authz = "denyAll" -> TRUE
+--- END

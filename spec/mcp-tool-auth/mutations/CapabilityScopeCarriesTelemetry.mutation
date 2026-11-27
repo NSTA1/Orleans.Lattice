@@ -1,0 +1,13 @@
+# Pairs with ScopelessToolsClusterWide. The permission resolver treats a
+# Telemetry rule over a tenant's capability scope as cluster-wide, so a
+# tenant-confined grant (#5582) is advertised the MCP telemetry tools.
+MODULE: CapabilityScopeCarriesTelemetry
+TARGET: ScopelessToolsClusterWide
+CLASS: Invariant
+SUMMARY: the resolver carries Telemetry from a tenant capability rule
+
+--- FIND
+TelemetryCarriedFrom == {ClusterWideTreeId}
+--- REPLACE
+TelemetryCarriedFrom == {ClusterWideTreeId, TenantCapability("A")}
+--- END

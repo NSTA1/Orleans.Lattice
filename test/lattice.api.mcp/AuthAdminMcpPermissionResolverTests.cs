@@ -417,6 +417,30 @@ public sealed class AuthAdminMcpPermissionResolverTests
     }
 
     [Test]
+    public async Task A_tenant_capability_telemetry_grant_does_not_advertise_the_mcp_telemetry_tools()
+    {
+        // #5582 confines a Telemetry grant to one tenant's capability scope. The MCP
+        // telemetry tools stay cluster-wide only, so discovery must neither admit the
+        // group nor carry the operation from it, or it would advertise tools the
+        // call-time check refuses.
+        var rule = new LatticeAuthorizationRule(
+            ruleId: "r-" + Guid.NewGuid().ToString("N"),
+            subject: LatticeSubjectSelector.User("alice"),
+            scope: LatticeScope.TenantCapability(TenantId.Parse("acme")),
+            operations: LatticeOperation.Telemetry,
+            effect: LatticeEffect.Allow);
+        var resolver = CreateResolver(AdminReturning(rule));
+
+        var access = await resolver.ResolveAsync(new LatticeCredential("alice"), CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(access.Contains(LatticeApiMcpGroup.Telemetry), Is.False);
+            Assert.That(access.GrantedOperations.HasFlag(LatticeOperation.Telemetry), Is.False);
+        });
+    }
+
+    [Test]
     public async Task A_tree_scoped_telemetry_grant_does_not_suppress_a_cluster_wide_one()
     {
         // The mask must not turn into a denial: a caller holding both rules is

@@ -125,6 +125,9 @@ gate will tell you if you forget.
   its size (#4056). Unknown argument names are further reduced to a safe character
   set, truncated, and capped in number (#3972). An authorization denial is never
   marked as a client error; it surfaces as a denial.
+- These are model-checked by `spec/mcp-tool-auth/` (`McpToolAuthorization`), over
+  the `Allowed(caller, op, scope)` contract of `spec/auth-decision/`; its
+  refinement note names the detector test for each guard.
 
 ### Telemetry metric-name allow-list (`src/lattice.api.telemetry`, consumed by `src/lattice.api.mcp.telemetry`)
 - The PromQL `__name__` / metric-name allow-list fails closed: an unparseable,

@@ -1,0 +1,16 @@
+# Pairs with LockStep. The invocation reuses the advertisement's verdict: an
+# advertised tool is served without the gate or the facade's current check,
+# so a grant revoked after tools/list still works.
+MODULE: GroupToolCachesAdvertisedVerdict
+TARGET: LockStep
+CLASS: Invariant
+SUMMARY: an advertised group tool is served on the advertisement-time verdict
+PERTURBS: CallGroupTool
+
+--- FIND
+        res == IF ~adv THEN "notFound" ELSE IF ~g THEN "denied" ELSE IF bad THEN "clientError" ELSE IF fac THEN "ok" ELSE "denied"
+        facObs == IF ~adv \/ ~g \/ bad THEN "skipped" ELSE IF fac THEN "allow" ELSE "deny"
+--- REPLACE
+        res == IF ~adv THEN "notFound" ELSE IF bad THEN "clientError" ELSE "ok"
+        facObs == "skipped"
+--- END
