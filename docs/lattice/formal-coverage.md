@@ -649,7 +649,7 @@ gaps, states its full scope.
     lands, and a crashed writer, until membership declares it dead; a silo
     clock slower than the epoch coordinator's by more than the ledger margin
     over one lease; more than one write or two silos; liveness after a false
-    death declaration, which does not hold (#6216); and rate budgets and
+    death declaration, which does not hold; and rate budgets and
     footprint quotas, which the two areas above cover.
 
 - **Authorization decision** ([`spec/auth-decision/`](../../spec/auth-decision/README.md)).

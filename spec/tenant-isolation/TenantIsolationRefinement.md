@@ -123,7 +123,7 @@ over one lease.
 - **Tenant-policy grace release on a death.** `TenantPolicyEpochGrain.EveryLiveSiloHasLeased`
   skips every member membership reports dead at once, so the tenant-policy epoch grain
   can end its grace while a silo falsely declared dead still trusts a lease from the
-  previous activation (#5719). The model checks the rule
+  previous activation. The model checks the rule
   `AppRegistryEpochGrain.CanReleaseGrace` implements, which counts a death only once
   the activation has seen it for one lease plus the margin.
   Production symbols: `TenantPolicyEpochGrain.EveryLiveSiloHasLeased`, `AppRegistryEpochGrain.CanReleaseGrace`.
@@ -131,7 +131,7 @@ over one lease.
   commits a registry write after its declaration, fails to publish it and then stops
   leaves the write uncovered: survivors invalidated their snapshots at the declaration,
   before the write, and no later death follows it, so `EveryCommitEventuallyCovered`
-  does not hold (#6216). `TenantIsolation.FalseDead.cfg` therefore checks the safety
+  does not hold. `TenantIsolation.FalseDead.cfg` therefore checks the safety
   properties only, and `TenantIsolation.Faults.cfg` keeps false declarations at zero.
   Production symbols: `TenantPolicyEpochSubscription`, `CompiledTenantPolicySnapshotMaintainer.InvalidateClusterView`.
 - **Recovered silos and their old address.** A recovered silo is modelled as the same
