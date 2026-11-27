@@ -1,0 +1,16 @@
+# Pairs with RuleAuthoringConfined: the tenant policy facade writes a tenant rule without checking it is confined to its tenant.
+
+MODULE: FacadeSkipsConfinement
+TARGET: RuleAuthoringConfined
+CLASS: Invariant
+SUMMARY: the tenant policy facade writes a tenant rule without checking it is confined to its tenant
+PERTURBS: TenantFacadeUpsert
+
+--- FIND
+    /\ r.owner = T
+    /\ Conforms(r)
+
+--- REPLACE
+    /\ r.owner = T
+
+--- END

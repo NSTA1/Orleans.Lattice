@@ -1,0 +1,13 @@
+# Pairs with BatchAllOrNothingAuthorization: a batch is authorized when any one leg is allowed rather than every leg.
+
+MODULE: BatchAnyLegSuffices
+TARGET: BatchAllOrNothingAuthorization
+CLASS: Invariant
+SUMMARY: a batch is authorized when any one leg is allowed rather than every leg
+PERTURBS: BatchEvaluate
+
+--- FIND
+    /\ LET ok == \A p \in pairs : PointAllowed(c, "Write", p)
+--- REPLACE
+    /\ LET ok == \E p \in pairs : PointAllowed(c, "Write", p)
+--- END

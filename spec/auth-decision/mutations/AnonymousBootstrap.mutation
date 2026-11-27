@@ -1,0 +1,13 @@
+# Pairs with BootstrapRootOfTrust: an anonymous caller is honoured as a bootstrap administrator when the configured set names it.
+
+MODULE: AnonymousBootstrap
+TARGET: BootstrapRootOfTrust
+CLASS: Invariant
+SUMMARY: an anonymous caller is honoured as a bootstrap administrator when the configured set names it
+PERTURBS: BootstrapEvaluate
+
+--- FIND
+    /\ c # Anonymous /\ c \in BootstrapConfigured
+--- REPLACE
+    /\ c \in BootstrapConfigured
+--- END

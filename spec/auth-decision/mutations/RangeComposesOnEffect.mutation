@@ -1,0 +1,13 @@
+# Pairs with PerKeyCoverage: the range filter hands a key to the tenant layer unless the operator layer denies it, so a tenant deny revokes an operator allow.
+
+MODULE: RangeComposesOnEffect
+TARGET: PerKeyCoverage
+CLASS: Invariant
+SUMMARY: the range filter hands a key to the tenant layer unless the operator layer denies it, so a tenant deny revokes an operator allow
+PERTURBS: EvaluateRange
+
+--- FIND
+               IN IF o.matched THEN o.effect = "Allow"
+--- REPLACE
+               IN IF o.matched /\ o.effect = "Deny" THEN FALSE
+--- END
