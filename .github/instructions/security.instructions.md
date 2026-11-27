@@ -407,6 +407,17 @@ gate will tell you if you forget.
   silo whose clock runs behind still removes the entry. A cap withdrawal is retried a
   bounded number of times, and one that never lands is reported as a
   `LatticeQuotaExceededException` saying the cap may stay exceeded, never as success.
+- **A death is not proof a silo stopped.** A tenant registry write returns only after
+  every silo that could trust the old policy has acknowledged the new epoch or let its
+  lease lapse, and a fresh `TenantPolicyEpochGrain` or `AppRegistryEpochGrain`
+  activation holds every advance for one lease plus the margin, in case a previous
+  activation granted leases still live. It may end that grace early only once every
+  member has leased from it, or has been seen dead by it for one lease plus the margin:
+  a silo falsely declared dead keeps serving on a lease from the previous activation
+  until it learns it is dead. `AppRegistryEpochGrain` implements this rule; the
+  tenant-policy grain still releases on a death at once (#5719). Model-checked by
+  `spec/tenant-isolation/` (`TenantIsolation`: `NoStaleAuthority` and
+  `NoEarlyGraceRelease`); its refinement note names the detector for each guard.
 - **The conformance suite is the regression guard.** `TenantAccessConformanceTests`
   (`test/lattice.api.tenantadmin/Security/`, Category `Integration`, filter
   `FullyQualifiedName~TenantAccessConformanceTests`) proves the invariants above end to
@@ -429,8 +440,9 @@ gate will tell you if you forget.
   logical id adds no row and is not charged. Admission does not reserve, so concurrent
   admissions can overshoot by the number in flight. The design, its mutations and its
   detectors are `TenantTreeCount` in
-  [`spec/tenant-quotas/`](../../spec/tenant-quotas/RefinementTreeCount.md); the
-  tree-admin alias seam does not yet charge a new logical id (#5333).
+  [`spec/tenant-quotas/`](../../spec/tenant-quotas/RefinementTreeCount.md). In the
+  tree-admin facade the alias check is `LatticeTreeAdmin.SetTreeAliasAsync`; do not add a
+  verb that writes a registry row without it.
 
 ## Release-status note for security fixes
 

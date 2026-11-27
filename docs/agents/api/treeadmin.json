@@ -5362,7 +5362,7 @@
         },
         {
           "error_id": "precondition-failed",
-          "condition": "Facade precondition failed, including while another operation (a resize, shadow-cutover restore, restore revert, or schema remediation or migration) holds the tree's alias reservation; the message names the holder."
+          "condition": "Facade precondition failed, including while another operation (a resize, shadow-cutover restore, restore revert, or schema remediation or migration) holds the tree's alias reservation, the message naming the holder; or, for an alias onto a logical id with no registry entry, a tenant quota controller refuses it with LatticeQuotaExceededException (an InvalidOperationException)."
         },
         {
           "error_id": "tree-ownership-denied",
@@ -5370,7 +5370,7 @@
         },
         {
           "error_id": "tenant-access-denied",
-          "condition": "The active tenant cannot be resolved or attempts a reserved namespace escape while either tree id is composed (LatticeTenantAccessDeniedException)."
+          "condition": "The active tenant cannot be resolved or attempts a reserved namespace escape while either tree id is composed, or tenant admission refuses an alias onto a logical id with no registry entry because MaxTreeCount would be exceeded (LatticeTenantAccessDeniedException)."
         },
         {
           "error_id": "cancelled",
