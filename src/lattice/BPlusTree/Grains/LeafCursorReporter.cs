@@ -852,7 +852,7 @@ internal sealed class LeafCursorReporter(
             if (pinStarted != 0L)
             {
                 // #6166: a pin shard call's wall time, queue included, by kind.
-                var kind = writeThrough ? "wal.pin.seed" : "wal.pin.report";
+                var kind = writeThrough ? "wal.pin.seed" : sheddable ? "wal.pin.report.mirror" : "wal.pin.report";
                 AwaitDiagnostics.Count(kind);
                 AwaitDiagnostics.Add(string.Concat(kind, ".us"), (long)System.Diagnostics.Stopwatch.GetElapsedTime(pinStarted).TotalMicroseconds);
             }

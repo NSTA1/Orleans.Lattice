@@ -95,9 +95,17 @@ internal sealed class LiveAdvanceRig
     /// <summary>A shard root routing stamp, as a shard root admits a write under.</summary>
     public static WalRoutingStamp Routing => WalRoutingStamp.ForShardRoot(0, 1);
 
+    /// <summary>A cursor reporter to register for the leaf, or <see langword="null"/> for none.</summary>
+    public ILeafCursorReporter? CursorReporter { get; set; }
+
     /// <summary>Registers the rig's services for the leaf's activation.</summary>
     public void Register(IServiceCollection services)
     {
+        if (CursorReporter is not null)
+        {
+            services.AddSingleton(CursorReporter);
+        }
+
         services.AddSingleton<IWalAppendFenceGate>(FenceGate);
         services.AddKeyedSingleton<IGrainStorage>(LatticeOptions.StorageProviderName, new HookedStorage(this));
         services.AddSingleton(FencingCheck);
