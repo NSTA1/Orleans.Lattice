@@ -1295,7 +1295,6 @@ internal sealed partial class ShardRootGrain
         return System.Diagnostics.Stopwatch.GetTimestamp();
     }
 
-    /// <summary>Adds the time since <paramref name="start"/> to <paramref name="region"/>'s census total and returns now; a no-op for 0.</summary>
     /// <summary>
     /// How many of a bulk append's new leaves are born at once (#6166). A chunk spread over
     /// a tree's shards bears a few leaves per shard; the bound caps the fan-out of a large
@@ -1303,6 +1302,7 @@ internal sealed partial class ShardRootGrain
     /// </summary>
     private const int AppendedLeafBirthConcurrency = 8;
 
+    /// <summary>Adds the time since <paramref name="start"/> to <paramref name="region"/>'s census total and returns now; a no-op for 0.</summary>
     private static long BulkPhaseMark(string region, long start)
     {
         if (start == 0)

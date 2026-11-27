@@ -1,4 +1,3 @@
-using System.Reflection;
 using NSubstitute;
 using Orleans.Lattice.BPlusTree;
 using Orleans.Lattice.BPlusTree.Grains;
@@ -18,37 +17,41 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
         h.State.State.RootIsLeaf = true;
         h.Leaf(existing).GetAppendTailAsync().Returns((2, "a"));
 
-        // The three leaves the append mints, registered up front so their births can be held.
-        var deterministicGuid = typeof(ShardRootGrain).GetMethod("DeterministicGuid", BindingFlags.NonPublic | BindingFlags.Static)!;
-        var births = new TaskCompletionSource[3];
-        var leaves = new IBPlusLeafGrain[3];
-        for (var i = 0; i < 3; i++)
+        // Every leaf the append mints holds its birth on the next gate, in the order births begin.
+        var births = Enumerable.Range(0, 3).Select(_ => new TaskCompletionSource()).ToArray();
+        var begun = 0;
+        h.Factory.GetGrain<IBPlusLeafGrain>(Arg.Any<Guid>()).Returns(call =>
         {
-            var key = (Guid)deterministicGuid.Invoke(null, [$"{TreeId}/0/append/{operationId}/leaf/{i}"])!;
-            births[i] = new TaskCompletionSource();
-            leaves[i] = MakeLeaf(key);
-            leaves[i].InitializeSiblingAsync(Arg.Any<SiblingInitialization>()).Returns(births[i].Task);
-            h.Leaves[key] = leaves[i];
-        }
+            var key = call.ArgAt<Guid>(0);
+            if (!h.Leaves.TryGetValue(key, out var leaf))
+            {
+                leaf = MakeLeaf(key);
+                leaf.InitializeSiblingAsync(Arg.Any<SiblingInitialization>())
+                    .Returns(_ => births[Interlocked.Increment(ref begun) - 1].Task);
+                h.Leaves[key] = leaf;
+            }
 
-        var append = h.Grain.BulkAppendAsync(operationId, Pairs(6));
-        await WaitForInitAsync(leaves[0]);
-        Assert.Multiple(() =>
-        {
-            Assert.That(InitCalls(leaves[1]) + InitCalls(leaves[2]), Is.Zero,
-                "no leaf is born before the first, whose low bound a retry reads to keep the layout");
+            return leaf;
         });
 
+        var append = h.Grain.BulkAppendAsync(operationId, Pairs(6));
+        await WaitForBirthsAsync(1);
+        await Task.Delay(100);
+        Assert.That(Volatile.Read(ref begun), Is.EqualTo(1),
+            "no leaf is born before the first, whose low bound a retry reads to keep the layout");
+
         births[0].SetResult();
-        await WaitForInitAsync(leaves[1]);
-        await WaitForInitAsync(leaves[2]);
+        await WaitForBirthsAsync(3);
         Assert.That(append.IsCompleted, Is.False, "precondition: the later births are still held");
 
         births[1].SetResult();
         births[2].SetResult();
         await append;
 
-        foreach (var leaf in leaves)
+        var newLeaves = h.Leaves.Values.Where(l => l.ReceivedCalls().Any(c =>
+            c.GetMethodInfo().Name == nameof(IBPlusLeafGrain.InitializeSiblingAsync))).ToArray();
+        Assert.That(newLeaves, Has.Length.EqualTo(3));
+        foreach (var leaf in newLeaves)
         {
             await leaf.Received(1).InitializeSiblingAsync(Arg.Any<SiblingInitialization>());
             await leaf.Received(1).MergeBulkSeedAsync(Arg.Any<Dictionary<string, LwwValue<byte[]>>>(), Arg.Any<WalRoutingStamp>());
@@ -56,17 +59,14 @@ public sealed partial class ShardRootGrainBulkLoadGraftTests
 
         Assert.That(h.State.State.LastCompletedBulkOperationId, Is.EqualTo(operationId));
 
-        static int InitCalls(IBPlusLeafGrain leaf) => leaf.ReceivedCalls().Count(c =>
-            c.GetMethodInfo().Name == nameof(IBPlusLeafGrain.InitializeSiblingAsync));
-
-        static async Task WaitForInitAsync(IBPlusLeafGrain leaf)
+        async Task WaitForBirthsAsync(int count)
         {
-            for (var i = 0; i < 500 && InitCalls(leaf) == 0; i++)
+            for (var i = 0; i < 500 && Volatile.Read(ref begun) < count; i++)
             {
                 await Task.Delay(10);
             }
 
-            Assert.That(InitCalls(leaf), Is.EqualTo(1), "the leaf's birth began while the others were held");
+            Assert.That(Volatile.Read(ref begun), Is.EqualTo(count), "these births began while the others were held");
         }
     }
 }
