@@ -107,7 +107,10 @@ internal sealed class CompiledPolicy
     /// Tenant-tier rules never enter that operator partition: when
     /// <paramref name="includeTenantLayer"/> is <c>true</c> they are compiled into
     /// the separate <see cref="Tenant"/> partition, and otherwise they are excluded
-    /// outright, so a pre-existing tenant rule is inert while the layer is off.
+    /// outright, so a pre-existing tenant rule is inert while the layer is off. An
+    /// operator rule naming a tenant group outside that group's tenant
+    /// (<see cref="TenantRuleConfinement.CheckTenantGroupSubject"/>) is dropped
+    /// whatever its origin, because replication and restore write around the store.
     /// </summary>
     /// <param name="rules">The full authorization rule set. Must not be <c>null</c>.</param>
     /// <param name="includeTenantLayer">Whether to build the tenant partition (the layer is active).</param>
@@ -138,6 +141,15 @@ internal sealed class CompiledPolicy
                     (tenantRules ??= new List<LatticeAuthorizationRule>()).Add(rule);
                 }
 
+                continue;
+            }
+
+            // An operator rule naming a tenant group outside that group's tenant is
+            // refused by the store's D4 guard, but replication and restore write the
+            // policy tree around the store. Re-apply the guard here, whatever the
+            // rule's origin, so such a record never takes effect (#6210).
+            if (TenantRuleConfinement.CheckTenantGroupSubject(rule) is not null)
+            {
                 continue;
             }
 
