@@ -1,0 +1,13 @@
+# Pairs with ContactOnlyWhenAdmitted. The inbound rows lose their cap, so
+# peer-chosen origins grow the state without bound.
+MODULE: ReceiverContactRowsUncapped
+TARGET: ContactOnlyWhenAdmitted
+CLASS: Invariant
+SUMMARY: a new inbound contact row is admitted past the cap
+PERTURBS: ApplyRun
+
+--- FIND
+        record == result = "applied" /\ (<<t, o>> \in contact \/ Cardinality(contact) < Cap)
+--- REPLACE
+        record == result = "applied"
+--- END

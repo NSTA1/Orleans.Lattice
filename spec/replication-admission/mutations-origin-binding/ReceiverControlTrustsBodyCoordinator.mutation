@@ -1,0 +1,12 @@
+# Pairs with OriginAuthenticated. A saga control verb with no credential-bound
+# origin falls back to the coordinator the body names.
+MODULE: ReceiverControlTrustsBodyCoordinator
+TARGET: OriginAuthenticated
+CLASS: Invariant
+SUMMARY: a control verb acts for a body-declared coordinator when the origin is not credential-bound
+
+--- FIND
+    THEN IF BoundOrigin(hdr) = NoHeader THEN <<"denied", NoHeader>>
+--- REPLACE
+    THEN IF BoundOrigin(hdr) = NoHeader THEN (IF body \in Topology THEN <<"ok", body>> ELSE <<"denied", NoHeader>>)
+--- END

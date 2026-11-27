@@ -1,0 +1,18 @@
+# Pairs with OriginAuthenticated. A new cross-cluster method is bound on the
+# host without registering with the admitted-peer seam, and the interceptor
+# lets unregistered methods through.
+MODULE: ReceiverUnregisteredMethodUngated
+TARGET: OriginAuthenticated
+CLASS: Invariant
+SUMMARY: a method bound on the host but not registered with the seam is served
+
+--- FIND
+HostMethods == PushMethods \cup SnapshotMethods \cup SagaMethods
+--- REPLACE
+HostMethods == PushMethods \cup SnapshotMethods \cup SagaMethods \cup {"GrantIntent"}
+--- END
+--- FIND
+    IF m \notin Registered THEN "unimplemented"
+--- REPLACE
+    IF FALSE THEN "unimplemented"
+--- END

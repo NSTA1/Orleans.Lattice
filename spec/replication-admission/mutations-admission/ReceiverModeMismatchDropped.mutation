@@ -1,0 +1,13 @@
+# Pairs with ModeReResolvedLocally. A mode disagreement on an enrolled tree is
+# silently dropped, losing the entries instead of parking them for an operator.
+MODULE: ReceiverModeMismatchDropped
+TARGET: ModeReResolvedLocally
+CLASS: Invariant
+SUMMARY: a wire-mode disagreement is dropped rather than dead-lettered
+PERTURBS: ApplyRun
+
+--- FIND
+THEN "applied" ELSE "deadLettered"
+--- REPLACE
+THEN "applied" ELSE "dropped"
+--- END
