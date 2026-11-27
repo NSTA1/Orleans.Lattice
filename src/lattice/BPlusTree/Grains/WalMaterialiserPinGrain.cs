@@ -27,7 +27,9 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// that lags the in-memory frontier only ever retains more WAL (always
 /// GC-safe). The birth seed path (<see cref="SeedManyAsync"/>) bypasses the
 /// window and writes through durably, preserving the crash-safety guarantee
-/// that a new leaf's block pin is durable before its data becomes reachable. A
+/// that a new leaf's block pin is durable before its data becomes reachable;
+/// reports and seeds interleave, and concurrent seeds share a write (issue
+/// #6166, see <c>WalMaterialiserPinGrain.GroupCommit.cs</c>). A
 /// final flush runs on deactivation so a clean shutdown loses no pending
 /// advance.
 /// </para>
@@ -79,7 +81,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// entries are larger than estimated converges instead of failing forever.
 /// </para>
 /// </summary>
-internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinGrain
+internal sealed partial class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinGrain
 {
     /// <summary>
     /// Average slot size, in estimated serialised bytes, above which the shard
@@ -602,6 +604,9 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
         }
 
         _legacyRetirePending = false;
+
+        // Exclusive: the live map is swapped out while the empty blob is written (#6166).
+        EnterExclusive();
         var live = _state.State;
         _state.State = new WalMaterialiserPinState();
         try
@@ -622,6 +627,7 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
         finally
         {
             _state.State = live;
+            ExitExclusive();
         }
     }
 
@@ -868,16 +874,20 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     public async Task ReportAsync(string consumerId, HybridLogicalClock frontier)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(consumerId);
+        await WaitForExclusiveAsync();
         if (Merge(consumerId, frontier, checkpointOffset: NoOffset))
         {
             await ScheduleOrFlushAsync();
         }
+
+        await WaitIfDurableWriteStalledAsync();
     }
 
     /// <inheritdoc />
     public async Task ReportManyAsync(IReadOnlyList<MaterialiserPinReport> reports)
     {
         ArgumentNullException.ThrowIfNull(reports);
+        await WaitForExclusiveAsync();
         var changed = false;
         for (var i = 0; i < reports.Count; i++)
         {
@@ -890,12 +900,15 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
         {
             await ScheduleOrFlushAsync();
         }
+
+        await WaitIfDurableWriteStalledAsync();
     }
 
     /// <inheritdoc />
     public async Task SeedManyAsync(IReadOnlyList<MaterialiserPinReport> reports)
     {
         ArgumentNullException.ThrowIfNull(reports);
+        await WaitForExclusiveAsync();
         List<uint>? changedHashes = null;
         for (var i = 0; i < reports.Count; i++)
         {
@@ -915,23 +928,24 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
         // Birth path: persist through durably (awaited) so the block pin is
         // durable before the caller lets the new leaf's data become reachable.
         // Only the seeded consumers' slots are written, so the cost of a seed
-        // is bounded by a slot rather than by the shard. While the store is
+        // is bounded by a slot rather than by the shard, and seeds that arrive
+        // while a write is in flight share the next one (#6166). While the store is
         // failing persistently the seed fails fast instead: the pin is already
         // merged in memory (which is what the WAL GC reads) and stays dirty, so
         // the next successful flush makes it durable.
         ThrowIfFailingFast("seed");
-        await PersistAsync(MaterialiserPinBirthOutcome, PersistScope.Consumers, changedHashes);
+        await JoinSeedRound(changedHashes);
     }
 
     /// <inheritdoc />
     public Task<IReadOnlyDictionary<string, HybridLogicalClock>> GetPinsAsync() =>
-        Task.FromResult<IReadOnlyDictionary<string, HybridLogicalClock>>(
-            new Dictionary<string, HybridLogicalClock>(_state.State.Pins, StringComparer.Ordinal));
+        ReadOutsideExclusiveAsync<IReadOnlyDictionary<string, HybridLogicalClock>>(
+            () => new Dictionary<string, HybridLogicalClock>(_state.State.Pins, StringComparer.Ordinal));
 
     /// <inheritdoc />
     public Task<IReadOnlyDictionary<string, long>> GetPinOffsetsAsync() =>
-        Task.FromResult<IReadOnlyDictionary<string, long>>(
-            new Dictionary<string, long>(_state.State.Offsets, StringComparer.Ordinal));
+        ReadOutsideExclusiveAsync<IReadOnlyDictionary<string, long>>(
+            () => new Dictionary<string, long>(_state.State.Offsets, StringComparer.Ordinal));
 
     /// <inheritdoc />
     public async Task RaiseOverrideHoldsAsync(IReadOnlyList<string> consumerIds)
@@ -941,6 +955,8 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(consumerIds[i]);
         }
+
+        await WaitForExclusiveAsync();
 
         // Fail fast before touching memory: a hold that is not durable must not
         // be reported as raised, and nothing is merged that a failed write would
@@ -1014,13 +1030,14 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
 
     /// <inheritdoc />
     public Task<IReadOnlyCollection<string>> GetOverrideHoldsAsync() =>
-        Task.FromResult<IReadOnlyCollection<string>>(
-            new HashSet<string>(_state.State.OverrideHolds, StringComparer.Ordinal));
+        ReadOutsideExclusiveAsync<IReadOnlyCollection<string>>(
+            () => new HashSet<string>(_state.State.OverrideHolds, StringComparer.Ordinal));
 
     /// <inheritdoc />
     public async Task RemoveAsync(string consumerId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(consumerId);
+        await WaitForExclusiveAsync();
 
         // Resolve the routing hash before removing: once the consumer is gone
         // from the in-memory map its bucket still has to be rewritten to make
@@ -1073,9 +1090,11 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     public async Task<bool> RemoveIfUnmergedSinceAsync(string consumerId, WalMaterialiserPinToken token)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(consumerId);
+        await WaitForExclusiveAsync();
 
         // Checked and acted on in one turn before any await, so no merge can
-        // land between the fence and the in-memory removal.
+        // land between the fence and the in-memory removal: RemoveAsync's own
+        // exclusive wait completes synchronously, since none can begin in between.
         long? lastMerged = _lastMerged.TryGetValue(consumerId, out var merged) ? merged : null;
         if (!WalOrphanPinRetirementCore.MayRemove(token, _activationEpoch, lastMerged))
         {
@@ -1106,6 +1125,7 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
             throw GrainStateWriteFaults.ConflictedActivation(StateWriteGrainType, GrainKey);
         }
 
+        await WaitForExclusiveAsync();
         if (_state.State.Pins.Count == 0
             && _state.State.Offsets.Count == 0
             && _state.State.OverrideHolds.Count == 0)
@@ -1151,6 +1171,8 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     /// </summary>
     private async Task ClearLegacySlotAsync()
     {
+        await AcquireFlushAsync();
+        EnterExclusive();
         try
         {
             await WriteLegacySlotAsync();
@@ -1161,6 +1183,11 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
                 ex,
                 "Clearing the legacy WAL materialiser pin slot for {GrainKey} failed; stale pins may keep WAL retained until the next clear.",
                 GrainKey);
+        }
+        finally
+        {
+            ExitExclusive();
+            ReleaseFlush();
         }
     }
 
@@ -1595,12 +1622,7 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
             throw GrainStateWriteFaults.ConflictedActivation(StateWriteGrainType, GrainKey);
         }
 
-        while (_flushInFlight)
-        {
-            await Task.Yield();
-        }
-
-        _flushInFlight = true;
+        await AcquireFlushAsync();
         var startedTickMs = Environment.TickCount64;
         try
         {
@@ -1622,7 +1644,6 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
         }
         finally
         {
-            _flushInFlight = false;
             RefreshDirty();
 
             // Record what this write cost so the coalesced flush can amortise
@@ -1631,6 +1652,16 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
             var completedTickMs = Environment.TickCount64;
             _lastWriteDurationMs = Math.Max(0, completedTickMs - startedTickMs);
             _lastWriteCompletedTickMs = completedTickMs;
+            if (AwaitDiagnostics.Enabled)
+            {
+                // #6166: what a pin shard's durable write costs, by kind, and the map it holds.
+                var kind = string.Concat("wal.pin.grain.write.", outcome);
+                AwaitDiagnostics.Count(kind);
+                AwaitDiagnostics.Add(string.Concat(kind, ".ms"), _lastWriteDurationMs);
+                AwaitDiagnostics.Add(string.Concat(kind, ".consumers"), _state.State.Pins.Count);
+            }
+
+            ReleaseFlush();
         }
     }
 
@@ -1667,9 +1698,20 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
             }
         }
 
+        // A relayout and a legacy-slot write are exclusive (#6166): no merge may land
+        // while the layout changes or the live map is serialised.
         if (_relayoutTarget != 0)
         {
-            await RelayoutAsync(_relayoutTarget);
+            EnterExclusive();
+            try
+            {
+                await RelayoutAsync(_relayoutTarget);
+            }
+            finally
+            {
+                ExitExclusive();
+            }
+
             wrote = true;
         }
 
@@ -1680,8 +1722,17 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
                 return wrote;
             }
 
-            await WriteLegacySlotAsync();
-            _dirty = false;
+            EnterExclusive();
+            try
+            {
+                await WriteLegacySlotAsync();
+                _dirty = false;
+            }
+            finally
+            {
+                ExitExclusive();
+            }
+
             return true;
         }
 
@@ -1815,11 +1866,32 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     {
         await EnsureHoldersAsync(slots);
         var slices = BuildSlices(_bucketCount, slots, _persistedWidth);
-        await WriteGroupsAsync(slots, slices);
+
+        // Claimed with the contents just built (#6166): a merge that lands while the write is
+        // in flight marks its slot dirty again, and a failed write puts the claim back.
+        List<int>? drained = null;
         foreach (var slot in slots)
         {
             _dirtyBuckets.Remove(slot);
-            _legacyDrainBuckets.Remove(slot);
+            if (_legacyDrainBuckets.Remove(slot))
+            {
+                (drained ??= new List<int>()).Add(slot);
+            }
+        }
+
+        try
+        {
+            await WriteGroupsAsync(slots, slices);
+        }
+        catch
+        {
+            _dirtyBuckets.UnionWith(slots);
+            if (drained is not null)
+            {
+                _legacyDrainBuckets.UnionWith(drained);
+            }
+
+            throw;
         }
     }
 

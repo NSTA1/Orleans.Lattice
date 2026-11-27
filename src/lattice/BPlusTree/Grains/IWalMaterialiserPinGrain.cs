@@ -1,3 +1,4 @@
+using Orleans.Concurrency;
 using Orleans.Lattice.Primitives;
 
 namespace Orleans.Lattice.BPlusTree.Grains;
@@ -42,6 +43,8 @@ internal interface IWalMaterialiserPinGrain : IGrainWithStringKey
     /// </summary>
     /// <param name="consumerId">Stable leaf-materialiser consumer id. Must not be <see langword="null"/> or whitespace.</param>
     /// <param name="frontier">Highest HLC the leaf has durably checkpointed.</param>
+    /// <remarks>Interleaves (#6166): the merge is synchronous and its durable write is coalesced, so a report never waits behind another call's storage write.</remarks>
+    [AlwaysInterleave]
     Task ReportAsync(string consumerId, HybridLogicalClock frontier);
 
     /// <summary>
@@ -54,6 +57,8 @@ internal interface IWalMaterialiserPinGrain : IGrainWithStringKey
     /// reports collapses to at most one <c>WriteStateAsync</c> per window.
     /// </summary>
     /// <param name="reports">The pin reports to merge. Each report's consumer id must not be <see langword="null"/> or whitespace.</param>
+    /// <remarks>Interleaves (#6166), as <see cref="ReportAsync"/> does.</remarks>
+    [AlwaysInterleave]
     Task ReportManyAsync(IReadOnlyList<MaterialiserPinReport> reports);
 
     /// <summary>
@@ -67,6 +72,12 @@ internal interface IWalMaterialiserPinGrain : IGrainWithStringKey
     /// awaited write for the batch routed to this shard.
     /// </summary>
     /// <param name="reports">The pin reports to seed durably. Each report's consumer id must not be <see langword="null"/> or whitespace.</param>
+    /// <remarks>
+    /// Interleaves and group-commits (#6166): seeds that arrive while a write is in flight
+    /// share the next one, so a shard's seeds no longer queue one storage write apiece.
+    /// A seed still returns only once a write that began after its merge has landed.
+    /// </remarks>
+    [AlwaysInterleave]
     Task SeedManyAsync(IReadOnlyList<MaterialiserPinReport> reports);
 
     /// <summary>
