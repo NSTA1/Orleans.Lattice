@@ -1,0 +1,13 @@
+# Pairs with FailClosed: a key-filtered decision is accepted where a whole-scope allow is required.
+
+MODULE: FilteredAllowAccepted
+TARGET: FailClosed
+CLASS: Invariant
+SUMMARY: a key-filtered decision is accepted where a whole-scope allow is required
+PERTURBS: Evaluate
+
+--- FIND
+                      THEN IF m.matched /\ m.effect = "Allow" THEN "Allow" ELSE "Deny"
+--- REPLACE
+                      THEN IF (m.matched /\ m.effect = "Allow") \/ m.layer = "filtered" THEN "Allow" ELSE "Deny"
+--- END

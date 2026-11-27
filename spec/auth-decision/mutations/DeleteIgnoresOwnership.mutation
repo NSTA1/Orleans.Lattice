@@ -1,0 +1,13 @@
+# Pairs with RuleAuthoringConfined: the operator surface removes a tenant: rule.
+
+MODULE: DeleteIgnoresOwnership
+TARGET: RuleAuthoringConfined
+CLASS: Invariant
+SUMMARY: the operator surface removes a tenant: rule
+PERTURBS: RuleDelete
+
+--- FIND
+       \/ a = "operator" /\ r.layer = "operator"
+--- REPLACE
+       \/ a = "operator"
+--- END

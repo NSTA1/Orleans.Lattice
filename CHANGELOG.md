@@ -13,6 +13,7 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 ### Added
 
 - **Views - Lag age in view status.** View status reports `ApplyLagAge`, how long the oldest unapplied source change has waited, and the Explorer's Views tab shows it beside the entry lag. ([#6145](https://github.com/NSTA1/Orleans.Lattice/issues/6145)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Explorer.UI`)
+- **Formal - Authorization decision model.** The authorization decision is model-checked: operator-final layering, tenant-layer confinement, per-key range composition, scopeless capabilities, fail-closed control-plane isolation and all-or-nothing batch authorization. ([#6048](https://github.com/NSTA1/Orleans.Lattice/issues/6048)) (`repository-wide`)
 
 ### Fixed
 

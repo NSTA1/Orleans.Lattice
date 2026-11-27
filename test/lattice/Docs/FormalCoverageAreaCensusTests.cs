@@ -15,6 +15,7 @@ public sealed class FormalCoverageAreaCensusTests
 {
     private const string ControlArea = "Shard ownership";
     private const string ControlCompanion = "MaterialisedViewFence";
+    private const string ControlSecurity = "AuthDecision";
 
     private static readonly Lazy<IReadOnlyDictionary<string, FormalCoverageModuleCensus>> Census = new(() =>
         SpecModuleCatalogue.Repository().ToDictionary(m => m.Name, FormalCoverageModuleCensus.Of, StringComparer.Ordinal));
@@ -39,6 +40,37 @@ public sealed class FormalCoverageAreaCensusTests
     public void Companion_mutation_figures_match_the_module_manifests()
     {
         Assert.That(FormalCoverageAreaCensus.CompanionFindings(Page(), Census.Value), Is.Empty);
+    }
+
+    [Test]
+    public void Security_figures_match_the_module_manifests_and_refinement_notes()
+    {
+        var page = Page();
+        Assert.That(MarkdownTable.Read(page, FormalCoverageAreaCensus.SecuritySection, FormalCoverageAreaCensus.PagePath).Rows,
+            Is.Not.Empty, "The security table must have a row; an empty table would check nothing.");
+        Assert.That(FormalCoverageAreaCensus.SecurityFindings(page, Census.Value), Is.Empty);
+    }
+
+    [TestCase("Mutants")]
+    [TestCase("Behaviour rows")]
+    [TestCase("Detector tests")]
+    public void A_wrong_security_figure_is_rejected(string header)
+    {
+        var perturbed = ReplaceCell(Page(), FormalCoverageAreaCensus.SecuritySection, ControlSecurity, header, "999");
+
+        Assert.That(FormalCoverageAreaCensus.SecurityFindings(perturbed, Census.Value),
+            Has.Some.Contains($"security module '{ControlSecurity}' states '999' {header.ToLowerInvariant()}"));
+    }
+
+    [Test]
+    public void A_security_row_naming_another_module_leaves_its_module_unaccounted()
+    {
+        var perturbed = ReplaceCell(Page(), FormalCoverageAreaCensus.SecuritySection, ControlSecurity, "Module", "NoSuchSecurityModule");
+
+        Assert.That(
+            FormalCoverageAreaCensus.AccountingFindings(perturbed, Census.Value.Keys.ToList(), FormalCoverageAreaCensus.AreaModules),
+            Has.Some.Contains($"module '{ControlSecurity}' is accounted for by no census")
+                .And.Some.Contains("names 'NoSuchSecurityModule', which is not a module discovered"));
     }
 
     [Test]

@@ -225,6 +225,9 @@ public sealed partial class TlcCiShardTests
                         ? TlcCiShard.SchemaView
                         : module.Name == "BackupRetention"
                         ? TlcCiShard.BackupRetention
+                        : new[] { "auth-decision", "tenant-access-admin", "tenant-grants", "apps-install", "mcp-tool-auth", "replication-admission", "audit-trail" }
+                            .Contains(Path.GetFileName(module.Directory))
+                        ? TlcCiShard.Security
                         : module.Name.StartsWith("Schema", StringComparison.Ordinal)
                         ? TlcCiShard.Schema
                         : module.Name == "MaterialisedViewFence"
@@ -290,6 +293,7 @@ public sealed partial class TlcCiShardTests
     [TestCase("aliasing", TlcCiShard.Aliasing)]
     [TestCase("schema", TlcCiShard.Schema)]
     [TestCase("schema-view", TlcCiShard.SchemaView)]
+    [TestCase("auth-decision", TlcCiShard.Security)]
     public void Lifecycle_areas_route_every_base_variant_and_mutation_together(string area, string expected)
     {
         var modules = SpecModuleCatalogue.Repository().Where(module =>
