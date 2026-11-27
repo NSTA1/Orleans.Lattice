@@ -92,6 +92,17 @@ internal static class PreparedBucketSweep
             var pendingPage = await leaf.GetPendingMutationsForSlotsAndNextSiblingAsync(sortedSlots, virtualShardCount);
             foreach (var snapshot in pendingPage.Mutations)
             {
+                // A prepare the source's own newer row already supersedes can
+                // never become the key's visible value whatever its saga's
+                // outcome: the source's drain skips it and its read gate hides
+                // it. Carrying it over would resurrect it (issue #6206) - a
+                // committed backstop is restamped above the destination's row,
+                // and a replayed prepare outranks the copied row there because
+                // that row is migrated - so the key would read the stale round
+                // until a later write overwrote it. The copied row is the value.
+                if (snapshot.SupersededByRow)
+                    continue;
+
                 // Per-snapshot pre-check: if the saga has already
                 // terminalized at sweep-time, the saga's own
                 // commit-phase broadcast has finished and the

@@ -2289,7 +2289,11 @@ internal sealed partial class BPlusLeafGrain
                 if (Array.BinarySearch(sortedMovedSlots, slot) < 0)
                     continue;
 
-                result.Add(CaptureReplayPrepare(txid, key, value) with { WalOffset = walOffset });
+                result.Add(CaptureReplayPrepare(txid, key, value) with
+                {
+                    WalOffset = walOffset,
+                    SupersededByRow = IsPrepareSupersededByRow(key, txid, value),
+                });
             }
         }
 

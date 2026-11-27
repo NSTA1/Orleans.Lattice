@@ -135,4 +135,16 @@ internal readonly record struct PendingMutationSnapshot
     /// drain.
     /// </summary>
     [Id(13)] public bool StampIsOriginal { get; init; }
+
+    /// <summary>
+    /// Whether the source leaf's own committed row already supersedes the
+    /// prepared mutation (issue #6206): a later write to the key landed there
+    /// while the saga's terminal never did, so the prepare can no longer become
+    /// the key's visible value whatever its saga's outcome. The retroactive
+    /// sweep must not carry such a prepare to the destination, where the copied
+    /// row is migrated and a backstop or replay of the stale value would win over
+    /// it. Legacy snapshots, and those from an older silo, decode to
+    /// <see langword="false"/>: the previous behaviour.
+    /// </summary>
+    [Id(14)] public bool SupersededByRow { get; init; }
 }
