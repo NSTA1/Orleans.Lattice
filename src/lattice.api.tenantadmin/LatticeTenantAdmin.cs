@@ -325,13 +325,6 @@ internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
     }
 
     /// <summary>
-    /// Validates and normalises the caller-supplied admin subjects: a
-    /// <c>null</c> / empty collection yields an empty set (the caller-seeding
-    /// default then applies), a <c>null</c>, empty, or whitespace entry fails
-    /// closed with an <see cref="ArgumentException"/> rather than being silently
-    /// dropped, and duplicates collapse (subject membership is a set).
-    /// </summary>
-    /// <summary>
     /// The operator-only authorization, with a refusal recorded to the admin audit
     /// trail before it is rethrown (#3638).
     /// </summary>
@@ -342,6 +335,13 @@ internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
             ct => _authorizer.AuthorizeTenantAdminAsync(ct),
             cancellationToken);
 
+    /// <summary>
+    /// Validates and normalises the caller-supplied admin subjects: a
+    /// <c>null</c> / empty collection yields an empty set (the caller-seeding
+    /// default then applies), a <c>null</c>, empty, or whitespace entry fails
+    /// closed with an <see cref="ArgumentException"/> rather than being silently
+    /// dropped, and duplicates collapse (subject membership is a set).
+    /// </summary>
     private static IReadOnlyList<string> ValidateSubjects(IReadOnlyCollection<string>? adminSubjects)
     {
         if (adminSubjects is null || adminSubjects.Count == 0)

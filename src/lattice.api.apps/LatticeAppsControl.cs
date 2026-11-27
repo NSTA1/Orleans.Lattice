@@ -250,12 +250,10 @@ internal sealed partial class LatticeAppsControl : ILatticeAppsControl
 
     /// <summary>
     /// Authorizes <see cref="LatticeOperation.AppInstall"/> over the cluster-wide scope
-    /// through the shared gate. A key-filtered allow is refused: the capability is not
-    /// attached to a key. System-origin callers and the no-op gate skip enforcement.
-    /// </summary>
-    /// <summary>
-    /// The unaudited authorization the capability probe uses: a probe expects to be
-    /// refused, so its refusal is an answer, not a denied administrative call.
+    /// through the shared gate, unaudited: the capability probe uses it, and a probe
+    /// expects to be refused, so its refusal is an answer, not a denied administrative
+    /// call. A key-filtered allow is refused: the capability is not attached to a key.
+    /// System-origin callers and the no-op gate skip enforcement.
     /// </summary>
     private ValueTask AuthorizeAsync(CancellationToken cancellationToken) =>
         LatticeAccessGateEnforcement.EnforceWholeTreeControlAsync(
