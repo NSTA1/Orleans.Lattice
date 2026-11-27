@@ -1167,13 +1167,12 @@ internal sealed partial class ShardRootGrain
             newLeafIds[i] = grainFactory.GetGrain<IBPlusLeafGrain>(
                 DeterministicGuid($"{shardKey}/append/{operationId}/leaf/{i}")).GetGrainId();
         }
-        int leafIndex = 0;
-
-        while (idx < sortedEntries.Count)
+        var batches = new Dictionary<string, LwwValue<byte[]>>[newLeafCount];
+        var separators = new string[newLeafCount];
+        for (var leafIndex = 0; idx < sortedEntries.Count; leafIndex++)
         {
             int take = Math.Min(maxLeafKeys, sortedEntries.Count - idx);
-            var separator = sortedEntries[idx].Key;
-
+            separators[leafIndex] = sortedEntries[idx].Key;
             var batch = new Dictionary<string, LwwValue<byte[]>>(take);
             for (int i = 0; i < take; i++, idx++)
             {
@@ -1181,46 +1180,89 @@ internal sealed partial class ShardRootGrain
                 batch[sortedEntries[idx].Key] = LwwValue<byte[]>.Create(sortedEntries[idx].Value, clock);
             }
 
+            batches[leafIndex] = batch;
+        }
+
+        // #6166: the appended leaves are born concurrently, in bounded groups. Each is an
+        // independent grain whose birth names its neighbours only by id, and the graft below
+        // waits for every one. The first is born alone and first: a retry of this operation
+        // reads the first leaf's low bound to keep the layout this attempt gives every leaf
+        // (PriorAttemptLayoutLowAsync), so no other leaf may be born under a layout the first
+        // does not record.
+        var timed = phase != 0;
+        await BirthAppendedLeafAsync(0, mergeRows: false);
+        for (var start = 0; start < newLeafCount; start += AppendedLeafBirthConcurrency)
+        {
+            var end = Math.Min(newLeafCount, start + AppendedLeafBirthConcurrency);
+            var births = new Task[end - start];
+            for (var i = start; i < end; i++)
+            {
+                births[i - start] = BirthAppendedLeafAsync(i, mergeRows: true);
+            }
+
+            await Task.WhenAll(births);
+        }
+
+        for (var leafIndex = 0; leafIndex < newLeafCount; leafIndex++)
+        {
+            CollectMirroredRows(mirrored, batches[leafIndex]);
+            graftEntries.Add(new GraftEntry { SeparatorKey = separators[leafIndex], LeafId = newLeafIds[leafIndex] });
+        }
+
+        phase = BulkPhaseMark("bulk.append.ms.seed", phase);
+
+        // Births leaf i, unless the first-born step already did, and then merges its rows.
+        async Task BirthAppendedLeafAsync(int leafIndex, bool mergeRows)
+        {
             var newId = newLeafIds[leafIndex];
             var newLeaf = grainFactory.GetGrain<IBPlusLeafGrain>(newId);
-
-            // The append creates this leaf, so its first row write carries a
-            // create intent naming it (issue #4654). The leaf is born declaring
-            // the range it owns, up to the next appended leaf's separator and open
-            // at the tail (issue #5460; see SeedBulkLoadLeavesAsync).
-            var initStarted = phase != 0 ? System.Diagnostics.Stopwatch.GetTimestamp() : 0L;
-            using (LatticeNewLeafIntentContext.BeginScope(newId))
+            var mergeStarted = 0L;
+            if (leafIndex > 0 || !mergeRows)
             {
-                await newLeaf.InitializeSiblingAsync(new SiblingInitialization
+                // The append creates this leaf, so its first row write carries a
+                // create intent naming it (issue #4654). The leaf is born declaring
+                // the range it owns, up to the next appended leaf's separator and open
+                // at the tail (issue #5460; see SeedBulkLoadLeavesAsync).
+                var initStarted = timed ? System.Diagnostics.Stopwatch.GetTimestamp() : 0L;
+                using (LatticeNewLeafIntentContext.BeginScope(newId))
                 {
-                    TreeId = TreeId,
-                    ShardIndex = MyShardIndex,
-                    LowKeyInclusive = separator,
-                    HighKeyExclusive = idx < sortedEntries.Count ? sortedEntries[idx].Key : null,
-                    PrevSibling = leafIndex > 0 ? newLeafIds[leafIndex - 1] : null,
-                    NextSibling = leafIndex + 1 < newLeafCount ? newLeafIds[leafIndex + 1] : null,
+                    await newLeaf.InitializeSiblingAsync(new SiblingInitialization
+                    {
+                        TreeId = TreeId,
+                        ShardIndex = MyShardIndex,
+                        LowKeyInclusive = separators[leafIndex],
+                        HighKeyExclusive = leafIndex + 1 < newLeafCount ? separators[leafIndex + 1] : null,
+                        PrevSibling = leafIndex > 0 ? newLeafIds[leafIndex - 1] : null,
+                        NextSibling = leafIndex + 1 < newLeafCount ? newLeafIds[leafIndex + 1] : null,
 
-                    // #6166: the switch's close applies the birth hint it stored.
-                    AwaitsBirthHint = awaitsBirthHint,
-                });
+                        // #6166: the switch's close applies the birth hint it stored.
+                        AwaitsBirthHint = awaitsBirthHint,
+                    });
+                }
+
+                // #6166: the seed phase split per appended leaf - its birth, then its rows.
+                // Summed over leaves born concurrently, so the two can exceed the seed's wall time.
+                mergeStarted = BulkPhaseMark("bulk.append.ms.seed.init", initStarted);
             }
-            // #6166: the seed phase split per appended leaf - its birth, then its rows.
-            var mergeStarted = BulkPhaseMark("bulk.append.ms.seed.init", initStarted);
+
+            if (!mergeRows)
+            {
+                return;
+            }
+
+            if (timed && mergeStarted == 0)
+            {
+                mergeStarted = System.Diagnostics.Stopwatch.GetTimestamp();
+            }
+
             await WalFenceSeamRetry.RunAsync(
-                () => MergeBulkSeedAsync(newLeaf, batch, seedRouting), WalFenceSeamRetry.CallerShardCoordinator, TreeId);
+                () => MergeBulkSeedAsync(newLeaf, batches[leafIndex], seedRouting), WalFenceSeamRetry.CallerShardCoordinator, TreeId);
             BulkPhaseMark("bulk.append.ms.seed.merge", mergeStarted);
             if (mergeStarted != 0)
             {
                 AwaitDiagnostics.Count("bulk.append.seed.leaves");
             }
-
-            CollectMirroredRows(mirrored, batch);
-
-            graftEntries.Add(new GraftEntry { SeparatorKey = separator, LeafId = newId });
-            leafIndex++;
         }
-
-        phase = BulkPhaseMark("bulk.append.ms.seed", phase);
         NoteStructuralRoutingChange(); // #5876
         state.State.PendingBulkGraft = new PendingBulkGraft
         {
@@ -1254,6 +1296,13 @@ internal sealed partial class ShardRootGrain
     }
 
     /// <summary>Adds the time since <paramref name="start"/> to <paramref name="region"/>'s census total and returns now; a no-op for 0.</summary>
+    /// <summary>
+    /// How many of a bulk append's new leaves are born at once (#6166). A chunk spread over
+    /// a tree's shards bears a few leaves per shard; the bound caps the fan-out of a large
+    /// append into one shard.
+    /// </summary>
+    private const int AppendedLeafBirthConcurrency = 8;
+
     private static long BulkPhaseMark(string region, long start)
     {
         if (start == 0)
