@@ -287,6 +287,16 @@ internal static class TlcCiShard
     public const string SchemaView = "TlcShardSchemaView";
 
     /// <summary>
+    /// Every base, variant and mutation of the identity, authorization and
+    /// protected-action modules of epic #6046, co-located so each base serves its
+    /// mutations' full-bound controls. Routed by directory (see
+    /// <see cref="SecurityDirectories"/>), so a later module in one of those
+    /// directories joins with no routing change. The measured per-module costs
+    /// live in the shard's <c>test-shards.json</c> note.
+    /// </summary>
+    public const string Security = "TlcShardSecurity";
+
+    /// <summary>
     /// The prefix of the per-module category every TLC base, variant and
     /// mutation case carries beside its shard category (contract C2 of #5148),
     /// so <c>TestCategory=TlcModule_&lt;Module&gt;</c> selects exactly one
@@ -307,7 +317,7 @@ internal static class TlcCiShard
          MaterialisedViewResolvedIdentity, MaterialisedViewJointRepair, MaterialisedViewNumeric,
          AntiEntropy, AntiEntropy2, AntiEntropy3, TreeLifecycle, Aliasing, SplitGate,
          Scheduling, SchedulingWorkloadB, SchedulingReplayTwoPartitions, SchedulingShipping, SchedulingShippingVariants,
-         Schema, SchemaView,
+         Schema, SchemaView, Security,
          WalAppendEpoch, WalHandOffFence, WalRoutingFloor, WalBulkSwitch, WalLiveAdvanceCore,
          WalLiveAdvanceCoreEagerVariants, WalLiveAdvanceCoreLazyVariants, WalLiveAdvanceCoreFree,
          WalLiveAdvanceCoreFreeSnapshot, WalLiveAdvanceCoreFreeLink, WalLiveAdvanceCoreFreeReadPosition, WalLiveAdvanceCoreFreeVariants,
@@ -334,6 +344,10 @@ internal static class TlcCiShard
         if (SchemaCategory(name) is { } schemaCategory)
         {
             return schemaCategory;
+        }
+        if (SecurityCategory(module) is { } securityCategory)
+        {
+            return securityCategory;
         }
         if (string.Equals(name, "WalLiveAdvanceCore", StringComparison.Ordinal) && RaisesFreeAdvance(mutation))
         {
@@ -413,7 +427,7 @@ internal static class TlcCiShard
     public static string? OfModule(SpecModule module)
     {
         ArgumentNullException.ThrowIfNull(module);
-        return SchedulingCategory(module) ?? SchemaCategory(module.Name) ?? LiveAdvanceCategory(module.Name)
+        return SchedulingCategory(module) ?? SchemaCategory(module.Name) ?? SecurityCategory(module) ?? LiveAdvanceCategory(module.Name)
             ?? LifecycleCategory(module.Name) ?? CoLocatedBaseCategory(module);
     }
 
@@ -488,6 +502,11 @@ internal static class TlcCiShard
         if (SchemaCategory(module.Name) is { } schemaCategory)
         {
             return schemaCategory;
+        }
+
+        if (SecurityCategory(module) is { } securityCategory)
+        {
+            return securityCategory;
         }
 
         if (string.Equals(module.Name, "WalLiveAdvanceCore", StringComparison.Ordinal)
@@ -628,6 +647,17 @@ internal static class TlcCiShard
             ? SchedulingWorkloadB
             : Scheduling;
     }
+
+    /// <summary>
+    /// The spec directories of epic #6046's identity, authorization and
+    /// protected-action modules, every one routed to <see cref="Security"/>.
+    /// </summary>
+    private static readonly HashSet<string> SecurityDirectories =
+        new(["auth-decision", "tenant-access-admin", "tenant-grants", "apps-install", "mcp-tool-auth",
+             "replication-admission", "audit-trail"], StringComparer.Ordinal);
+
+    private static string? SecurityCategory(SpecModule module) =>
+        SecurityDirectories.Contains(Path.GetFileName(module.Directory)) ? Security : null;
 
     private static string? SchemaCategory(string name) =>
         string.Equals(name, "SchemaViewComposition", StringComparison.Ordinal) ? SchemaView

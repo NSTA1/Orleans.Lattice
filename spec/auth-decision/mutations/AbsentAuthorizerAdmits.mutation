@@ -1,0 +1,13 @@
+# Pairs with FailClosed: the MCP tool gate admits a caller when no authorizer is registered.
+
+MODULE: AbsentAuthorizerAdmits
+TARGET: FailClosed
+CLASS: Invariant
+SUMMARY: the MCP tool gate admits a caller when no authorizer is registered
+PERTURBS: ToolCheck
+
+--- FIND
+!.verdict = IF McpAuthorizerRegistered THEN "Delegated" ELSE "Deny"]
+--- REPLACE
+!.verdict = IF McpAuthorizerRegistered THEN "Delegated" ELSE "Allow"]
+--- END

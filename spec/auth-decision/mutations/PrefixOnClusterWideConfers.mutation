@@ -1,0 +1,12 @@
+# Pairs with ScopelessFromClusterWideOnly: a prefix rule on the cluster-wide id matches the scopeless request, conferring AppInstall.
+
+MODULE: PrefixOnClusterWideConfers
+TARGET: ScopelessFromClusterWideOnly
+CLASS: Invariant
+SUMMARY: a prefix rule on the cluster-wide id matches the scopeless request, conferring AppInstall
+
+--- FIND
+    /\ \/ r.kind = "tree"
+--- REPLACE
+    /\ \/ r.kind = "tree" \/ r.tree = ClusterWideTreeId
+--- END
