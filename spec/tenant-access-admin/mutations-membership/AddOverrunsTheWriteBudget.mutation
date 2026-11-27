@@ -1,0 +1,16 @@
+# Pairs with TypeOK. A model-domain defect: the budget leaves 0..MaxWrites.
+MODULE: AddOverrunsTheWriteBudget
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: a facade add consumes two writes, driving the write budget below zero
+PERTURBS: AddEntry
+
+--- FIND
+    /\ slots' = [slots EXCEPT ![x][e] = MergeSlot(@, Slot(TRUE, clock[s] + 1))]
+    /\ clock' = [clock EXCEPT ![s] = @ + 1]
+    /\ budget' = budget - 1
+--- REPLACE
+    /\ slots' = [slots EXCEPT ![x][e] = MergeSlot(@, Slot(TRUE, clock[s] + 1))]
+    /\ clock' = [clock EXCEPT ![s] = @ + 1]
+    /\ budget' = budget - 2
+--- END

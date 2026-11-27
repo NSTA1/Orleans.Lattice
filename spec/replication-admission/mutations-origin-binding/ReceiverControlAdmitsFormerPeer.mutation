@@ -1,0 +1,13 @@
+# Pairs with OriginAuthenticated. A control verb drops the authorized-peer
+# check, so a cluster removed from the topology whose secret is still
+# configured keeps driving saga state.
+MODULE: ReceiverControlAdmitsFormerPeer
+TARGET: OriginAuthenticated
+CLASS: Invariant
+SUMMARY: a control verb admits a credential-bound origin outside the topology
+
+--- FIND
+         ELSE IF hdr \notin Topology THEN <<"denied", NoHeader>>
+--- REPLACE
+         ELSE IF FALSE THEN <<"denied", NoHeader>>
+--- END

@@ -10,9 +10,13 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ## Unreleased
 
+### Breaking
+
+- **Tenancy - Registry updates no longer create records.** `ITenantRegistry.PutAsync` and the guarded put now throw `TenantRecordNotFoundException` for an absent tenant. **Migration:** create and seed through the new `CreateAsync`; a host-supplied `ITenantRegistry` must refuse an update to an absent record and implement `CreateAsync`. ([#6230](https://github.com/NSTA1/Orleans.Lattice/issues/6230)) (`Orleans.Lattice.Tenancy`)
+
 ### Security
 
-- **Tenancy - A deleted tenant stays deleted.** A tenant-admin write that read a tenant's record before the tenant was deleted is now refused instead of re-creating the tenant. `ITenantRegistry.PutAsync` no longer creates a record; use the new `CreateAsync`. ([#6230](https://github.com/NSTA1/Orleans.Lattice/issues/6230)) (`Orleans.Lattice.Tenancy`, `Orleans.Lattice.Api.TenantAdmin`)
+- **Tenancy - A deleted tenant stays deleted.** A tenant-admin write that read a tenant's record before the tenant was deleted is now refused instead of re-creating the tenant. ([#6230](https://github.com/NSTA1/Orleans.Lattice/issues/6230)) (`Orleans.Lattice.Tenancy`, `Orleans.Lattice.Api.TenantAdmin`)
 - **Tenancy - Read denials no longer reveal other tenants.** A refused crossing or active-tenant check returns one fixed reason naming no tenant, so a caller cannot tell whether another tenant exists or is suspended; the cause is logged at debug level. ([#6231](https://github.com/NSTA1/Orleans.Lattice/issues/6231)) (`Orleans.Lattice.Tenancy`)
 - **Auth - Replicated rules cannot cross tenants.** An operator rule that names a tenant group on a tree outside that group's tenant, arriving by replication or restore, is now dropped when the policy compiles instead of taking effect. ([#6210](https://github.com/NSTA1/Orleans.Lattice/issues/6210)) (`Orleans.Lattice.Auth`)
 
