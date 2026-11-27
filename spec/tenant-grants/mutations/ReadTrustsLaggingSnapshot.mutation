@@ -1,0 +1,14 @@
+# Pairs with RevocationTakesEffect. Serving a read from the peer's compiled
+# snapshot after the push told it the snapshot is out of date admits a read
+# from a revoked grant beyond the bound.
+MODULE: ReadTrustsLaggingSnapshot
+TARGET: RevocationTakesEffect
+CLASS: Invariant
+SUMMARY: the peer trusts its snapshot whether or not it is still authoritative
+PERTURBS: Read
+
+--- FIND
+    LET auth == s = Peer /\ trusted
+--- REPLACE
+    LET auth == s = Peer
+--- END

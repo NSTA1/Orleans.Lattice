@@ -1,0 +1,13 @@
+# Pairs with PeerAuthorityBounded. The captured-source confinement passes a report
+# naming no source, so an unknown backup is replayed under system origin.
+MODULE: PeerRestoreEmptySourceListElevates
+TARGET: PeerAuthorityBounded
+CLASS: Invariant
+SUMMARY: an elevated prepare builds from a backup whose admission report names no source
+PERTURBS: Prepare
+
+--- FIND
+          ELSE IF up /\ ~SourcesEnrolled(b, t)
+--- REPLACE
+          ELSE IF up /\ (\A m \in t : Sources(b, m) # {}) /\ ~SourcesEnrolled(b, t)
+--- END

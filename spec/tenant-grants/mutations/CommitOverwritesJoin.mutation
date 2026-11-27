@@ -1,0 +1,16 @@
+# Pairs with RevocationTakesEffect. A copy written over the committed record
+# instead of joined with it lets a stale approval reinstate a revoked grant.
+# The offer, approval and revocation it overtakes plus its own write need a
+# fourth write.
+MODULE: CommitOverwritesJoin
+TARGET: RevocationTakesEffect
+CLASS: Invariant
+SUMMARY: a copy read before later writes overwrites the committed record instead of joining it
+PERTURBS: CommitCall
+BOUNDS: MaxWrites = 4
+
+--- FIND
+    /\ Commit(fl.verb, fl.caller, fl.auth, fl.present, fl.preActive, fl.cp, Merge(grant, fl.cp), fl.target)
+--- REPLACE
+    /\ Commit(fl.verb, fl.caller, fl.auth, fl.present, fl.preActive, fl.cp, fl.cp, fl.target)
+--- END

@@ -1,0 +1,13 @@
+# Pairs with LastAdminGuard. A group deletion that removes its admin entry
+# through a plain put, so it races an access-facade removal unguarded.
+MODULE: GroupDeleteCommitsUnguarded
+TARGET: LastAdminGuard
+CLASS: Invariant
+SUMMARY: the group deletion's admin-entry removal skips the guarded commit
+PERTURBS: Commit
+
+--- FIND
+       /\ IF "admin" \in op.sets /\ AdmissibleCount(merged["admin"]) = 0
+--- REPLACE
+       /\ IF "admin" \in op.sets /\ op.kind # "deleteGroup" /\ AdmissibleCount(merged["admin"]) = 0
+--- END

@@ -1,0 +1,14 @@
+# Pairs with NonDisclosure. The enforcer before #6231: a refused crossing
+# said whether the owning tenant was registered, so a member of any tenant
+# could enumerate tenants by reading their trees.
+MODULE: ReadReasonNamesUnregisteredOwner
+TARGET: NonDisclosure
+CLASS: Invariant
+SUMMARY: a refused crossing reports an unregistered owning tenant apart from a missing grant
+PERTURBS: Read
+
+--- FIND
+        crossingReason == "crossing"
+--- REPLACE
+        crossingReason == IF status["A"] = "active" THEN "crossing" ELSE "ownerUnregistered"
+--- END

@@ -1,0 +1,13 @@
+# Pairs with TwoPartyActivation. Creating a tenant over a registered id hands
+# the new incarnation every grant the old one approved.
+MODULE: CreateOverExistingTenant
+TARGET: TwoPartyActivation
+CLASS: Invariant
+SUMMARY: tenant creation accepts an id that is still registered
+PERTURBS: Recreate
+
+--- FIND
+    /\ status["B"] = "absent"
+--- REPLACE
+    /\ status["B"] \in Status
+--- END
