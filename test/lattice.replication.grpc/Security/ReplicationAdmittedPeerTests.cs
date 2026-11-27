@@ -145,7 +145,7 @@ public class ReplicationAdmittedPeerTests
 
                 var bind = attribute.BindType.GetMethod(
                     attribute.BindMethodName,
-                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static)
+                    BindingFlags.Public | BindingFlags.Static)
                     ?? throw new InvalidOperationException($"{type} names a missing bind method.");
                 bind.Invoke(null, [binder, null]);
             }
