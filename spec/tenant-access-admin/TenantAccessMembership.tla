@@ -44,6 +44,7 @@ Slots == [p : BOOLEAN, ts : 0..MaxStamp]
 MergeSlot(incumbent, incoming) == IF incoming.ts > incumbent.ts THEN incoming ELSE incumbent
 
 LiveCount(set) == Cardinality({e \in Entries : set[e].p})
+AdmissibleCount(set) == Cardinality({e \in Entries : set[e].p /\ Admissible(e)})
 
 \* TenantRemovalStamp: strictly later than both the local clock and the
 \* slot it supersedes.
@@ -105,7 +106,7 @@ BeginRemoveAdmin(p, s, e) ==
     /\ pending[p].kind = "idle"
     /\ budget > 0
     /\ IF ~slots["admin"][e].p THEN Answer("removeAdmin", "unchanged")
-       ELSE IF LiveCount(slots["admin"]) <= 1 THEN Answer("removeAdmin", "refused")
+       ELSE IF Admissible(e) /\ AdmissibleCount(slots["admin"]) <= 1 THEN Answer("removeAdmin", "refused")
        ELSE /\ pending' = [pending EXCEPT ![p] =
                   [kind |-> "removeAdmin", entry |-> e, sets |-> {"admin"},
                    stamp |-> [x \in Sets |-> IF x = "admin" THEN RemovalStamp(clock[s], slots["admin"][e]) ELSE 0],
@@ -138,7 +139,7 @@ BeginDeleteGroup(p, s) ==
     IN /\ pending[p].kind = "idle"
        /\ budget > 0
        /\ IF ~groupExists THEN Answer("deleteGroup", "unchanged")
-          ELSE IF "admin" \in inSets /\ LiveCount(slots["admin"]) <= 1 THEN Answer("deleteGroup", "refused")
+          ELSE IF "admin" \in inSets /\ AdmissibleCount(slots["admin"]) <= 1 THEN Answer("deleteGroup", "refused")
           ELSE /\ pending' = [pending EXCEPT ![p] =
                      [kind |-> "deleteGroup", entry |-> OwnGroup, sets |-> inSets,
                       stamp |-> [x \in Sets |-> IF x \in inSets THEN RemovalStamp(clock[s], slots[x][OwnGroup]) ELSE 0],
@@ -159,7 +160,7 @@ Commit(p) ==
                        THEN [slots[x] EXCEPT ![op.entry] = MergeSlot(@, Slot(FALSE, op.stamp[x]))]
                        ELSE slots[x]]
     IN /\ op.kind # "idle"
-       /\ IF "admin" \in op.sets /\ LiveCount(merged["admin"]) = 0
+       /\ IF "admin" \in op.sets /\ AdmissibleCount(merged["admin"]) = 0
           THEN /\ pending' = [pending EXCEPT ![p] = None]
                /\ obs' = [kind |-> "call", op |-> op.kind, result |-> "refused", wrote |-> FALSE]
                /\ UNCHANGED <<slots, clock, groupExists, bindings, removed, budget>>
@@ -236,11 +237,12 @@ TypeOK ==
     /\ obs \in Obs
 
 \* No interleaving of concurrent removals, through the access facade or a
-\* group deletion, leaves the tenant's admin set empty, and a refused removal
-\* writes nothing. The guard, like production's, counts every live admin
-\* entry, admissible or not.
+\* group deletion, leaves the tenant without an admin entry that counts for
+\* it, and a refused removal writes nothing. An entry that never counts
+\* (another tenant's group that arrived by replication) does not hold the
+\* set open.
 LastAdminGuard ==
-    /\ LiveCount(slots["admin"]) >= 1
+    /\ AdmissibleCount(slots["admin"]) >= 1
     /\ (obs.kind = "call" /\ obs.result = "refused") => ~obs.wrote
 
 \* A committed removal supersedes the slot it read, even when it was stamped
