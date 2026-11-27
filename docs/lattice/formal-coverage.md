@@ -408,7 +408,7 @@ states as load-bearing, and appends its own row to this table when it lands.
 | `McpToolAuthorization` | MCP tool authorization lock-step | 23 | 12 | 25 | [MCP tool authorization](../../spec/mcp-tool-auth/README.md) |
 | `TenantAccessAuthorization` | Delegated tenant access: authorization | 20 | 20 | 36 | [Delegated tenant-access administration](../../spec/tenant-access-admin/README.md) |
 | `TenantGrants` | Cross-tenant grants | 25 | 20 | 36 | [Cross-tenant grants](../../spec/tenant-grants/README.md) |
-| `AppsInstall` | Installable apps | 15 | 15 | 32 | [Installable apps](../../spec/apps-install/README.md) |
+| `AppsInstall` | Installable apps | 16 | 15 | 33 | [Installable apps](../../spec/apps-install/README.md) |
 | `ReplicationOriginBinding` | Replication gRPC host admitted-peer seam and origin binding | 10 | 2 | 10 | [Replication receiver admission](../../spec/replication-admission/README.md) |
 | `ReplicationAdmission` | Replication receiver enrollment and merge-mode gate | 7 | 4 | 10 | [Replication receiver admission](../../spec/replication-admission/README.md) |
 | `RestorePeerAuthority` | Coordinated-restore participant peer authority, own-saga decision and cutover fence | 17 | 6 | 23 | [Replication receiver admission](../../spec/replication-admission/README.md) |
@@ -708,10 +708,10 @@ gaps, states its full scope.
     with a refused delete not disclosing whether the rule exists; the alias
     tree-ownership guard binding system origin too, judged on the target's
     derivation root, with a default decision or a guard fault writing nothing;
-    and the app UI bridge answering a role member exactly as for an absent app
-    when the app is not installed at the requested revision.
-  - **Does not cover:** a bridge caller holding no role of the app; alias
-    swaps, which share the guard; more than one app or app-owned rule; the
+    and the app UI bridge answering exactly as for an absent app when the app
+    is not installed at the requested revision or the caller holds no role of
+    it.
+  - **Does not cover:** alias swaps, which share the guard; more than one app or app-owned rule; the
     bridge's tenant refusal, request limiter and consent check; and uninstall,
     disable and enable, which pass the same `AppInstall` gate.
 

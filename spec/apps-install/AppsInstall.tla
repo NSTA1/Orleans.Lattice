@@ -69,7 +69,7 @@ Guards == {"ledger", "null", "faulty"}
 \* The bridge: alice is a member of the app's role, mallory of none. A
 \* request names an app, the revision the page was served at, and a tree.
 RoleMembers == {"alice"}
-BridgeCallers == {"alice"}
+BridgeCallers == {"alice", "mallory"}
 Apps == {"x", "missing"}
 DeclaredTrees == GrantableTrees
 RequestTrees == {"data1", "data2", "other"}
@@ -195,17 +195,20 @@ SetAlias(sys, l, p, g) ==
        /\ UNCHANGED <<source, seen, pin, installed, roleGrants, rules>>
 
 \* The bridge authorizes a workspace verb: the app must be installed at the
-\* requested revision, the tree must be one the app declares, and the caller
-\* must hold a role grant on it.
+\* requested revision, the caller must be bound to some app-owned grant
+\* before the tree is resolved, the tree must be one the app declares, and the
+\* caller must hold a role grant on it.
 BridgeAuthorize(c, a, rev, t) ==
     LET live == a = "x" /\ installed # "none" /\ Digest(installed) = rev
+        member == c \in RoleMembers /\ roleGrants # {}
         holds == c \in RoleMembers /\ <<"Read", t>> \in roleGrants
         ans == IF ~live THEN "denied"
+               ELSE IF ~member THEN "denied"
                ELSE IF t \notin DeclaredTrees THEN "notFound"
                ELSE IF ~holds THEN "denied"
                ELSE "allowed"
     IN /\ obs' = [kind |-> "bridge",
-                  discreet |-> (~live => ans = AbsentAnswer),
+                  discreet |-> ((~live \/ ~member) => ans = AbsentAnswer),
                   granted |-> (ans = "allowed" => (c \in RoleMembers /\ <<"Read", t>> \in roleGrants))]
        /\ UNCHANGED <<source, seen, pin, installed, roleGrants, rules, alias>>
 
@@ -262,9 +265,10 @@ AliasOwnershipPreserved ==
 InstalledEqualsReviewed ==
     obs.kind = "install" => obs.pinned
 
-\* For a caller who is a member of the app's role, an app that is not
-\* installed at the requested revision is answered exactly as an app that
-\* does not exist, and a verb is allowed only with the role grant on the tree.
+\* An app that is not installed at the requested revision, and any app asked
+\* about by a caller bound to none of its grants, is answered exactly as an
+\* app that does not exist, and a verb is allowed only with the role grant on
+\* the tree.
 WorkspaceNonDisclosure ==
     obs.kind = "bridge" => (obs.discreet /\ obs.granted)
 

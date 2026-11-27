@@ -29,12 +29,24 @@ namespace Orleans.Lattice.Api.Apps;
 internal sealed class AppBridgeInstallPlan
 {
     private readonly Dictionary<string, TreePlan> _trees;
+    private readonly string[] _grantGroups;
 
     private AppBridgeInstallPlan(AppUiBridgeRequest consented, AppUiBridgeRequest requested, Dictionary<string, TreePlan> trees)
     {
         Consented = consented;
         Requested = requested;
         _trees = trees;
+
+        var groups = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var tree in trees.Values)
+        {
+            foreach (var grant in tree.Grants)
+            {
+                groups.Add(grant.GroupId);
+            }
+        }
+
+        _grantGroups = groups.Count == 0 ? [] : [.. groups];
     }
 
     /// <summary>The bridge grants the operator consented to; empty when none was recorded.</summary>
@@ -99,6 +111,31 @@ internal sealed class AppBridgeInstallPlan
     /// <param name="tree">The resolved tree when declared.</param>
     /// <returns>Whether the install declares the tree.</returns>
     public bool TryGetTree(string logicalTree, out TreePlan tree) => _trees.TryGetValue(logicalTree, out tree!);
+
+    /// <summary>
+    /// Whether a caller whose group closure is <paramref name="groups"/> is bound to at least one app-owned grant
+    /// of this install, over any declared tree. A caller who is not learns nothing more about the install, such as
+    /// which tree names it declares.
+    /// </summary>
+    /// <param name="groups">The caller's transitive group closure.</param>
+    /// <returns><c>true</c> when the caller's groups include the group of any app-owned grant.</returns>
+    public bool HoldsAnyGrant(IReadOnlyCollection<string>? groups)
+    {
+        if (groups is null || groups.Count == 0)
+        {
+            return false;
+        }
+
+        foreach (var groupId in _grantGroups)
+        {
+            if (AppRoleGate.IsMember(groups, groupId))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     private static TreeGrant[] BuildGrants(AppRoleGrantInstall install, string local, string effective, bool adopted)
     {
