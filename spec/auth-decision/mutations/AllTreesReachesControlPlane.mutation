@@ -1,0 +1,12 @@
+# Pairs with FailClosed: the all-trees (Tree:*) tier folds into control-plane ids, so a wildcard Admin grant administers every tenant.
+
+MODULE: AllTreesReachesControlPlane
+TARGET: FailClosed
+CLASS: Invariant
+SUMMARY: the all-trees (Tree:*) tier folds into control-plane ids, so a wildcard Admin grant administers every tenant
+
+--- FIND
+ConsultAllTrees(tree) == tree.kind \in DataKinds
+--- REPLACE
+ConsultAllTrees(tree) == tree.kind \in DataKinds \cup ControlKinds
+--- END

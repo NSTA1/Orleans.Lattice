@@ -1,0 +1,22 @@
+# Pairs with ScopelessFromClusterWideOnly: the tenant layer governs a tenant's capability id and keeps a tenant Telemetry rule, so a tenant-layer rule confers Telemetry.
+
+MODULE: TenantLayerGovernsCapability
+TARGET: ScopelessFromClusterWideOnly
+CLASS: Invariant
+SUMMARY: the tenant layer governs a tenant's capability id and keeps a tenant Telemetry rule, so a tenant-layer rule confers Telemetry
+
+--- FIND
+TenantLayerTree(tree) == tree.kind = "tenant"
+--- REPLACE
+TenantLayerTree(tree) == tree.kind \in {"tenant", "tenantCapability"}
+--- END
+--- FIND
+    /\ r.ops \subseteq TenantOps
+--- REPLACE
+    /\ r.ops \subseteq Ops
+--- END
+--- FIND
+       \/ r.tree.kind = "tenant" /\ r.tree.tenant = r.owner
+--- REPLACE
+       \/ r.tree.kind \in {"tenant", "tenantCapability"} /\ r.tree.tenant = r.owner
+--- END

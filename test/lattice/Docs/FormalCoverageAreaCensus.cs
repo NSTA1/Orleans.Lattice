@@ -45,6 +45,19 @@ internal static class FormalCoverageAreaCensus
     /// <summary>The heading of the materialised-view companions census.</summary>
     public const string CompanionsSection = "Focused materialised-view companions";
 
+    /// <summary>
+    /// The heading of the identity, authorization and protected-action census:
+    /// one row per module, whose mutation, behaviour-row and detector figures are
+    /// checked like an area's.
+    /// </summary>
+    public const string SecuritySection = "Identity, authorization and protected actions";
+
+    /// <summary>The security table's behaviour-row column.</summary>
+    public const string SecurityBehaviourRowsHeader = "Behaviour rows";
+
+    /// <summary>The security table's detector column.</summary>
+    public const string SecurityDetectorsHeader = "Detector tests";
+
     /// <summary>The areas table's header row, in order.</summary>
     public static IReadOnlyList<string> AreasHeaders { get; } =
         ["Area", "Modules", "Mutations", "Behaviour rows", "Detector tests", "Page"];
@@ -83,7 +96,6 @@ internal static class FormalCoverageAreaCensus
             ["Tenant quotas"] = ["TenantFootprint", "TenantQuotaEvaluation", "TenantTreeCount"],
             ["Tenant rate budgets"] = ["TenantRateBudget"],
             ["Tenant isolation"] = ["TenantIsolation"],
-            ["Delegated tenant access"] = ["TenantAccessAuthorization"],
             ["Scheduling and progress"] =
             [
                 "MaterialiserDrain", "ReplayPermits", "ReplicationShipping", "SagaReadProgress", "TagIndexReconcile",
@@ -214,6 +226,50 @@ internal static class FormalCoverageAreaCensus
     }
 
     /// <summary>
+    /// The findings for the security census: every row's mutation, behaviour-row
+    /// and detector figures against its module's manifest and refinement note.
+    /// </summary>
+    /// <param name="markdown">The page's text.</param>
+    /// <param name="modules">Every discovered module's census, keyed by name.</param>
+    public static IReadOnlyList<string> SecurityFindings(
+        string markdown,
+        IReadOnlyDictionary<string, FormalCoverageModuleCensus> modules)
+    {
+        ArgumentNullException.ThrowIfNull(markdown);
+        ArgumentNullException.ThrowIfNull(modules);
+
+        var table = MarkdownTable.Read(markdown, SecuritySection, PagePath);
+        var name = table.ColumnOf(CompanionModuleHeader);
+        var findings = new List<string>();
+
+        foreach (var row in table.Rows)
+        {
+            var module = row.Cells[name].Trim('`');
+            if (!modules.TryGetValue(module, out var census))
+            {
+                continue;
+            }
+
+            Check(CompanionMutationsHeader, census.Mutations);
+            Check(SecurityBehaviourRowsHeader, census.BehaviourRows);
+            Check(SecurityDetectorsHeader, census.Detectors.Count);
+
+            void Check(string header, int derived)
+            {
+                var cell = row.Cells[table.ColumnOf(header)];
+                if (!TryNumber(cell, out var stated) || stated != derived)
+                {
+                    findings.Add(
+                        $"line {row.LineNumber}: security module '{module}' states '{cell}' {header.ToLowerInvariant()}, "
+                        + $"but its manifest and refinement note give {derived}.");
+                }
+            }
+        }
+
+        return findings;
+    }
+
+    /// <summary>
     /// The findings for module accounting: each discovered module must be
     /// counted exactly once across the declared areas and the companions table,
     /// and every name either census uses must be a discovered module.
@@ -232,10 +288,13 @@ internal static class FormalCoverageAreaCensus
 
         var companions = MarkdownTable.Read(markdown, CompanionsSection, PagePath);
         var name = companions.ColumnOf(CompanionModuleHeader);
+        var security = MarkdownTable.Read(markdown, SecuritySection, PagePath);
+        var securityName = security.ColumnOf(CompanionModuleHeader);
 
         var claims = areaModules
             .SelectMany(a => a.Value.Select(m => (Module: m, Census: $"the '{a.Key}' area")))
             .Concat(companions.Rows.Select(r => (Module: r.Cells[name].Trim('`'), Census: $"the companions table (line {r.LineNumber})")))
+            .Concat(security.Rows.Select(r => (Module: r.Cells[securityName].Trim('`'), Census: $"the security table (line {r.LineNumber})")))
             .ToList();
 
         var findings = new List<string>();
@@ -254,7 +313,7 @@ internal static class FormalCoverageAreaCensus
                 findings.Add(
                     $"module '{module}' is accounted for by no census on {PagePath}. Add it to a row of "
                     + $"{nameof(FormalCoverageAreaCensus)}.{nameof(AreaModules)} (and correct that row's figures) or to the "
-                    + "companions table.");
+                    + "companions table, or to the security table.");
             }
             else if (where.Count > 1)
             {
