@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -878,6 +879,12 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     public async Task ReportManyAsync(IReadOnlyList<MaterialiserPinReport> reports)
     {
         ArgumentNullException.ThrowIfNull(reports);
+        if (AwaitDiagnostics.Enabled)
+        {
+            // #6166: the shard's report load, against the seeds queued behind it.
+            AwaitDiagnostics.Count("wal.pin.grain.report.turn");
+        }
+
         var changed = false;
         for (var i = 0; i < reports.Count; i++)
         {
@@ -920,7 +927,14 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
         // merged in memory (which is what the WAL GC reads) and stays dirty, so
         // the next successful flush makes it durable.
         ThrowIfFailingFast("seed");
+        var turnStarted = AwaitDiagnostics.Enabled ? Stopwatch.GetTimestamp() : 0L;
         await PersistAsync(MaterialiserPinBirthOutcome, PersistScope.Consumers, changedHashes);
+        if (turnStarted != 0L)
+        {
+            // #6166: a seed's own turn; wal.pin.seed.us at the caller minus this is queue.
+            AwaitDiagnostics.Count("wal.pin.grain.seed.turn");
+            AwaitDiagnostics.Add("wal.pin.grain.seed.turn.us", (long)Stopwatch.GetElapsedTime(turnStarted).TotalMicroseconds);
+        }
     }
 
     /// <inheritdoc />
@@ -1443,6 +1457,11 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
 
         if (ShouldDeferCoalescedFlush(nowTickMs, _lastWriteCompletedTickMs, _lastWriteDurationMs))
         {
+            if (AwaitDiagnostics.Enabled)
+            {
+                AwaitDiagnostics.Count("wal.pin.grain.tick.deferred");
+            }
+
             // Amortisation: the previous write has not yet "paid for itself" in
             // queue-draining time. Stay dirty and let a later tick (or an
             // explicit durability point) persist the accumulated advances.
@@ -1631,6 +1650,15 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
             var completedTickMs = Environment.TickCount64;
             _lastWriteDurationMs = Math.Max(0, completedTickMs - startedTickMs);
             _lastWriteCompletedTickMs = completedTickMs;
+            if (AwaitDiagnostics.Enabled)
+            {
+                // #6166: what a shard write costs, by kind, against the map and layout behind it.
+                var kind = string.Concat("wal.pin.grain.write.", outcome);
+                AwaitDiagnostics.Count(kind);
+                AwaitDiagnostics.Add(string.Concat(kind, ".ms"), _lastWriteDurationMs);
+                AwaitDiagnostics.Add(string.Concat(kind, ".consumers"), _state.State.Pins.Count);
+                AwaitDiagnostics.Add(string.Concat(kind, ".width"), _bucketCount);
+            }
         }
     }
 
@@ -1669,7 +1697,15 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
 
         if (_relayoutTarget != 0)
         {
+            var relayoutStarted = AwaitDiagnostics.Enabled ? Stopwatch.GetTimestamp() : 0L;
             await RelayoutAsync(_relayoutTarget);
+            if (relayoutStarted != 0L)
+            {
+                // #6166: a relayout rewrites every slot in one turn.
+                AwaitDiagnostics.Count("wal.pin.grain.relayout");
+                AwaitDiagnostics.Add("wal.pin.grain.relayout.us", (long)Stopwatch.GetElapsedTime(relayoutStarted).TotalMicroseconds);
+            }
+
             wrote = true;
         }
 
@@ -1813,9 +1849,19 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     /// </summary>
     private async Task WriteSlotsAsync(List<int> slots)
     {
+        var phase = AwaitDiagnostics.Enabled ? Stopwatch.GetTimestamp() : 0L;
         await EnsureHoldersAsync(slots);
+        phase = PinPhaseMark("wal.pin.grain.slots.holders.us", phase);
         var slices = BuildSlices(_bucketCount, slots, _persistedWidth);
+        phase = PinPhaseMark("wal.pin.grain.slots.build.us", phase);
         await WriteGroupsAsync(slots, slices);
+        if (phase != 0L)
+        {
+            // #6166: BuildSlices walks the whole map; the storage writes are per slot.
+            PinPhaseMark("wal.pin.grain.slots.store.us", phase);
+            AwaitDiagnostics.Count("wal.pin.grain.slots.write");
+            AwaitDiagnostics.Add("wal.pin.grain.slots.written", slots.Count);
+        }
         foreach (var slot in slots)
         {
             _dirtyBuckets.Remove(slot);
@@ -1840,6 +1886,19 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
 
             await Task.WhenAll(writes);
         }
+    }
+
+    /// <summary>Adds the microseconds since <paramref name="start"/> to <paramref name="name"/> and returns now; a no-op for 0 (#6166).</summary>
+    private static long PinPhaseMark(string name, long start)
+    {
+        if (start == 0L)
+        {
+            return 0L;
+        }
+
+        var now = Stopwatch.GetTimestamp();
+        AwaitDiagnostics.Add(name, (long)Stopwatch.GetElapsedTime(start, now).TotalMicroseconds);
+        return now;
     }
 
     /// <summary>
