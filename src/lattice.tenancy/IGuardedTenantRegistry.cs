@@ -20,7 +20,7 @@ internal interface IGuardedTenantRegistry
 {
     /// <summary>
     /// Merges <paramref name="record"/> into the stored record exactly as
-    /// <see cref="ITenantRegistry.PutAsync"/> does, running
+    /// <see cref="ITenantRegistry.PutAsync"/> does (an update: it never creates a record), running
     /// <paramref name="validateMerged"/> on each attempt's merged record before the
     /// conditional write.
     /// </summary>
@@ -32,7 +32,7 @@ internal interface IGuardedTenantRegistry
     /// <param name="cancellationToken">Cancels the write.</param>
     /// <returns>The stored record after the merge.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="record"/> or <paramref name="validateMerged"/> is <c>null</c>.</exception>
-    /// <exception cref="TenantRegistryConcurrencyException">The bounded attempt budget was exhausted; nothing was written.</exception>
+    /// <exception cref="TenantRecordNotFoundException">No record is stored for the tenant; nothing was written.</exception>
     Task<TenantRecord> PutGuardedAsync(
         TenantRecord record, Action<TenantRecord> validateMerged, CancellationToken cancellationToken = default);
 }

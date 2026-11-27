@@ -367,7 +367,7 @@ public sealed class LatticeTenantRegionAdminIntegrationTests
             record.AddAdminSubject(TenantAdmin, new HybridLogicalClock { WallClockTicks = 4 }, "seed");
         }
 
-        await _fixture.Registry.PutAsync(record);
+        await _fixture.Registry.CreateAsync(record);
     }
 
     private static byte[] Bytes(string value) => System.Text.Encoding.UTF8.GetBytes(value);

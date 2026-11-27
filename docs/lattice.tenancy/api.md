@@ -98,6 +98,7 @@ The following inventory includes directly declared public members and overloads,
 - `Task<bool> ExistsAsync(TenantId tenant, CancellationToken cancellationToken = default)`
 - `IAsyncEnumerable<TenantRecord> ListAsync(CancellationToken cancellationToken = default)`
 - `Task<TenantRecord> PutAsync(TenantRecord record, CancellationToken cancellationToken = default)`
+- `Task<TenantRecord> CreateAsync(TenantRecord record, CancellationToken cancellationToken = default)`
 - `Task<bool> DeleteAsync(TenantId tenant, CancellationToken cancellationToken = default)`
 
 ### `Orleans.Lattice.Tenancy.ITenantResidencyResolver`
@@ -483,6 +484,15 @@ The following inventory includes directly declared public members and overloads,
 - `public TenantRecord Clone()`
 - `public TenantRecord MergeFrom(TenantRecord other)`
 - `public static TenantRecord Merge(TenantRecord left, TenantRecord right)`
+
+### `Orleans.Lattice.Tenancy.TenantRecordNotFoundException`
+
+[Source](../../src/lattice.tenancy/TenantRecordNotFoundException.cs) (line 17).
+
+`public sealed class TenantRecordNotFoundException : Exception`
+
+- `public TenantRecordNotFoundException(TenantId tenant)`
+- `public TenantId Tenant { get; }`
 
 ### `Orleans.Lattice.Tenancy.TenantRegionAllowSlot`
 

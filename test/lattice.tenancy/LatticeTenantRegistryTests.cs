@@ -57,4 +57,12 @@ public sealed class LatticeTenantRegistryTests
 
         Assert.That(async () => await registry.PutAsync(null!), Throws.ArgumentNullException);
     }
+
+    [Test]
+    public void CreateAsync_null_record_throws()
+    {
+        var registry = CreateRegistry();
+
+        Assert.That(async () => await registry.CreateAsync(null!), Throws.ArgumentNullException);
+    }
 }

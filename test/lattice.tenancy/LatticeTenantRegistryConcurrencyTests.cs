@@ -105,7 +105,7 @@ public sealed class LatticeTenantRegistryConcurrencyTests
     }
 
     [Test]
-    public async Task PutMergeAsync_creates_the_record_when_the_key_is_absent()
+    public async Task PutMergeAsync_with_create_creates_the_record_when_the_key_is_absent()
     {
         var (registry, _) = Create();
         var lattice = Substitute.For<ILattice>();
@@ -119,7 +119,7 @@ public sealed class LatticeTenantRegistryConcurrencyTests
         var incoming = Base();
         incoming.AddGrant(GrantB, Clock(30), "me");
 
-        var merged = await registry.PutMergeAsync(lattice, Acme.Value!, incoming, CancellationToken.None);
+        var merged = await registry.PutMergeAsync(lattice, Acme.Value!, incoming, CancellationToken.None, create: true);
 
         Assert.Multiple(() =>
         {
@@ -127,6 +127,24 @@ public sealed class LatticeTenantRegistryConcurrencyTests
             Assert.That(merged.TryGetGrant(GrantB.GrantId, out _), Is.True);
         });
         await lattice.Received(1).SetIfVersionAsync(Acme.Value!, Arg.Any<byte[]>(), HybridLogicalClock.Zero, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task PutMergeAsync_update_of_an_absent_record_throws_and_writes_nothing()
+    {
+        // A caller that read the record before the tenant was deleted writes back a
+        // stale copy: the update must not re-create the deleted tenant (issue #6230).
+        var (registry, _) = Create();
+        var lattice = Substitute.For<ILattice>();
+        lattice.GetWithVersionAsync(Acme.Value!, Arg.Any<CancellationToken>())
+            .Returns(new VersionedValue { Value = null, Version = HybridLogicalClock.Zero });
+
+        var ex = Assert.ThrowsAsync<TenantRecordNotFoundException>(
+            async () => await registry.PutMergeAsync(lattice, Acme.Value!, Base(), CancellationToken.None));
+
+        Assert.That(ex!.Tenant, Is.EqualTo(Acme));
+        await lattice.DidNotReceiveWithAnyArgs().SetIfVersionAsync(
+            default!, default!, default, default);
     }
 
     [Test]

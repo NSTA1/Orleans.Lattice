@@ -13,7 +13,7 @@ reach.
 
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 | --- | --- | --- | --- | --- | --- | --- |
-| `TenantGrants` | 7 | 0 | 14 | 25 | 20 | 56,456 |
+| `TenantGrants` | 7 | 1 | 14 | 26 | 21 | 85,592 |
 
 ## TenantGrants
 
@@ -69,14 +69,17 @@ deleted (`DeleteTenant`) and the grantee created again under its old id
   granting tenant, a refused read is told only the stage that refused it and
   never whether a tenant is registered, and the existence probe never reveals
   a tree a read would refuse.
+- `DeletionIsFinal` (action property): a deleted tenant comes back only as a
+  new incarnation created on purpose; a grant call that read the granting
+  tenant's record before its deletion is refused, never re-creating it.
 - `NoUnilateralTrap`: a revocation of an active grant by an operator or an
   admin of a registered party is never refused.
 
 **Bounds.** Two tenants, one grant, three admins (the operator and one admin
 per tenant), three readers, two trees, two silos, three grant writes, one
 publication failure and one re-creation of the grantee. Every property is a
-safety property over the last step or the registry, so these bounds reach
-every counterexample the mutations target. There are no liveness properties.
+safety property over the last step, the registry or a single step, so these
+bounds reach every counterexample the mutations target. There are no liveness properties.
 
 ## Refinement and mutations
 

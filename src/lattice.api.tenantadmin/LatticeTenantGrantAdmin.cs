@@ -311,7 +311,18 @@ internal sealed class LatticeTenantGrantAdmin : ILatticeTenantGrantAdmin
         TenantGrantState target,
         CancellationToken cancellationToken)
     {
-        var merged = await _registry.PutAsync(record, cancellationToken).ConfigureAwait(false);
+        TenantRecord merged;
+        try
+        {
+            merged = await _registry.PutAsync(record, cancellationToken).ConfigureAwait(false);
+        }
+        catch (TenantRecordNotFoundException)
+        {
+            // The granting tenant was deleted after its record was read. The update
+            // is refused rather than re-creating it, and the outcome is reported
+            // exactly as an unoffered grant, so the grantee learns nothing more.
+            throw new TenantGrantNotFoundException(granter.Value, grantee.Value, scope);
+        }
 
         if (!merged.TryGetGrant(grantId, out var committed))
         {

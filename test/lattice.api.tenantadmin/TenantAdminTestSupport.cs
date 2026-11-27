@@ -319,7 +319,9 @@ internal static class TenantAdminTestSupport
     /// into the stored one with <see cref="TenantRecord.MergeFrom"/> and returns
     /// the stored, merged result. That is what makes a read-check-write guard
     /// testable: the caller's pre-merge view and the committed record are
-    /// genuinely different objects.
+    /// genuinely different objects. Like the real registry, an update of an absent
+    /// record throws <see cref="TenantRecordNotFoundException"/> and writes nothing;
+    /// only <see cref="CreateAsync"/> creates.
     /// </summary>
     internal class MergingTenantRegistry : ITenantRegistry, IGuardedTenantRegistry
     {
@@ -360,9 +362,7 @@ internal static class TenantAdminTestSupport
 
             if (!_records.TryGetValue(record.Id.Value, out var stored))
             {
-                stored = record.Clone();
-                _records[record.Id.Value] = stored;
-                return Task.FromResult(stored.Clone());
+                throw new TenantRecordNotFoundException(record.Id);
             }
 
             stored.MergeFrom(record);
@@ -389,10 +389,7 @@ internal static class TenantAdminTestSupport
 
             if (!_records.TryGetValue(record.Id.Value, out var stored))
             {
-                validateMerged(record);
-                stored = record.Clone();
-                _records[record.Id.Value] = stored;
-                return Task.FromResult(stored.Clone());
+                throw new TenantRecordNotFoundException(record.Id);
             }
 
             validateMerged(stored.Clone().MergeFrom(record));
@@ -400,11 +397,29 @@ internal static class TenantAdminTestSupport
             return Task.FromResult(stored.Clone());
         }
 
+        /// <summary>Creates the record when absent, otherwise merges, as the real registry's create does.</summary>
+        public Task<TenantRecord> CreateAsync(TenantRecord record, CancellationToken cancellationToken = default)
+        {
+            ArgumentNullException.ThrowIfNull(record);
+            if (!_records.TryGetValue(record.Id.Value, out var stored))
+            {
+                Puts++;
+                stored = record.Clone();
+                _records[record.Id.Value] = stored;
+                return Task.FromResult(stored.Clone());
+            }
+
+            return PutAsync(record, cancellationToken);
+        }
+
         public Task<bool> DeleteAsync(TenantId tenant, CancellationToken cancellationToken = default)
         {
             Deletes++;
             return Task.FromResult(_records.Remove(tenant.Value));
         }
+
+        /// <summary>Removes a record without counting a delete, for a test that deletes a tenant inside a caller's window.</summary>
+        public void Remove(string tenantId) => _records.Remove(tenantId);
 
         /// <summary>
         /// Hook invoked immediately before the <paramref name="putNumber"/>-th
@@ -414,6 +429,22 @@ internal static class TenantAdminTestSupport
         /// </summary>
         protected virtual void OnBeforeMerge(int putNumber)
         {
+        }
+    }
+
+    /// <summary>
+    /// A <see cref="MergingTenantRegistry"/> that deletes one tenant's record inside
+    /// the read-to-write window of the first write, modelling the tenant's deletion
+    /// completing between a facade's read of the record and its write back.
+    /// </summary>
+    internal sealed class DeletingTenantRegistry(string deletedTenantId) : MergingTenantRegistry
+    {
+        protected override void OnBeforeMerge(int putNumber)
+        {
+            if (putNumber == 1)
+            {
+                Remove(deletedTenantId);
+            }
         }
     }
 

@@ -432,6 +432,12 @@ gate will tell you if you forget.
   the flag, feature-off inertness, authorize-before-disclose and the authorize, validate,
   write order, each with a mutation that turns it red and detectors in
   `spec/tenant-access-admin/RefinementAuthorization.md`. Change the model with the seam.
+- **A registry update never creates a record.** `ITenantRegistry.PutAsync` (and the
+  guarded put) merges into a stored record and throws `TenantRecordNotFoundException`
+  when there is none; only `ITenantRegistry.CreateAsync`, used by tenant creation and
+  seeding, creates. A facade that read a record before its tenant was deleted is
+  refused instead of re-creating the tenant, with its stale status, admins and grants,
+  from that copy (#6230). Never seed or create a tenant through `PutAsync`.
 - **The cross-tenant grant protocol's formal model is `spec/tenant-grants/`.** Module
   `TenantGrants` (over the authorization contract's abstract `Allowed`, with snapshot
   freshness in the form `spec/tenant-isolation/` guarantees) checks two-party
