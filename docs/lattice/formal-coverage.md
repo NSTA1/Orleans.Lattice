@@ -404,7 +404,7 @@ states as load-bearing, and appends its own row to this table when it lands.
 | Module | Surface | Mutants | Behaviour rows | Detector tests | Page |
 |--------|---------|---------|----------------|----------------|------|
 | `AuthDecision` | Authorization decision layering | 18 | 17 | 41 | [Authorization decision](../../spec/auth-decision/README.md) |
-| `McpToolAuthorization` | MCP tool authorization lock-step | 22 | 12 | 24 | [MCP tool authorization](../../spec/mcp-tool-auth/README.md) |
+| `McpToolAuthorization` | MCP tool authorization lock-step | 23 | 12 | 25 | [MCP tool authorization](../../spec/mcp-tool-auth/README.md) |
 
 ## What each area covers, and what it does not
 

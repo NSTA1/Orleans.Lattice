@@ -12,7 +12,7 @@ production seams its detectors reach.
 
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 | --- | --- | --- | --- | --- | --- | --- |
-| `McpToolAuthorization` | 8 | 0 | 7 | 22 | 12 | 32,268 |
+| `McpToolAuthorization` | 8 | 0 | 7 | 23 | 12 | 32,268 |
 
 ## McpToolAuthorization
 
@@ -45,9 +45,7 @@ may arrive with or without a request context and with a malformed argument.
   only tools the design entitles its caller to, and all of them when the
   resolver carried operation detail; a call is served only when its tool was
   advertised and the design entitles the call under the snapshot current when
-  it is made. Advertisement is never a capability. For `lattice_list_regions`
-  the call-time entitlement is the authorizer alone; the refinement note's gap
-  register records why.
+  it is made. Advertisement is never a capability.
 - `OnlyMetaToolUngated`: every advertised tool but `lattice_capabilities`
   was admitted by the authorizer, and every served call but it passed the gate.
 - `PerToolMinimum`: a group tool is advertised only when the resolver's

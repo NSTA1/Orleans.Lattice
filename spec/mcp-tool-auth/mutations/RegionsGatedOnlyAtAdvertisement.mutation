@@ -7,7 +7,7 @@ SUMMARY: the region-discovery tool is gated at advertisement only
 PERTURBS: CallRegions
 
 --- FIND
-        res == IF ~adv THEN "notFound" ELSE IF ~g THEN "denied" ELSE "ok"
+        res == IF ~adv THEN "notFound" ELSE IF ~g THEN "denied" ELSE IF held THEN "ok" ELSE "denied"
 --- REPLACE
-        res == IF ~adv THEN "notFound" ELSE "ok"
+        res == IF ~adv THEN "notFound" ELSE IF held THEN "ok" ELSE "denied"
 --- END
