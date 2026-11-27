@@ -1,0 +1,13 @@
+{
+  "mutations": "mutations-restore-authority",
+  "refinement": "RefinementRestoreAuthority.md",
+  "nonBehaviouralActions": ["Decide", "LoseCache", "FenceExpires", "SetEnrollment", "SetTopology"],
+  "counts": {
+    "invariants": 4,
+    "properties": 0,
+    "actions": 8,
+    "mutations": 16,
+    "behaviourRows": 6,
+    "distinctStates": 32052
+  }
+}

@@ -259,7 +259,11 @@ gate will tell you if you forget.
   tree's local writes before the failure propagates, so the decision is redelivered
   without the tree staying fenced. Do not widen it to other saga participants, or
   move it to the saga service or participant grain, where it would elevate
-  host-registered participants too.
+  host-registered participants too. This is model-checked by `RestorePeerAuthority`
+  in `spec/replication-admission/` (`PeerAuthorityBounded`,
+  `OwnSagaCommitNeedsDurableDecision`, `NoStrandedFence`), over the admitted-peer
+  seam `ReplicationOriginBinding` checks; its refinement note names the detector
+  test for each guard and the gaps it does not yet close.
 
 ### Identity-directory validation (`src/lattice.membership`, `src/lattice.api.auth`)
 - Administrative membership-reference create paths (`UpsertGroupAsync`,
