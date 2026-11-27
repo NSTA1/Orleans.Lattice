@@ -343,6 +343,15 @@ internal interface IWalShardGrain : IGrainWithStringKey
     /// an earlier build does not have it; the leaf then reads the heads alone and caps
     /// them at its own frontier, as before.
     /// </summary>
+    /// <remarks>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/> (issue #6166). The cut is read
+    /// synchronously under the shard's state gate, which is what makes it one consistent
+    /// reading; it never awaits, so interleaving cannot split it. Without the attribute it
+    /// queued behind every exclusive turn that awaits storage - a single-entry append holds
+    /// its turn across its flush - and every leaf of the tree reads it on each activation
+    /// and stall drive, so the queue grew with the tree's leaf count.
+    /// </remarks>
+    [AlwaysInterleave]
     Task<WalSplitCut> GetSplitCutAsync(WalAppendStamp reader, string? lowInclusive, string? highExclusive, CancellationToken cancellationToken);
 
     /// <summary>
@@ -368,6 +377,12 @@ internal interface IWalShardGrain : IGrainWithStringKey
     /// this head re-reads at most entries it already holds.
     /// </summary>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <remarks>
+    /// Marked <see cref="AlwaysInterleaveAttribute"/>, as <see cref="GetSplitCutAsync"/> and
+    /// for the same reason (issue #6166): it is read synchronously under the state gate, and
+    /// every leaf activation probes it once per partition.
+    /// </remarks>
+    [AlwaysInterleave]
     ValueTask<long> GetReadableHeadAsync(CancellationToken cancellationToken);
 
     /// <summary>
