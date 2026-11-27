@@ -403,6 +403,7 @@ states as load-bearing, and appends its own row to this table when it lands.
 
 | Module | Surface | Mutants | Behaviour rows | Detector tests | Page |
 |--------|---------|---------|----------------|----------------|------|
+| `AuthDecision` | Authorization decision layering | 18 | 17 | 41 | [Authorization decision](../../spec/auth-decision/README.md) |
 
 ## What each area covers, and what it does not
 
@@ -650,6 +651,22 @@ gaps, states its full scope.
     clock slower than the epoch coordinator's by more than the ledger margin
     over one lease; more than one write or two silos; and rate budgets and
     footprint quotas, which the two areas above cover.
+
+- **Authorization decision** ([`spec/auth-decision/`](../../spec/auth-decision/README.md)).
+  - **Covers:** the decision over a rule store written by the operator
+    surface, the tenant policy facade and system-origin writes: a matched
+    operator verdict is final; the tenant layer runs only on its owner's tenant
+    data trees; a range filter composes the layers per key on operator
+    coverage; `Telemetry` and `AppInstall` come only from the cluster-wide id
+    (`Telemetry` also from a platform grant over one tenant's capability scope);
+    control-plane requests fail closed; bootstrap administrators are the one
+    root of trust; and a cross-tree batch is authorized all or nothing. It
+    publishes the `Allowed(caller, op, scope)` contract the other authorization
+    modules assume.
+  - **Does not cover:** group subjects and templated scopes, the uniform-range
+    shortcut, tenant-isolation composition, snapshot warm-up and the
+    strict-consistency fence, existence probes, or what a registered MCP
+    authorizer decides.
 
 - **Scheduling and progress** ([`spec/scheduling/`](../../spec/scheduling/README.md)).
   - **Covers:** non-reentrant turn occupancy, partition admission capacity,
