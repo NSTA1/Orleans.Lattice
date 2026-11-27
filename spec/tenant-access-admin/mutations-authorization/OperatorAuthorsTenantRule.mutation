@@ -1,0 +1,14 @@
+# Pairs with TenantRuleConfinement. Operators list and remove tenant-tier
+# rules but never author them; without the refusal a tenant rule exists that
+# the tenant policy facade never wrote.
+MODULE: OperatorAuthorsTenantRule
+TARGET: TenantRuleConfinement
+CLASS: Invariant
+SUMMARY: the cluster facade lets an operator author a tenant-tier rule
+PERTURBS: OperatorPutRule
+
+--- FIND
+          ELSE IF layer = "tenant" \/ sc.kind = "tenantWide" THEN Refuse("opPutRule", auth, FALSE, "refused", FALSE)
+--- REPLACE
+          ELSE IF sc.kind = "tenantWide" THEN Refuse("opPutRule", auth, FALSE, "refused", FALSE)
+--- END

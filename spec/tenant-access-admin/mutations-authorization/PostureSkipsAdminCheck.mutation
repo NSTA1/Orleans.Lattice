@@ -1,0 +1,14 @@
+# Pairs with AuthorizeBeforeDisclose. The posture answers while the flag is
+# off, so it is exactly the verb that would disclose the flag if it skipped
+# authorization.
+MODULE: PostureSkipsAdminCheck
+TARGET: AuthorizeBeforeDisclose
+CLASS: Invariant
+SUMMARY: the posture verb answers an unauthorized caller
+PERTURBS: Posture
+
+--- FIND
+    IN IF ~auth THEN Refuse("posture", auth, fl, "denied", FALSE)
+--- REPLACE
+    IN IF FALSE THEN Refuse("posture", auth, fl, "denied", FALSE)
+--- END

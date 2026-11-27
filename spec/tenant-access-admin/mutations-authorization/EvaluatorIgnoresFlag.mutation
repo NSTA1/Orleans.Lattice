@@ -1,0 +1,13 @@
+# Pairs with FeatureOffInert. The tenant layer must be skipped the moment the
+# flag is off, on that silo, with the rules left in place.
+MODULE: EvaluatorIgnoresFlag
+TARGET: FeatureOffInert
+CLASS: Invariant
+SUMMARY: the evaluator consults the tenant layer while the silo's flag is off
+PERTURBS: Evaluate
+
+--- FIND
+        consulted == ~opMatch /\ flag[s] /\ tree.kind = "tenant"
+--- REPLACE
+        consulted == ~opMatch /\ tree.kind = "tenant"
+--- END

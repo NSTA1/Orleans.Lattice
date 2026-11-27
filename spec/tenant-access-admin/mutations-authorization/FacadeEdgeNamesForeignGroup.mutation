@@ -1,0 +1,19 @@
+# Pairs with ReservedGroupNamespace. ToStoredId refuses a t/ id named as a user
+# or cluster group, and the directory's nesting invariant backs it up; removing
+# both nests another tenant's group in this tenant's group.
+MODULE: FacadeEdgeNamesForeignGroup
+TARGET: ReservedGroupNamespace
+CLASS: Invariant
+SUMMARY: the tenant facade stores a t/ id given as a plain member and the directory skips its nesting check
+PERTURBS: FacadeAddEdge
+
+--- FIND
+          ELSE IF IsTier(m) THEN Refuse("facadeAddEdge", auth, fl, "refused", FALSE)
+--- REPLACE
+          ELSE IF FALSE THEN Refuse("facadeAddEdge", auth, fl, "refused", FALSE)
+--- END
+--- FIND
+          ELSE IF ~NestingOk(TGroup(t), m) THEN Refuse("facadeAddEdge", auth, fl, "refused", TRUE)
+--- REPLACE
+          ELSE IF FALSE THEN Refuse("facadeAddEdge", auth, fl, "refused", TRUE)
+--- END

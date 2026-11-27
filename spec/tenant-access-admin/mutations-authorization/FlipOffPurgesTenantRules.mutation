@@ -1,0 +1,16 @@
+# Pairs with FlipDeletesNothing. A flip to off must take effect by not
+# consulting the tenant layer, never by deleting what tenants authored.
+MODULE: FlipOffPurgesTenantRules
+TARGET: FlipDeletesNothing
+CLASS: Action
+SUMMARY: turning the flag off deletes the tenant-tier rules
+PERTURBS: FlipFlag
+
+--- FIND
+    /\ UNCHANGED vreq
+    /\ UNCHANGED Stores
+--- REPLACE
+    /\ UNCHANGED vreq
+    /\ rules' = IF flag[s] THEN {r \in rules : r.layer # "tenant"} ELSE rules
+    /\ UNCHANGED <<clusterGroups, tenantGroups, edges, adminEntries, memberEntries, budget>>
+--- END
