@@ -8,10 +8,10 @@ PERTURBS: Commit
 
 --- FIND
           ELSE /\ fence' = "unblocked"
-               /\ cache' = t
+               /\ cache' = sw
                /\ obs' = Obs("cutoverFailed"
 --- REPLACE
           ELSE /\ fence' = "engaged"
-               /\ cache' = t
+               /\ cache' = sw
                /\ obs' = Obs("cutoverFailed"
 --- END

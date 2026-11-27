@@ -17,7 +17,7 @@ detectors reach.
 | --- | --- | --- | --- | --- | --- | --- |
 | `ReplicationOriginBinding` | 2 | 0 | 1 | 11 | 2 | 1,442 |
 | `ReplicationAdmission` | 4 | 0 | 2 | 7 | 4 | 1,740 |
-| `RestorePeerAuthority` | 4 | 0 | 8 | 16 | 6 | 32,052 |
+| `RestorePeerAuthority` | 4 | 0 | 8 | 17 | 6 | 45,828 |
 
 ## ReplicationOriginBinding
 
@@ -112,7 +112,9 @@ part-way and the decision read can fail.
 
 - `PeerAuthorityBounded`: a step runs with peer authority only when every seam
   is wired, the credential-bound coordinator is a remote cluster of the current
-  topology and the target is enrolled here; a build under peer authority
+  topology and every tree it restores or swaps is enrolled here, a swap only
+  inside the write fence - so a set commit never cuts over a member that
+  stopped being replicated since prepare; a build under peer authority
   replays only the target or trees enrolled here, and an empty captured-source
   list refuses; and the elevated probe is not an existence oracle - a missing
   backup and one the peer may not restore draw the same refusal.
@@ -125,8 +127,9 @@ part-way and the decision read can fail.
   failure propagates and keeps the shadow, so a redelivered decision can finish.
 
 **Bounds.** Two peers, either of which can leave or join the topology, two
-trees of which one starts enrolled, four backups (of the target, of the other
-tree, naming no source, and missing), one saga, and every seam wired or not.
+trees of which one starts enrolled, a single-tree or two-member set target, four
+backups (of the restored tree, of the other tree, naming no source, and
+missing), one saga, and every seam wired or not.
 Every property is a safety property over the last step.
 
 ## Refinement and mutations
