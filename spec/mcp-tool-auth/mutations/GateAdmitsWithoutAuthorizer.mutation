@@ -1,6 +1,6 @@
 # Pairs with FailClosed. The gate admits every tool when no authorizer is
 # registered, so a host that removed the default reaches every facade tool.
-MODULE: AbsentAuthorizerAdmits
+MODULE: GateAdmitsWithoutAuthorizer
 TARGET: FailClosed
 CLASS: Invariant
 SUMMARY: McpToolAuthorizationGate admits when no authorizer is registered
