@@ -93,7 +93,7 @@ internal sealed class AdminAuditReconciler(
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
             await foreach (var entry in tree
-                .EntriesAsync(AdminAuditKeys.PendingPrefix, AdminAuditKeys.PendingEnd, cancellationToken: cancellationToken)
+                .ScanEntriesAsync(AdminAuditKeys.PendingPrefix, AdminAuditKeys.PendingEnd, cancellationToken: cancellationToken)
                 .ConfigureAwait(false))
             {
                 if (AdminAuditStore.Deserialize(entry.Value) is { } intent
@@ -155,7 +155,7 @@ internal sealed class AdminAuditReconciler(
         var expired = new List<string>();
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            await foreach (var key in tree.KeysAsync(cancellationToken: cancellationToken).ConfigureAwait(false))
+            await foreach (var key in tree.ScanKeysAsync(cancellationToken: cancellationToken).ConfigureAwait(false))
             {
                 if (AdminAuditKeys.TryReadTicks(key, out var ticks) && ticks < cutoff.UtcTicks)
                 {
