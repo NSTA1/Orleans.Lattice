@@ -41,6 +41,7 @@ internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
     private readonly ILatticeIdentityDirectory? _identityDirectory;
     private readonly IOptionsMonitor<LatticeIdentityDirectoryOptions>? _identityDirectoryOptions;
     private readonly string? _writerId;
+    private readonly ILatticeAdminAuditTrail? _audit;
 
     /// <summary>
     /// Initializes a new <see cref="LatticeTenantAdmin"/>.
@@ -74,7 +75,8 @@ internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
         IOptions<ClusterOptions> clusterOptions,
         ILatticeMembershipContext? membership = null,
         ILatticeIdentityDirectory? identityDirectory = null,
-        IOptionsMonitor<LatticeIdentityDirectoryOptions>? identityDirectoryOptions = null)
+        IOptionsMonitor<LatticeIdentityDirectoryOptions>? identityDirectoryOptions = null,
+        ILatticeAdminAuditTrail? auditTrail = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(authorizer);
@@ -90,6 +92,7 @@ internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
         _identityDirectory = identityDirectory;
         _identityDirectoryOptions = identityDirectoryOptions;
         _writerId = clusterOptions.Value.ClusterId;
+        _audit = auditTrail;
     }
 
     /// <inheritdoc />
@@ -106,8 +109,17 @@ internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
         // create path. Validating ahead of the gate let an unauthorized caller
         // distinguish a malformed subject list (ArgumentException) from a denial
         // (LatticeAuthorizationDeniedException), a small but needless oracle.
-        await _authorizer.AuthorizeTenantAdminAsync(cancellationToken).ConfigureAwait(false);
+        var audit = TenantAdminAudit.OnTenantRecord(
+            LatticeAdminAuditAction.TenantCreate, tenant, LatticeAdminAuditTargetKind.Tenant, tenant.Value);
+        await AuthorizeAsync(audit, cancellationToken).ConfigureAwait(false);
+        return await LatticeAdminAudit
+            .RunAsync(_audit, audit, ct => CreateCoreAsync(tenant, adminSubjects, ct), changed: null, cancellationToken)
+            .ConfigureAwait(false);
+    }
 
+    private async Task<TenantCreationResult> CreateCoreAsync(
+        TenantId tenant, IReadOnlyCollection<string>? adminSubjects, CancellationToken cancellationToken)
+    {
         var requested = ValidateSubjects(adminSubjects);
         EnsureSeedableAdminEntries(tenant, requested);
         await ValidateDirectorySubjectsAsync(requested, cancellationToken).ConfigureAwait(false);
@@ -166,8 +178,16 @@ internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
         string tenantId, CancellationToken cancellationToken = default)
     {
         var tenant = TenantAdminArguments.ParseTenantId(tenantId);
-        await _authorizer.AuthorizeTenantAdminAsync(cancellationToken).ConfigureAwait(false);
+        var audit = TenantAdminAudit.OnTenantRecord(
+            LatticeAdminAuditAction.TenantDelete, tenant, LatticeAdminAuditTargetKind.Tenant, tenant.Value);
+        await AuthorizeAsync(audit, cancellationToken).ConfigureAwait(false);
+        return await LatticeAdminAudit
+            .RunAsync(_audit, audit, ct => DeleteCoreAsync(tenant, ct), changed: null, cancellationToken)
+            .ConfigureAwait(false);
+    }
 
+    private async Task<TenantDeletionResult> DeleteCoreAsync(TenantId tenant, CancellationToken cancellationToken)
+    {
         // The reserved default tenant names the cluster's own legacy state and can
         // never be deleted. The reserved id is a constant, so rejecting it before
         // any store read leaks nothing about registry contents.
@@ -211,8 +231,17 @@ internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
         string tenantId, TenantQuotasDescriptor quotas, CancellationToken cancellationToken = default)
     {
         var tenant = TenantAdminArguments.ParseTenantId(tenantId);
-        await _authorizer.AuthorizeTenantAdminAsync(cancellationToken).ConfigureAwait(false);
+        var audit = TenantAdminAudit.OnTenantRecord(
+            LatticeAdminAuditAction.TenantQuotasSet, tenant, LatticeAdminAuditTargetKind.Tenant, tenant.Value);
+        await AuthorizeAsync(audit, cancellationToken).ConfigureAwait(false);
+        return await LatticeAdminAudit
+            .RunAsync(_audit, audit, ct => SetQuotasCoreAsync(tenant, quotas, ct), changed: null, cancellationToken)
+            .ConfigureAwait(false);
+    }
 
+    private async Task<TenantQuotasUpdateResult> SetQuotasCoreAsync(
+        TenantId tenant, TenantQuotasDescriptor quotas, CancellationToken cancellationToken)
+    {
         // The reserved default tenant names the cluster's own legacy state and is
         // permanently unbounded; it can never be given quotas. The reserved id is a
         // constant, so rejecting it before any store read leaks nothing about
@@ -244,8 +273,20 @@ internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
         string tenantId, TenantStatus target, string operation, CancellationToken cancellationToken)
     {
         var tenant = TenantAdminArguments.ParseTenantId(tenantId);
-        await _authorizer.AuthorizeTenantAdminAsync(cancellationToken).ConfigureAwait(false);
+        var audit = TenantAdminAudit.OnTenantRecord(
+            target == TenantStatus.Suspended ? LatticeAdminAuditAction.TenantSuspend : LatticeAdminAuditAction.TenantResume,
+            tenant,
+            LatticeAdminAuditTargetKind.Tenant,
+            tenant.Value);
+        await AuthorizeAsync(audit, cancellationToken).ConfigureAwait(false);
+        return await LatticeAdminAudit
+            .RunAsync(_audit, audit, ct => TransitionCoreAsync(tenant, target, operation, ct), static r => r.Changed, cancellationToken)
+            .ConfigureAwait(false);
+    }
 
+    private async Task<TenantStatusChangeResult> TransitionCoreAsync(
+        TenantId tenant, TenantStatus target, string operation, CancellationToken cancellationToken)
+    {
         // The reserved default tenant can never be suspended (and, symmetrically,
         // a resume is meaningless on a tenant that can never be suspended).
         if (tenant.IsDefault && target == TenantStatus.Suspended)
@@ -282,6 +323,17 @@ internal sealed class LatticeTenantAdmin : ILatticeTenantAdmin
             Changed = merged.Status != previous,
         };
     }
+
+    /// <summary>
+    /// The operator-only authorization, with a refusal recorded to the admin audit
+    /// trail before it is rethrown (#3638).
+    /// </summary>
+    private ValueTask AuthorizeAsync(LatticeAdminAuditRequest audit, CancellationToken cancellationToken) =>
+        LatticeAdminAudit.AuthorizeAsync(
+            _audit,
+            audit,
+            ct => _authorizer.AuthorizeTenantAdminAsync(ct),
+            cancellationToken);
 
     /// <summary>
     /// Validates and normalises the caller-supplied admin subjects: a

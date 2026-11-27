@@ -57,7 +57,8 @@ public static class LatticeAppsApiServiceCollectionExtensions
             sp.GetRequiredService<IAppActivationPipeline>(),
             sp.GetRequiredService<ILatticeAccessGate>(),
             sp.GetRequiredService<ITenantContextResolver>(),
-            sp.GetService<ILatticeMembershipContext>()));
+            sp.GetService<ILatticeMembershipContext>(),
+            auditTrail: sp.GetService<ILatticeAdminAuditTrail>()));
         services.TryAddSingleton<ILatticeAppRoleBindings>(sp =>
             sp.GetRequiredService<ILatticeAppsControl>() as ILatticeAppRoleBindings
             ?? new LatticeAppsControl(
@@ -66,7 +67,8 @@ public static class LatticeAppsApiServiceCollectionExtensions
                 sp.GetRequiredService<IAppActivationPipeline>(),
                 sp.GetRequiredService<ILatticeAccessGate>(),
                 sp.GetRequiredService<ITenantContextResolver>(),
-                sp.GetService<ILatticeMembershipContext>()));
+                sp.GetService<ILatticeMembershipContext>(),
+                auditTrail: sp.GetService<ILatticeAdminAuditTrail>()));
         services.TryAddSingleton<ILatticeAppCatalog>(sp => new LatticeAppCatalog(
             LatticeAppCatalog.ToSourceSet(sp.GetRequiredService<IAppSource>()),
             sp.GetRequiredService<IAppRegistry>(),

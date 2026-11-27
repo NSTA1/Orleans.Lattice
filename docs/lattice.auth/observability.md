@@ -28,6 +28,7 @@ Besides `MeterName` and the tag keys below, `LatticeAuthMetrics` exposes each in
 | Snapshot epoch | `orleans.lattice.auth.snapshot.epoch` | Observable gauge (`long`) | `{epoch}` | Yes (on scrape) | The current compiled-policy epoch. |
 | Snapshot age | `orleans.lattice.auth.snapshot.age` | Observable gauge (`double`) | `s` | Yes (on scrape) | Seconds since the current compiled snapshot was last rebuilt. Reports no measurement until the first rebuild. |
 | Snapshot subjects | `orleans.lattice.auth.snapshot.subjects` | Observable gauge (`long`) | `{subject}` | Yes (on scrape) | Distinct members (users and groups) for which a policy is configured. |
+| Admin audit write failures | `orleans.lattice.auth.admin_audit.write_failures` | Counter (`long`) | `{write}` | Yes (zero-primed when the trail is created) | One per [admin audit](admin-audit.md) write that failed: a denial record (the refusal is still returned), an intent (the call is refused before any change), a finalize (left to the reconciler), or a reconciler write (retried on the next sweep). Tagged `tenant` = `_platform_`. |
 
 ### Policy-coverage gauge
 
@@ -127,6 +128,10 @@ public sealed class ConsoleAuditSink : ILatticeAuthAuditSink
 Register the sink in DI so the gate picks it up, for example with `siloBuilder.Services.AddSingleton<ILatticeAuthAuditSink, ConsoleAuditSink>();`.
 
 A `LatticeAuthDecisionEvent` exposes the subject id, the operation, the tree id, the effect, the matched rule id and scope, the policy epoch, an optional key / range, an optional reason, and the UTC timestamp.
+
+## The admin audit trail
+
+Privileged administrative calls - rule, group and membership changes, tenant lifecycle, grants, regions, app lifecycle and aliases - are recorded in a separate, unsampled, on-by-default trail with the actor, the action, the target and the outcome, denials included. See [Admin audit trail](admin-audit.md).
 
 ## Subject-resolution cache counters
 

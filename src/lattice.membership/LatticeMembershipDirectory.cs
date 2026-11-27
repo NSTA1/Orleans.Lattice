@@ -265,7 +265,7 @@ internal sealed partial class LatticeMembershipDirectory(
                 state.groupId.AsSpan().CopyTo(span[pos..]);
             });
 
-    private static string ReverseKey(string groupId, string memberId) =>
+    internal static string ReverseKey(string groupId, string memberId) =>
         string.Create(
             2 + groupId.Length + 1 + memberId.Length,
             (groupId, memberId),

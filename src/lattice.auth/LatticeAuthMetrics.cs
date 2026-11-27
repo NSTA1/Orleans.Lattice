@@ -71,6 +71,9 @@ public static class LatticeAuthMetrics
     /// </summary>
     public const string SnapshotSubjectsName = "orleans.lattice.auth.snapshot.subjects";
 
+    /// <summary>Canonical name of the <see cref="AdminAuditWriteFailures"/> counter.</summary>
+    public const string AdminAuditWriteFailuresName = "orleans.lattice.auth.admin_audit.write_failures";
+
     /// <summary>
     /// The meter that owns every authorization instrument. Exposed publicly so
     /// integration tests and custom OpenTelemetry exporters can subscribe by
@@ -129,6 +132,18 @@ public static class LatticeAuthMetrics
     public static readonly Counter<long> SnapshotRebuilds =
         Meter.CreateCounter<long>(SnapshotRebuildsName, unit: "{rebuild}",
             description: "Compiled authorization policy snapshot rebuilds.");
+
+    /// <summary>
+    /// Counter of durable admin audit writes that failed: a denial record that could
+    /// not be written (the refusal is still returned), an intent that could not be
+    /// written (the call is refused before any change), a finalize that could not be
+    /// written (left to the reconciler), or a reconciler write that could not be
+    /// written (retried on the next sweep). A non-zero rate means the admin audit
+    /// trail is degraded.
+    /// </summary>
+    public static readonly Counter<long> AdminAuditWriteFailures =
+        Meter.CreateCounter<long>(AdminAuditWriteFailuresName, unit: "{write}",
+            description: "Durable admin audit trail writes that failed (denial, intent, finalize or reconcile).");
 
     /// <summary>
     /// The <see cref="TagEffect"/> value for a decision: <see cref="EffectAllow"/>

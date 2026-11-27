@@ -516,6 +516,7 @@ Charted by the Identity & Authorization dashboard.
 | `orleans.lattice.auth.snapshot.epoch` | observable gauge (`{epoch}`) | `tenant` | Authorization | Compiled snapshot epoch (one series per silo process, which the panel separates by the scrape target's `instance` label) |
 | `orleans.lattice.auth.snapshot.age` | observable gauge (`s`) | `tenant` | Authorization | Compiled snapshot age (one series per silo process, which the panel separates by the scrape target's `instance` label) |
 | `orleans.lattice.auth.snapshot.subjects` | observable gauge (`{subject}`) | `tenant` | Authorization | Members with policies configured (one series per silo process, which the panel separates by the scrape target's `instance` label) |
+| `orleans.lattice.auth.admin_audit.write_failures` | counter (`{write}`) | `tenant` | Authorization | Admin audit write failures (rate) |
 
 ## `orleans.lattice.membership` meter
 

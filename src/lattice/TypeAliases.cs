@@ -76,6 +76,17 @@ internal static class TypeAliases
     internal const string LatticeAuthorizationDenied = "ol.azd";
     internal const string LatticeTreeOwnershipDenied = "ol.tod";
 
+    // The durable admin audit trail (#3638): the record a privileged auth/admin
+    // decision or mutation writes to the reserved sys-admin-audit tree, its
+    // enumerations, and the fail-closed exception raised when the intent cannot
+    // be written.
+    internal const string LatticeAdminAuditRecord = "ol.adr";
+    internal const string LatticeAdminAuditAction = "ol.ada";
+    internal const string LatticeAdminAuditOutcome = "ol.ado";
+    internal const string LatticeAdminAuditActorKind = "ol.adk";
+    internal const string LatticeAdminAuditTargetKind = "ol.adt";
+    internal const string LatticeAdminAuditUnavailable = "ol.adu";
+
     // Write-path interceptor: the fail-closed rejection the public write / CRDT
     // / atomic / bulk-load surface throws when the registered write interceptor
     // rejects (or, in an atomic batch, dead-letters) an incoming value.
