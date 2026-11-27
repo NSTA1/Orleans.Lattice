@@ -398,6 +398,12 @@ gate will tell you if you forget.
   the flag, feature-off inertness, authorize-before-disclose and the authorize, validate,
   write order, each with a mutation that turns it red and detectors in
   `spec/tenant-access-admin/RefinementAuthorization.md`. Change the model with the seam.
+  Module `TenantAccessMembership` checks the concurrency half: the last-admin guard
+  re-applied to the merged record inside the registry compare-and-set loop,
+  removals stamped later than the slot they
+  supersede on a lagging silo, and admin-set, member-set and role-binding entries
+  that arrive by replication or restore never letting another tenant's group count,
+  with detectors in `spec/tenant-access-admin/RefinementMembership.md`.
 
 ## Release-status note for security fixes
 

@@ -16,6 +16,7 @@ manifest, mutation directory and refinement note. This README is shared.
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 | --- | --- | --- | --- | --- | --- | --- |
 | `TenantAccessAuthorization` | 7 | 1 | 13 | 19 | 20 | 3,338 |
+| `TenantAccessMembership` | 4 | 0 | 8 | 12 | 11 | 17,174 |
 
 ## TenantAccessAuthorization
 
@@ -72,9 +73,53 @@ rule scopes and one write per behaviour. Every property is a safety property
 over the last step or the stores, so one write reaches every counterexample the
 mutations target. There are no liveness properties.
 
+## TenantAccessMembership
+
+The concurrency half (#6191): what concurrent removals, removal stamps and
+arriving records can do to a tenant's admin set, member set and app role
+bindings. Authorization is taken as decided: every modelled operation is one
+an admin of the tenant has already been authorized for.
+
+**Actors and actions.** Two concurrent callers each read the tenant record,
+check, and stamp a removal (`BeginRemoveAdmin`, `BeginRemoveMember`,
+`BeginDeleteGroup`, the last removing the tenant group's admin and member
+entries), then commit it (`Commit`): one committing attempt of the registry's
+compare-and-set loop, which re-merges the tombstones into the stored record
+and re-applies the last-admin guard to the merged record before writing.
+Removals run on a silo whose clock lags; adds (`AddEntry`) run on one whose
+clock leads. Tenant records arrive by replication or restore around the
+facades (`ArriveEntry`), stamped ahead of both silos and carrying another
+tenant's group, and so do app records carrying role bindings
+(`ArriveBinding`). A membership decision (`Count`) reports which entries
+conferred anything.
+
+**Properties.**
+
+- `LastAdminGuard`: no interleaving of removals and group deletions leaves the
+  tenant's admin set empty, and a refused removal writes nothing. Like the
+  production guard, it counts every live admin entry.
+- `RemovalWinsUnderSkew`: a committed removal supersedes the slot it read,
+  even when the remover's clock lags the silo or peer that wrote the slot.
+- `NoCrossTenantMembership`: an admin-set, member-set or role-binding entry
+  naming another tenant's group, or a malformed `t/` id, never confers
+  anything, written or arrived, and a subject whose own id is shaped like such
+  a group never matches it by exact id.
+
+**Bounds.** One tenant with two users, a cluster group and its own group (two
+admin entries and two member entries at the start), another tenant's group
+and a malformed `t/` id, two concurrent callers, two silos, and three
+operations (a removal's begin, an add or an arrival) per behaviour; commits
+and decisions are free. Every property is a safety property, and three
+operations reach every counterexample the mutations target, the deepest being
+two racing removals, or an arrival followed by a removal. There are no liveness properties.
+
 ## Refinement and mutations
 
 - [Authorization refinement](RefinementAuthorization.md), including the
   deliberate abstraction gaps.
 - [Authorization mutations](mutations-authorization/): every property and
   every action of `Next` has a falsifying mutation; no action is exempt.
+- [Membership refinement](RefinementMembership.md), including the deliberate
+  abstraction gaps.
+- [Membership mutations](mutations-membership/): every property and every
+  action of `Next` has a falsifying mutation; no action is exempt.

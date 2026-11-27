@@ -1,0 +1,13 @@
+# Pairs with NoCrossTenantMembership. An app's role compilation that keeps a
+# stored binding to another tenant's group confers the role through it.
+MODULE: RoleBindingSkipsTenantCheck
+TARGET: NoCrossTenantMembership
+CLASS: Invariant
+SUMMARY: role compilation keeps a binding to a group outside the app's tenant
+PERTURBS: Count
+
+--- FIND
+        roles == IF \A b \in bindings : Bindable(b) THEN bindings \cap groups ELSE {}
+--- REPLACE
+        roles == bindings \cap groups
+--- END
