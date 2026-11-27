@@ -45,6 +45,7 @@ internal sealed partial class LatticeAppsControl : ILatticeAppsControl
     private readonly ITenantContextResolver _tenants;
     private readonly ILatticeMembershipContext? _membership;
     private readonly TimeProvider _time;
+    private readonly ILatticeAdminAuditTrail? _audit;
 
     /// <summary>
     /// How long an enable, disable or uninstall call waits for its activation run before it
@@ -71,7 +72,8 @@ internal sealed partial class LatticeAppsControl : ILatticeAppsControl
         ILatticeAccessGate gate,
         ITenantContextResolver tenants,
         ILatticeMembershipContext? membership = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        ILatticeAdminAuditTrail? auditTrail = null)
     {
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(source);
@@ -85,6 +87,7 @@ internal sealed partial class LatticeAppsControl : ILatticeAppsControl
         _tenants = tenants;
         _membership = membership;
         _time = timeProvider ?? TimeProvider.System;
+        _audit = auditTrail;
     }
 
     /// <summary>The accept window of an activation verb; see <see cref="DefaultAcceptWindow"/>.</summary>
@@ -136,8 +139,33 @@ internal sealed partial class LatticeAppsControl : ILatticeAppsControl
     {
         var slug = AppsControlMapping.ParseSlug(appSlug, nameof(appSlug));
         var tenant = await ResolveTenantAsync(cancellationToken).ConfigureAwait(false);
-        await AuthorizeAsync(cancellationToken).ConfigureAwait(false);
+        var audit = AppRequest(
+            operation switch
+            {
+                AppActivationOperation.Enable => LatticeAdminAuditAction.AppEnable,
+                AppActivationOperation.Disable => LatticeAdminAuditAction.AppDisable,
+                _ => LatticeAdminAuditAction.AppUninstall,
+            },
+            tenant,
+            slug);
+        await AuthorizeAsync(audit, cancellationToken).ConfigureAwait(false);
+        return await LatticeAdminAudit
+            .RunAsync(
+                _audit,
+                audit,
+                ct => RunAuthorizedActivationAsync(tenant, slug, operation, ct),
+                static r => r.Changed,
+                cancellationToken,
+                undecided: static r => r.Pending)
+            .ConfigureAwait(false);
+    }
 
+    private async Task<AppLifecycleResult> RunAuthorizedActivationAsync(
+        TenantId tenant,
+        AppSlug slug,
+        AppActivationOperation operation,
+        CancellationToken cancellationToken)
+    {
         // The run is not the caller's to cancel: once authorized it runs to completion and
         // records its outcome, because a run stopped part-way (rules withdrawn, trees not yet
         // retired) records nothing. The caller waits only for the accept window.
@@ -225,9 +253,49 @@ internal sealed partial class LatticeAppsControl : ILatticeAppsControl
     /// through the shared gate. A key-filtered allow is refused: the capability is not
     /// attached to a key. System-origin callers and the no-op gate skip enforcement.
     /// </summary>
+    /// <summary>
+    /// The unaudited authorization the capability probe uses: a probe expects to be
+    /// refused, so its refusal is an answer, not a denied administrative call.
+    /// </summary>
     private ValueTask AuthorizeAsync(CancellationToken cancellationToken) =>
         LatticeAccessGateEnforcement.EnforceWholeTreeControlAsync(
             _gate, _membership, LatticeScope.ClusterWideTreeId, LatticeOperation.AppInstall, cancellationToken);
+
+    /// <summary>The admin audit request a read authorizes under: recorded only when refused.</summary>
+    private static LatticeAdminAuditRequest ReadRequest(TenantId tenant) =>
+        new(
+            LatticeAdminAuditAction.Read,
+            LatticeAdminAuditRequest.TenantScope(tenant.Value!),
+            LatticeAdminAuditTargetKind.None,
+            null,
+            ActorTenant: tenant.Value);
+
+    /// <summary>
+    /// The audited authorization: a refusal is recorded to the admin audit trail before
+    /// it is rethrown (#3638).
+    /// </summary>
+    private ValueTask AuthorizeAsync(LatticeAdminAuditRequest audit, CancellationToken cancellationToken) =>
+        LatticeAdminAudit.AuthorizeAsync(
+            _audit,
+            audit,
+            ct => LatticeAccessGateEnforcement.EnforceWholeTreeControlAsync(
+                _gate, _membership, LatticeScope.ClusterWideTreeId, LatticeOperation.AppInstall, ct),
+            cancellationToken);
+
+    /// <summary>
+    /// The admin audit request for an app lifecycle call: filed under the tenant's
+    /// partition, anchored at the app's registry record (#3638).
+    /// </summary>
+    private static LatticeAdminAuditRequest AppRequest(
+        LatticeAdminAuditAction action, TenantId tenant, AppSlug slug, IReadOnlyDictionary<string, string>? detail = null) =>
+        new(
+            action,
+            LatticeAdminAuditRequest.TenantScope(tenant.Value!),
+            LatticeAdminAuditTargetKind.App,
+            string.Concat(tenant.Value, "/", slug.Value),
+            AppAuditAnchors.App(tenant, slug),
+            detail,
+            tenant.Value);
 
     /// <summary>
     /// Resolves the caller's active tenant, preferring the synchronous warm path. A

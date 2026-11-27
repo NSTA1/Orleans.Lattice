@@ -12,6 +12,7 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Added
 
+- **Auth - Admin audit trail.** Every privileged admin call (rules, groups, tenants, grants, regions, apps, aliases) is recorded with actor, target and outcome, denials included; on by default, and a call whose audit intent cannot be written is refused. ([#3638](https://github.com/NSTA1/Orleans.Lattice/issues/3638)) (`Orleans.Lattice`, `Orleans.Lattice.Auth`, `Orleans.Lattice.Membership`, `Orleans.Lattice.Tenancy`, `Orleans.Lattice.Apps`, `Orleans.Lattice.Replication`, `Orleans.Lattice.Api.Auth`, `Orleans.Lattice.Api.TenantAdmin`, `Orleans.Lattice.Api.Apps`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Dashboards`)
 - **Views - Lag age in view status.** View status reports `ApplyLagAge`, how long the oldest unapplied source change has waited, and the Explorer's Views tab shows it beside the entry lag. ([#6145](https://github.com/NSTA1/Orleans.Lattice/issues/6145)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Explorer.UI`)
 
 ### Fixed

@@ -29,6 +29,16 @@ public sealed class SystemTreeNameDriftGuardTests
     }
 
     [Test]
+    public void Admin_audit_tree_mirror_matches_the_canonical_constant_inside_the_reserved_namespace()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(LatticeSystemTreeNames.AdminAudit, Is.EqualTo(AuthConstants.AdminAuditTree));
+            Assert.That(AuthConstants.AdminAuditTree, Does.StartWith(AuthConstants.ReservedTreePrefix));
+        });
+    }
+
+    [Test]
     public void Auth_audit_tree_mirror_stays_within_the_reserved_auth_namespace()
     {
         // The audit tree must stay inside the reserved auth namespace so it can

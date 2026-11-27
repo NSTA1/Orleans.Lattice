@@ -57,7 +57,8 @@ internal sealed class LatticeAuthAdmin(
     IOptionsMonitor<LatticeIdentityDirectoryOptions> identityDirectoryOptions,
     ITenantContextResolver? tenants = null,
     ITenantRuleLayer? tenantRuleLayer = null,
-    ILatticeDecisionEngine? decisionEngine = null) : ILatticeAuthAdmin
+    ILatticeDecisionEngine? decisionEngine = null,
+    ILatticeAdminAuditTrail? auditTrail = null) : ILatticeAuthAdmin
 {
     private const string RuleKeySeparator = "\u001f";
 
@@ -91,6 +92,13 @@ internal sealed class LatticeAuthAdmin(
     private readonly IOptionsMonitor<LatticeMembershipOptions> _membershipOptions = membershipOptions ?? throw new ArgumentNullException(nameof(membershipOptions));
     private readonly IOptionsMonitor<LatticeIdentityDirectoryOptions> _identityDirectoryOptions = identityDirectoryOptions ?? throw new ArgumentNullException(nameof(identityDirectoryOptions));
 
+    /// <summary>
+    /// The admin audit request every read and introspection call authorizes under: a
+    /// refused read is audited (#3638), a successful one is not.
+    /// </summary>
+    private static readonly LatticeAdminAuditRequest ReadRequest =
+        new(LatticeAdminAuditAction.Read, LatticeAdminAuditRequest.ClusterScope, LatticeAdminAuditTargetKind.None, null);
+
     // ----- Membership administration -----
 
     /// <inheritdoc />
@@ -98,24 +106,33 @@ internal sealed class LatticeAuthAdmin(
     {
         ArgumentNullException.ThrowIfNull(group);
         ArgumentException.ThrowIfNullOrEmpty(group.GroupId);
-        await AuthorizeAdminAsync(cancellationToken).ConfigureAwait(false);
+        var audit = new LatticeAdminAuditRequest(
+            LatticeAdminAuditAction.GroupUpsert,
+            LatticeAdminAuditRequest.ClusterScope,
+            LatticeAdminAuditTargetKind.Group,
+            group.GroupId,
+            MembershipAuditAnchors.Group(group.GroupId));
+        await AuthorizeAdminAsync(audit, cancellationToken).ConfigureAwait(false);
 
-        // D2: the whole t/ namespace is reserved to the tenant tier, malformed ids
-        // included, so the test is the prefix rather than the exact tenant-group shape.
-        if (IsTenantTierGroupId(group.GroupId))
+        await LatticeAdminAudit.RunAsync(auditTrail, audit, async ct =>
         {
-            throw LatticeTenantOwnedGroupException.Rejected(group.GroupId, nameof(group));
-        }
+            // D2: the whole t/ namespace is reserved to the tenant tier, malformed ids
+            // included, so the test is the prefix rather than the exact tenant-group shape.
+            if (IsTenantTierGroupId(group.GroupId))
+            {
+                throw LatticeTenantOwnedGroupException.Rejected(group.GroupId, nameof(group));
+            }
 
-        await ValidateDirectoryPrincipalAsync(
-            group.GroupId, DirectoryPrincipalKind.Group, nameof(group), cancellationToken).ConfigureAwait(false);
+            await ValidateDirectoryPrincipalAsync(
+                group.GroupId, DirectoryPrincipalKind.Group, nameof(group), ct).ConfigureAwait(false);
 
-        using (LatticeAccessGateContext.EnterSystemOrigin())
-        {
-            await _directory
-                .UpsertGroupAsync(new MembershipGroup(group.GroupId, group.DisplayName), cancellationToken)
-                .ConfigureAwait(false);
-        }
+            using (LatticeAccessGateContext.EnterSystemOrigin())
+            {
+                await _directory
+                    .UpsertGroupAsync(new MembershipGroup(group.GroupId, group.DisplayName), ct)
+                    .ConfigureAwait(false);
+            }
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -135,21 +152,30 @@ internal sealed class LatticeAuthAdmin(
     public async Task RemoveGroupAsync(string groupId, CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(groupId);
-        await AuthorizeAdminAsync(cancellationToken).ConfigureAwait(false);
+        var audit = new LatticeAdminAuditRequest(
+            LatticeAdminAuditAction.GroupRemove,
+            LatticeAdminAuditRequest.ClusterScope,
+            LatticeAdminAuditTargetKind.Group,
+            groupId,
+            MembershipAuditAnchors.Group(groupId));
+        await AuthorizeAdminAsync(audit, cancellationToken).ConfigureAwait(false);
 
-        // D2: a tenant group is removed only by the tenant directory facade's
-        // cascade. Deleting just its record here would leave its edges, registry
-        // entries and rules in force, and the tenant facade treats a group without
-        // a record as already removed, so nothing could clean them up.
-        if (IsTenantTierGroupId(groupId))
+        await LatticeAdminAudit.RunAsync(auditTrail, audit, async ct =>
         {
-            throw LatticeTenantOwnedGroupException.RemovalRejected(groupId, nameof(groupId));
-        }
+            // D2: a tenant group is removed only by the tenant directory facade's
+            // cascade. Deleting just its record here would leave its edges, registry
+            // entries and rules in force, and the tenant facade treats a group without
+            // a record as already removed, so nothing could clean them up.
+            if (IsTenantTierGroupId(groupId))
+            {
+                throw LatticeTenantOwnedGroupException.RemovalRejected(groupId, nameof(groupId));
+            }
 
-        using (LatticeAccessGateContext.EnterSystemOrigin())
-        {
-            await _directory.RemoveGroupAsync(groupId, cancellationToken).ConfigureAwait(false);
-        }
+            using (LatticeAccessGateContext.EnterSystemOrigin())
+            {
+                await _directory.RemoveGroupAsync(groupId, ct).ConfigureAwait(false);
+            }
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -187,29 +213,39 @@ internal sealed class LatticeAuthAdmin(
     {
         ArgumentException.ThrowIfNullOrEmpty(groupId);
         ArgumentException.ThrowIfNullOrEmpty(memberId);
-        await AuthorizeAdminAsync(cancellationToken).ConfigureAwait(false);
+        var audit = new LatticeAdminAuditRequest(
+            LatticeAdminAuditAction.GroupMemberAdd,
+            LatticeAdminAuditRequest.ClusterScope,
+            LatticeAdminAuditTargetKind.GroupMember,
+            string.Concat(groupId, "/", memberId),
+            MembershipAuditAnchors.Edge(groupId, memberId),
+            new Dictionary<string, string>(1, StringComparer.Ordinal) { ["memberKind"] = memberKind.ToString() });
+        await AuthorizeAdminAsync(audit, cancellationToken).ConfigureAwait(false);
 
-        // A t/ id is a local tenant-tier group that no upstream identity directory
-        // knows, so it is not validated there: the directory's tenant group nesting
-        // invariant (D3) decides it, and its typed refusal surfaces unchanged.
-        if (!IsTenantTierGroupId(memberId))
+        await LatticeAdminAudit.RunAsync(auditTrail, audit, async ct =>
         {
-            await ValidateDirectoryPrincipalAsync(
-                memberId, ToDirectoryPrincipalKind(memberKind), nameof(memberId), cancellationToken).ConfigureAwait(false);
-        }
+            // A t/ id is a local tenant-tier group that no upstream identity directory
+            // knows, so it is not validated there: the directory's tenant group nesting
+            // invariant (D3) decides it, and its typed refusal surfaces unchanged.
+            if (!IsTenantTierGroupId(memberId))
+            {
+                await ValidateDirectoryPrincipalAsync(
+                    memberId, ToDirectoryPrincipalKind(memberKind), nameof(memberId), ct).ConfigureAwait(false);
+            }
 
-        if (!IsTenantTierGroupId(groupId))
-        {
-            await ValidateDirectoryPrincipalAsync(
-                groupId, DirectoryPrincipalKind.Group, nameof(groupId), cancellationToken).ConfigureAwait(false);
-        }
+            if (!IsTenantTierGroupId(groupId))
+            {
+                await ValidateDirectoryPrincipalAsync(
+                    groupId, DirectoryPrincipalKind.Group, nameof(groupId), ct).ConfigureAwait(false);
+            }
 
-        // The directory enforces the tenant group nesting invariant for every caller
-        // and throws LatticeTenantGroupNestingException before any write.
-        using (LatticeAccessGateContext.EnterSystemOrigin())
-        {
-            await _directory.AddMemberAsync(groupId, memberId, memberKind, cancellationToken).ConfigureAwait(false);
-        }
+            // The directory enforces the tenant group nesting invariant for every caller
+            // and throws LatticeTenantGroupNestingException before any write.
+            using (LatticeAccessGateContext.EnterSystemOrigin())
+            {
+                await _directory.AddMemberAsync(groupId, memberId, memberKind, ct).ConfigureAwait(false);
+            }
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -217,12 +253,21 @@ internal sealed class LatticeAuthAdmin(
     {
         ArgumentException.ThrowIfNullOrEmpty(groupId);
         ArgumentException.ThrowIfNullOrEmpty(memberId);
-        await AuthorizeAdminAsync(cancellationToken).ConfigureAwait(false);
+        var audit = new LatticeAdminAuditRequest(
+            LatticeAdminAuditAction.GroupMemberRemove,
+            LatticeAdminAuditRequest.ClusterScope,
+            LatticeAdminAuditTargetKind.GroupMember,
+            string.Concat(groupId, "/", memberId),
+            MembershipAuditAnchors.Edge(groupId, memberId));
+        await AuthorizeAdminAsync(audit, cancellationToken).ConfigureAwait(false);
 
-        using (LatticeAccessGateContext.EnterSystemOrigin())
+        await LatticeAdminAudit.RunAsync(auditTrail, audit, async ct =>
         {
-            await _directory.RemoveMemberAsync(groupId, memberId, cancellationToken).ConfigureAwait(false);
-        }
+            using (LatticeAccessGateContext.EnterSystemOrigin())
+            {
+                await _directory.RemoveMemberAsync(groupId, memberId, ct).ConfigureAwait(false);
+            }
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     /// <inheritdoc />
@@ -261,8 +306,14 @@ internal sealed class LatticeAuthAdmin(
     public async Task PutRuleAsync(LatticeAuthorizationRule rule, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(rule);
-        await AuthorizeAdminAsync(cancellationToken).ConfigureAwait(false);
+        ArgumentNullException.ThrowIfNull(rule.Scope);
+        var audit = RuleRequest(LatticeAdminAuditAction.RuleUpsert, rule.Scope.TreeId, rule.RuleId, rule);
+        await AuthorizeAdminAsync(audit, cancellationToken).ConfigureAwait(false);
+        await LatticeAdminAudit.RunAsync(auditTrail, audit, ct => PutRuleCoreAsync(rule, ct), cancellationToken).ConfigureAwait(false);
+    }
 
+    private async Task PutRuleCoreAsync(LatticeAuthorizationRule rule, CancellationToken cancellationToken)
+    {
         // D7: operators list and remove tenant-tier rules but never author them. The
         // store refuses both of these off system origin too; refusing here, before the
         // store is reached, gives the operator an error that names the right surface.
@@ -304,8 +355,15 @@ internal sealed class LatticeAuthAdmin(
     {
         ArgumentException.ThrowIfNullOrEmpty(treeId);
         ArgumentException.ThrowIfNullOrEmpty(ruleId);
-        await AuthorizeAdminAsync(cancellationToken).ConfigureAwait(false);
+        var audit = RuleRequest(LatticeAdminAuditAction.RuleRemove, treeId, ruleId, rule: null);
+        await AuthorizeAdminAsync(audit, cancellationToken).ConfigureAwait(false);
+        return await LatticeAdminAudit
+            .RunAsync(auditTrail, audit, ct => RemoveRuleCoreAsync(treeId, ruleId, ct), static removed => removed, cancellationToken)
+            .ConfigureAwait(false);
+    }
 
+    private async Task<bool> RemoveRuleCoreAsync(string treeId, string ruleId, CancellationToken cancellationToken)
+    {
         if (LatticeTenantRuleIds.IsTenantOwned(ruleId))
         {
             // Break-glass: an operator may remove a tenant-tier rule it cannot author.
@@ -804,8 +862,41 @@ internal sealed class LatticeAuthAdmin(
     /// when no real access gate is registered.
     /// </summary>
     private ValueTask AuthorizeAdminAsync(CancellationToken cancellationToken) =>
-        LatticeAccessGateEnforcement.EnforceWholeTreeAsync(
-            _gate, _membership, AdminScopeTreeId, LatticeOperation.Admin, cancellationToken);
+        AuthorizeAdminAsync(ReadRequest, cancellationToken);
+
+    /// <summary>
+    /// Authorizes the ambient caller as an administrator for the audited call
+    /// <paramref name="audit"/>: a refusal is recorded to the admin audit trail before
+    /// it is rethrown (#3638).
+    /// </summary>
+    private ValueTask AuthorizeAdminAsync(LatticeAdminAuditRequest audit, CancellationToken cancellationToken) =>
+        LatticeAdminAudit.AuthorizeAsync(
+            auditTrail,
+            audit,
+            ct => LatticeAccessGateEnforcement.EnforceWholeTreeAsync(
+                _gate, _membership, AdminScopeTreeId, LatticeOperation.Admin, ct),
+            cancellationToken);
+
+    /// <summary>
+    /// The admin audit request for a rule write or removal. The detail carries the
+    /// rule's shape (effect, operations, scope kind), never its subject or key.
+    /// </summary>
+    private static LatticeAdminAuditRequest RuleRequest(
+        LatticeAdminAuditAction action, string treeId, string ruleId, LatticeAuthorizationRule? rule) =>
+        new(
+            action,
+            LatticeAdminAuditRequest.ClusterScope,
+            LatticeAdminAuditTargetKind.Rule,
+            PolicyAuditAnchors.RuleTarget(treeId, ruleId),
+            PolicyAuditAnchors.Rule(treeId, ruleId),
+            rule is null
+                ? null
+                : new Dictionary<string, string>(3, StringComparer.Ordinal)
+                {
+                    ["effect"] = rule.Effect.ToString(),
+                    ["operations"] = rule.Operations.ToString(),
+                    ["scopeKind"] = rule.Scope.Kind.ToString(),
+                });
 
     /// <summary>
     /// Snapshots the cluster's opt-in authorization posture (the two tier flags)

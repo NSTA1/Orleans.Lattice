@@ -31,6 +31,7 @@ Registering the package installs the enforcing gate. A cluster that does not reg
 | Reserved rule-id namespaces | `LatticeAppRuleIds`, `LatticeAppOwnedRuleException`, `LatticeTenantRuleIds`, `LatticeTenantOwnedRuleException` | [Rule](#rule), [Tenant-tier rule ids](tenant-layer.md#tenant-tier-rule-ids) |
 | Tenant rule layer and tenant-isolation seams | `ITenantRuleLayer`, `ITenantGateEnforcer` | [The tenant rule layer](tenant-layer.md) |
 | Metrics and audit trail | `LatticeAuthMetrics`, `ILatticeAuthAuditSink`, `LatticeAuthDecisionEvent`, `LatticeAuthAuditVerbosity` | [Observability](observability.md) |
+| Admin audit trail | `LatticeAdminAuditRecord`, `LatticeAuthOptions.EnableAdminAuditTrail` | [Admin audit trail](admin-audit.md) |
 | Opt-in enforcement with zero cost when absent | `LatticeAuthServiceCollectionExtensions` | [Zero cost when disabled](#zero-cost-when-disabled) |
 
 ## Setup

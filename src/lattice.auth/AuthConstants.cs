@@ -34,6 +34,16 @@ internal static class AuthConstants
     /// </summary>
     internal const string AuditTree = "sys-auth-audit";
 
+    /// <summary>
+    /// The durable admin audit tree (#3638): one record per privileged
+    /// administrative decision or mutation (actor, action, target, outcome), plus
+    /// the pending intents of calls still in flight. Written only by the admin
+    /// audit trail under system origin. It sits in the reserved <c>sys-auth-*</c>
+    /// namespace, so no data-plane grant can read or write it. Mirrored publicly as
+    /// <c>LatticeSystemTreeNames.AdminAudit</c> in the replication package.
+    /// </summary>
+    internal const string AdminAuditTree = "sys-auth-admin-audit";
+
     /// <summary>Durable per-key history view name for <see cref="PolicyTree"/>.</summary>
     internal const string PolicyHistoryView = "sys-auth-policy-history";
 

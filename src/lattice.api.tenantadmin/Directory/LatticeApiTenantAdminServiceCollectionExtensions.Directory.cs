@@ -49,7 +49,8 @@ public static partial class LatticeApiTenantAdminServiceCollectionExtensions
             DelegatedAccessReader(sp),
             sp.GetService<ILatticeIdentityDirectory>(),
             sp.GetService<IOptionsMonitor<LatticeIdentityDirectoryOptions>>(),
-            sp.GetService<ILogger<LatticeTenantDirectoryAdmin>>()));
+            sp.GetService<ILogger<LatticeTenantDirectoryAdmin>>(),
+            sp.GetService<ILatticeAdminAuditTrail>()));
     }
 
     /// <summary>
@@ -136,5 +137,6 @@ public static partial class LatticeApiTenantAdminServiceCollectionExtensions
             sp.GetRequiredService<IOptions<ClusterOptions>>(),
             sp.GetService<ILatticeIdentityDirectory>(),
             sp.GetService<IOptionsMonitor<LatticeIdentityDirectoryOptions>>(),
-            sp.GetRequiredService<ITenantDirectoryStore>());
+            sp.GetRequiredService<ITenantDirectoryStore>(),
+            sp.GetService<ILatticeAdminAuditTrail>());
 }

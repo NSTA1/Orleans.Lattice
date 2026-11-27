@@ -69,43 +69,59 @@ internal sealed partial class LatticeTenantDirectoryAdmin
         ArgumentNullException.ThrowIfNull(group);
         ValidateGroupName(group.Name, nameof(group));
 
-        var record = await AuthorizeAsync(tenant, "upsert-group", cancellationToken).ConfigureAwait(false);
+        var audit = TenantAdminAudit.Anchored(
+            LatticeAdminAuditAction.GroupUpsert,
+            tenant,
+            LatticeAdminAuditTargetKind.Group,
+            group.Name,
+            TenantAdminAudit.TenantGroupId(tenant, group.Name) is { } id ? MembershipAuditAnchors.Group(id) : null);
+        var record = await AuthorizeAsync(audit, tenant, "upsert-group", cancellationToken).ConfigureAwait(false);
 
-        var groupId = LatticeTenantGroupId.Compose(tenant, group.Name).Value;
-        var cap = record.Quotas.EffectiveMaxGroups;
+        return await LatticeAdminAudit
+            .RunAsync(
+                _audit,
+                audit,
+                async ct =>
+                {
+                    var groupId = LatticeTenantGroupId.Compose(tenant, group.Name).Value;
+                    var cap = record.Quotas.EffectiveMaxGroups;
 
-        // Only a new group counts against the cap; replacing an existing group's
-        // display name never does.
-        var isNew = await _store.GetGroupAsync(groupId, cancellationToken).ConfigureAwait(false) is null;
-        if (isNew)
-        {
-            var count = await _store.CountTenantGroupsAsync(tenant, cancellationToken).ConfigureAwait(false);
-            TenantAccessCaps.AdmitAddition(
-                tenant, MembershipConstants.GroupsTree, TenantAccessCaps.GroupsDimension, count, cap);
-        }
+                    // Only a new group counts against the cap; replacing an existing group's
+                    // display name never does.
+                    var isNew = await _store.GetGroupAsync(groupId, ct).ConfigureAwait(false) is null;
+                    if (isNew)
+                    {
+                        var count = await _store.CountTenantGroupsAsync(tenant, ct).ConfigureAwait(false);
+                        TenantAccessCaps.AdmitAddition(
+                            tenant, MembershipConstants.GroupsTree, TenantAccessCaps.GroupsDimension, count, cap);
+                    }
 
-        await _store
-            .UpsertGroupAsync(new MembershipGroup(groupId, group.DisplayName), cancellationToken)
+                    await _store
+                        .UpsertGroupAsync(new MembershipGroup(groupId, group.DisplayName), ct)
+                        .ConfigureAwait(false);
+
+                    // Verify-and-compensate (see the type remarks): concurrent creators can all
+                    // pass the check above, so re-count after the write and withdraw this
+                    // group if the tenant is now over its cap.
+                    if (isNew
+                        && await _store.CountTenantGroupsAsync(tenant, ct).ConfigureAwait(false) is var groups
+                        && groups > cap)
+                    {
+                        await TenantCapCompensation.WithdrawAndRefuseAsync(
+                            ct => _store.RemoveGroupCascadeAsync(groupId, ct),
+                            _logger,
+                            tenant,
+                            MembershipConstants.GroupsTree,
+                            TenantAccessCaps.GroupsDimension,
+                            cap,
+                            groups).ConfigureAwait(false);
+                    }
+
+                    return new TenantGroupDescriptor { Name = group.Name, DisplayName = group.DisplayName };
+                },
+                changed: null,
+                cancellationToken)
             .ConfigureAwait(false);
-
-        // Verify-and-compensate (see the type remarks): concurrent creators can all
-        // pass the check above, so re-count after the write and withdraw this
-        // group if the tenant is now over its cap.
-        if (isNew
-            && await _store.CountTenantGroupsAsync(tenant, cancellationToken).ConfigureAwait(false) is var groups
-            && groups > cap)
-        {
-            await TenantCapCompensation.WithdrawAndRefuseAsync(
-                ct => _store.RemoveGroupCascadeAsync(groupId, ct),
-                _logger,
-                tenant,
-                MembershipConstants.GroupsTree,
-                TenantAccessCaps.GroupsDimension,
-                cap,
-                groups).ConfigureAwait(false);
-        }
-
-        return new TenantGroupDescriptor { Name = group.Name, DisplayName = group.DisplayName };
     }
 
     /// <inheritdoc />
@@ -115,49 +131,65 @@ internal sealed partial class LatticeTenantDirectoryAdmin
         var tenant = TenantAdminArguments.ParseTenantId(tenantId);
         ValidateGroupName(groupName, nameof(groupName));
 
-        var record = await AuthorizeAsync(tenant, "remove-group", cancellationToken).ConfigureAwait(false);
+        var audit = TenantAdminAudit.Anchored(
+            LatticeAdminAuditAction.GroupRemove,
+            tenant,
+            LatticeAdminAuditTargetKind.Group,
+            groupName,
+            TenantAdminAudit.TenantGroupId(tenant, groupName) is { } id ? MembershipAuditAnchors.Group(id) : null);
+        var record = await AuthorizeAsync(audit, tenant, "remove-group", cancellationToken).ConfigureAwait(false);
 
-        var groupId = LatticeTenantGroupId.Compose(tenant, groupName).Value;
-        if (await _store.GetGroupAsync(groupId, cancellationToken).ConfigureAwait(false) is null)
-        {
-            return new TenantGroupRemovalResult { TenantId = tenant.Value, GroupName = groupName };
-        }
+        return await LatticeAdminAudit
+            .RunAsync(
+                _audit,
+                audit,
+                async ct =>
+                {
+                    var groupId = LatticeTenantGroupId.Compose(tenant, groupName).Value;
+                    if (await _store.GetGroupAsync(groupId, ct).ConfigureAwait(false) is null)
+                    {
+                        return new TenantGroupRemovalResult { TenantId = tenant.Value, GroupName = groupName };
+                    }
 
-        // Last-admin protection (D6): a group entry counts as one admin entry, and a
-        // tenant may never be left with none. Checked before anything is written.
-        var inAdminSet = record.HasAdminSubject(groupId);
-        if (inAdminSet && record.AdminSubjectCount <= 1)
-        {
-            throw new TenantLastAdminSubjectException(tenant.Value, groupId);
-        }
+                    // Last-admin protection (D6): a group entry counts as one admin entry, and a
+                    // tenant may never be left with none. Checked before anything is written.
+                    var inAdminSet = record.HasAdminSubject(groupId);
+                    if (inAdminSet && record.AdminSubjectCount <= 1)
+                    {
+                        throw new TenantLastAdminSubjectException(tenant.Value, groupId);
+                    }
 
-        var inMemberSet = record.HasMemberSubject(groupId);
+                    var inMemberSet = record.HasMemberSubject(groupId);
 
-        // The cascade runs while the group record still exists and removes the
-        // record last, so an interrupted removal is completed by a re-run (which
-        // still finds the group) rather than leaving dangling references behind.
-        if (inAdminSet || inMemberSet)
-        {
-            await RemoveRegistryEntriesAsync(record, groupId, inAdminSet, inMemberSet, cancellationToken)
-                .ConfigureAwait(false);
-        }
+                    // The cascade runs while the group record still exists and removes the
+                    // record last, so an interrupted removal is completed by a re-run (which
+                    // still finds the group) rather than leaving dangling references behind.
+                    if (inAdminSet || inMemberSet)
+                    {
+                        await RemoveRegistryEntriesAsync(record, groupId, inAdminSet, inMemberSet, ct)
+                            .ConfigureAwait(false);
+                    }
 
-        var removedRules = await _rules
-            .RemoveRulesNamingGroupAsync(tenant, groupId, cancellationToken)
+                    var removedRules = await _rules
+                        .RemoveRulesNamingGroupAsync(tenant, groupId, ct)
+                        .ConfigureAwait(false);
+
+                    var edgesRemoved = await _store.RemoveGroupCascadeAsync(groupId, ct).ConfigureAwait(false);
+
+                    return new TenantGroupRemovalResult
+                    {
+                        TenantId = tenant.Value,
+                        GroupName = groupName,
+                        Removed = true,
+                        EdgesRemoved = edgesRemoved,
+                        RemovedFromMemberSet = inMemberSet,
+                        RemovedFromAdminSet = inAdminSet,
+                        RemovedRuleIds = ToLocalRuleIds(tenant, removedRules),
+                    };
+                },
+                static r => r.Removed,
+                cancellationToken)
             .ConfigureAwait(false);
-
-        var edgesRemoved = await _store.RemoveGroupCascadeAsync(groupId, cancellationToken).ConfigureAwait(false);
-
-        return new TenantGroupRemovalResult
-        {
-            TenantId = tenant.Value,
-            GroupName = groupName,
-            Removed = true,
-            EdgesRemoved = edgesRemoved,
-            RemovedFromMemberSet = inMemberSet,
-            RemovedFromAdminSet = inAdminSet,
-            RemovedRuleIds = ToLocalRuleIds(tenant, removedRules),
-        };
     }
 
     /// <summary>

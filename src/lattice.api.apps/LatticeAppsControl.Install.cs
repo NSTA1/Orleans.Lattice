@@ -78,8 +78,51 @@ internal sealed partial class LatticeAppsControl
         var tenant = await ResolveTenantAsync(cancellationToken).ConfigureAwait(false);
         var ceiling = AppsControlMapping.ToEngineCeiling(request.Ceiling, tenant);
 
-        await AuthorizeAsync(cancellationToken).ConfigureAwait(false);
+        var versionDetail = new Dictionary<string, string>(1, StringComparer.Ordinal) { ["version"] = version.ToString() };
+        var audit = AppRequest(LatticeAdminAuditAction.AppInstall, tenant, slug, versionDetail);
+        await AuthorizeAsync(audit, cancellationToken).ConfigureAwait(false);
 
+        // Everything up to the registry write only reads and validates; a refusal here is
+        // recorded as a failed install before it is rethrown.
+        AppRegistryInstallRequest installRequest;
+        AppRegistryRecord? current;
+        bool upgrading;
+        try
+        {
+            (installRequest, current, upgrading) = await PrepareInstallAsync(
+                request, tenant, slug, version, bindings, ceiling, expectedDigest, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            await LatticeAdminAudit.RecordFailureAsync(_audit, audit, ex).ConfigureAwait(false);
+            throw;
+        }
+
+        if (upgrading)
+        {
+            audit = audit with { Action = LatticeAdminAuditAction.AppUpgrade };
+        }
+
+        return await LatticeAdminAudit
+            .RunAsync(
+                _audit,
+                audit,
+                ct => CommitInstallAsync(installRequest, current, upgrading, tenant, slug, ct),
+                static r => r.Changed,
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private async Task<(AppRegistryInstallRequest Request, AppRegistryRecord? Current, bool Upgrading)> PrepareInstallAsync(
+        AppInstallRequest request,
+        TenantId tenant,
+        AppSlug slug,
+        AppVersion version,
+        AppRoleBinding[] bindings,
+        AppCapabilityCeiling ceiling,
+        string? expectedDigest,
+        CancellationToken cancellationToken)
+    {
         var resolved = await _source.ResolveFromAsync(slug, version, request.SourceKey, cancellationToken).ConfigureAwait(false);
         var manifest = AppsControlFailures.RequireResolved(slug, version, resolved);
         var provenance = resolved.Provenance ?? manifest.Identity.Provenance;
@@ -119,6 +162,17 @@ internal sealed partial class LatticeAppsControl
             installRequest = installRequest with { BridgeConsent = AppUiBridgeRequest.FromManifest(manifest) };
         }
 
+        return (installRequest, current, upgrading);
+    }
+
+    private async Task<AppLifecycleResult> CommitInstallAsync(
+        AppRegistryInstallRequest installRequest,
+        AppRegistryRecord? current,
+        bool upgrading,
+        TenantId tenant,
+        AppSlug slug,
+        CancellationToken cancellationToken)
+    {
         // The upgrade is pinned to the version just read, so an upgrade racing this one is
         // refused rather than silently overwritten.
         var transition = upgrading
@@ -147,49 +201,64 @@ internal sealed partial class LatticeAppsControl
         var ceiling = AppsControlMapping.ToEngineCeiling(request.Ceiling, tenant);
         var bridgeConsent = AppsPresentationMapping.ToEngineConsent(request.BridgeGrants);
 
-        await AuthorizeAsync(cancellationToken).ConfigureAwait(false);
+        var audit = AppRequest(
+            LatticeAdminAuditAction.AppConsentUpdate,
+            tenant,
+            slug,
+            new Dictionary<string, string>(1, StringComparer.Ordinal) { ["version"] = version.ToString() });
+        await AuthorizeAsync(audit, cancellationToken).ConfigureAwait(false);
 
-        var current = await _registry.GetAsync(tenant, slug, cancellationToken).ConfigureAwait(false);
-        if (current is null || current.State == AppRegistryLifecycleState.Uninstalled)
-        {
-            throw AppsControlFailures.NotInstalled(slug);
-        }
+        return await LatticeAdminAudit
+            .RunAsync(
+                _audit,
+                audit,
+                async ct =>
+                {
+                    var current = await _registry.GetAsync(tenant, slug, ct).ConfigureAwait(false);
+                    if (current is null || current.State == AppRegistryLifecycleState.Uninstalled)
+                    {
+                        throw AppsControlFailures.NotInstalled(slug);
+                    }
 
-        if (current.Version != version)
-        {
-            throw new InvalidOperationException(
-                $"The consent names version '{version}' of app '{slug}', but version '{current.Version}' is installed; "
-                + "consent is pinned to the installed version.");
-        }
+                    if (current.Version != version)
+                    {
+                        throw new InvalidOperationException(
+                            $"The consent names version '{version}' of app '{slug}', but version '{current.Version}' is installed; "
+                            + "consent is pinned to the installed version.");
+                    }
 
-        // A same-version upgrade replaces the ceiling (re-pinning it to the version) and keeps
-        // identity, bindings and state. It is pinned to the version and the revision just read, so
-        // an upgrade or a role re-binding that lands in between is refused (ConcurrencyConflict)
-        // instead of being rolled back.
-        var transition = await _registry.UpgradeAsync(
-            new AppRegistryInstallRequest
-            {
-                Tenant = tenant,
-                Identity = new AppIdentity { Slug = slug, Version = current.Version, Provenance = current.Provenance },
-                Ceiling = ceiling,
-                RoleBindings = current.RoleBindings,
-                ExpectedVersion = current.Version,
-                ExpectedRevision = current.Revision,
-                BridgeConsent = bridgeConsent,
-            },
-            cancellationToken).ConfigureAwait(false);
-        if (!transition.Succeeded || transition.Record is not { } record)
-        {
-            throw AppsControlFailures.FromTransition(slug, "update the consent of", transition);
-        }
+                    // A same-version upgrade replaces the ceiling (re-pinning it to the version) and keeps
+                    // identity, bindings and state. It is pinned to the version and the revision just read, so
+                    // an upgrade or a role re-binding that lands in between is refused (ConcurrencyConflict)
+                    // instead of being rolled back.
+                    var transition = await _registry.UpgradeAsync(
+                        new AppRegistryInstallRequest
+                        {
+                            Tenant = tenant,
+                            Identity = new AppIdentity { Slug = slug, Version = current.Version, Provenance = current.Provenance },
+                            Ceiling = ceiling,
+                            RoleBindings = current.RoleBindings,
+                            ExpectedVersion = current.Version,
+                            ExpectedRevision = current.Revision,
+                            BridgeConsent = bridgeConsent,
+                        },
+                        ct).ConfigureAwait(false);
+                    if (!transition.Succeeded || transition.Record is not { } record)
+                    {
+                        throw AppsControlFailures.FromTransition(slug, "update the consent of", transition);
+                    }
 
-        if (record.State == AppRegistryLifecycleState.Enabled)
-        {
-            await ReapplyAsync(tenant, slug, "The consent was recorded, but re-applying the enabled app failed. ", cancellationToken)
-                .ConfigureAwait(false);
-        }
+                    if (record.State == AppRegistryLifecycleState.Enabled)
+                    {
+                        await ReapplyAsync(tenant, slug, "The consent was recorded, but re-applying the enabled app failed. ", ct)
+                            .ConfigureAwait(false);
+                    }
 
-        return ToConsentReport(record);
+                    return ToConsentReport(record);
+                },
+                changed: null,
+                cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private async Task ReapplyAsync(TenantId tenant, AppSlug slug, string preface, CancellationToken cancellationToken)
