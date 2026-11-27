@@ -29,7 +29,7 @@ Configures how the decision engine compiles and evaluates rules, how policy hist
 | `EnableAdminAuditTrail` | `bool` | `true` | Records every privileged administrative decision and mutation in the [admin audit trail](admin-audit.md). While on, an administrative mutation whose audit intent cannot be written is refused before it changes anything. |
 | `AdminAuditTrailTimeToLive` | `TimeSpan?` | `null` | How long a final admin audit record is kept, or `null` to keep every record. Must be strictly positive when supplied. Pending intents are never aged out. |
 | `AdminAuditReconcileLease` | `TimeSpan` | 2 minutes | How long an admin audit intent may stay pending before the reconciler resolves it. Must be strictly positive. |
-| `AdminAuditMaxPendingAge` | `TimeSpan` | 1 hour | How long the reconciler waits for evidence before recording an unresolvable intent as `Indeterminate`. Must be greater than `AdminAuditReconcileLease`. |
+| `AdminAuditMaxPendingAge` | `TimeSpan` | 1 hour | How long the reconciler waits before recording an intent whose anchor was not written as not committed, or an unresolvable intent as `Indeterminate`. Set it above the longest administrative operation. Must be greater than `AdminAuditReconcileLease`. |
 | `AdminAuditReconcileInterval` | `TimeSpan` | 1 minute | How often each silo's reconciler sweeps. Must be strictly positive. |
 
 ### Validation

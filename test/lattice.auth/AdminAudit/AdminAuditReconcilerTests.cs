@@ -32,10 +32,10 @@ public sealed class AdminAuditReconcilerTests
         harness.Audit.Records().Single(r => !r.Key.StartsWith(AdminAuditKeys.PendingPrefix, StringComparison.Ordinal)).Value;
 
     [Test]
-    public async Task Sweep_resolves_a_stale_intent_whose_anchor_never_moved_as_not_committed()
+    public async Task Sweep_resolves_an_intent_whose_anchor_never_moved_as_not_committed_only_after_the_max_pending_age()
     {
         var (harness, _) = await PendingAsync();
-        harness.Time.Advance(harness.Options.AdminAuditReconcileLease);
+        harness.Time.Advance(harness.Options.AdminAuditMaxPendingAge);
 
         var finalized = await harness.Reconciler().SweepAsync(CancellationToken.None);
 
@@ -44,6 +44,54 @@ public sealed class AdminAuditReconcilerTests
             Assert.That(finalized, Is.EqualTo(1));
             Assert.That(harness.Audit.Records(), Has.Count.EqualTo(1), "the intent is removed");
             Assert.That(Final(harness).Outcome, Is.EqualTo(LatticeAdminAuditOutcome.Failed));
+            Assert.That(Final(harness).ReasonCode, Is.EqualTo(LatticeAdminAuditReasonCodes.FailedNotCommitted));
+        });
+    }
+
+    [Test]
+    public async Task Sweep_never_records_not_committed_for_a_long_running_activation_that_commits_after_the_lease()
+    {
+        // An accepted app activation returns Pending after its accept window and keeps
+        // running; its registry transition is its last write. An unmoved anchor past the
+        // lease proves only "not committed yet".
+        var (harness, intent) = await PendingAsync();
+        var reconciler = harness.Reconciler();
+        harness.Time.Advance(harness.Options.AdminAuditReconcileLease * 3);
+
+        await reconciler.SweepAsync(CancellationToken.None);
+        var stillPending = harness.Audit.Records().ContainsKey(AdminAuditKeys.Pending(intent.OperationId));
+
+        var landed = harness.Anchor.Put(AdminAuditHarness.AnchorKey, [9]);
+        harness.Anchor.History = new EntryHistoryPage
+        {
+            Source = EntryHistorySource.View,
+            Revisions = [new EntryRevision { Hlc = landed, SourceKey = AdminAuditHarness.AnchorKey, OriginClusterId = null }],
+        };
+        await reconciler.SweepAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(stillPending, Is.True, "an in-flight operation must not be recorded as not committed");
+            Assert.That(Final(harness).Outcome, Is.EqualTo(LatticeAdminAuditOutcome.Indeterminate));
+            Assert.That(Final(harness).ReasonCode, Is.Not.EqualTo(LatticeAdminAuditReasonCodes.FailedNotCommitted));
+        });
+    }
+
+    [Test]
+    public async Task Sweep_waits_on_an_anchor_absent_before_and_after_until_the_max_pending_age()
+    {
+        var (harness, intent) = await PendingAsync(anchorExists: false);
+        var reconciler = harness.Reconciler();
+        harness.Time.Advance(harness.Options.AdminAuditReconcileLease);
+
+        await reconciler.SweepAsync(CancellationToken.None);
+        var stillPending = harness.Audit.Records().ContainsKey(AdminAuditKeys.Pending(intent.OperationId));
+        harness.Time.Advance(harness.Options.AdminAuditMaxPendingAge);
+        await reconciler.SweepAsync(CancellationToken.None);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(stillPending, Is.True);
             Assert.That(Final(harness).ReasonCode, Is.EqualTo(LatticeAdminAuditReasonCodes.FailedNotCommitted));
         });
     }
@@ -109,7 +157,7 @@ public sealed class AdminAuditReconcilerTests
             Source = EntryHistorySource.View,
             Revisions = [new EntryRevision { Hlc = replicated, SourceKey = AdminAuditHarness.AnchorKey, OriginClusterId = "us" }],
         };
-        harness.Time.Advance(harness.Options.AdminAuditReconcileLease);
+        harness.Time.Advance(harness.Options.AdminAuditMaxPendingAge);
 
         await harness.Reconciler().SweepAsync(CancellationToken.None);
 
@@ -179,12 +227,14 @@ public sealed class AdminAuditReconcilerTests
         var anchor = new LatticeAdminAuditAnchor(LatticeConstants.RegistryTreeId, "alias");
         var intent = await harness.Trail().BeginAsync(AdminAuditHarness.Request(anchor), CancellationToken.None);
 
-        var unchanged = await AdminAuditEvidence.ResolveAsync(harness.GrainFactory, intent, TimeSpan.FromMinutes(5), TimeSpan.FromHours(1), CancellationToken.None);
+        var tooEarly = await AdminAuditEvidence.ResolveAsync(harness.GrainFactory, intent, TimeSpan.FromMinutes(5), TimeSpan.FromHours(1), CancellationToken.None);
+        var unchanged = await AdminAuditEvidence.ResolveAsync(harness.GrainFactory, intent, TimeSpan.FromHours(1), TimeSpan.FromHours(1), CancellationToken.None);
         harness.SystemAnchor.GetAsync("alias", Arg.Any<CancellationToken>()).Returns(Task.FromResult<byte[]?>([8]));
         var changed = await AdminAuditEvidence.ResolveAsync(harness.GrainFactory, intent, TimeSpan.FromMinutes(5), TimeSpan.FromHours(1), CancellationToken.None);
 
         Assert.Multiple(() =>
         {
+            Assert.That(tooEarly, Is.Null, "an unmoved value is not proof while the operation may still run");
             Assert.That(unchanged!.Value.ReasonCode, Is.EqualTo(LatticeAdminAuditReasonCodes.FailedNotCommitted));
             Assert.That(changed!.Value.Outcome, Is.EqualTo(LatticeAdminAuditOutcome.Indeterminate));
         });

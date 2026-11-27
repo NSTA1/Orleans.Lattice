@@ -110,6 +110,17 @@ internal sealed class AdminAuditReconciler(
         {
             try
             {
+                // The caller already finalized but its intent delete was lost: remove
+                // the leftover intent; the final record stands.
+                using (LatticeAccessGateContext.EnterSystemOrigin())
+                {
+                    if (await tree.GetAsync(AdminAuditKeys.Final(intent), cancellationToken).ConfigureAwait(false) is not null)
+                    {
+                        await tree.DeleteAsync(AdminAuditKeys.Pending(intent.OperationId), cancellationToken).ConfigureAwait(false);
+                        continue;
+                    }
+                }
+
                 var completion = await AdminAuditEvidence
                     .ResolveAsync(grainFactory, intent, now - intent.TimestampUtc, current.AdminAuditMaxPendingAge, cancellationToken)
                     .ConfigureAwait(false);

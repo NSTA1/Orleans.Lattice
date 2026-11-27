@@ -5,15 +5,21 @@ namespace Orleans.Lattice.Auth;
 /// <summary>
 /// Resolves an admin audit intent left pending (the facade stopped between its
 /// commit and its finalize, or failed in a way that could not prove either outcome)
-/// from the evidence of its anchor record. The rule never claims a commit:
+/// from the evidence of its anchor record. The rule never claims a commit, and never
+/// claims the absence of one while the operation could still be running: an accepted
+/// app activation, a long cascade, or a cancelled caller's commit can land well after
+/// the facade returned, so an unmoved anchor only proves "not committed yet".
 /// <list type="bullet">
 /// <item><description>the anchor still holds the version (or, for a tree with no
-/// versions, the value) observed before the commit: nothing was written, so the
-/// intent is <see cref="LatticeAdminAuditOutcome.Failed"/> with
-/// <see cref="LatticeAdminAuditReasonCodes.FailedNotCommitted"/>;</description></item>
+/// versions, the value, or for an anchor absent before, still absent) observed before
+/// the commit, once the intent is older than
+/// <see cref="LatticeAuthOptions.AdminAuditMaxPendingAge"/>: the intent is
+/// <see cref="LatticeAdminAuditOutcome.Failed"/> with
+/// <see cref="LatticeAdminAuditReasonCodes.FailedNotCommitted"/>; younger, it waits;</description></item>
 /// <item><description>the anchor's history since that version is complete and holds
 /// only revisions authored by another region (replication applies): this region
-/// wrote nothing, so likewise <see cref="LatticeAdminAuditOutcome.Failed"/>;</description></item>
+/// wrote nothing, so likewise <see cref="LatticeAdminAuditOutcome.Failed"/> once
+/// the intent is older than the maximum pending age;</description></item>
 /// <item><description>a local revision exists: something in this region wrote the
 /// anchor, which may or may not have been this call, so
 /// <see cref="LatticeAdminAuditOutcome.Indeterminate"/>;</description></item>
@@ -68,24 +74,33 @@ internal static class AdminAuditEvidence
         var anchor = new LatticeAdminAuditAnchor(treeId, key);
         var observed = await AdminAuditAnchorReader.ReadAsync(grainFactory, anchor, cancellationToken).ConfigureAwait(false);
 
+        // An unmoved anchor proves only that nothing has committed YET: the operation
+        // may still be running (an accepted activation, a long cascade, a cancelled
+        // caller's commit). "Not committed" is therefore issued only once the intent has
+        // outlived the maximum pending age; until then the intent waits.
+        var expired = age >= maxPendingAge;
+        LatticeAdminAuditCompletion? notCommittedOnceExpired = expired ? notCommitted : null;
+
         if (!observed.Versioned)
         {
             // A tree with no versions or history: only "the value never moved" is provable.
-            return observed.Hash == intent.AnchorBaseHash ? notCommitted : indeterminate;
+            return observed.Hash == intent.AnchorBaseHash ? notCommittedOnceExpired : indeterminate;
         }
 
-        if (intent.AnchorBaseVersion is { } baseVersion && observed.Version is { } current && current.Equals(baseVersion))
+        var unmoved = intent.AnchorBaseVersion is { } baseVersion
+            ? observed.Version is { } current && current.Equals(baseVersion)
+            : observed.Version is null;
+        if (unmoved)
         {
-            // The anchor's version is unchanged since before the commit: nothing wrote it.
-            return notCommitted;
+            return notCommittedOnceExpired;
         }
 
         var verdict = await ReadHistoryAsync(grainFactory, intent, anchor, observed, cancellationToken).ConfigureAwait(false);
         return verdict switch
         {
             HistoryVerdict.LocalWrite => indeterminate,
-            HistoryVerdict.OnlyRemoteWrites => notCommitted,
-            _ => age >= maxPendingAge ? indeterminate : null,
+            HistoryVerdict.OnlyRemoteWrites => notCommittedOnceExpired,
+            _ => expired ? indeterminate : null,
         };
     }
 

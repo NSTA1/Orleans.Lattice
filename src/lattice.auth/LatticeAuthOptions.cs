@@ -243,10 +243,13 @@ public sealed class LatticeAuthOptions
     public TimeSpan AdminAuditReconcileLease { get; set; } = TimeSpan.FromMinutes(2);
 
     /// <summary>
-    /// How long the reconciler keeps waiting for the evidence that would prove an
-    /// intent never committed before it records the intent as
-    /// <see cref="LatticeAdminAuditOutcome.Indeterminate"/>. Defaults to one hour. Must
-    /// be strictly greater than <see cref="AdminAuditReconcileLease"/>.
+    /// How long an admin audit intent may stay pending before the reconciler decides
+    /// it. An unwritten anchor only proves that nothing has committed yet, so an
+    /// intent is recorded as not committed only after this age; an intent the
+    /// evidence cannot resolve is recorded as
+    /// <see cref="LatticeAdminAuditOutcome.Indeterminate"/> after it. Set it above the
+    /// longest administrative operation. Defaults to one hour. Must be strictly greater
+    /// than <see cref="AdminAuditReconcileLease"/>.
     /// </summary>
     public TimeSpan AdminAuditMaxPendingAge { get; set; } = TimeSpan.FromHours(1);
 

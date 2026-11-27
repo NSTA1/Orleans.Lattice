@@ -175,7 +175,8 @@ internal sealed class DurableLatticeAdminAuditTrail : ILatticeAdminAuditTrail
     /// <summary>
     /// Points a committed record at the anchor revision the call left: the anchor's
     /// current version (when it moved past the base) and value hash. When the anchor's
-    /// version has not moved at all the call changed nothing, and the record says so
+    /// version has not moved at all (or it was absent before and is absent after) the
+    /// call changed nothing, and the record says so
     /// (<see cref="LatticeAdminAuditReasonCodes.FailedNoChange"/>) instead of claiming a
     /// commit. A failed read leaves the record committed without the pointer.
     /// </summary>
@@ -187,10 +188,12 @@ internal sealed class DurableLatticeAdminAuditTrail : ILatticeAdminAuditTrail
 
             // The anchor's version has not moved since before the commit, so the call
             // wrote nothing to it: a facade that returned normally made no change.
-            if (observed.Versioned
-                && final.AnchorBaseVersion is { } baseVersion
-                && observed.Version is { } unchanged
-                && unchanged.Equals(baseVersion))
+            // On a versioned tree an anchor absent before and absent after was not
+            // written either: a removal that matched nothing.
+            var unmoved = final.AnchorBaseVersion is { } baseVersion
+                ? observed.Version is { } unchanged && unchanged.Equals(baseVersion)
+                : observed.Version is null;
+            if (observed.Versioned && unmoved)
             {
                 return final with
                 {
@@ -224,14 +227,14 @@ internal sealed class DurableLatticeAdminAuditTrail : ILatticeAdminAuditTrail
             Outcome = LatticeAdminAuditOutcome.Pending,
             Action = request.Action,
             ActorSubjectId = subject.SubjectId,
-            ActorTenant = request.ActorTenant,
+            ActorTenant = AdminAuditBounds.Bound(request.ActorTenant),
             ActorKind = bootstrap is not null && bootstrap.Contains(subject.SubjectId)
                 ? LatticeAdminAuditActorKind.BootstrapAdministrator
                 : LatticeAdminAuditActorKind.Subject,
             TargetScope = request.TargetScope,
             TargetKind = request.TargetKind,
-            TargetId = request.TargetId,
-            Detail = request.Detail,
+            TargetId = AdminAuditBounds.Bound(request.TargetId),
+            Detail = AdminAuditBounds.Bound(request.Detail),
             OriginRegion = _replication.LocalReplicaId ?? string.Empty,
             TimestampUtc = _time.GetUtcNow(),
         };

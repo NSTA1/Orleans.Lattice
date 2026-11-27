@@ -55,21 +55,25 @@ Each record is a `LatticeAdminAuditRecord` in the reserved `sys-auth-admin-audit
 
 **No secret material.** A record carries identifiers, enumerations, hashes, timestamps and allow-listed scalars only. It never carries rule bodies, manifests, consent, credentials or exception messages.
 
+**Bounded caller text.** `TargetId`, `ActorTenant` and `Detail` are built from the caller's arguments, before authorization and validation. A value longer than 256 characters is stored as its first 64 characters followed by `...[truncated len={length} xxh64={hash}]`, and a record keeps at most 8 detail entries, so an unauthorized caller cannot make denials store large text.
+
 ## How a call is recorded
 
 1. **Authorize.** A refusal writes one `Denied` record, then the refusal is returned. If that write fails, the refusal is still returned and the failure is counted.
 2. **Intent.** Before anything is written, a `Pending` intent is written at `pending/{operationId}`. If the intent cannot be written, the call is refused with `LatticeAdminAuditUnavailableException` and changes nothing.
 3. **Commit.** The facade runs its change, unchanged.
 4. **Finalize.** The intent moves to its final key, `{scope}/{ticks}\u001f{operationId}`, with the observed outcome:
-   - `Committed` when the call returned normally, unless the anchor's version never moved, which is recorded as `Failed` with `failed.no-change`;
+   - `Committed` when the call returned normally, unless the anchor was not written (its version never moved, or it was absent before and after), which is recorded as `Failed` with `failed.no-change`;
    - `Failed` for a validation error, a conflict, a quota refusal or a missing target;
    - `Denied` for a tier-confinement refusal after authorization.
 
    The final record is written create-only, so a call is finalized at most once.
-5. **Reconcile.** A failure that may have struck after the commit landed (a timeout, a cancellation, a storage fault), or a crash between commit and finalize, leaves the intent pending. Each silo's reconciler resolves its own region's intents that are older than `AdminAuditReconcileLease`, from the anchor:
-   - the anchor's version is unchanged, or its complete history holds only replicated writes: `Failed`, `failed.not-committed`;
+5. **Reconcile.** A failure that may have struck after the commit landed (a timeout, a cancellation, a storage fault), a crash between commit and finalize, or an operation that returns before it settles (an app activation still running after its accept window), leaves the intent pending. Each silo's reconciler resolves its own region's intents that are older than `AdminAuditReconcileLease`, from the anchor:
    - a local write moved the anchor: `Indeterminate`;
+   - the anchor was not written (its version is unchanged, it is still absent, or its complete history holds only replicated writes): the operation may still be running, so the reconciler waits, and records `Failed`, `failed.not-committed` only once the intent is older than `AdminAuditMaxPendingAge`;
    - the history cannot yet prove either: the reconciler waits, and records `Indeterminate` after `AdminAuditMaxPendingAge`.
+
+   An intent whose final record already exists (the caller finalized but its intent delete was lost) is simply removed.
 
    The reconciler never records `Committed`. An `Indeterminate` record still names the actor, so every committed call is attributed by exactly one record, and no record claims a change that did not happen.
 
@@ -88,7 +92,7 @@ Final records are kept until `AdminAuditTrailTimeToLive` (default: kept indefini
 | `EnableAdminAuditTrail` | `true` | Records the admin audit trail. While it is on, a mutation whose intent cannot be written is refused. |
 | `AdminAuditTrailTimeToLive` | `null` | How long a final record is kept; `null` keeps every record. |
 | `AdminAuditReconcileLease` | 2 minutes | How long an intent may stay pending before the reconciler resolves it. |
-| `AdminAuditMaxPendingAge` | 1 hour | After this, an intent the evidence cannot resolve is recorded `Indeterminate`. |
+| `AdminAuditMaxPendingAge` | 1 hour | An intent whose anchor was not written is recorded `failed.not-committed` only after this; an intent the evidence cannot resolve is recorded `Indeterminate` after it. Set it above the longest administrative operation. |
 | `AdminAuditReconcileInterval` | 1 minute | How often each silo's reconciler sweeps. |
 
 ```csharp verify
