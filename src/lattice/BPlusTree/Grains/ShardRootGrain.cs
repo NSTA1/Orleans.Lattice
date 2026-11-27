@@ -2623,39 +2623,61 @@ internal sealed partial class ShardRootGrain(
         var total = 0;
         string? resumeFrom = null;
         var currentId = leafId.Value;
+        // A chain threading an orphan (issue 3271) reaches the orphan's shadow
+        // copy of a live leaf's rows; counting every leaf reached over-counted
+        // by exactly those rows (issue 6199). The keys path judges rows through
+        // the same watermark the scans use; the count fast path has no keys, so
+        // it judges each leaf by its declared bounds.
+        var chain = ScanChainCursor.Forward();
+        var countChain = default(CountChainBounds);
         while (true)
         {
             StandDownIfCeilingFired(scan, currentId);
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(currentId);
             var leafCount = 0;
             LeafChainLink link;
+            bool trusted;
+            string? watermark;
             if (hasMovedAway)
             {
                 var page = await leaf.GetKeysAndNextSiblingAsync(startInclusive, endExclusive);
                 var keys = page.Keys;
+                chain.BeginLeaf();
+                watermark = chain.Watermark;
                 for (int i = 0; i < keys.Count; i++)
                 {
+                    if (!chain.Admit(keys[i])) continue;
                     if (!IsSlotMovedAway(keys[i])) leafCount++;
                 }
                 link = page.Link;
+                trusted = chain.TrustsBounds(link.KeyRange);
+                if (chain.TryClaimWarning())
+                    WarnScanChainRegression(scan, currentId, watermark);
             }
             else
             {
                 var page = await leaf.CountAndNextSiblingAsync(startInclusive, endExclusive);
-                leafCount = page.Count;
                 link = page.Link;
+                watermark = countChain.PreviousHigh;
+                trusted = countChain.Admit(link.KeyRange);
+                if (trusted)
+                    leafCount = page.Count;
+                else
+                    WarnScanChainRegression(scan, currentId, watermark);
             }
             total += leafCount;
             scan.Budget.RecordLeafVisited();
 
-            // Bounds and successor accompany both the count and moved-slot keys.
-            var bounds = link.KeyRange;
+            // Bounds and successor accompany both the count and moved-slot
+            // keys. A regressed leaf's bounds are not its own to claim, so they
+            // steer neither termination nor resume.
+            LeafKeyRange? bounds = trusted ? link.KeyRange : null;
 
             // Past-range early exit (issue 1971). Without this a narrow range
             // still costs a walk to the end of the shard's chain.
             if (leafCount == 0
                 && endExclusive is not null
-                && bounds.LowKeyInclusive is { } low
+                && bounds?.LowKeyInclusive is { } low
                 && string.CompareOrdinal(low, endExclusive) >= 0)
             {
                 break;
@@ -2679,7 +2701,9 @@ internal sealed partial class ShardRootGrain(
             var next = link.NextSibling;
             if (next is null) break;
 
-            var boundary = ResumeKeyFrom(bounds, startInclusive, endExclusive);
+            var boundary = bounds is { } trustedBounds
+                ? ResumeKeyFrom(trustedBounds, startInclusive, endExclusive)
+                : null;
             if (boundary is not null)
             {
                 // Bankable checkpoint (issue 2807). `total` covers exactly the
@@ -2890,17 +2914,24 @@ internal sealed partial class ShardRootGrain(
         HashSet<int>? movedSet = null;
         string? resumeFrom = null;
         var currentId = leafId.Value;
+        // Orphan leaves must not contribute (issue 6199); see CountBoundedCoreAsync.
+        var chain = ScanChainCursor.Forward();
+        var countChain = default(CountChainBounds);
         while (true)
         {
             StandDownIfCeilingFired(scan, currentId);
             var leaf = grainFactory.GetGrain<IBPlusLeafGrain>(currentId);
             LeafChainLink link;
+            bool trusted;
             if (hasActiveSplit || hasMovedAway)
             {
                 var page = await leaf.GetKeysAndNextSiblingAsync(null, null);
                 var keys = page.Keys;
+                chain.BeginLeaf();
+                var watermark = chain.Watermark;
                 for (int i = 0; i < keys.Count; i++)
                 {
+                    if (!chain.Admit(keys[i])) continue;
                     if (TryGetMovedAwaySlot(keys[i], out var movedSlot))
                     {
                         (movedSet ??= []).Add(movedSlot);
@@ -2909,20 +2940,27 @@ internal sealed partial class ShardRootGrain(
                     total++;
                 }
                 link = page.Link;
+                trusted = chain.TrustsBounds(link.KeyRange);
+                if (chain.TryClaimWarning())
+                    WarnScanChainRegression(scan, currentId, watermark);
             }
             else
             {
                 var page = await leaf.CountAndNextSiblingAsync(null, null);
-                total += page.Count;
                 link = page.Link;
+                var watermark = countChain.PreviousHigh;
+                trusted = countChain.Admit(link.KeyRange);
+                if (trusted)
+                    total += page.Count;
+                else
+                    WarnScanChainRegression(scan, currentId, watermark);
             }
             scan.Budget.RecordLeafVisited();
 
-            var bounds = link.KeyRange;
             var next = link.NextSibling;
             if (next is null) break;
 
-            var boundary = ResumeKeyFrom(bounds, resumeFromInclusive, null);
+            var boundary = trusted ? ResumeKeyFrom(link.KeyRange, resumeFromInclusive, null) : null;
             if (boundary is not null)
             {
                 // Bankable checkpoint (issue 2807). The moved-away slot set has
@@ -3013,6 +3051,8 @@ internal sealed partial class ShardRootGrain(
         var total = 0;
         string? resumeFrom = null;
         var currentId = leafId.Value;
+        // Orphan leaves must not contribute (issue 6199); see CountBoundedCoreAsync.
+        var chain = ScanChainCursor.Forward();
         while (true)
         {
             StandDownIfCeilingFired(scan, currentId);
@@ -3024,21 +3064,29 @@ internal sealed partial class ShardRootGrain(
             // exact against the authoritative ShardMap.
             var page = await leaf.GetKeysAndNextSiblingAsync(startInclusive, endExclusive);
             var keys = page.Keys;
+            chain.BeginLeaf();
+            var watermark = chain.Watermark;
             for (int i = 0; i < keys.Count; i++)
             {
+                if (!chain.Admit(keys[i])) continue;
                 var slot = ShardMap.GetVirtualSlot(keys[i], virtualShardCount);
                 if (Array.BinarySearch(sortedSlots, slot) >= 0)
                     total++;
             }
             scan.Budget.RecordLeafVisited();
 
-            // Keep the per-slot filter; topology rides with the keys.
+            // Keep the per-slot filter; topology rides with the keys. A
+            // regressed leaf's bounds steer neither termination nor resume.
             var link = page.Link;
+            var trusted = chain.TrustsBounds(link.KeyRange);
+            if (chain.TryClaimWarning())
+                WarnScanChainRegression(scan, currentId, watermark);
             var bounds = link.KeyRange;
 
             // Past-range early exit (issue 1971): a bounded range must not cost
             // a walk to the end of the chain.
-            if (keys.Count == 0
+            if (trusted
+                && keys.Count == 0
                 && endExclusive is not null
                 && bounds.LowKeyInclusive is { } low
                 && string.CompareOrdinal(low, endExclusive) >= 0)
@@ -3049,7 +3097,7 @@ internal sealed partial class ShardRootGrain(
             var next = link.NextSibling;
             if (next is null) break;
 
-            var boundary = ResumeKeyFrom(bounds, startInclusive, endExclusive);
+            var boundary = trusted ? ResumeKeyFrom(bounds, startInclusive, endExclusive) : null;
             if (boundary is not null)
             {
                 PublishScanPagePartial(
