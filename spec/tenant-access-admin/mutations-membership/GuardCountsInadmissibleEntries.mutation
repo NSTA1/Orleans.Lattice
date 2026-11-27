@@ -1,0 +1,24 @@
+# Pairs with LastAdminGuard. The guard before #6204: it counted every live
+# admin-set slot, so an entry that never counts for the tenant (another
+# tenant's group that arrived by replication) let the last real admin go.
+MODULE: GuardCountsInadmissibleEntries
+TARGET: LastAdminGuard
+CLASS: Invariant
+SUMMARY: the pre-checks and the commit guard count inadmissible admin entries too
+PERTURBS: BeginRemoveAdmin, BeginDeleteGroup, Commit
+
+--- FIND
+       ELSE IF Admissible(e) /\ AdmissibleCount(slots["admin"]) <= 1 THEN Answer("removeAdmin", "refused")
+--- REPLACE
+       ELSE IF LiveCount(slots["admin"]) <= 1 THEN Answer("removeAdmin", "refused")
+--- END
+--- FIND
+          ELSE IF "admin" \in inSets /\ AdmissibleCount(slots["admin"]) <= 1 THEN Answer("deleteGroup", "refused")
+--- REPLACE
+          ELSE IF "admin" \in inSets /\ LiveCount(slots["admin"]) <= 1 THEN Answer("deleteGroup", "refused")
+--- END
+--- FIND
+       /\ IF "admin" \in op.sets /\ AdmissibleCount(merged["admin"]) = 0
+--- REPLACE
+       /\ IF "admin" \in op.sets /\ LiveCount(merged["admin"]) = 0
+--- END

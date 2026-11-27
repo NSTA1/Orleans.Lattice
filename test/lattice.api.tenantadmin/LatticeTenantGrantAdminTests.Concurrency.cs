@@ -60,7 +60,7 @@ public sealed partial class LatticeTenantGrantAdminTests
     /// lives on the granter's, and the inbox projection enumerates the registry.
     /// N1's own double could not serve those reads.
     /// </remarks>
-    private sealed class MergingTenantRegistry : ITenantRegistry
+    private sealed class MergingTenantRegistry : ITenantRegistry, IGuardedTenantRegistry
     {
         private readonly Dictionary<string, TenantRecord> _stored = new(StringComparer.Ordinal);
         private Action<TenantRecord>? _competingWrite;
@@ -100,12 +100,25 @@ public sealed partial class LatticeTenantGrantAdminTests
 #pragma warning restore CS1998
 
         public Task<TenantRecord> PutAsync(TenantRecord record, CancellationToken cancellationToken = default)
+            => PutProbedAsync(record, new TenantStoredRecordProbe(static _ => false), null, cancellationToken);
+
+        public Task<TenantRecord> PutGuardedAsync(
+            TenantRecord record, Action<TenantRecord> validateMerged, CancellationToken cancellationToken = default)
+            => PutProbedAsync(record, new TenantStoredRecordProbe(static _ => false), validateMerged, cancellationToken);
+
+        public Task<TenantRecord> PutProbedAsync(
+            TenantRecord record,
+            TenantStoredRecordProbe probe,
+            Action<TenantRecord>? validateMerged,
+            CancellationToken cancellationToken = default)
         {
             ArgumentNullException.ThrowIfNull(record);
             Puts++;
 
             if (!_stored.TryGetValue(record.Id.Value, out var stored))
             {
+                probe.Observe(null);
+                validateMerged?.Invoke(record);
                 _stored[record.Id.Value] = record;
                 return Task.FromResult(record);
             }
@@ -118,6 +131,8 @@ public sealed partial class LatticeTenantGrantAdminTests
                 write(stored);
             }
 
+            probe.Observe(stored);
+            validateMerged?.Invoke(stored.Clone().MergeFrom(record));
             return Task.FromResult(stored.MergeFrom(record));
         }
 
@@ -361,6 +376,45 @@ public sealed partial class LatticeTenantGrantAdminTests
                 Is.False,
                 "an unapproved widening became a live cross-tenant grant");
         });
+    }
+
+    /// <summary>
+    /// Two concurrent revokes both pass the pre-write check against their own reads
+    /// and both merge cleanly; only the one whose merge found the grant still live
+    /// changed anything, so the other reports no change and is not audited as a
+    /// committed revoke (#3638).
+    /// </summary>
+    [Test]
+    public async Task A_revoke_racing_an_identical_revoke_reports_no_change()
+    {
+        var registry = RacingRegistry();
+        SeedPending(registry, TenantGrantOperations.Read);
+        registry.Stored(Granter)!.TransitionGrant(GrantId, TenantGrantState.Active, Stamp(15), "grantee");
+        var admin = RacingAdmin(registry, new ScriptedClock(20));
+
+        registry.RaceOnFirstWriteTo(Granter, stored =>
+            stored.TransitionGrant(GrantId, TenantGrantState.Revoked, Stamp(18), "granter-b"));
+
+        var result = await admin.RevokeGrantAsync(Granter, Grantee, Scope);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Changed, Is.False, "the racing revoke already revoked the grant");
+            Assert.That(CommittedState(registry), Is.EqualTo(TenantGrantState.Revoked));
+        });
+    }
+
+    [Test]
+    public async Task A_revoke_whose_own_merge_revokes_the_grant_reports_a_change()
+    {
+        var registry = RacingRegistry();
+        SeedPending(registry, TenantGrantOperations.Read);
+        registry.Stored(Granter)!.TransitionGrant(GrantId, TenantGrantState.Active, Stamp(15), "grantee");
+        var admin = RacingAdmin(registry, new ScriptedClock(20));
+
+        var result = await admin.RevokeGrantAsync(Granter, Grantee, Scope);
+
+        Assert.That(result.Changed, Is.True);
     }
 
     /// <summary>

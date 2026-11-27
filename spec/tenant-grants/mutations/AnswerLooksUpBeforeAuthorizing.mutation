@@ -1,0 +1,15 @@
+# Pairs with NonDisclosure. Looking the grant up before authorizing tells an
+# unauthorized caller "not found" where it should only learn "denied".
+MODULE: AnswerLooksUpBeforeAuthorizing
+TARGET: NonDisclosure
+CLASS: Invariant
+SUMMARY: approve and reject report a missing grant before checking the caller's authority
+PERTURBS: Answer
+
+--- FIND
+    IN IF a # "ok" THEN Refuse(verb, c, a, present, preActive, a)
+       ELSE IF ~present THEN Refuse(verb, c, a, present, preActive, "notFound")
+--- REPLACE
+    IN IF ~present THEN Refuse(verb, c, a, present, preActive, "notFound")
+       ELSE IF a # "ok" THEN Refuse(verb, c, a, present, preActive, a)
+--- END

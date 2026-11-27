@@ -89,7 +89,7 @@ public sealed class TenantGateEnforcerMemberTests
         var decision = await world.EnforceAsync("carol", ClusterGroup);
 
         Assert.That(decision.Allowed, Is.False, "the registry confirmation applies the same group-aware rule and sees the removal");
-        Assert.That(decision.Reason, Does.Contain("not an admin or member of tenant 'beta'"));
+        Assert.That(decision.Reason, Is.EqualTo(TenantGateEnforcer.ActiveTenantDeniedReason));
 
         await world.ReleaseRebuildAsync();
         Assert.That((await world.EnforceAsync("carol", ClusterGroup)).Allowed, Is.False, "the removal holds once the rebuild lands");
@@ -122,7 +122,7 @@ public sealed class TenantGateEnforcerMemberTests
         var decision = await world.EnforceAsync("carol", ClusterGroup);
 
         Assert.That(decision.Allowed, Is.False, "the confirmation compiles under the new, disabled posture");
-        Assert.That(decision.Reason, Does.Contain("not an admin of tenant 'beta'"));
+        Assert.That(decision.Reason, Is.EqualTo(TenantGateEnforcer.ActiveTenantDeniedReason));
     }
 
     [Test]

@@ -394,7 +394,34 @@ internal sealed class LatticeTenantGrantAdmin : ILatticeTenantGrantAdmin
         TenantGrantState target,
         CancellationToken cancellationToken)
     {
-        var merged = await _registry.PutAsync(record, cancellationToken).ConfigureAwait(false);
+        // Changed comes from the stored record this commit merged into, not from the
+        // caller's earlier read: a concurrent identical transition (two revokes) passes
+        // both callers' pre-write checks, and only the one whose merge found the grant
+        // not yet in the target state changed anything (#3638).
+        // The call mutated the record, so it holds the grant as intended.
+        record.TryGetGrant(grantId, out var intended);
+        var intendedOperations = intended.Operations;
+        TenantRecord merged;
+        bool changed;
+        try
+        {
+            (merged, changed) = await TenantRecordProbedCommit
+                .PutAsync(
+                    _registry,
+                    record,
+                    stored => !(stored.TryGetGrant(grantId, out var prior)
+                        && prior.State == target
+                        && prior.Operations == intendedOperations),
+                    cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (TenantRecordNotFoundException)
+        {
+            // The granting tenant was deleted after its record was read. The update
+            // is refused rather than re-creating it, and the outcome is reported
+            // exactly as an unoffered grant, so the grantee learns nothing more.
+            throw new TenantGrantNotFoundException(granter.Value, grantee.Value, scope);
+        }
 
         if (!merged.TryGetGrant(grantId, out var committed))
         {
@@ -426,7 +453,7 @@ internal sealed class LatticeTenantGrantAdmin : ILatticeTenantGrantAdmin
         return new TenantGrantChangeResult
         {
             Grant = TenantGrantMapping.Describe(granter.Value, committed),
-            Changed = true,
+            Changed = changed,
         };
     }
 

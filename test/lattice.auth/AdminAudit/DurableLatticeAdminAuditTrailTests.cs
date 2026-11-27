@@ -98,37 +98,79 @@ public sealed class DurableLatticeAdminAuditTrailTests
     }
 
     [Test]
-    public async Task CompleteAsync_committed_reports_no_change_when_the_anchor_never_moved()
+    public async Task CompleteAsync_no_change_is_recorded_when_nothing_wrote_the_anchor()
     {
         var harness = new AdminAuditHarness();
         harness.Anchor.Put(AdminAuditHarness.AnchorKey, [1]);
         var trail = harness.Trail();
         var intent = await trail.BeginAsync(AdminAuditHarness.Request(), CancellationToken.None);
 
+        await trail.CompleteAsync(intent, LatticeAdminAuditCompletion.NoChange);
+
+        Assert.That(harness.Audit.Records().Single().Value.ReasonCode, Is.EqualTo(LatticeAdminAuditReasonCodes.FailedNoChange));
+    }
+
+    [Test]
+    public async Task Trace1_a_committed_write_whose_anchor_a_concurrent_delete_removed_stays_committed()
+    {
+        // F9 trace 1: UpsertGroup commits, then a replicated or concurrent delete of the
+        // same key lands before the finalize. Absent before and absent after must not
+        // turn the call's own reported commit into "no change".
+        var harness = new AdminAuditHarness();
+        var trail = harness.Trail();
+        var intent = await trail.BeginAsync(AdminAuditHarness.Request(), CancellationToken.None);
+        harness.Anchor.Put(AdminAuditHarness.AnchorKey, [1]);
+        await harness.Anchor.Lattice.DeleteAsync(AdminAuditHarness.AnchorKey);
+
         await trail.CompleteAsync(intent, LatticeAdminAuditCompletion.Committed);
+
+        Assert.That(harness.Audit.Records().Single().Value.Outcome, Is.EqualTo(LatticeAdminAuditOutcome.Committed));
+    }
+
+    [Test]
+    public async Task Trace2_a_removal_pre_empted_by_a_concurrent_delete_is_indeterminate_not_committed()
+    {
+        // F9 trace 2: the store reports that this call removed nothing, because a
+        // concurrent delete got there first. The anchor moved, but not by this call.
+        var harness = new AdminAuditHarness();
+        harness.Anchor.Put(AdminAuditHarness.AnchorKey, [1]);
+        var trail = harness.Trail();
+        var intent = await trail.BeginAsync(AdminAuditHarness.Request(), CancellationToken.None);
+        await harness.Anchor.Lattice.DeleteAsync(AdminAuditHarness.AnchorKey);
+
+        await trail.CompleteAsync(intent, LatticeAdminAuditCompletion.NoChange);
 
         var record = harness.Audit.Records().Single().Value;
         Assert.Multiple(() =>
         {
-            Assert.That(record.Outcome, Is.EqualTo(LatticeAdminAuditOutcome.Failed));
-            Assert.That(record.ReasonCode, Is.EqualTo(LatticeAdminAuditReasonCodes.FailedNoChange));
+            Assert.That(record.Outcome, Is.EqualTo(LatticeAdminAuditOutcome.Indeterminate));
+            Assert.That(record.ActorSubjectId, Is.EqualTo("alice"));
         });
     }
 
     [Test]
-    public async Task CompleteAsync_committed_reports_no_change_for_a_removal_of_an_anchor_that_never_existed()
+    public async Task CompleteAsync_no_change_on_an_absent_anchor_is_indeterminate_while_the_history_view_cannot_prove_it()
     {
+        // Absent before and after: only the history tells a write-then-delete from no
+        // write, and a lagging history view cannot prove an absence at finalize time.
         var harness = new AdminAuditHarness();
         var trail = harness.Trail();
         var intent = await trail.BeginAsync(AdminAuditHarness.Request(), CancellationToken.None);
 
-        await trail.CompleteAsync(intent, LatticeAdminAuditCompletion.Committed);
+        await trail.CompleteAsync(intent, LatticeAdminAuditCompletion.NoChange);
+        var viaView = harness.Audit.Records().Single().Value.Outcome;
 
-        var record = harness.Audit.Records().Single().Value;
+        var walHarness = new AdminAuditHarness();
+        walHarness.Anchor.History = new EntryHistoryPage { Source = EntryHistorySource.WalWindow };
+        var walTrail = walHarness.Trail();
+        var walIntent = await walTrail.BeginAsync(AdminAuditHarness.Request(), CancellationToken.None);
+        await walTrail.CompleteAsync(walIntent, LatticeAdminAuditCompletion.NoChange);
+
         Assert.Multiple(() =>
         {
-            Assert.That(record.Outcome, Is.EqualTo(LatticeAdminAuditOutcome.Failed));
-            Assert.That(record.ReasonCode, Is.EqualTo(LatticeAdminAuditReasonCodes.FailedNoChange));
+            Assert.That(viaView, Is.EqualTo(LatticeAdminAuditOutcome.Indeterminate));
+            Assert.That(walHarness.Audit.Records().Single().Value.ReasonCode, Is.EqualTo(LatticeAdminAuditReasonCodes.FailedNoChange),
+                "an untruncated write-ahead-log window proves that nothing wrote the key");
         });
     }
 

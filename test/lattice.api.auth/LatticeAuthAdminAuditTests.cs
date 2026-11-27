@@ -88,6 +88,19 @@ public sealed class LatticeAuthAdminAuditTests
     }
 
     [Test]
+    public async Task RemoveMemberAsync_completes_as_no_change_unless_the_store_reports_a_removal()
+    {
+        // The removal returns no store report through a replaced directory, so the call
+        // must never be recorded Committed on its own say-so (F9 trace 2).
+        var (admin, trail, _) = Create(allow: true);
+
+        await admin.RemoveMemberAsync("g", "alice");
+        await admin.RemoveGroupAsync("g");
+
+        Assert.That(trail.Calls.Where(c => c.StartsWith("complete:", StringComparison.Ordinal)), Has.All.EqualTo("complete:Failed"));
+    }
+
+    [Test]
     public void ListRulesAsync_refused_records_a_read_denial()
     {
         var (admin, trail, _) = Create(allow: false);

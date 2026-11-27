@@ -1,0 +1,13 @@
+# Pairs with NoCrossTenantMembership. Count a replicated entry naming
+# another tenant's group: a group-aware probe that takes any live slot.
+MODULE: GroupMatchSkipsAdmissibility
+TARGET: NoCrossTenantMembership
+CLASS: Invariant
+SUMMARY: the group-aware admin and member probes skip the admissibility filter
+PERTURBS: Count
+
+--- FIND
+        viaGroup == {e \in Entries : e \in groups /\ Admissible(e) /\ live(e)}
+--- REPLACE
+        viaGroup == {e \in Entries : e \in groups /\ live(e)}
+--- END

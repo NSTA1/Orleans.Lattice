@@ -88,8 +88,11 @@ internal static class LatticeAdminAudit
     /// <param name="request">The call.</param>
     /// <param name="commit">The facade's validate-and-commit step.</param>
     /// <param name="changed">
-    /// Reports from the result whether the call changed state, or
-    /// <see langword="null"/> when every successful return is a change.
+    /// Reports, from the call's own store result, whether the call changed state; or
+    /// <see langword="null"/> when the commit is an unconditional write, so every
+    /// successful return is a change. A call that cannot tell must report
+    /// <see langword="false"/>: the trail then claims no change only if nothing wrote
+    /// the anchor, and otherwise records the call as indeterminate.
     /// </param>
     /// <param name="cancellationToken">Cancels the intent write and the commit; the finalize is not cancellable.</param>
     /// <param name="undecided">

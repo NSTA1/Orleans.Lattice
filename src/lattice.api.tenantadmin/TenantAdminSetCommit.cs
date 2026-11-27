@@ -5,7 +5,10 @@ namespace Orleans.Lattice.Api.TenantAdmin;
 /// <summary>
 /// Commits a tenant record that removes an admin-set entry without ever committing
 /// a record whose admin set is empty (D6: a tenant may never be left without an
-/// admin).
+/// admin). Only entries that may admit anyone count
+/// (<see cref="TenantRecord.AdmissibleAdminSubjectCount"/>): another tenant's group
+/// or a malformed <c>t/</c> entry, which can arrive by replication or restore, never
+/// holds the set open.
 /// </summary>
 /// <remarks>
 /// <para>
@@ -41,6 +44,11 @@ internal static class TenantAdminSetCommit
     /// <param name="clock">The facade's clock, used only by the fallback's self-heal.</param>
     /// <param name="writerId">The writer id, used only by the fallback's self-heal.</param>
     /// <param name="cancellationToken">Cancels the write.</param>
+    /// <param name="probe">
+    /// An optional probe evaluated on the stored record the commit merged into. A
+    /// host-supplied registry without the guarded commit cannot report that record,
+    /// so the probe is assumed to match, as the caller's own read showed.
+    /// </param>
     /// <returns>The committed record.</returns>
     /// <exception cref="TenantLastAdminSubjectException">The committed admin set would have been empty; nothing was removed.</exception>
     internal static async Task<TenantRecord> CommitAsync(
@@ -49,12 +57,13 @@ internal static class TenantAdminSetCommit
         string removedAdminEntry,
         ITenantAdminClock clock,
         string? writerId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        TenantStoredRecordProbe? probe = null)
     {
         var tenantId = record.Id.Value;
         void Guard(TenantRecord merged)
         {
-            if (merged.AdminSubjectCount == 0)
+            if (merged.AdmissibleAdminSubjectCount == 0)
             {
                 throw new TenantLastAdminSubjectException(tenantId, removedAdminEntry);
             }
@@ -62,16 +71,20 @@ internal static class TenantAdminSetCommit
 
         if (registry is IGuardedTenantRegistry guarded)
         {
-            return await guarded.PutGuardedAsync(record, Guard, cancellationToken).ConfigureAwait(false);
+            return probe is null
+                ? await guarded.PutGuardedAsync(record, Guard, cancellationToken).ConfigureAwait(false)
+                : await guarded.PutProbedAsync(record, probe, Guard, cancellationToken).ConfigureAwait(false);
         }
 
-        if (await registry.GetAsync(record.Id, cancellationToken).ConfigureAwait(false) is { } current)
+        var fresh = await registry.GetAsync(record.Id, cancellationToken).ConfigureAwait(false);
+        probe?.AssumeMatched();
+        if (fresh is { } current)
         {
             Guard(current.Clone().MergeFrom(record));
         }
 
         var committed = await registry.PutAsync(record, cancellationToken).ConfigureAwait(false);
-        if (committed.AdminSubjectCount == 0)
+        if (committed.AdmissibleAdminSubjectCount == 0)
         {
             committed.AddAdminSubject(
                 removedAdminEntry,

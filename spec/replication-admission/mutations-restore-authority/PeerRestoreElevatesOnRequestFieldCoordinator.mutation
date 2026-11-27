@@ -1,0 +1,19 @@
+# Pairs with PeerAuthorityBounded. The gRPC saga service neither binds the body's
+# coordinator to the credential-bound origin nor overwrites it, so a peer names
+# another current peer as the coordinator its restore runs for.
+MODULE: PeerRestoreElevatesOnRequestFieldCoordinator
+TARGET: PeerAuthorityBounded
+CLASS: Invariant
+SUMMARY: the participant elevates on the coordinator the request body names, not the credential-bound origin
+
+--- FIND
+Coord(ch, bound, claimed) == IF ch = "grpc" THEN bound ELSE claimed
+--- REPLACE
+Coord(ch, bound, claimed) == claimed
+--- END
+
+--- FIND
+    THEN bound # NoCluster /\ bound \in topology /\ claimed \in {NoCluster, bound}
+--- REPLACE
+    THEN bound # NoCluster /\ bound \in topology
+--- END

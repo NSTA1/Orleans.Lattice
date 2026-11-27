@@ -41,6 +41,10 @@ ControlPeer == {"Prepare", "Commit", "Abort", "GetStatus", "GetDecision"}
 \* GetDecision's caller names this cluster, the coordinator it asks, in the
 \* body; its requester identity is the stamped origin, never a body value.
 RequesterQuery == {"GetDecision"}
+\* A pushed batch carries entries, each naming its own origin. A conforming
+\* sender ships only entries its own cluster authored, so the one origin the
+\* receiver expects from a sender is the sender itself.
+EntryOrigins(m) == IF m = "Push" THEN Clusters ELSE {NoBody}
 
 VARIABLES binding, obs
 vars == <<binding, obs>>
@@ -48,7 +52,7 @@ vars == <<binding, obs>>
 NoObs == [kind |-> "none"]
 CallObsRecs ==
     [kind : {"call"}, m : HostMethods, hdr : Headers, cred : Credentials, body : Bodies,
-     binding : BOOLEAN, status : STRING, acted : Headers]
+     entry : Bodies, binding : BOOLEAN, status : STRING, acted : Headers]
 
 -----------------------------------------------------------------------------
 \* LatticeReplicationGrpcAuthInterceptor.EnforceOriginBindingAsync: the
@@ -71,10 +75,11 @@ BoundOrigin(hdr) == IF binding /\ hdr # NoHeader THEN hdr ELSE NoHeader
 
 \* The method's own admission class: the status, and the identity the method
 \* acts for.
-Verb(m, hdr, body) ==
+Verb(m, hdr, body, entry) ==
     IF m \in OriginBound
     THEN IF body = NoBody THEN <<"invalid", NoHeader>>
          ELSE IF hdr = NoHeader \/ hdr # body THEN <<"denied", NoHeader>>
+         ELSE IF m = "Push" /\ entry # body THEN <<"denied", NoHeader>>
          ELSE <<"ok", body>>
     ELSE IF m \in ControlPeer
     THEN IF BoundOrigin(hdr) = NoHeader THEN <<"denied", NoHeader>>
@@ -89,18 +94,19 @@ Init ==
     /\ obs = NoObs
 
 \* A peer, honest or not, calls method m with a stamped origin header, a
-\* credential and a body-declared origin.
-Call(m, hdr, cred, body) ==
+\* credential and a body-declared origin; a push also carries an entry
+\* naming its own origin.
+Call(m, hdr, cred, body, entry) ==
     LET gate == Interceptor(m, hdr, cred)
-        verb == Verb(m, hdr, body)
+        verb == Verb(m, hdr, body, entry)
         status == IF gate # "pass" THEN gate ELSE verb[1]
         acted == IF gate # "pass" THEN NoHeader ELSE verb[2]
-    IN /\ obs' = [kind |-> "call", m |-> m, hdr |-> hdr, cred |-> cred, body |-> body,
+    IN /\ obs' = [kind |-> "call", m |-> m, hdr |-> hdr, cred |-> cred, body |-> body, entry |-> entry,
                   binding |-> binding, status |-> status, acted |-> acted]
        /\ UNCHANGED binding
 
 Next ==
-    \/ \E m \in HostMethods, hdr \in Headers, cred \in Credentials, body \in Bodies : Call(m, hdr, cred, body)
+    \/ \E m \in HostMethods, hdr \in Headers, cred \in Credentials, body \in Bodies : \E entry \in EntryOrigins(m) : Call(m, hdr, cred, body, entry)
 
 Spec == Init /\ [][Next]_vars
 
@@ -115,13 +121,15 @@ Ok == obs.kind = "call" /\ obs.status = "ok"
 \* seam. Its method is registered and its credential accepted; with binding
 \* on, the credential is the one this cluster uses for the stamped origin; a
 \* method consuming a body-declared origin acts only for a present stamped
-\* origin equal to it; a control method acts only for the credential-bound
+\* origin equal to it, and every entry it pushes names that origin; a
+\* control method acts only for the credential-bound
 \* origin of a current peer, with every body-declared identity bound to it;
 \* and a missing, unknown or mismatched origin draws one refusal.
 OriginAuthenticated ==
     /\ Ok => obs.m \in Registered /\ obs.cred \in Accepted
     /\ (Ok /\ obs.binding) => Bound(obs.hdr, obs.cred)
     /\ (Ok /\ obs.m \in OriginBound) => obs.hdr # NoHeader /\ obs.hdr = obs.body /\ obs.acted = obs.body
+    /\ (Ok /\ obs.m = "Push") => obs.entry = obs.body
     /\ (Ok /\ obs.m \in ControlPeer) => obs.binding /\ Bound(obs.hdr, obs.cred) /\ obs.hdr \in Topology /\ obs.acted = obs.hdr
     /\ (Ok /\ obs.m \in ControlPeer \ RequesterQuery /\ obs.body # NoBody) => obs.body = obs.hdr
     /\ (obs.kind = "call" /\ obs.binding /\ obs.m \in Registered /\ obs.cred \in Accepted /\ ~Bound(obs.hdr, obs.cred)) => obs.status = "unbound"

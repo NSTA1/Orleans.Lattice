@@ -1,0 +1,12 @@
+# Pairs with PeerAuthorityBounded. The participant trusts any remote coordinator,
+# so a redelivered abort for a peer that has left the topology runs elevated.
+MODULE: PeerRestoreElevatesFormerPeer
+TARGET: PeerAuthorityBounded
+CLASS: Invariant
+SUMMARY: peer authority does not require the coordinator to be in the current topology
+
+--- FIND
+HasPeerAuthority(c) == wired /\ c \notin {Self, NoCluster} /\ c \in topology
+--- REPLACE
+HasPeerAuthority(c) == wired /\ c \notin {Self, NoCluster}
+--- END

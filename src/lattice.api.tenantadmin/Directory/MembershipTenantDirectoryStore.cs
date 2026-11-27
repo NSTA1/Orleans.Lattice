@@ -68,12 +68,12 @@ internal sealed class MembershipTenantDirectoryStore(
     }
 
     /// <inheritdoc />
-    public async Task<int> RemoveGroupCascadeAsync(string groupId, CancellationToken cancellationToken)
+    public async Task<(int EdgesRemoved, bool GroupRemoved)> RemoveGroupCascadeAsync(string groupId, CancellationToken cancellationToken)
     {
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
-            var removed = await _scoped.RemoveGroupCascadeAsync(groupId, cancellationToken).ConfigureAwait(false);
-            return removed.Count;
+            var (edges, groupRemoved) = await _scoped.RemoveGroupCascadeReportingAsync(groupId, cancellationToken).ConfigureAwait(false);
+            return (edges.Count, groupRemoved);
         }
     }
 
@@ -88,11 +88,19 @@ internal sealed class MembershipTenantDirectoryStore(
     }
 
     /// <inheritdoc />
-    public async Task RemoveMemberAsync(string groupId, string memberId, CancellationToken cancellationToken)
+    public async Task<bool> RemoveMemberAsync(string groupId, string memberId, CancellationToken cancellationToken)
     {
         using (LatticeAccessGateContext.EnterSystemOrigin())
         {
+            if (_directory is LatticeMembershipDirectory reporting)
+            {
+                return await reporting.RemoveMemberReportingAsync(groupId, memberId, cancellationToken).ConfigureAwait(false);
+            }
+
+            // A replaced directory cannot report; claim no change, which the audit
+            // trail accepts only if nothing wrote the membership edge.
             await _directory.RemoveMemberAsync(groupId, memberId, cancellationToken).ConfigureAwait(false);
+            return false;
         }
     }
 

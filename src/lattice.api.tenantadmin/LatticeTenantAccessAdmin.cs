@@ -237,8 +237,10 @@ internal sealed class LatticeTenantAccessAdmin : ILatticeTenantAccessAdmin
         // Unbypassable orphan guard: a tenant stripped of its last admin subject
         // disappears from every self-service surface and can only be reached by a
         // platform operator, so the removal is refused rather than silently
-        // stranding the tenant. Counted in place - no list materialised.
-        if (record.AdminSubjectCount <= 1)
+        // stranding the tenant. Counted in place - no list materialised. Only entries
+        // that admit anyone count: another tenant's group that arrived by replication
+        // never holds the set open, and removing one never empties it.
+        if (TenantAccessEntries.IsAdmissible(subjectId, tenant) && record.AdmissibleAdminSubjectCount <= 1)
         {
             throw new TenantLastAdminSubjectException(tenant.Value, subjectId);
         }
@@ -257,15 +259,19 @@ internal sealed class LatticeTenantAccessAdmin : ILatticeTenantAccessAdmin
         // conditional write: the first racer to commit succeeds, and the second
         // re-reads that commit, re-merges, and is refused with nothing written. No
         // remove-then-re-grant, so no second write can fail and strand the tenant.
+        // Changed reports whether the subject was live in the stored record the merge
+        // folded into, so of two concurrent removals of one subject only one reports
+        // a change (#3638).
+        var probe = new TenantStoredRecordProbe(stored => stored.HasAdminSubject(subjectId));
         var merged = await TenantAdminSetCommit
-            .CommitAsync(_registry, record, subjectId, _clock, _writerId, cancellationToken)
+            .CommitAsync(_registry, record, subjectId, _clock, _writerId, cancellationToken, probe)
             .ConfigureAwait(false);
 
         return new TenantAdminSubjectChangeResult
         {
             TenantId = tenant.Value,
             SubjectId = subjectId,
-            Changed = true,
+            Changed = probe.Matched,
             Subjects = merged.AdminSubjects,
         };
     }

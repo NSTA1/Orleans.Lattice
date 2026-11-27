@@ -17,7 +17,7 @@ to detector tests. Rate budgets and footprint quotas are out of scope.
 
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
-| `TenantIsolation` | 6 | 2 | 22 | 27 | 28 | 200,358 |
+| `TenantIsolation` | 6 | 2 | 23 | 31 | 29 | 200,358 |
 
 `Actions` counts the disjuncts of `Next`, including the non-behavioural `Stutter`.
 `Behaviour rows` counts the action rows of the refinement note, excluding
@@ -28,9 +28,9 @@ for the base cfg (two silos, no faults).
 
 Faults are checked in separate configurations so each stays tractable. Every
 variant checks the same invariants and properties as the base cfg, except
-`TenantIsolation.FalseDead.cfg`, which checks the safety properties only; the
-refinement note's gap register records why liveness under a false death
-declaration is not checked.
+`TenantIsolation.FalseDead.cfg`, which checks the safety properties only to bound
+its cost; liveness under a false death declaration is checked in
+`TenantIsolation.Faults.cfg`.
 
 | Configuration | Instance | Distinct states |
 |---------------|----------|-----------------|
@@ -39,7 +39,7 @@ declaration is not checked.
 | `TenantIsolation.Restart.cfg` | Two silos, one epoch grain re-activation | 672,536 |
 | `TenantIsolation.Failure.cfg` | Two silos, one failed publication | 627,966 |
 | `TenantIsolation.FalseDead.cfg` | Two silos, one epoch grain re-activation, one false death declaration | 2,680,898 |
-| `TenantIsolation.Faults.cfg` | One silo, one of each fault interleaved | 41,650 |
+| `TenantIsolation.Faults.cfg` | One silo, one of each fault interleaved, a false death declaration included | 108,547 |
 
 ## Files
 
@@ -68,6 +68,8 @@ declaration is not checked.
 | Issue | Defect | Mutation |
 |-------|--------|----------|
 | #4806 | The epoch ledger captured only leases inside their recorded deadline, so an advance neither pushed to nor waited out a silo whose slower clock still trusted its lease inside the documented margin. Fixed: the ledger captures and waits out leases through deadline plus margin. | `StartAdvanceDropsMarginLease` |
+| #5719 | The tenant-policy epoch grain ended its fresh-activation grace as soon as every member membership did not report dead had leased, so a silo falsely declared dead could keep deciding on a lease from the previous activation after a registry write returned. Fixed: a death counts only once the activation has seen it for one lease plus the margin. | `ReleaseGraceSkipsDead` |
+| #6216 | Survivors invalidated their snapshots once, when membership declared a silo dead, so a registry write that silo committed after a false declaration and failed to publish before it stopped was never covered. Fixed: every newly-dead silo opens a false-death horizon during which survivors keep re-invalidating, and the registry refuses writes on a silo membership reports dead. | `HorizonClosesLeavesWriteUncovered` |
 
 ## What the assurance covers, and what it does not
 
@@ -80,8 +82,11 @@ snapshot until the background re-publish lands, and a writer that crashes after
 committing leaves peers unaware until membership declares it dead. A silo membership
 falsely declares dead keeps serving on its snapshot and lease until it learns it is
 dead, so a fresh epoch grain activation's grace counts a death only once it has seen
-it for one lease plus the margin; the app registry epoch grain implements that rule,
-and the refinement note's gap register records the tenant-policy grain's. The guarantee
+it for one lease plus the margin; the tenant-policy and app registry epoch grains both
+implement that rule. Such a silo can also commit a registry write after its
+declaration and stop before publishing it, so every survivor re-invalidates until a
+false-death horizon has passed; this assumes a silo falsely declared dead stops within
+the horizon. The guarantee
 assumes no silo clock runs slower than the epoch grain's by more than the ledger
 margin over one lease. Bounds are one write and two silos; see the refinement note
 for the abstraction gaps.

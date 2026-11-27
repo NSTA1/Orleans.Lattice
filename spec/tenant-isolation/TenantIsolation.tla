@@ -18,7 +18,11 @@
 \* the epoch grain's fresh-activation grace may not count a death as proof the
 \* silo stopped. The grace ends early only once every member has leased from
 \* the activation, or has been seen dead by the activation for one lease plus
-\* the margin (NoEarlyGraceRelease).
+\* the margin (NoEarlyGraceRelease). A silo falsely declared dead can also
+\* commit a registry write after its declaration and stop before publishing it,
+\* after the one invalidation the declaration triggered; every survivor therefore
+\* re-invalidates until a false-death horizon has passed, on the assumption that
+\* a silo falsely declared dead stops within the horizon.
 EXTENDS Naturals
 
 CONSTANTS NumSilos, MaxWrites, MaxCrashes, MaxRestarts, MaxFailures, MaxFalseDeaths
@@ -34,16 +38,16 @@ VARIABLES
     alive, awaiting,
     dec,
     crashes, restarts, failures,
-    falseDead, seen, suspicions
+    falseDead, seen, suspicions, horizonOpen
 
 vars == <<regVer, coveredVer, returnedVer, wstate, wsilo, owes,
           epoch, graceOpen, graceWait, lease, pend,
           snapVer, stale, scanning, scanDirty, knows,
           alive, awaiting, dec, crashes, restarts, failures,
-          falseDead, seen, suspicions>>
+          falseDead, seen, suspicions, horizonOpen>>
 
 \* The false-death state most actions leave alone.
-suspectVars == <<falseDead, seen, suspicions>>
+suspectVars == <<falseDead, seen, suspicions, horizonOpen>>
 
 \* Epochs are <<incarnation, version>>; the first epoch grain activation is
 \* incarnation 1. Epochs only ever grow, so whether a silo's latest observed
@@ -59,6 +63,8 @@ suspectVars == <<falseDead, seen, suspicions>>
 \* seen[s] is the epoch grain's record of s's death during its grace: "no" not
 \* seen, "fresh" first seen by this activation, "aged" seen for one lease plus
 \* the margin. suspicions counts false declarations against MaxFalseDeaths.
+\* horizonOpen[s]: survivors are still re-invalidating after s's false
+\* declaration; the horizon ends only once s's process has stopped.
 
 \* Membership lists t as dead: a crash it has declared, or a false declaration
 \* while t's process still runs.
@@ -104,6 +110,7 @@ TypeOK ==
     /\ falseDead \in [Silos -> BOOLEAN]
     /\ seen \in [Silos -> {"no", "fresh", "aged"}]
     /\ suspicions \in 0..MaxFalseDeaths
+    /\ horizonOpen \in [Silos -> BOOLEAN]
 
 \* Once a write has returned after its publication completed (or once the
 \* crashed writer's death has been declared), no silo trusts an older snapshot.
@@ -159,6 +166,7 @@ Init ==
     /\ falseDead = [s \in Silos |-> FALSE]
     /\ seen = [s \in Silos |-> "no"]
     /\ suspicions = 0
+    /\ horizonOpen = [s \in Silos |-> FALSE]
 
 \* Silo s has not observed the current epoch: learning it supersedes what s
 \* compiled, so the snapshot stops being current and a rebuild is scheduled.
@@ -364,7 +372,7 @@ SiloCrash(s) ==
     /\ knows' = [knows EXCEPT ![s] = FALSE]
     /\ UNCHANGED <<regVer, coveredVer, returnedVer, wsilo, epoch, graceOpen, dec,
                    restarts, failures>>
-    /\ UNCHANGED <<seen, suspicions>>
+    /\ UNCHANGED <<seen, suspicions, horizonOpen>>
 
 \* Cluster membership declares the crashed silo s dead. Every surviving silo
 \* treats its snapshot as out of date, which covers any write s committed and
@@ -382,25 +390,46 @@ DeclareDead(s) ==
     /\ UNCHANGED <<regVer, returnedVer, wsilo, owes, epoch, graceOpen, graceWait,
                    lease, pend, snapVer, scanning, knows, alive, dec, crashes,
                    restarts, failures>>
-    /\ UNCHANGED <<falseDead, suspicions>>
+    /\ UNCHANGED <<falseDead, suspicions, horizonOpen>>
 
 \* Membership falsely declares the live silo s dead. Its process keeps running,
 \* serving on its snapshot and whatever lease it holds, until it learns it is
 \* dead and stops (SiloCrash). Survivors treat their snapshots as out of date,
 \* as for any declaration; the epoch ledger still pushes to and waits out every
 \* lease it captured, whatever membership says; and an epoch grain in its grace
-\* records when it first sees the death.
+\* records when it first sees the death. Every survivor opens a false-death
+\* horizon for s.
 DeclareFalselyDead(s) ==
     /\ alive[s] /\ ~falseDead[s] /\ ~awaiting[s]
     /\ suspicions < MaxFalseDeaths
     /\ suspicions' = suspicions + 1
     /\ falseDead' = [falseDead EXCEPT ![s] = TRUE]
     /\ seen' = [seen EXCEPT ![s] = IF graceOpen THEN "fresh" ELSE "no"]
+    /\ horizonOpen' = [horizonOpen EXCEPT ![s] = TRUE]
     /\ stale' = [t \in Silos |-> stale[t] \/ (alive[t] /\ t # s)]
     /\ scanDirty' = [t \in Silos |-> scanDirty[t] \/ (alive[t] /\ t # s /\ scanning[t])]
     /\ UNCHANGED <<regVer, coveredVer, returnedVer, wstate, wsilo, owes, epoch,
                    graceOpen, graceWait, lease, pend, snapVer, scanning, knows,
                    alive, awaiting, dec, crashes, restarts, failures>>
+
+\* The false-death horizon for s ends. It ends only after s's falsely-declared
+\* process has stopped (the horizon assumption), and its last re-invalidation on
+\* every survivor lands after that: survivors treat their snapshots as out of
+\* date, which covers any write s committed after its declaration and never
+\* published. Earlier re-invalidations inside the horizon are not modelled; only
+\* the last one bears on coverage.
+HorizonCloses(s) ==
+    /\ horizonOpen[s]
+    /\ ~(alive[s] /\ falseDead[s])
+    /\ horizonOpen' = [horizonOpen EXCEPT ![s] = FALSE]
+    /\ stale' = [u \in Silos |-> stale[u] \/ alive[u]]
+    /\ scanDirty' = [u \in Silos |-> scanDirty[u] \/ (alive[u] /\ scanning[u])]
+    /\ IF wstate = "crashed" /\ wsilo = s
+          THEN /\ wstate' = "idle" /\ coveredVer' = regVer
+          ELSE UNCHANGED <<wstate, coveredVer>>
+    /\ UNCHANGED <<regVer, returnedVer, wsilo, owes, epoch, graceOpen, graceWait,
+                   lease, pend, snapVer, scanning, knows, alive, awaiting, dec,
+                   crashes, restarts, failures, falseDead, seen, suspicions>>
 
 \* One lease plus the margin passes after the epoch grain first saw t dead. The
 \* sighting came after the grain activated, so every lease a previous activation
@@ -413,7 +442,7 @@ SightingAges(t) ==
     /\ UNCHANGED <<regVer, coveredVer, returnedVer, wstate, wsilo, owes, epoch,
                    graceOpen, graceWait, pend, snapVer, stale, scanning, scanDirty,
                    knows, alive, awaiting, dec, crashes, restarts, failures>>
-    /\ UNCHANGED <<falseDead, suspicions>>
+    /\ UNCHANGED <<falseDead, suspicions, horizonOpen>>
 
 \* A fresh process starts on silo s with no snapshot and no observed epoch.
 Recover(s) ==
@@ -443,7 +472,7 @@ EpochRestart ==
     /\ seen' = [t \in Silos |-> IF MemberDead(t) THEN "fresh" ELSE "no"]
     /\ UNCHANGED <<regVer, coveredVer, wsilo, owes, snapVer, stale, scanning,
                    scanDirty, alive, awaiting, dec, crashes, failures>>
-    /\ UNCHANGED <<falseDead, suspicions>>
+    /\ UNCHANGED <<falseDead, suspicions, horizonOpen>>
 
 \* One lease plus the margin passes after activation: every lease the previous
 \* activation granted has lapsed.
@@ -455,7 +484,7 @@ GraceElapse ==
     /\ UNCHANGED <<regVer, coveredVer, returnedVer, wstate, wsilo, owes, epoch,
                    pend, snapVer, stale, scanning, scanDirty, knows, alive,
                    awaiting, dec, crashes, restarts, failures>>
-    /\ UNCHANGED <<falseDead, suspicions>>
+    /\ UNCHANGED <<falseDead, suspicions, horizonOpen>>
 
 \* The grace ends early once every silo membership lists has leased from this
 \* activation, or has been seen dead by this activation for one lease plus the
@@ -469,7 +498,7 @@ ReleaseGrace ==
     /\ UNCHANGED <<regVer, coveredVer, returnedVer, wstate, wsilo, owes, epoch,
                    lease, pend, snapVer, stale, scanning, scanDirty, knows, alive,
                    awaiting, dec, crashes, restarts, failures>>
-    /\ UNCHANGED <<falseDead, suspicions>>
+    /\ UNCHANGED <<falseDead, suspicions, horizonOpen>>
 
 Stutter == UNCHANGED vars
 
@@ -491,6 +520,7 @@ Next ==
     \/ \E s \in Silos : DeclareDead(s)
     \/ \E s \in Silos : DeclareFalselyDead(s)
     \/ \E t \in Silos : SightingAges(t)
+    \/ \E s \in Silos : HorizonCloses(s)
     \/ \E s \in Silos : Recover(s)
     \/ EpochRestart
     \/ GraceElapse
@@ -499,8 +529,9 @@ Next ==
 
 \* Fairness is what production guarantees without help: the hook always calls
 \* the grain, clocks advance, the advance waits complete, the background loop
-\* keeps re-publishing while the writer lives, and membership eventually
-\* declares a crashed silo dead. Deliveries, renewals, rebuilds, failures,
+\* keeps re-publishing while the writer lives, membership eventually
+\* declares a crashed silo dead, and a false-death horizon whose silo has
+\* stopped eventually ends. Deliveries, renewals, rebuilds, failures,
 \* crashes, false declarations, sightings aging and restarts carry no fairness.
 Spec ==
     /\ Init
@@ -512,10 +543,12 @@ Spec ==
     /\ WF_vars(RetryAdvance)
     /\ WF_vars(RetrySucceeds)
     /\ \A s \in Silos : WF_vars(DeclareDead(s))
+    /\ \A s \in Silos : WF_vars(HorizonCloses(s))
     /\ WF_vars(GraceElapse)
 
 \* Every committed write is eventually covered: published to every silo, or
-\* covered by membership declaring its crashed writer dead.
+\* covered by membership declaring its crashed writer dead, or by the last
+\* re-invalidation of a false-death horizon.
 EveryCommitEventuallyCovered ==
     \A v \in 1..MaxWrites : (regVer >= v) ~> (coveredVer >= v)
 ====

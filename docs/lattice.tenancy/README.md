@@ -255,11 +255,20 @@ if (LatticeTenantTrees.TryGetTenant(treeId, out TenantId owner))
   status in the same windows. The steady state pays only a few field reads and a
   timestamp read. A restarted epoch holds each write open for about 1.1 times the
   lease (one lease plus a tenth), or until
-  every silo cluster membership does not report dead has leased from it, so no silo
-  leased by its previous incarnation stays authoritative. The guarantee assumes no silo clock runs slower than the epoch grain's by more than the margin over one lease. Two windows remain open: failed publication lets the write return while peers retain old authority until the background re-publish succeeds (the committing silo stays non-authoritative); the writer-crash window is bounded
+  every silo cluster membership lists has leased from it or has been seen dead by it
+  for one lease plus the margin, so no silo leased by its previous incarnation stays
+  authoritative - a silo falsely declared dead included. The guarantee assumes no silo clock runs slower than the epoch grain's by more than the margin over one lease. Two windows remain open: failed publication lets the write return while peers retain old authority until the background re-publish succeeds (the committing silo stays non-authoritative); the writer-crash window is bounded
   rather than closed: a silo that crashes after committing a registry write but
   before publishing it leaves the other silos unaware of that write until cluster
-  membership declares it dead, at which point every surviving silo rebuilds. Each
+  membership declares it dead, at which point every surviving silo rebuilds.
+  Membership can also declare a live silo dead, and that silo keeps running until it
+  learns of its death; a registry write it commits in the meantime and fails to
+  publish would come after the one rebuild its declaration triggered. So every newly
+  dead silo opens a false-death horizon (`FalseDeathHorizon`, by default the Orleans
+  membership table refresh plus the probe timeout) during which every surviving silo
+  re-invalidates its snapshots every `FalseDeathReinvalidationInterval`, and the
+  registry refuses writes on a silo membership already reports dead. This assumes a
+  silo falsely declared dead stops within the horizon. Each
   silo also builds its snapshot at start-up, and on its first decision if that has
   not happened yet, so a new silo never reports a registered tenant as unregistered.
   The same epoch and lease keep each silo's residency and placement views of the
@@ -608,6 +617,7 @@ write contention on one tenant.
 | Exception | Raised by | What happens |
 |---|---|---|
 | `TenantRegistryConcurrencyException` | `ITenantRegistry.PutAsync`, which every record change the [tenant-administration facades](../lattice.api.tenantadmin/README.md) make is written through (`DeleteAsync` removes the deleted tenant's record outright, and raises it only while removing the grants other tenants issued to that tenant, before the record is removed, so retrying the delete completes it) | The change is not applied and the exception reaches the caller, which may retry. The tenant-administration gRPC binding has no arm for it, so a remote caller sees `Internal`. |
+| `TenantRecordNotFoundException` | `ITenantRegistry.PutAsync` when the tenant has no stored record. `PutAsync` is an update and never creates a record; only `CreateAsync`, which tenant creation and seeding use, does. A facade that read a record before the tenant was deleted is refused here instead of re-creating the tenant from its stale copy. | The change is not applied. The grant facade reports it as `TenantGrantNotFoundException`, exactly as an unoffered grant; the other facades let it reach the caller, as they do the concurrency exception, so a remote caller sees `Internal`. |
 | `TenantUsageConcurrencyException` | The metering cycle's usage-slot publish | Caught and logged for that tenant: its overage accrual is skipped for the tick too, the rest of the pass continues, and the next tick retries. |
 | `TenantOverageConcurrencyException` | The metering cycle's overage accrual | Caught and logged for that tenant: that tick's overage is not recorded - the tally is a per-tick sum, so it is not recovered later - and the next tick accrues as normal. |
 

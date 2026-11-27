@@ -95,4 +95,21 @@ public sealed class TenantAccessEntriesTests
             Assert.That(record.IsMember("e", ["t/acme/editors"]), Is.True);
         });
     }
+
+    [Test]
+    public void AdmissibleAdminSubjectCount_counts_only_entries_that_may_admit_anyone()
+    {
+        var record = Record("acme", admins: ["alice"]);
+        record.AddAdminSubject("cg", Clock(49), "replica");
+        record.AddAdminSubject("t/acme/admins", Clock(50), "replica");
+        record.AddAdminSubject("t/beta/admins", Clock(51), "replica");
+        record.AddAdminSubject("t/bad", Clock(52), "replica");
+        record.RemoveAdminSubject("cg", Clock(53), "replica");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(record.AdminSubjectCount, Is.EqualTo(4));
+            Assert.That(record.AdmissibleAdminSubjectCount, Is.EqualTo(2), "alice and the tenant's own group");
+        });
+    }
 }

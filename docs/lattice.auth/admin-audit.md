@@ -63,19 +63,21 @@ Each record is a `LatticeAdminAuditRecord` in the reserved `sys-auth-admin-audit
 2. **Intent.** Before anything is written, a `Pending` intent is written at `pending/{operationId}`. If the intent cannot be written, the call is refused with `LatticeAdminAuditUnavailableException` and changes nothing.
 3. **Commit.** The facade runs its change, unchanged.
 4. **Finalize.** The intent moves to its final key, `{scope}/{ticks}\u001f{operationId}`, with the observed outcome:
-   - `Committed` when the call returned normally, unless the anchor was not written (its version never moved, or it was absent before and after), which is recorded as `Failed` with `failed.no-change`;
+   - `Committed` only when the call's own store result reports a change: an unconditional write that returned, or a removal or transition the store reports it performed. For a tenant-record change (a member, an administrator, a grant transition) the built-in registry judges this against the stored record it merged into, not the caller's earlier read, so of two concurrent removals of one entry only one is `Committed`;
+   - `Failed` with `failed.no-change` when the store reports no change and nothing at all wrote the anchor since the intent;
+   - `Indeterminate` when the store reports no change but something wrote the anchor (for example a concurrent removal that pre-empted this one), or when that cannot be proven;
    - `Failed` for a validation error, a conflict, a quota refusal or a missing target;
    - `Denied` for a tier-confinement refusal after authorization.
 
+   The anchor alone never says what this call did, because a concurrent or replicated write can move it either way. The only fact it proves is "nothing wrote it since the intent": its version equals the version observed before the commit, or, for an anchor absent before, its history holds no revision of any kind since the intent's time less a five-minute clock-skew allowance (a delete between an absent before and an absent after counts as a write). A history view may lag, so at finalize time only an untruncated write-ahead-log window proves an absence. A truncated window proves nothing: the log reports its oldest surviving entry, not the point it was trimmed at, and a replicated entry keeps its author's older clock.
+
    The final record is written create-only, so a call is finalized at most once.
-5. **Reconcile.** A failure that may have struck after the commit landed (a timeout, a cancellation, a storage fault), a crash between commit and finalize, or an operation that returns before it settles (an app activation still running after its accept window), leaves the intent pending. Each silo's reconciler resolves its own region's intents that are older than `AdminAuditReconcileLease`, from the anchor:
-   - a local write moved the anchor: `Indeterminate`;
-   - the anchor was not written (its version is unchanged, it is still absent, or its complete history holds only replicated writes): the operation may still be running, so the reconciler waits, and records `Failed`, `failed.not-committed` only once the intent is older than `AdminAuditMaxPendingAge`;
-   - the history cannot yet prove either: the reconciler waits, and records `Indeterminate` after `AdminAuditMaxPendingAge`.
+5. **Reconcile.** A failure that may have struck after the commit landed (a timeout, a cancellation, a storage fault), a crash between commit and finalize, or an operation that returns before it settles (an app activation still running after its accept window), leaves the intent pending. Each silo's reconciler resolves its own region's intents that are older than `AdminAuditReconcileLease`, from the same "nothing wrote it since the intent" test:
+   - anything wrote the anchor: `Indeterminate`;
+   - nothing wrote it: the operation may still be running, so the reconciler waits, and records `Failed`, `failed.not-committed` only once the intent is older than `AdminAuditMaxPendingAge` (by then the history view is trusted to prove an absence);
+   - the evidence cannot prove either (no history, or an anchor tree without versions): the reconciler waits, and records `Indeterminate` after `AdminAuditMaxPendingAge`.
 
-   An intent whose final record already exists (the caller finalized but its intent delete was lost) is simply removed.
-
-   The reconciler never records `Committed`. An `Indeterminate` record still names the actor, so every committed call is attributed by exactly one record, and no record claims a change that did not happen.
+   The reconciler never records `Committed`. An `Indeterminate` record still names the actor, so every committed call is attributed by exactly one record, and no record claims a change that did not happen. An intent whose final record already exists (the caller finalized but its intent delete was lost) is simply removed.
 
 ## Replication and restore
 

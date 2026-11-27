@@ -31,7 +31,7 @@ public sealed class LatticeTenantAccessAdminAuditTests
             "seed");
         record.AddAdminSubject("alice", new HybridLogicalClock { WallClockTicks = 2 }, "seed");
         registry.Seed(record);
-        var trail = new RecordingTrail(registry);
+        var trail = new RecordingTrail(() => registry.Puts);
         var admin = new LatticeTenantAccessAdmin(
             registry,
             new TenantRegionResidencyAuthorizer(
@@ -82,7 +82,73 @@ public sealed class LatticeTenantAccessAdminAuditTests
         Assert.That(trail.Calls[^1], Is.EqualTo("complete:Failed:puts=0"));
     }
 
-    private sealed class RecordingTrail(FakeTenantRegistry registry) : ILatticeAdminAuditTrail
+    [Test]
+    public async Task RemoveAdminSubjectAsync_racing_an_identical_removal_reports_no_change_and_is_not_audited_as_committed()
+    {
+        var registry = new RacingRemovalRegistry();
+        var (admin, trail) = CreateMerging(registry);
+
+        var result = await admin.RemoveAdminSubjectAsync(Tenant, "bob");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Changed, Is.False, "the racer's removal already removed bob");
+            Assert.That(trail.Calls[^1], Is.EqualTo("complete:Failed:puts=1"));
+            Assert.That(registry.Peek(Tenant)!.HasAdminSubject("bob"), Is.False);
+        });
+    }
+
+    [Test]
+    public async Task RemoveAdminSubjectAsync_whose_own_merge_removes_the_subject_is_audited_as_committed()
+    {
+        var registry = new MergingTenantRegistry();
+        var (admin, trail) = CreateMerging(registry);
+
+        var result = await admin.RemoveAdminSubjectAsync(Tenant, "bob");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Changed, Is.True);
+            Assert.That(trail.Calls[^1], Is.EqualTo("complete:Committed:puts=1"));
+        });
+    }
+
+    private static (LatticeTenantAccessAdmin Admin, RecordingTrail Trail) CreateMerging(MergingTenantRegistry registry)
+    {
+        var record = TenantRecord.Create(
+            TenantId.Parse(Tenant),
+            TenantStatus.Active,
+            TenantQuotas.Unbounded,
+            TenantPlacement.Shared,
+            new HybridLogicalClock { WallClockTicks = 1 },
+            "seed");
+        record.AddAdminSubject("alice", new HybridLogicalClock { WallClockTicks = 2 }, "seed");
+        record.AddAdminSubject("bob", new HybridLogicalClock { WallClockTicks = 3 }, "seed");
+        registry.Seed(record);
+        var trail = new RecordingTrail(() => registry.Puts);
+        var admin = new LatticeTenantAccessAdmin(
+            registry,
+            new TenantRegionResidencyAuthorizer(
+                new FixedGate(allow: true), registry, new FixedMembershipContext(new LatticeSubject("op"))),
+            new IncrementingClock(),
+            Options.Create(new ClusterOptions { ClusterId = "region-a" }),
+            auditTrail: trail);
+        return (admin, trail);
+    }
+
+    /// <summary>A second removal of bob commits inside this call's read-to-write window.</summary>
+    private sealed class RacingRemovalRegistry : MergingTenantRegistry
+    {
+        protected override void OnBeforeMerge(int putNumber)
+        {
+            if (putNumber == 1)
+            {
+                Peek(Tenant)!.RemoveAdminSubject("bob", new HybridLogicalClock { WallClockTicks = 5 }, "racer");
+            }
+        }
+    }
+
+    private sealed class RecordingTrail(Func<int> puts) : ILatticeAdminAuditTrail
     {
         public List<string> Calls { get; } = [];
 
@@ -98,7 +164,7 @@ public sealed class LatticeTenantAccessAdminAuditTests
 
         public ValueTask<LatticeAdminAuditRecord> BeginAsync(LatticeAdminAuditRequest request, CancellationToken cancellationToken)
         {
-            Calls.Add($"begin:{request.Action}:{request.TargetScope}:puts={registry.Puts}");
+            Calls.Add($"begin:{request.Action}:{request.TargetScope}:puts={puts()}");
             Begun.Add(request);
             return ValueTask.FromResult(new LatticeAdminAuditRecord
             {
@@ -110,7 +176,7 @@ public sealed class LatticeTenantAccessAdminAuditTests
 
         public ValueTask CompleteAsync(LatticeAdminAuditRecord intent, LatticeAdminAuditCompletion completion)
         {
-            Calls.Add($"complete:{completion.Outcome}:puts={registry.Puts}");
+            Calls.Add($"complete:{completion.Outcome}:puts={puts()}");
             return ValueTask.CompletedTask;
         }
     }

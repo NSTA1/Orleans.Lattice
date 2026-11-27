@@ -76,7 +76,7 @@ public sealed class TenantWalPlacementIntegrationTests
             placement,
             Clock(1),
             "t18-integration");
-        await _fixture.Registry.PutAsync(record);
+        await _fixture.Registry.CreateAsync(record);
 
         // Make the seeded record visible to the placement resolver deterministically:
         // the resolver reads an in-memory snapshot (not a live registry), so warm it

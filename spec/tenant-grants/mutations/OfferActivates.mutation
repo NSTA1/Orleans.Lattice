@@ -1,0 +1,13 @@
+# Pairs with TwoPartyActivation. An offer that lands active needs no answer
+# from the grantee, so the granting tenant alone exposes its data.
+MODULE: OfferActivates
+TARGET: TwoPartyActivation
+CLASS: Invariant
+SUMMARY: the offer writes the grant active instead of pending
+PERTURBS: Offer
+
+--- FIND
+       ELSE Write("offer", c, a, present, preActive, OfferSlot(grant), "pending", FALSE)
+--- REPLACE
+       ELSE Write("offer", c, a, present, preActive, Slot(OfferSlot(grant).gen, "active"), "active", FALSE)
+--- END

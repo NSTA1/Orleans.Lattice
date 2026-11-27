@@ -51,8 +51,8 @@ internal interface ITenantDirectoryStore
     /// </summary>
     /// <param name="groupId">The full group id.</param>
     /// <param name="cancellationToken">Cancels the removal.</param>
-    /// <returns>The number of edges removed.</returns>
-    Task<int> RemoveGroupCascadeAsync(string groupId, CancellationToken cancellationToken);
+    /// <returns>The number of edges removed, and whether this call removed the group record.</returns>
+    Task<(int EdgesRemoved, bool GroupRemoved)> RemoveGroupCascadeAsync(string groupId, CancellationToken cancellationToken);
 
     /// <summary>Adds a direct membership edge. Enforces membership's tenant group nesting invariant.</summary>
     /// <param name="groupId">The full parent group id.</param>
@@ -67,8 +67,8 @@ internal interface ITenantDirectoryStore
     /// <param name="groupId">The full parent group id.</param>
     /// <param name="memberId">The member id.</param>
     /// <param name="cancellationToken">Cancels the write.</param>
-    /// <returns>A task that completes when the edge is gone.</returns>
-    Task RemoveMemberAsync(string groupId, string memberId, CancellationToken cancellationToken);
+    /// <returns><see langword="true"/> when this call removed the edge; <see langword="false"/> when it was already gone or the store cannot tell.</returns>
+    Task<bool> RemoveMemberAsync(string groupId, string memberId, CancellationToken cancellationToken);
 
     /// <summary>Returns a group's direct member ids.</summary>
     /// <param name="groupId">The full group id.</param>

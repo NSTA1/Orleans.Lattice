@@ -159,6 +159,23 @@ internal sealed class DurableLatticeAdminAuditTrail : ILatticeAdminAuditTrail
             {
                 final = await PointAtRevisionAsync(final, new LatticeAdminAuditAnchor(treeId, key)).ConfigureAwait(false);
             }
+            else if (completion.ReasonCode == LatticeAdminAuditReasonCodes.FailedNoChange)
+            {
+                // The store reported no change, but a "no change" claim is about the
+                // anchor: it holds only when nothing at all wrote the anchor since the
+                // intent. Anything else may have been this call racing another writer.
+                var movement = await AdminAuditEvidence
+                    .CheckMovementAsync(_grainFactory, intent, viewProvesAbsence: false, CancellationToken.None)
+                    .ConfigureAwait(false);
+                if (movement != AdminAuditEvidence.AnchorMovement.Unmoved)
+                {
+                    final = final with
+                    {
+                        Outcome = AdminAuditEvidence.Indeterminate.Outcome,
+                        ReasonCode = AdminAuditEvidence.Indeterminate.ReasonCode,
+                    };
+                }
+            }
 
             await AdminAuditStore.WriteFinalAsync(_grainFactory, final, CancellationToken.None).ConfigureAwait(false);
         }
@@ -173,35 +190,17 @@ internal sealed class DurableLatticeAdminAuditTrail : ILatticeAdminAuditTrail
     }
 
     /// <summary>
-    /// Points a committed record at the anchor revision the call left: the anchor's
-    /// current version (when it moved past the base) and value hash. When the anchor's
-    /// version has not moved at all (or it was absent before and is absent after) the
-    /// call changed nothing, and the record says so
-    /// (<see cref="LatticeAdminAuditReasonCodes.FailedNoChange"/>) instead of claiming a
-    /// commit. A failed read leaves the record committed without the pointer.
+    /// Points a committed record at the anchor as the call left it: its current version
+    /// (when it moved past the base) and value hash. The commit itself is proven by the
+    /// call's own store result, never by the anchor, which a concurrent or replicated
+    /// write can move either way; the pointer is a best-effort join into the anchor's
+    /// history. A failed read leaves the record committed without the pointer.
     /// </summary>
     private async Task<LatticeAdminAuditRecord> PointAtRevisionAsync(LatticeAdminAuditRecord final, LatticeAdminAuditAnchor anchor)
     {
         try
         {
             var observed = await AdminAuditAnchorReader.ReadAsync(_grainFactory, anchor, CancellationToken.None).ConfigureAwait(false);
-
-            // The anchor's version has not moved since before the commit, so the call
-            // wrote nothing to it: a facade that returned normally made no change.
-            // On a versioned tree an anchor absent before and absent after was not
-            // written either: a removal that matched nothing.
-            var unmoved = final.AnchorBaseVersion is { } baseVersion
-                ? observed.Version is { } unchanged && unchanged.Equals(baseVersion)
-                : observed.Version is null;
-            if (observed.Versioned && unmoved)
-            {
-                return final with
-                {
-                    Outcome = LatticeAdminAuditCompletion.NoChange.Outcome,
-                    ReasonCode = LatticeAdminAuditCompletion.NoChange.ReasonCode,
-                };
-            }
-
             return final with
             {
                 AnchorValueHash = observed.Hash,

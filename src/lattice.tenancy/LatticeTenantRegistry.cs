@@ -12,12 +12,28 @@ namespace Orleans.Lattice.Tenancy;
 /// concurrent updates converge and replaying an older write never regresses a
 /// field. The default tenant is seeded lazily on first use by the shared
 /// initializer.
+/// <para>
+/// Every write first checks this silo's own standing in cluster membership and is
+/// refused, with nothing written, once membership reports the silo dead (#6216): a
+/// silo falsely declared dead keeps running until it learns of its death, and a
+/// write it committed then could fail to publish and be left uncovered when it
+/// stops. The check narrows that window; the false-death horizon in
+/// <see cref="TenantPolicyEpochSubscription"/> bounds what remains.
+/// </para>
 /// </summary>
+/// <param name="grainFactory">The grain factory the registry tree is reached through.</param>
+/// <param name="initializer">Seeds the default tenant on first use.</param>
+/// <param name="serializer">The record serializer.</param>
+/// <param name="accessDataPurge">Purges a deleted tenant's access data.</param>
+/// <param name="membership">Cluster membership, or <c>null</c> off a silo.</param>
+/// <param name="localSilo">This silo's details, or <c>null</c> off a silo.</param>
 internal sealed class LatticeTenantRegistry(
     IGrainFactory grainFactory,
     TenantRegistryInitializer initializer,
     OrleansLatticeSerializer<TenantRecord> serializer,
-    ITenantAccessDataPurge accessDataPurge) : ITenantRegistry, IGuardedTenantRegistry
+    ITenantAccessDataPurge accessDataPurge,
+    IClusterMembershipService? membership = null,
+    ILocalSiloDetails? localSilo = null) : ITenantRegistry, IGuardedTenantRegistry
 {
     /// <summary>
     /// The bounded optimistic-concurrency retry budget for a single
@@ -76,11 +92,25 @@ internal sealed class LatticeTenantRegistry(
     {
         ArgumentNullException.ThrowIfNull(record);
         var key = RequireTenantKey(record.Id);
+        EnsureNotDeclaredDead();
         await initializer.EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
 
         using (LatticeSystemOrigin.Enter())
         {
             return await PutMergeAsync(Registry, key, record, cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<TenantRecord> CreateAsync(TenantRecord record, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        var key = RequireTenantKey(record.Id);
+        await initializer.EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
+
+        using (LatticeSystemOrigin.Enter())
+        {
+            return await PutMergeAsync(Registry, key, record, cancellationToken, create: true).ConfigureAwait(false);
         }
     }
 
@@ -91,11 +121,30 @@ internal sealed class LatticeTenantRegistry(
         ArgumentNullException.ThrowIfNull(record);
         ArgumentNullException.ThrowIfNull(validateMerged);
         var key = RequireTenantKey(record.Id);
+        EnsureNotDeclaredDead();
         await initializer.EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
 
         using (LatticeSystemOrigin.Enter())
         {
             return await PutMergeAsync(Registry, key, record, cancellationToken, validateMerged).ConfigureAwait(false);
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<TenantRecord> PutProbedAsync(
+        TenantRecord record,
+        TenantStoredRecordProbe probe,
+        Action<TenantRecord>? validateMerged,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        ArgumentNullException.ThrowIfNull(probe);
+        var key = RequireTenantKey(record.Id);
+        await initializer.EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
+
+        using (LatticeSystemOrigin.Enter())
+        {
+            return await PutMergeAsync(Registry, key, record, cancellationToken, validateMerged, probe).ConfigureAwait(false);
         }
     }
 
@@ -110,22 +159,38 @@ internal sealed class LatticeTenantRegistry(
     /// <see cref="PutAsync"/> converge rather than last-writer-wins overwrite.
     /// Factored out of <see cref="PutAsync"/> so the retry loop can be driven
     /// deterministically in a unit test against a substituted <see cref="ILattice"/>.
+    /// An absent record is created only when <paramref name="create"/> is
+    /// <see langword="true"/>; otherwise the write is an update and an absent record
+    /// throws <see cref="TenantRecordNotFoundException"/> with nothing written, so a
+    /// stale copy of a deleted tenant's record can never re-create it.
     /// When <paramref name="validateMerged"/> is supplied it runs on each attempt's
     /// merged record before the conditional write; a throw aborts with nothing
-    /// written (see <see cref="IGuardedTenantRegistry"/>).
+    /// written (see <see cref="IGuardedTenantRegistry"/>). When
+    /// <paramref name="probe"/> is supplied it observes each attempt's stored record
+    /// before the merge, so it reports the stored record of the attempt that committed.
     /// </summary>
     internal async Task<TenantRecord> PutMergeAsync(
         ILattice registry,
         string key,
         TenantRecord record,
         CancellationToken cancellationToken,
-        Action<TenantRecord>? validateMerged = null)
+        Action<TenantRecord>? validateMerged = null,
+        TenantStoredRecordProbe? probe = null,
+        bool create = false)
     {
         for (var attempt = 1; ; attempt++)
         {
             var current = await registry
                 .GetWithVersionAsync(key, _serializer, cancellationToken)
                 .ConfigureAwait(false);
+
+            if (current.Value is null && !create)
+            {
+                throw new TenantRecordNotFoundException(record.Id);
+            }
+
+            // Before the merge, which folds the incoming record into the stored one in place.
+            probe?.Observe(current.Value);
 
             // On a miss the version is HybridLogicalClock.Zero, which
             // SetIfVersionAsync treats as "create only if still absent".
@@ -160,6 +225,7 @@ internal sealed class LatticeTenantRegistry(
     public async Task<bool> DeleteAsync(TenantId tenant, CancellationToken cancellationToken = default)
     {
         var key = RequireTenantKey(tenant);
+        EnsureNotDeclaredDead();
         await initializer.EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
         await accessDataPurge.PurgeAsync(tenant, cancellationToken).ConfigureAwait(false);
         await PurgeInboundGrantsAsync(tenant, cancellationToken).ConfigureAwait(false);
@@ -223,11 +289,39 @@ internal sealed class LatticeTenantRegistry(
         {
             foreach (var record in granting)
             {
-                await PutAsync(record, cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    await PutAsync(record, cancellationToken).ConfigureAwait(false);
+                }
+                catch (TenantRecordNotFoundException)
+                {
+                    // The granting tenant was itself deleted since the scan, and its
+                    // grants with it: there is nothing left to purge.
+                }
             }
         }
 
         return removed;
+    }
+
+    /// <summary>
+    /// Refuses a registry write once cluster membership reports this silo dead.
+    /// Off a silo (no membership or no local silo) there is nothing to check.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">Membership reports this silo dead.</exception>
+    internal void EnsureNotDeclaredDead()
+    {
+        if (membership is null || localSilo is null)
+        {
+            return;
+        }
+
+        if (membership.CurrentSnapshot.GetSiloStatus(localSilo.SiloAddress) == SiloStatus.Dead)
+        {
+            throw new InvalidOperationException(
+                "Cluster membership reports this silo dead, so it refuses tenant-registry writes: a write it committed "
+                + "now might never be published to the other silos.");
+        }
     }
 
     /// <summary>

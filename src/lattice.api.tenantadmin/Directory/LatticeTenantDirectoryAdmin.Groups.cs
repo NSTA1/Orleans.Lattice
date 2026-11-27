@@ -139,6 +139,9 @@ internal sealed partial class LatticeTenantDirectoryAdmin
             TenantAdminAudit.TenantGroupId(tenant, groupName) is { } id ? MembershipAuditAnchors.Group(id) : null);
         var record = await AuthorizeAsync(audit, tenant, "remove-group", cancellationToken).ConfigureAwait(false);
 
+        // Committed only when this call's cascade itself removed the group record: a
+        // concurrent removal can pre-empt it between the existence check and the delete.
+        var groupRecordRemoved = false;
         return await LatticeAdminAudit
             .RunAsync(
                 _audit,
@@ -154,7 +157,7 @@ internal sealed partial class LatticeTenantDirectoryAdmin
                     // Last-admin protection (D6): a group entry counts as one admin entry, and a
                     // tenant may never be left with none. Checked before anything is written.
                     var inAdminSet = record.HasAdminSubject(groupId);
-                    if (inAdminSet && record.AdminSubjectCount <= 1)
+                    if (inAdminSet && record.AdmissibleAdminSubjectCount <= 1)
                     {
                         throw new TenantLastAdminSubjectException(tenant.Value, groupId);
                     }
@@ -174,7 +177,8 @@ internal sealed partial class LatticeTenantDirectoryAdmin
                         .RemoveRulesNamingGroupAsync(tenant, groupId, ct)
                         .ConfigureAwait(false);
 
-                    var edgesRemoved = await _store.RemoveGroupCascadeAsync(groupId, ct).ConfigureAwait(false);
+                    var (edgesRemoved, groupRemoved) = await _store.RemoveGroupCascadeAsync(groupId, ct).ConfigureAwait(false);
+                    groupRecordRemoved = groupRemoved;
 
                     return new TenantGroupRemovalResult
                     {
@@ -187,7 +191,7 @@ internal sealed partial class LatticeTenantDirectoryAdmin
                         RemovedRuleIds = ToLocalRuleIds(tenant, removedRules),
                     };
                 },
-                static r => r.Removed,
+                _ => groupRecordRemoved,
                 cancellationToken)
             .ConfigureAwait(false);
     }

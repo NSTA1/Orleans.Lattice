@@ -149,8 +149,8 @@ internal sealed partial class LatticeTenantDirectoryAdmin
                         return GroupChange(tenant, groupName, memberId, memberKind, changed: false);
                     }
 
-                    await _store.RemoveMemberAsync(groupId, storedMemberId, ct).ConfigureAwait(false);
-                    return GroupChange(tenant, groupName, memberId, memberKind, changed: true);
+                    var removed = await _store.RemoveMemberAsync(groupId, storedMemberId, ct).ConfigureAwait(false);
+                    return GroupChange(tenant, groupName, memberId, memberKind, changed: removed);
                 },
                 static r => r.Changed,
                 cancellationToken)

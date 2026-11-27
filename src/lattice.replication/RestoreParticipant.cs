@@ -1137,6 +1137,10 @@ internal sealed class RestoreParticipant(
             built = rebuilt;
             _builtSets[request.SagaId] = built;
         }
+        else
+        {
+            built = await SkipMembersNoLongerHostedAsync(request, members, built, cancellationToken);
+        }
 
         // One fence over the whole group: every member tree is write-fenced and
         // shipping-paused together, so the set flips as one atomic unit.
@@ -1165,6 +1169,64 @@ internal sealed class RestoreParticipant(
 
         await fence.UnblockWritesAsync();
         RecordCommit(LatticeReplicationMetrics.SagaReasonSet);
+    }
+
+    /// <summary>
+    /// Restricts a cached set group to the members this cluster still hosts at commit
+    /// (#6233). The group was cached at prepare, against the hosted members then; a
+    /// member that stopped being replicated since is not swapped - its cutover would run
+    /// under the step's authority on a tree this cluster no longer replicates, outside
+    /// the write fence, which covers only the members hosted now. Its shadow is garbage
+    /// collected, the cached group is narrowed so the coordinator's read-back reports
+    /// the partial cutover, and each skipped member is logged and counted. Cold path:
+    /// one commit per set saga.
+    /// </summary>
+    private async Task<IReadOnlyList<LatticeRestoreResult>> SkipMembersNoLongerHostedAsync(
+        SagaControlRequest request,
+        IReadOnlyList<BackupSetMember> hosted,
+        IReadOnlyList<LatticeRestoreResult> built,
+        CancellationToken cancellationToken)
+    {
+        var hostedTrees = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var member in hosted)
+        {
+            hostedTrees.Add(member.TreeId);
+        }
+
+        List<LatticeRestoreResult>? kept = null;
+        for (var i = 0; i < built.Count; i++)
+        {
+            var result = built[i];
+            if (hostedTrees.Contains(result.TargetTreeId))
+            {
+                kept?.Add(result);
+                continue;
+            }
+
+            if (kept is null)
+            {
+                kept = new List<LatticeRestoreResult>(built.Count);
+                for (var j = 0; j < i; j++)
+                {
+                    kept.Add(built[j]);
+                }
+            }
+
+            logger.LogWarning(
+                "Restore participant: set saga '{SagaId}' commit skips member tree '{TreeId}', which this cluster " +
+                "no longer replicates; its shadow is garbage collected and only the hosted members are cut over.",
+                request.SagaId, result.TargetTreeId);
+            RecordCommit(LatticeReplicationMetrics.SagaReasonNotReplicated);
+            await SafeDeleteShadowByIdAsync(result.ShadowPhysicalTreeId, cancellationToken);
+        }
+
+        if (kept is null)
+        {
+            return built;
+        }
+
+        _builtSets[request.SagaId] = kept;
+        return kept;
     }
 
     /// <summary>

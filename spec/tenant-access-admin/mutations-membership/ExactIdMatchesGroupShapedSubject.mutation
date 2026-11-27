@@ -1,0 +1,13 @@
+# Pairs with NoCrossTenantMembership. Without the exact-id screen a subject
+# whose id is literally another tenant's group matches that group's entry.
+MODULE: ExactIdMatchesGroupShapedSubject
+TARGET: NoCrossTenantMembership
+CLASS: Invariant
+SUMMARY: the exact-id probe matches a subject id shaped like a tenant group
+PERTURBS: Count
+
+--- FIND
+        exact == {e \in Entries : e = subj /\ ~IsTier(subj) /\ live(e)}
+--- REPLACE
+        exact == {e \in Entries : e = subj /\ live(e)}
+--- END

@@ -44,7 +44,7 @@ public sealed class TenantGateEnforcerSnapshotLagTests
         var decision = await world.ReadAsync();
 
         Assert.That(decision.Allowed, Is.False, "a revoked grant must not outlive its revocation by a rebuild");
-        Assert.That(decision.Reason, Does.Contain("no active grant"));
+        Assert.That(decision.Reason, Is.EqualTo(TenantGateEnforcer.CrossingDeniedReason));
 
         await world.ReleaseRebuildAsync();
         Assert.That((await world.ReadAsync()).Allowed, Is.False, "the revocation holds once the rebuild lands");
@@ -76,12 +76,12 @@ public sealed class TenantGateEnforcerSnapshotLagTests
 
         var confirmed = await world.ReadAsync();
         Assert.That(confirmed.Allowed, Is.False, "the registry confirmation must refuse a crossing into a suspended owner");
-        Assert.That(confirmed.Reason, Does.Contain("is not active"));
+        Assert.That(confirmed.Reason, Is.EqualTo(TenantGateEnforcer.CrossingDeniedReason));
 
         await world.ReleaseRebuildAsync();
         var rebuilt = await world.ReadAsync();
         Assert.That(rebuilt.Allowed, Is.False, "the rebuilt snapshot refuses it too");
-        Assert.That(rebuilt.Reason, Does.Contain("is not active"));
+        Assert.That(rebuilt.Reason, Is.EqualTo(TenantGateEnforcer.CrossingDeniedReason));
     }
 
     [Test]
@@ -148,7 +148,7 @@ public sealed class TenantGateEnforcerSnapshotLagTests
         var decision = await enforcer.EnforceAsync(in request);
 
         Assert.That(decision.Allowed, Is.False);
-        Assert.That(decision.Reason, Does.Contain("Target tenant 'acme' is not registered"));
+        Assert.That(decision.Reason, Is.EqualTo(TenantGateEnforcer.CrossingDeniedReason));
     }
 
     [Test]
