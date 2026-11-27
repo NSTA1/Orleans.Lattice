@@ -1,0 +1,11 @@
+MODULE: RepointCharges
+TARGET: RepointUncharged
+CLASS: Invariant
+SUMMARY: re-pointing an existing logical id is refused at the tree cap
+PERTURBS: Repoint
+
+--- FIND
+    /\ repoint' = "done"
+--- REPLACE
+    /\ repoint' = IF Cardinality(owned) + 1 <= Effective THEN "done" ELSE "refused"
+--- END

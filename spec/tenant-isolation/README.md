@@ -11,13 +11,13 @@ to detector tests. Rate budgets and footprint quotas are out of scope.
 
 | Module | What it specifies |
 |--------|-------------------|
-| [`TenantIsolation.tla`](TenantIsolation.tla) | A registry write committing on one silo, the epoch advance published through the epoch grain's lease ledger, each silo's snapshot, lease and rebuild, publication failure and background re-publish, silo crash and membership recovery, and epoch grain re-activation with its grace. |
+| [`TenantIsolation.tla`](TenantIsolation.tla) | A registry write committing on one silo, the epoch advance published through the epoch grain's lease ledger, each silo's snapshot, lease and rebuild, publication failure and background re-publish, silo crash and membership recovery, membership falsely declaring a live silo dead, and epoch grain re-activation with the grace rule both epoch grains share. |
 
 ## Counts
 
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 |--------|------------|------------|---------|-----------|----------------|-----------------|
-| `TenantIsolation` | 5 | 2 | 20 | 25 | 25 | 200,358 |
+| `TenantIsolation` | 6 | 2 | 22 | 27 | 28 | 200,358 |
 
 `Actions` counts the disjuncts of `Next`, including the non-behavioural `Stutter`.
 `Behaviour rows` counts the action rows of the refinement note, excluding
@@ -27,15 +27,19 @@ for the base cfg (two silos, no faults).
 ### Variant configurations
 
 Faults are checked in separate configurations so each stays tractable. Every
-variant checks the same invariants and properties as the base cfg.
+variant checks the same invariants and properties as the base cfg, except
+`TenantIsolation.FalseDead.cfg`, which checks the safety properties only; the
+refinement note's gap register records why liveness under a false death
+declaration is not checked.
 
 | Configuration | Instance | Distinct states |
 |---------------|----------|-----------------|
 | `TenantIsolation.cfg` | Two silos, no faults | 200,358 |
-| `TenantIsolation.Crash.cfg` | Two silos, one silo crash | 919,142 |
+| `TenantIsolation.Crash.cfg` | Two silos, one silo crash | 1,361,654 |
 | `TenantIsolation.Restart.cfg` | Two silos, one epoch grain re-activation | 672,536 |
 | `TenantIsolation.Failure.cfg` | Two silos, one failed publication | 627,966 |
-| `TenantIsolation.Faults.cfg` | One silo, one of each fault interleaved | 32,602 |
+| `TenantIsolation.FalseDead.cfg` | Two silos, one epoch grain re-activation, one false death declaration | 2,680,898 |
+| `TenantIsolation.Faults.cfg` | One silo, one of each fault interleaved | 41,650 |
 
 ## Files
 
@@ -55,6 +59,7 @@ variant checks the same invariants and properties as the base cfg.
 | `WriterReadsOwnWrite` | Invariant | The committing silo never trusts a snapshot that misses its own write. |
 | `PublicationWindowTracked` | Invariant | A write returns ahead of its coverage only through a failed publication still owed a re-publish, or a crashed writer. |
 | `UnconfirmableDenies` | Invariant | A decision trusts only an authoritative snapshot, confirms only against a reachable registry, and otherwise denies. |
+| `NoEarlyGraceRelease` | Invariant | A fresh epoch grain activation ends its grace only once no silo can still serve on a lease a previous activation granted: each has leased afresh, or has been seen dead by the activation for one lease plus the margin. A silo falsely declared dead is not assumed to have stopped. |
 | `EpochMonotonic` | Action property | Epochs never repeat across advances or grain re-activations. |
 | `EveryCommitEventuallyCovered` | Liveness | Every committed write is eventually published to every silo, or covered by its crashed writer being declared dead. |
 
@@ -72,7 +77,11 @@ and a decision that cannot confirm currency denies. It does not revoke decisions
 already taken. Two windows stay open by design and are tracked rather than assumed
 away: a write whose publication fails returns while peers may trust their old
 snapshot until the background re-publish lands, and a writer that crashes after
-committing leaves peers unaware until membership declares it dead. The guarantee
+committing leaves peers unaware until membership declares it dead. A silo membership
+falsely declares dead keeps serving on its snapshot and lease until it learns it is
+dead, so a fresh epoch grain activation's grace counts a death only once it has seen
+it for one lease plus the margin; the app registry epoch grain implements that rule,
+and the refinement note's gap register records the tenant-policy grain's. The guarantee
 assumes no silo clock runs slower than the epoch grain's by more than the ledger
 margin over one lease. Bounds are one write and two silos; see the refinement note
 for the abstraction gaps.
