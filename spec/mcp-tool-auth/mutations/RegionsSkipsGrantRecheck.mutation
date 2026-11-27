@@ -1,0 +1,15 @@
+# Pairs with LockStep. The code before #6205 was fixed:
+# AuthorizedMetaTool re-runs only the authorizer, so a caller whose every
+# grant was revoked after tools/list keeps reading the region topology for
+# the rest of its session.
+MODULE: RegionsSkipsGrantRecheck
+TARGET: LockStep
+CLASS: Invariant
+SUMMARY: lattice_list_regions does not re-check that the caller still holds a facade grant
+PERTURBS: CallRegions
+
+--- FIND
+        held == AccessGroups(policy, c) # {}
+--- REPLACE
+        held == TRUE
+--- END

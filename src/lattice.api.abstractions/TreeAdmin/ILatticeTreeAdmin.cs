@@ -201,7 +201,10 @@ public interface ILatticeTreeAdmin
     /// ids are rejected. Once the alias is set, the tree's shard map and split
     /// allocation mark are taken from the target's own, so every key the target holds
     /// stays readable through the tree; the map they replace is written to the
-    /// previous physical tree's own entry. A refused alias changes nothing.
+    /// previous physical tree's own entry. A refused alias changes nothing. With the
+    /// tenancy add-on active, an alias onto a logical id that has no registry entry adds
+    /// one, so it is admitted against the active tenant's quota exactly as
+    /// <see cref="CreateTreeAsync"/> is; re-pointing an existing logical id is not charged.
     /// </summary>
     /// <param name="treeId">The logical tree to alias. Must not be <c>null</c>, empty, or reserved.</param>
     /// <param name="physicalTreeId">The physical tree to point at. Must not be <c>null</c> or empty, and must differ from <paramref name="treeId"/>.</param>
