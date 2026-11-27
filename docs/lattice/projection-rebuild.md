@@ -869,7 +869,7 @@ when the WAL has been trimmed past the original checkpoint.
 The capture path is **leaf-driven**, not maintenance-driven:
 
 - At activation, the leaf runs the fall-off-log detector once per
-  partition it has WAL records to read; a warm replay skips a partition
+  partition it has WAL records to read; a warm activation skips a partition
   whose head is at or below its checkpoint, where the advisory below
   cannot fire. When no trigger has fired - not even one of the two cost
   signals - but a partition's persisted checkpoint sits within the
