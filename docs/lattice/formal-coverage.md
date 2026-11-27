@@ -391,6 +391,19 @@ peak live heap was not measured. These are local observations, not predicted CI
 deadlines. Exhaustive TLC is validated in CI's sharded runs; local iteration uses
 the structural and production-detector scopes rather than serially repeating it.
 
+## Identity, authorization and protected actions
+
+Epic #6046 gives the identity, authorization, protected-action and tenancy
+surfaces the same formal coverage as the protocols above: the authorization
+decision, delegated tenant-access administration, cross-tenant grants,
+installable apps, MCP tool gating, the replication receiver gate and origin
+binding, and audit-trail completeness. Each module refines to an invariant
+[`security.instructions.md`](../../.github/instructions/security.instructions.md)
+states as load-bearing, and appends its own row to this table when it lands.
+
+| Module | Surface | Mutants | Behaviour rows | Detector tests | Page |
+|--------|---------|---------|----------------|----------------|------|
+
 ## What each area covers, and what it does not
 
 Coverage of one area must not be read as coverage of another. Each area's page,
