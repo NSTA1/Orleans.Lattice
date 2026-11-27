@@ -3,17 +3,18 @@
   "refinement": "TenantIsolationRefinement.md",
   "nonBehaviouralActions": ["Stutter"],
   "counts": {
-    "invariants": 5,
+    "invariants": 6,
     "properties": 2,
-    "actions": 20,
-    "mutations": 25,
-    "behaviourRows": 25,
+    "actions": 22,
+    "mutations": 27,
+    "behaviourRows": 28,
     "distinctStates": 200358
   },
   "variants": {
-    "Crash": { "distinctStates": 919142 },
+    "Crash": { "distinctStates": 1361654 },
     "Restart": { "distinctStates": 672536 },
     "Failure": { "distinctStates": 627966 },
-    "Faults": { "distinctStates": 32602 }
+    "FalseDead": { "distinctStates": 2680898 },
+    "Faults": { "distinctStates": 41650 }
   }
 }

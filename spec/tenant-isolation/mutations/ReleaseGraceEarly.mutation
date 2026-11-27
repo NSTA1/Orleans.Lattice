@@ -1,15 +1,16 @@
-# Pairs with NoStaleAuthority. The grace may end early only once every silo
-# membership does not report dead has leased from the new activation; the
-# mutant releases it while a silo still holds a lease from the old one.
+# Pairs with NoEarlyGraceRelease. The grace may end early only once every silo
+# membership lists has leased from the new activation, or has been seen dead for
+# one lease plus the margin; the mutant releases it while a silo still holds a
+# lease from the old one.
 MODULE: ReleaseGraceEarly
-TARGET: NoStaleAuthority
+TARGET: NoEarlyGraceRelease
 CLASS: Invariant
-SUMMARY: the grace is released before every live silo has leased afresh
+SUMMARY: the grace is released before every silo has leased afresh or aged out
 PERTURBS: ReleaseGrace
 BOUNDS: MaxRestarts = 1
 
 --- FIND
-    /\ \A t \in Silos : ~awaiting[t] /\ (alive[t] => lease[t] \in {"live", "margin"})
+    /\ \A t \in Silos : ~awaiting[t] /\ (LeasedHere(t) \/ (MemberDead(t) /\ seen[t] = "aged"))
 --- REPLACE
 \* MUTATION: the release check is dropped.
     /\ TRUE
