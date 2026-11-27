@@ -466,6 +466,12 @@ gate will tell you if you forget.
   supersede on a lagging silo, and admin-set, member-set and role-binding entries
   that arrive by replication or restore never letting another tenant's group count,
   with detectors in `spec/tenant-access-admin/RefinementMembership.md`.
+- **A registry update never creates a record.** `ITenantRegistry.PutAsync` (and the
+  guarded put) merges into a stored record and throws `TenantRecordNotFoundException`
+  when there is none; only `ITenantRegistry.CreateAsync`, used by tenant creation and
+  seeding, creates. A facade that read a record before its tenant was deleted is
+  refused instead of re-creating the tenant, with its stale status, admins and grants,
+  from that copy (#6230). Never seed or create a tenant through `PutAsync`.
 - **The cross-tenant grant protocol's formal model is `spec/tenant-grants/`.** Module
   `TenantGrants` (over the authorization contract's abstract `Allowed`, with snapshot
   freshness in the form `spec/tenant-isolation/` guarantees) checks two-party

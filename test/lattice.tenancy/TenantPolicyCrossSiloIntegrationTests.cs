@@ -68,10 +68,10 @@ public sealed class TenantPolicyCrossSiloIntegrationTests
             CrossTenantGrant.Create("beta", TenantGranteeKind.Tenant, SharedTree, TenantGrantOperations.Read),
             Clock(2),
             "seed");
-        await registry.PutAsync(owner);
+        await registry.CreateAsync(owner);
         var grantee = TenantRecord.Create(Beta, TenantStatus.Active, TenantQuotas.Unbounded, TenantPlacement.Shared, Clock(1), "seed");
         grantee.AddAdminSubject(Subject, Clock(2), "seed");
-        await registry.PutAsync(grantee);
+        await registry.CreateAsync(grantee);
 
         // Bring every silo to an authoritative snapshot that holds the active grant,
         // so a silo that is never told of the revocation would answer from it.
@@ -87,7 +87,7 @@ public sealed class TenantPolicyCrossSiloIntegrationTests
 
         var committed = await registry.GetAsync(Acme);
         committed!.TransitionGrant(committed.Grants.Single().GrantId, TenantGrantState.Revoked, Clock(1_000), "revoker");
-        await registry.PutAsync(committed);
+        await registry.CreateAsync(committed);
 
         for (var i = 0; i < silos.Length; i++)
         {
@@ -112,7 +112,7 @@ public sealed class TenantPolicyCrossSiloIntegrationTests
         var record = TenantRecord.Create(gamma, TenantStatus.Active, TenantQuotas.Unbounded, TenantPlacement.Shared, Clock(1), "seed");
         record.AddAdminSubject("carol", Clock(2), "seed");
         record.SetRegionStatus(region, TenantRegionStatus.Online, Clock(3), "seed");
-        await registry.PutAsync(record);
+        await registry.CreateAsync(record);
 
         foreach (var services in silos)
         {
@@ -133,7 +133,7 @@ public sealed class TenantPolicyCrossSiloIntegrationTests
 
         var committed = await registry.GetAsync(gamma);
         committed!.SetRegionStatus(region, TenantRegionStatus.Offline, Clock(1_000), "operator");
-        await registry.PutAsync(committed);
+        await registry.CreateAsync(committed);
 
         for (var i = 0; i < silos.Length; i++)
         {

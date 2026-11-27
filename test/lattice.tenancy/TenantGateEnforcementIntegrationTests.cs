@@ -49,7 +49,7 @@ public sealed class TenantGateEnforcementIntegrationTests
             Clock(1),
             "seed");
         record.AddAdminSubject(Admin, Clock(2), "seed");
-        await _fixture.Registry.PutAsync(record);
+        await _fixture.Registry.CreateAsync(record);
 
         await _fixture.SiloServices
             .GetRequiredService<CompiledTenantPolicySnapshotMaintainer>()

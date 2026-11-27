@@ -303,6 +303,14 @@ internal static class DirectoryTestSupport
             return await put;
         }
 
+        public Task<TenantRecord> CreateAsync(TenantRecord record, CancellationToken cancellationToken = default)
+        {
+            lock (_sync)
+            {
+                return inner.CreateAsync(record, cancellationToken);
+            }
+        }
+
         public Task<bool> DeleteAsync(TenantId tenant, CancellationToken cancellationToken = default)
         {
             lock (_sync)

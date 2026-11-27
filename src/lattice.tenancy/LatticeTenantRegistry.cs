@@ -102,6 +102,19 @@ internal sealed class LatticeTenantRegistry(
     }
 
     /// <inheritdoc />
+    public async Task<TenantRecord> CreateAsync(TenantRecord record, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        var key = RequireTenantKey(record.Id);
+        await initializer.EnsureInitializedAsync(cancellationToken).ConfigureAwait(false);
+
+        using (LatticeSystemOrigin.Enter())
+        {
+            return await PutMergeAsync(Registry, key, record, cancellationToken, create: true).ConfigureAwait(false);
+        }
+    }
+
+    /// <inheritdoc />
     public async Task<TenantRecord> PutGuardedAsync(
         TenantRecord record, Action<TenantRecord> validateMerged, CancellationToken cancellationToken = default)
     {
@@ -128,6 +141,10 @@ internal sealed class LatticeTenantRegistry(
     /// <see cref="PutAsync"/> converge rather than last-writer-wins overwrite.
     /// Factored out of <see cref="PutAsync"/> so the retry loop can be driven
     /// deterministically in a unit test against a substituted <see cref="ILattice"/>.
+    /// An absent record is created only when <paramref name="create"/> is
+    /// <see langword="true"/>; otherwise the write is an update and an absent record
+    /// throws <see cref="TenantRecordNotFoundException"/> with nothing written, so a
+    /// stale copy of a deleted tenant's record can never re-create it.
     /// When <paramref name="validateMerged"/> is supplied it runs on each attempt's
     /// merged record before the conditional write; a throw aborts with nothing
     /// written (see <see cref="IGuardedTenantRegistry"/>).
@@ -137,13 +154,19 @@ internal sealed class LatticeTenantRegistry(
         string key,
         TenantRecord record,
         CancellationToken cancellationToken,
-        Action<TenantRecord>? validateMerged = null)
+        Action<TenantRecord>? validateMerged = null,
+        bool create = false)
     {
         for (var attempt = 1; ; attempt++)
         {
             var current = await registry
                 .GetWithVersionAsync(key, _serializer, cancellationToken)
                 .ConfigureAwait(false);
+
+            if (current.Value is null && !create)
+            {
+                throw new TenantRecordNotFoundException(record.Id);
+            }
 
             // On a miss the version is HybridLogicalClock.Zero, which
             // SetIfVersionAsync treats as "create only if still absent".
@@ -242,7 +265,15 @@ internal sealed class LatticeTenantRegistry(
         {
             foreach (var record in granting)
             {
-                await PutAsync(record, cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    await PutAsync(record, cancellationToken).ConfigureAwait(false);
+                }
+                catch (TenantRecordNotFoundException)
+                {
+                    // The granting tenant was itself deleted since the scan, and its
+                    // grants with it: there is nothing left to purge.
+                }
             }
         }
 
