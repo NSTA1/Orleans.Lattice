@@ -461,6 +461,15 @@ gate will tell you if you forget.
   supersede on a lagging silo, and admin-set, member-set and role-binding entries
   that arrive by replication or restore never letting another tenant's group count,
   with detectors in `spec/tenant-access-admin/RefinementMembership.md`.
+- **The cross-tenant grant protocol's formal model is `spec/tenant-grants/`.** Module
+  `TenantGrants` (over the authorization contract's abstract `Allowed`, with snapshot
+  freshness in the form `spec/tenant-isolation/` guarantees) checks two-party
+  activation, each grant step on its own side, either party able to revoke,
+  non-disclosure of unoffered grants and unregistered tenants, and cross-tenant reads
+  admitted only under the reader's own authorization and an active grant, with the
+  staleness after a returned revocation bounded by the publication window. Its
+  mutations and detectors are in `spec/tenant-grants/Refinement.md`. Change the model
+  with the seam.
 
 ### Tenant tree-count admission (`src/lattice.tenancy`, consumed by `src/lattice.api.treeadmin`)
 - **Every registry row a tenant adds passes tree-count admission.** `MaxTreeCount`

@@ -1,0 +1,13 @@
+# Pairs with ReadRequiresActiveGrant. If a pending offer resolved to an allow
+# the approval would be decorative.
+MODULE: ReadAdmitsPendingGrant
+TARGET: ReadRequiresActiveGrant
+CLASS: Invariant
+SUMMARY: the grant resolution admits a pending grant as well as an active one
+PERTURBS: Read
+
+--- FIND
+        grantOk == status["A"] = "active" /\ Live(x) /\ x.st = "active" /\ n = "orders"
+--- REPLACE
+        grantOk == status["A"] = "active" /\ Live(x) /\ x.st \in {"pending", "active"} /\ n = "orders"
+--- END

@@ -1,0 +1,13 @@
+# Pairs with NonDisclosure. Reporting an unregistered granting tenant apart
+# from an unoffered grant lets the grantee's admins probe for tenants.
+MODULE: RevokeTellsUnregisteredGranter
+TARGET: NonDisclosure
+CLASS: Invariant
+SUMMARY: revoke reports an unregistered granting tenant as tenant-not-found
+PERTURBS: Revoke
+
+--- FIND
+       ELSE IF ~present THEN Refuse("revoke", c, a, present, preActive, "notFound")
+--- REPLACE
+       ELSE IF ~present THEN Refuse("revoke", c, a, present, preActive, IF status["A"] = "active" THEN "notFound" ELSE "tenantNotFound")
+--- END

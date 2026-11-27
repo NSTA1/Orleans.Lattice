@@ -1,0 +1,13 @@
+# Pairs with RevocationTakesEffect. A failed publication that owes no
+# re-publish leaves the window open with nothing to close it.
+MODULE: FailureOwesNothing
+TARGET: RevocationTakesEffect
+CLASS: Invariant
+SUMMARY: a failed publication returns without owing a re-publish
+PERTURBS: Fail
+
+--- FIND
+    /\ owed' = TRUE
+--- REPLACE
+    /\ owed' = FALSE
+--- END
