@@ -340,49 +340,76 @@ internal sealed partial class BPlusLeafGrain
             var reached = true;
             var boundedOnly = true;
             string? heldBy = null;
-            for (var p = 0; p < partitions; p++)
+            var stamped = false;
+            CutAdvanceOutcome? declined = null;
+
+            // The stamps record their advances pending and the persist they make due is
+            // made once, after the last (#6166). Stamped one by one, a cut over a bulk seed's
+            // gap persisted the leaf, published its digest and reported its cursors once per
+            // partition: P storage writes per activation and per stall drive.
+            _deferringCutStampPersists = true;
+            try
             {
-                bounds[p] = -1;
-
-                // Re-checked per partition: a stamp may await a persist, and a write or a
-                // prepare can interleave with it; an own append below the head must be
-                // applied before the head is passed.
-                if (!IsCutAdvanceQuiescent(atActivation))
+                for (var p = 0; p < partitions; p++)
                 {
-                    _cutDecline = "not-quiescent-mid-cut";
-                    return CutAdvanceOutcome.NotTaken;
-                }
+                    bounds[p] = -1;
 
-                var current = GetCurrentCheckpointForPartition(p);
-                if (current < 0 || IsPartitionStaleLatched(p))
-                {
-                    reached = false;
-                    boundedOnly = false;
-                    heldBy ??= "partition-uncheckpointed";
-                    continue;
-                }
-
-                var target = CutAdvanceTarget(p, partitions, current, in cut[p], handOff, low, high, out var catchUp);
-                if (target < 0)
-                {
-                    reached = false;
-                    bounds[p] = catchUp;
-                    boundedOnly &= catchUp > current;
-                    if (heldBy is null && AwaitDiagnostics.Enabled)
+                    // Re-checked per partition: a stamp may await a persist, and a write or a
+                    // prepare can interleave with it; an own append below the head must be
+                    // applied before the head is passed.
+                    if (!IsCutAdvanceQuiescent(atActivation))
                     {
-                        var closeHead = LiveAdvanceCloseHead(handOff, low, high, p);
-                        heldBy = (catchUp > current ? "catch-up-" : "unbounded-")
-                            + (current < closeHead - 1 ? "close" + CloseHoldSource(handOff, low, high, p) : current < cut[p].ForeignHigh ? "foreign" : "watermark");
+                        _cutDecline = "not-quiescent-mid-cut";
+                        declined = CutAdvanceOutcome.NotTaken;
+                        break;
                     }
 
-                    continue;
-                }
+                    var current = GetCurrentCheckpointForPartition(p);
+                    if (current < 0 || IsPartitionStaleLatched(p))
+                    {
+                        reached = false;
+                        boundedOnly = false;
+                        heldBy ??= "partition-uncheckpointed";
+                        continue;
+                    }
 
-                bounds[p] = target > current ? target : current;
-                if (target > current)
-                {
-                    await StampAdvanceAsync(p, target, live: false);
+                    var target = CutAdvanceTarget(p, partitions, current, in cut[p], handOff, low, high, out var catchUp);
+                    if (target < 0)
+                    {
+                        reached = false;
+                        bounds[p] = catchUp;
+                        boundedOnly &= catchUp > current;
+                        if (heldBy is null && AwaitDiagnostics.Enabled)
+                        {
+                            var closeHead = LiveAdvanceCloseHead(handOff, low, high, p);
+                            heldBy = (catchUp > current ? "catch-up-" : "unbounded-")
+                                + (current < closeHead - 1 ? "close" + CloseHoldSource(handOff, low, high, p) : current < cut[p].ForeignHigh ? "foreign" : "watermark");
+                        }
+
+                        continue;
+                    }
+
+                    bounds[p] = target > current ? target : current;
+                    if (target > current)
+                    {
+                        await StampAdvanceAsync(p, target, live: false);
+                        stamped = true;
+                    }
                 }
+            }
+            finally
+            {
+                _deferringCutStampPersists = false;
+            }
+
+            if (stamped && IsResidualPendingCheckpointPersistDue(await GetOptionsAsync()))
+            {
+                await FlushPendingCheckpointAsync(persistEvenWithoutPendingAdvance: false);
+            }
+
+            if (declined is { } early)
+            {
+                return early;
             }
 
             _cutDecline = heldBy ?? "reached";

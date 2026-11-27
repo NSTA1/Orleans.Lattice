@@ -723,8 +723,18 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private bool IsCheckpointPersistDue(LatticeOptions options, long pendingEntries) =>
         options.MaterialiserCheckpointInterval == TimeSpan.Zero
-        || (!_bankingIncrementalReplayProgress && pendingEntries >= options.MaterialiserCheckpointEntries)
-        || HasIntervalElapsed(options.MaterialiserCheckpointInterval);
+        || (!_deferringCutStampPersists
+            && ((!_bankingIncrementalReplayProgress && pendingEntries >= options.MaterialiserCheckpointEntries)
+                || HasIntervalElapsed(options.MaterialiserCheckpointInterval)));
+
+    /// <summary>
+    /// Set while a consistent cut stamps its partitions (#6166), so each stamp records its
+    /// advance pending and the cut persists them in one flush after its last stamp, where
+    /// <see cref="IsResidualPendingCheckpointPersistDue"/> judges them as each stamp would
+    /// have. Deferral only: every reader follows the persisted checkpoint, which lags the
+    /// pending one exactly as it does inside the coalescing window.
+    /// </summary>
+    private bool _deferringCutStampPersists;
 
     /// <summary>
     /// Set while a catch-up replay records an incremental bank (issue #5851, O3a), so
