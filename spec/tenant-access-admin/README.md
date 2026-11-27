@@ -15,7 +15,7 @@ manifest, mutation directory and refinement note. This README is shared.
 
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 | --- | --- | --- | --- | --- | --- | --- |
-| `TenantAccessAuthorization` | 7 | 1 | 13 | 19 | 20 | 3,338 |
+| `TenantAccessAuthorization` | 7 | 1 | 13 | 20 | 20 | 3,398 |
 
 ## TenantAccessAuthorization
 
@@ -49,8 +49,8 @@ whole behaviour.
   policy facade after its admin check, is confined to its tenant's
   tenant-layer trees and tenant-wide scope with data-plane operations, and no
   rule in effect names a tenant group outside that group's tenant. A
-  non-conforming tenant rule that arrives by replication or restore is
-  dropped by the snapshot compiler.
+  non-conforming rule, tenant-tier or operator, that arrives by replication
+  or restore is dropped by the snapshot compiler.
 - `ReservedGroupNamespace`: no cluster group anywhere in `t/` (malformed ids
   and `t/default/...` included), no tenant group for the default tenant, and
   no edge nesting a tenant group in a cluster group or another tenant's group.

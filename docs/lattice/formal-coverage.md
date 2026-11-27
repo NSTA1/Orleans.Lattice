@@ -405,7 +405,7 @@ states as load-bearing, and appends its own row to this table when it lands.
 |--------|---------|---------|----------------|----------------|------|
 | `AuthDecision` | Authorization decision layering | 18 | 17 | 41 | [Authorization decision](../../spec/auth-decision/README.md) |
 | `McpToolAuthorization` | MCP tool authorization lock-step | 23 | 12 | 25 | [MCP tool authorization](../../spec/mcp-tool-auth/README.md) |
-| `TenantAccessAuthorization` | Delegated tenant access: authorization | 19 | 20 | 35 | [Delegated tenant-access administration](../../spec/tenant-access-admin/README.md) |
+| `TenantAccessAuthorization` | Delegated tenant access: authorization | 20 | 20 | 36 | [Delegated tenant-access administration](../../spec/tenant-access-admin/README.md) |
 
 ## What each area covers, and what it does not
 
@@ -662,8 +662,8 @@ gaps, states its full scope.
     administration against the authorization contract's abstract `Allowed`:
     tenant-tier rules written only by the tenant policy facade after its
     admin check and confined to the tenant's own trees and data-plane
-    operations, with a non-conforming arrival by replication or restore
-    dropped when the snapshot compiles; the reserved `t/` group namespace and
+    operations, with a non-conforming arrival by replication or restore,
+    tenant-tier or operator, dropped when the snapshot compiles; the reserved `t/` group namespace and
     the tenant group nesting rule for every caller; claim filtering of
     asserted `t/` groups whatever the flag, on a lagging silo too; the
     delegated-access flag switching the facades and the tenant layer off
@@ -671,8 +671,7 @@ gaps, states its full scope.
     of every facade verb.
   - **Does not cover:** concurrent admin-set and member-set changes, the
     last-admin guard and removal stamps; group deletion and its cascade;
-    membership records arriving by replication or restore; an operator rule
-    naming a tenant group that arrives around every store; app rules on
+    membership records arriving by replication or restore; app rules on
     app-owned trees; and the compiled snapshot's rebuild after a flip.
 - **Authorization decision** ([`spec/auth-decision/`](../../spec/auth-decision/README.md)).
   - **Covers:** the decision over a rule store written by the operator
