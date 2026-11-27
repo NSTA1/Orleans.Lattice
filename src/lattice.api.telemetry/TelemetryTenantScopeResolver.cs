@@ -32,6 +32,13 @@ namespace Orleans.Lattice.Api.Telemetry;
 /// effective visibilities agree.
 /// </para>
 /// <para>
+/// <b>A tenant-confined grant never widens.</b> A caller admitted only through the
+/// tenant capability scope (<see cref="AuthorizeAsync"/> returning a
+/// tenant-confined <see cref="TelemetryAccessGrant"/>) is pinned to that tenant on
+/// every query; a widening request is reported as downgraded and platform-operator
+/// validation is not consulted (issue #5582).
+/// </para>
+/// <para>
 /// <b>Tenancy-absent deployments.</b> With no tenancy add-on registered the core
 /// no-op resolver returns the reserved default tenant synchronously, so every query
 /// scopes to <c>tenant="default"</c> with no await and no allocation, and the same
@@ -64,6 +71,81 @@ public sealed class TelemetryTenantScopeResolver
         _tenants = tenants;
         _authorizer = authorizer;
     }
+
+    /// <summary>
+    /// Authorizes the caller for telemetry, cluster-wide or confined to its own
+    /// tenant, and fails closed. The cluster-wide
+    /// <see cref="LatticeOperation.Telemetry"/> capability is tried first; only a
+    /// caller it refuses is then tried against the tenant capability scope of its
+    /// <em>validated</em> active tenant - resolved here, through the same
+    /// <see cref="ITenantContextResolver"/> seam the scope comes from, never from a
+    /// request field.
+    /// </summary>
+    /// <remarks>
+    /// A caller that cannot be attributed to a tenant, one whose active tenant is the
+    /// reserved default tenant, and one refused on both scopes all receive the
+    /// cluster-wide refusal, so a denied caller learns nothing about which tenant its
+    /// assertion resolved to.
+    /// </remarks>
+    /// <param name="cancellationToken">Cancels the authorization.</param>
+    /// <returns>What the caller's capability admits it to.</returns>
+    /// <exception cref="LatticeAuthorizationDeniedException">The caller holds the capability on neither scope.</exception>
+    public async ValueTask<TelemetryAccessGrant> AuthorizeAsync(CancellationToken cancellationToken = default)
+    {
+        if (await _authorizer.IsClusterTelemetryGrantedAsync(cancellationToken).ConfigureAwait(false))
+        {
+            return TelemetryAccessGrant.ClusterWide;
+        }
+
+        TenantId tenant;
+        try
+        {
+            tenant = _tenants.TryResolveCurrent(out var current)
+                ? current
+                : await _tenants.ResolveCurrentAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (LatticeTenantAccessDeniedException)
+        {
+            // An unattributable caller learns nothing about why: it gets the same
+            // cluster-wide refusal as any other caller without a grant.
+            tenant = default;
+        }
+
+        if (await _authorizer.IsTenantTelemetryGrantedAsync(tenant, cancellationToken).ConfigureAwait(false))
+        {
+            return TelemetryAccessGrant.ForTenant(tenant.Value!);
+        }
+
+        // Cold path: throw the canonical cluster-wide refusal. A grant that landed since
+        // the probe above admits here, which is still a decision the gate made.
+        await _authorizer.AuthorizeClusterTelemetryAsync(cancellationToken).ConfigureAwait(false);
+        return TelemetryAccessGrant.ClusterWide;
+    }
+
+    /// <summary>
+    /// Resolves the scope to evaluate under for a caller
+    /// <see cref="AuthorizeAsync"/> admitted. A cluster-wide grant resolves exactly as
+    /// <see cref="ResolveAsync(TelemetryTenantVisibility, string?, CancellationToken)"/>
+    /// does; a tenant-confined grant is pinned to its tenant whatever was requested,
+    /// without consulting platform-operator validation, and a widening request is
+    /// reported as downgraded.
+    /// </summary>
+    /// <param name="grant">What the caller's capability admits it to.</param>
+    /// <param name="requestedVisibility">The visibility the caller asked for.</param>
+    /// <param name="requestedTenantId">The tenant the caller asked for; ignored for a tenant-confined grant.</param>
+    /// <param name="cancellationToken">Cancels the resolution.</param>
+    /// <returns>The scope the query must be evaluated under.</returns>
+    /// <exception cref="LatticeTenantAccessDeniedException">
+    /// A cluster-wide grant's caller could not be attributed to any tenant.
+    /// </exception>
+    public ValueTask<TelemetryTenantScope> ResolveAsync(
+        TelemetryAccessGrant grant,
+        TelemetryTenantVisibility requestedVisibility,
+        string? requestedTenantId = null,
+        CancellationToken cancellationToken = default) =>
+        grant.TenantId is { } tenantId
+            ? new ValueTask<TelemetryTenantScope>(TelemetryTenantScope.PinnedTo(tenantId, requestedVisibility))
+            : ResolveAsync(requestedVisibility, requestedTenantId, cancellationToken);
 
     /// <summary>
     /// Resolves the scope to evaluate under, given what the caller requested.

@@ -132,6 +132,20 @@ gate will tell you if you forget.
   call or range-guardrail evaluation, and applies the allow-list only after it
   (#3645). Discovery decides only which tools are offered; a tool gated only there
   is not gated at all, because a tool name is guessable.
+- A `Telemetry` grant can be confined to one tenant: a platform rule over
+  `LatticeScope.TenantCapability(tenant)`, the tenant's control-plane capability id
+  `_lattice_tenant_admin_{tenant}` (#5582). Only the curated facade honours it, through
+  `TelemetryTenantScopeResolver.AuthorizeAsync`: it tries the cluster-wide capability
+  first, then the capability scope of the caller's *validated* active tenant (resolved
+  through `ITenantContextResolver`, never a request field; the default tenant has no
+  such scope), and the tenant it authorizes is the tenant it pins, so a confined grant
+  never widens and never consults platform-operator validation. That pinning is safe
+  only because every series selector in every catalogue template carries the `$scope$`
+  slot (`TelemetryTemplateScopeGateTests`) and the `tenant` label is derived from the
+  tree id where a series is published, never caller-supplied. The MCP telemetry tools
+  evaluate caller-supplied PromQL that cannot be pinned, so they stay cluster-wide
+  only; do not route them through the confined grant. `Admin` and `Telemetry` on the
+  capability id are independent, and tenant-tier rules never carry `Telemetry`.
 
 ### Replication receiver enrollment gate (`src/lattice.replication`)
 - The receiver gate lives at the **applier seam** (`ReplicationApplier.ApplyAsync` /
