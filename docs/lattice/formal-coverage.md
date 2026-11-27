@@ -405,10 +405,10 @@ states as load-bearing, and appends its own row to this table when it lands.
 |--------|---------|---------|----------------|----------------|------|
 | `AdminAuditTrail` | Admin audit-trail completeness | 24 | 15 | 38 | [Admin audit-trail completeness](../../spec/audit-trail/README.md) |
 | `AuthDecision` | Authorization decision layering | 18 | 17 | 41 | [Authorization decision](../../spec/auth-decision/README.md) |
-| `TenantAccessMembership` | Tenant-access membership under concurrency | 12 | 11 | 20 | [Tenant-access membership](../../spec/tenant-access-admin/README.md#tenantaccessmembership) |
+| `TenantAccessMembership` | Tenant-access membership under concurrency | 13 | 11 | 23 | [Tenant-access membership](../../spec/tenant-access-admin/README.md#tenantaccessmembership) |
 | `McpToolAuthorization` | MCP tool authorization lock-step | 23 | 12 | 25 | [MCP tool authorization](../../spec/mcp-tool-auth/README.md) |
 | `TenantAccessAuthorization` | Delegated tenant access: authorization | 20 | 20 | 36 | [Delegated tenant-access administration](../../spec/tenant-access-admin/README.md) |
-| `ReplicationOriginBinding` | Replication gRPC host admitted-peer seam and origin binding | 10 | 2 | 10 | [Replication receiver admission](../../spec/replication-admission/README.md) |
+| `ReplicationOriginBinding` | Replication gRPC host admitted-peer seam and origin binding | 11 | 2 | 11 | [Replication receiver admission](../../spec/replication-admission/README.md) |
 | `ReplicationAdmission` | Replication receiver enrollment and merge-mode gate | 7 | 4 | 10 | [Replication receiver admission](../../spec/replication-admission/README.md) |
 | `RestorePeerAuthority` | Coordinated-restore participant peer authority, own-saga decision and cutover fence | 17 | 6 | 23 | [Replication receiver admission](../../spec/replication-admission/README.md) |
 | `TenantGrants` | Cross-tenant grants | 26 | 21 | 40 | [Cross-tenant grants](../../spec/tenant-grants/README.md) |
