@@ -65,4 +65,61 @@ public partial class BPlusLeafGrainTests
             BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
         }
     }
+
+    [Test]
+    [NonParallelizable]
+    public async Task CutAdvance_a_second_stall_drive_inside_the_coverage_lag_period_does_not_capture_a_snapshot()
+    {
+        BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
+        BPlusLeafGrain.SeedReplayAdmissionStateForTest(ceiling: TimerAdmissionCeiling, queued: 0);
+        try
+        {
+            var rig = new LiveAdvanceRig();
+            rig.FenceGate.IsPreArmOpen = true;
+            rig.Shard.GetSplitCutAsync(Arg.Any<WalAppendStamp>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new WalSplitCut(Head: 40, ForeignHigh: -1, UnstampedWatermark: -1)));
+            rig.CursorReporter = Substitute.For<ILeafCursorReporter>();
+            var snapshot = Substitute.For<ILeafSnapshotStorageGrain>();
+            snapshot.LoadAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult<LeafSnapshotBlob?>(null));
+            var saves = 0;
+            snapshot.SaveAsync(Arg.Any<LeafSnapshotBlob>(), Arg.Any<CancellationToken>())
+                .Returns(_ =>
+                {
+                    saves++;
+                    return Task.FromResult(LeafSnapshotSaveOutcome.Kept);
+                });
+            var state = new FakePersistentState<LeafNodeState>();
+            state.State.ProjectionCheckpointOffset = CutAdvanceCheckpoint;
+            state.State.ProjectionCheckpointOffsetAssigned = true;
+
+            var grain = CreateGrain(
+                state,
+                options: new LatticeOptions { WalPartitions = 1, MaterialiserCheckpointInterval = TimeSpan.Zero },
+                liveAdvance: rig,
+                configureGrainFactory: f =>
+                {
+                    f.GetGrain<IWalShardGrain>(Arg.Any<string>(), Arg.Any<string?>()).Returns(rig.Shard);
+                    f.GetGrain<ILeafSnapshotStorageGrain>(Arg.Any<Guid>()).Returns(snapshot);
+                });
+            await InitialiseOwnMarkerAsync(rig);
+            await SetStampedAsync(grain, "a", "1");
+
+            await grain.DispatchTimerDriveAsync(1, "arm=test", cutFirst: true);
+            Assert.That(saves, Is.EqualTo(1), "precondition: the first drive captured the checkpoint it took");
+
+            rig.Shard.GetSplitCutAsync(Arg.Any<WalAppendStamp>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult(new WalSplitCut(Head: 80, ForeignHigh: -1, UnstampedWatermark: -1)));
+            await grain.DispatchTimerDriveAsync(1, "arm=test", cutFirst: true);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(state.State.ProjectionCheckpointOffset, Is.EqualTo(79L), "precondition: the second drive persisted the cut head");
+                Assert.That(saves, Is.EqualTo(1), "the second drive must not capture a snapshot its pin is not published for");
+            });
+        }
+        finally
+        {
+            BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
+        }
+    }
 }

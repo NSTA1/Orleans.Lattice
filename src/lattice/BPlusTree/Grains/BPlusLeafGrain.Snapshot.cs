@@ -2482,9 +2482,17 @@ internal sealed partial class BPlusLeafGrain
     /// documented to govern periodic capture only.
     /// </para>
     /// </summary>
+    /// <param name="fromCheckpointPersist">Whether a checkpoint persist, which advances the cadence, is the caller.</param>
+    /// <param name="cancellationToken">Bounds the capture.</param>
+    /// <param name="allowCoverageCapture">
+    /// Whether the ordinary capture of a checkpoint ahead of coverage may run;
+    /// <see langword="false"/> only for a stall drive inside its pin-publish interval
+    /// (#6166). The coverage-deficit escape and the zero-coverage repair run either way.
+    /// </param>
     private async Task MaybeRunPeriodicSnapshotRecheckAsync(
         bool fromCheckpointPersist,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool allowCoverageCapture = true)
     {
         if (state.State.TreeId is null)
         {
@@ -2609,6 +2617,15 @@ internal sealed partial class BPlusLeafGrain
         // being absorbed silently.
         if (await TryRepairZeroCoverageAsync(Math.Max(1, resolved.WalPartitions), cancellationToken))
         {
+            return;
+        }
+
+        if (!allowCoverageCapture)
+        {
+            // #6166: a stall drive inside its pin-publish interval. The capture would only
+            // make bankable a pin the drive does not publish; the drive that next publishes
+            // it, the coverage-lag full pass and deactivation each capture first.
+            AwaitDiagnostics.Count("leaf.drive.capture-deferred");
             return;
         }
 

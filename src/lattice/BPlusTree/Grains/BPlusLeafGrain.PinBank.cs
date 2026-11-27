@@ -75,8 +75,9 @@ internal sealed partial class BPlusLeafGrain
     /// </param>
     /// <param name="cancellationToken">Bounds the flush, the recheck and the publish.</param>
     /// <param name="publishPin">
-    /// Whether to publish the pin the bank makes bankable; <see langword="false"/> only for
-    /// a stall drive inside its pin-publish interval (#6166), which flushes and rechecks alone.
+    /// Whether to publish the pin the bank makes bankable, and to capture the snapshot that
+    /// makes it so; <see langword="false"/> only for a stall drive inside its pin-publish
+    /// interval (#6166), which flushes and runs the recheck's escapes alone.
     /// </param>
     /// <remarks>See <see cref="IsDrivePinPublishDue"/> for why a drive may not publish.</remarks>
     private async Task BankDurablePinCoreAsync(
@@ -99,7 +100,8 @@ internal sealed partial class BPlusLeafGrain
         {
             await MaybeRunPeriodicSnapshotRecheckAsync(
                 fromCheckpointPersist: false,
-                cancellationToken);
+                cancellationToken,
+                allowCoverageCapture: publishPin);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
