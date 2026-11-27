@@ -5414,7 +5414,24 @@ internal sealed partial class BPlusLeafGrain
                 $"checkpoint={checkpoint} entryCount={Cache.Count}");
 #endif
 
-            if (detector is not null)
+            // A head the sweep probed at or below the checkpoint leaves nothing to
+            // read: ReplayPartitionAsync returns before its first read, on the same
+            // test, and the window the warm proof below would check is empty.
+            var windowEmpty = probedHead is { } sweptHead && CapReplayHead(partition, sweptHead) - 1 <= checkpoint;
+
+            // Nor does a warm activation replay ask the fall-off detector about an
+            // empty window (issue #6166). Its verdicts guard a read this partition will
+            // not make: the window holds no offset the replay could have lost, and a
+            // later record past the probed head is read - and classified - by the
+            // replay that reads it. The detector reads the partition's tail, an
+            // exclusive storage round trip on the WAL shard grain every leaf of the
+            // tree shares, so asking it here queued every first-touch activation after
+            // a seed behind one such read per leaf per partition. The SnapshotPending
+            // advisory it could still raise needs a checkpoint near the tail, which a
+            // checkpoint at the head is not. A starvation drive still asks: it is the
+            // path that latches a stale verdict and attempts the warm rescue, and the
+            // per-silo drive cap already bounds how many ask at once.
+            if (detector is not null && !(windowEmpty && checkpointOverride is null && activationCut != ActivationCut.None))
             {
                 var decision = await detector.ClassifyAsync(
                     treeId,
@@ -5491,10 +5508,6 @@ internal sealed partial class BPlusLeafGrain
                 }
             }
 
-            // A head the sweep probed at or below the checkpoint leaves nothing to
-            // read: ReplayPartitionAsync returns before its first read, on the same
-            // test, and the window the warm proof below would check is empty.
-            var windowEmpty = probedHead is { } sweptHead && CapReplayHead(partition, sweptHead) - 1 <= checkpoint;
             if (!windowEmpty && replayOwnership is null)
             {
                 census?.Lap(ActivationReplayCensus.Phase.Partitions);

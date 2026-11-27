@@ -50,7 +50,7 @@ public sealed class LeafActivationPartitionCallIntegrationTests
     }
 
     [Test]
-    public async Task A_warm_activation_with_nothing_to_replay_makes_no_shard_map_lookup_and_three_calls_per_partition()
+    public async Task A_warm_activation_with_nothing_to_replay_makes_no_shard_map_lookup_no_tail_read_and_two_calls_per_partition()
     {
         var lattice = _cluster.GrainFactory.GetGrain<ILattice>(Tree);
         for (var c = 0; c < 4; c++)
@@ -94,20 +94,29 @@ public sealed class LeafActivationPartitionCallIntegrationTests
         TestContext.Out.WriteLine("partition-grain calls by reading leaf: " + string.Join(", ", calls.OrderByDescending(kv => kv.Value).Select(kv => $"{kv.Key}={kv.Value}")));
 
         var partitionCalls = calls
+            .Where(kv => !kv.Key.StartsWith("other|", StringComparison.Ordinal))
             .Where(kv => kv.Key.Contains($"|{nameof(ILeafReplayCoordinatorGrain)}.", StringComparison.Ordinal)
                 || kv.Key.Contains($"|{nameof(IWalShardGrain)}.", StringComparison.Ordinal))
             .GroupBy(kv => kv.Key.Split('|')[0])
             .Select(g => g.Sum(kv => kv.Value))
             .DefaultIfEmpty(0)
             .Max();
+        var tailReads = calls
+            .Where(kv => kv.Key.EndsWith($"|{nameof(IWalShardGrain)}.{nameof(IWalShardGrain.GetTailOffsetAsync)}", StringComparison.Ordinal))
+            .Sum(kv => kv.Value);
         var shardMapLookups = calls
             .Where(kv => kv.Key.EndsWith($"|{nameof(ILatticeRegistry)}.{nameof(ILatticeRegistry.GetShardMapAsync)}", StringComparison.Ordinal))
             .Sum(kv => kv.Value);
         Assert.Multiple(() =>
         {
-            // The sweep's head probe, the consistent cut and the fall-off check; the warm
-            // proof's tail read has nothing to prove over an empty window.
-            Assert.That(partitionCalls, Is.EqualTo(3 * Partitions), "a warm activation with nothing to replay calls each partition three times");
+            // The sweep's head probe and the consistent cut. The fall-off detector and the
+            // warm proof have nothing to judge over an empty window.
+            Assert.That(partitionCalls, Is.EqualTo(2 * Partitions), "a warm activation with nothing to replay calls each partition twice");
+
+            // The detector's tail read is an exclusive storage round trip on the partition's
+            // WAL shard grain, which every leaf of the tree shares. It leaves the leaf's
+            // context, so it is counted from any source.
+            Assert.That(tailReads, Is.Zero, "a warm activation with nothing to replay reads no partition's tail");
 
             // The lookup returns the replay permit and queues for it again; a replay that
             // reads nothing has no use for the map.
@@ -149,7 +158,7 @@ public sealed class LeafActivationPartitionCallIntegrationTests
 
         internal static void Disarm() => Volatile.Write(ref _armed, 0);
 
-        internal static void Add(GrainId source, string method) => Calls.AddOrUpdate($"{source}|{method}", 1, (_, n) => n + 1);
+        internal static void Add(string source, string method) => Calls.AddOrUpdate($"{source}|{method}", 1, (_, n) => n + 1);
 
         internal static Dictionary<string, int> Snapshot() => new(Calls);
     }
@@ -159,12 +168,16 @@ public sealed class LeafActivationPartitionCallIntegrationTests
         public Task Invoke(IIncomingGrainCallContext context)
         {
             ArgumentNullException.ThrowIfNull(context);
-            if (PartitionCallMeter.Armed
-                && context.SourceId is { } source
-                && source.Type.ToString() == "bplusleaf"
-                && context.InterfaceMethod?.DeclaringType is { } type)
+            if (PartitionCallMeter.Armed && context.InterfaceMethod?.DeclaringType is { } type)
             {
-                PartitionCallMeter.Add(source, $"{type.Name}.{context.InterfaceMethod.Name}");
+                if (context.SourceId is { } source && source.Type.ToString() == "bplusleaf")
+                {
+                    PartitionCallMeter.Add(source.ToString(), $"{type.Name}.{context.InterfaceMethod.Name}");
+                }
+                else if (type == typeof(IWalShardGrain))
+                {
+                    PartitionCallMeter.Add("other", $"{type.Name}.{context.InterfaceMethod.Name}");
+                }
             }
 
             return context.Invoke();
