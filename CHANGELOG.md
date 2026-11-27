@@ -10,6 +10,10 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ## Unreleased
 
+### Security
+
+- **Auth - Replicated rules cannot cross tenants.** An operator rule that names a tenant group on a tree outside that group's tenant, arriving by replication or restore, is now dropped when the policy compiles instead of taking effect. ([#6210](https://github.com/NSTA1/Orleans.Lattice/issues/6210)) (`Orleans.Lattice.Auth`)
+
 ### Added
 
 - **Auth - Admin audit trail.** Every privileged admin call (rules, groups, tenants, grants, regions, apps, aliases) is recorded with actor, target and outcome, denials included; on by default, and a call whose audit intent cannot be written is refused. ([#3638](https://github.com/NSTA1/Orleans.Lattice/issues/3638)) (`Orleans.Lattice`, `Orleans.Lattice.Auth`, `Orleans.Lattice.Membership`, `Orleans.Lattice.Tenancy`, `Orleans.Lattice.Apps`, `Orleans.Lattice.Replication`, `Orleans.Lattice.Api.Auth`, `Orleans.Lattice.Api.TenantAdmin`, `Orleans.Lattice.Api.Apps`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Dashboards`)
@@ -20,6 +24,7 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
+- **MCP - Region discovery honours revoked grants.** `lattice_list_regions` re-checks at every call that the caller still holds a facade grant, so a session opened before its grants were revoked stops receiving region topology. ([#6205](https://github.com/NSTA1/Orleans.Lattice/issues/6205)) (`Orleans.Lattice.Api.Mcp`)
 - **Tree admin - Aliases count against the tree quota.** An alias that adds a new logical tree id now passes the tenant's `MaxTreeCount` admission like a create; re-pointing an existing logical tree is still not charged. ([#5333](https://github.com/NSTA1/Orleans.Lattice/issues/5333)) (`Orleans.Lattice.Api.TreeAdmin`)
 - **Replication - Lag reporting and re-seed.** `entries_behind` now reports the WAL tail minus the acknowledged watermark and keeps updating through an outage, and a receiver-requested export that already covers a lineage change no longer forces a second re-seed. ([#5587](https://github.com/NSTA1/Orleans.Lattice/issues/5587), [#5794](https://github.com/NSTA1/Orleans.Lattice/issues/5794)) (`Orleans.Lattice.Replication`)
 - **Replication - Bootstrap reserves the tree alias only at cutover.** A bootstrap copy takes its alias at cutover; a refused reservation keeps the copy held for a retry, and a superseded alias fails the bootstrap instead of being overwritten. ([#5832](https://github.com/NSTA1/Orleans.Lattice/issues/5832)) (`Orleans.Lattice`, `Orleans.Lattice.Replication`)

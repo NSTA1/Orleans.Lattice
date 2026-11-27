@@ -1,0 +1,13 @@
+# Pairs with ModeReResolvedLocally. An enrolled tree's run is applied under
+# the merge mode the wire carries rather than the locally resolved one.
+MODULE: ReceiverTrustsWireMode
+TARGET: ModeReResolvedLocally
+CLASS: Invariant
+SUMMARY: the wire mode decides whether an enrolled tree's run applies
+PERTURBS: ApplyRun
+
+--- FIND
+ELSE IF Admits(mode, cls) THEN "applied"
+--- REPLACE
+ELSE IF cls \in Modes THEN "applied"
+--- END

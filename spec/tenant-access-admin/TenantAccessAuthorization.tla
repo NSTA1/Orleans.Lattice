@@ -94,7 +94,8 @@ ArrivalRules ==
       Rule("tenant", "A", "u1", TreeScope(Tree("tenant", "B")), "data", "arrival", "peer"),
       Rule("tenant", "A", "u1", TreeScope(Tree("tenant", "A")), "telemetry", "arrival", "peer"),
       Rule("tenant", "A", "t/B/g", TreeScope(Tree("tenant", "A")), "data", "arrival", "peer"),
-      Rule("operator", NoTenant, "u1", TreeScope(Tree("default", NoTenant)), "data", "arrival", "peer") }
+      Rule("operator", NoTenant, "u1", TreeScope(Tree("default", NoTenant)), "data", "arrival", "peer"),
+      Rule("operator", NoTenant, "t/B/g", TreeScope(Tree("tenant", "A")), "data", "arrival", "peer") }
 
 OwnLayerScope(sc, t) == sc.tree.kind = "tenant" /\ sc.tree.tenant = t
 TenantRuleShapeOk(r) ==
@@ -106,7 +107,9 @@ GroupSubjectOk(r) ==
     IsTier(r.subject) => (r.subject \in WellFormed /\ OwnLayerScope(r.scope, GroupTenant(r.subject)))
 WideOk(r) == r.scope.kind = "tenantWide" => r.layer = "tenant"
 StoreAdmits(r) == WideOk(r) /\ (r.layer = "tenant" => TenantRuleShapeOk(r)) /\ GroupSubjectOk(r)
-CompileAdmits(r) == r.layer = "tenant" => TenantRuleShapeOk(r)
+\* The snapshot compiler re-applies the store's guards to every rule, whatever
+\* its origin: a tenant rule's shape, and any rule's tenant group subject.
+CompileAdmits(r) == (r.layer = "tenant" => TenantRuleShapeOk(r)) /\ GroupSubjectOk(r)
 
 NestingOk(g, m) ==
     /\ IsTier(g) => g \in WellFormed
@@ -360,8 +363,9 @@ TypeOK ==
 \* A tenant-tier rule is written only by the tenant policy facade after its
 \* admin check, is confined to its tenant's tenant-layer trees and
 \* tenant-wide scope with data-plane operations only, and no rule in effect
-\* names a tenant group outside that group's tenant. A non-conforming
-\* tenant-tier record arriving by replication or restore never takes effect.
+\* names a tenant group outside that group's tenant. A non-conforming record
+\* arriving by replication or restore, tenant-tier or operator, never takes
+\* effect.
 TenantRuleConfinement ==
     /\ \A r \in rules : r.via # "arrival" => StoreAdmits(r)
     /\ \A r \in rules : r.layer = "tenant" => r.via \in {"facade", "arrival"}

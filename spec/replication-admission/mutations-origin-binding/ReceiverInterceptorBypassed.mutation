@@ -1,0 +1,13 @@
+# Pairs with OriginAuthenticated. A method's own check runs without the
+# interceptor's verdict, so an unaccepted credential reaches the verb.
+MODULE: ReceiverInterceptorBypassed
+TARGET: OriginAuthenticated
+CLASS: Invariant
+SUMMARY: the host serves a call whatever the shared-secret interceptor decided
+PERTURBS: Call
+
+--- FIND
+        status == IF gate # "pass" THEN gate ELSE verb[1]
+--- REPLACE
+        status == verb[1]
+--- END

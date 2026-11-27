@@ -549,6 +549,57 @@ public sealed class LatticeApiMcpSessionConfiguratorTests
     }
 
     [Test]
+    public async Task Region_discovery_tool_refuses_a_caller_whose_grants_were_revoked_after_advertisement()
+    {
+        // A session's tool collection is built once, so the grant condition that
+        // admitted lattice_list_regions at tools/list must be re-checked at
+        // tools/call: a caller revoked after advertisement must stop reading the
+        // region topology (#6205).
+        var access = TestAccessSets.Granting(LatticeApiMcpGroup.Data);
+        var services = new ServiceCollection()
+            .AddSingleton<ILatticeApiMcpAuthorizer>(new AllowAllMcpAuthorizer())
+            .BuildServiceProvider();
+        var configurator = new LatticeApiMcpSessionConfigurator(
+            new FakeBridge(new LatticeCredential("alice")),
+            new FakeResolver(_ => access),
+            [new FakeToolGroup(LatticeApiMcpGroup.Data, "data_read")],
+            services,
+            NullLogger<LatticeApiMcpSessionConfigurator>.Instance);
+
+        var plan = await configurator.BuildSessionPlanAsync(ContextWith(), CancellationToken.None);
+        var regionTool = plan.Tools.Single(t => t.ProtocolTool.Name == "lattice_list_regions");
+
+        await using var invocation = new ServiceCollection()
+            .AddSingleton<ILatticeApiMcpAuthorizer>(new AllowAllMcpAuthorizer())
+            .AddSingleton<IHttpContextAccessor>(new HttpContextAccessor { HttpContext = new DefaultHttpContext() })
+            .AddSingleton<ILatticeApiMcpRegionRouter>(new LatticeApiMcpRegionRouter("us", new[]
+            {
+                new LatticeApiMcpRegionDefinition
+                {
+                    RegionId = "us",
+                    ClusterId = "cluster-us",
+                    IsCurrent = true,
+                    Groups = new Dictionary<LatticeApiMcpGroup, string?> { [LatticeApiMcpGroup.Data] = null },
+                },
+            }))
+            .AddSingleton<Orleans.Lattice.Api.Region.ILatticeRegionCatalog>(sp => new LatticeApiMcpRegionCatalog(
+                sp.GetRequiredService<ILatticeApiMcpRegionRouter>(), sp))
+            .BuildServiceProvider();
+
+        var served = await McpToolInvocation.CallAsync(regionTool, invocation);
+        access = LatticeApiMcpAccessSet.None;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(served.IsError, Is.Not.True, "A caller still holding a grant is served.");
+            Assert.That(
+                async () => await McpToolInvocation.CallAsync(regionTool, invocation),
+                Throws.TypeOf<ModelContextProtocol.McpException>().With.Message.Contain("not authorized"),
+                "A caller whose every grant was revoked after advertisement must be refused.");
+        });
+    }
+
+    [Test]
     public async Task Region_discovery_tool_is_hidden_from_a_caller_holding_no_facade_grant()
     {
         // A caller granted nothing can route nothing, so peer-region topology is
