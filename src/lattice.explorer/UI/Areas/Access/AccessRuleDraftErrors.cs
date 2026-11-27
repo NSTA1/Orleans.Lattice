@@ -12,6 +12,9 @@ internal sealed class AccessRuleDraftErrors
     /// <summary>The governed tree's problem.</summary>
     public string? Tree { get; set; }
 
+    /// <summary>The tenant's problem, for a tenant capability scope.</summary>
+    public string? Tenant { get; set; }
+
     /// <summary>The key or prefix's problem.</summary>
     public string? KeyOrPrefix { get; set; }
 
@@ -23,5 +26,5 @@ internal sealed class AccessRuleDraftErrors
 
     /// <summary>Whether any field has a problem.</summary>
     public bool HasAny => RuleId is not null || Subject is not null || Tree is not null
-        || KeyOrPrefix is not null || Operations is not null || Form is not null;
+        || Tenant is not null || KeyOrPrefix is not null || Operations is not null || Form is not null;
 }

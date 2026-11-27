@@ -877,6 +877,68 @@ internal sealed partial class ShardRootGrain
     }
 
     /// <summary>
+    /// The count-only counterpart of <see cref="ScanChainCursor"/> for a sibling
+    /// walk that reads per-leaf counts and never sees keys (issue 6199).
+    /// <para>
+    /// The shard count walks summed every leaf the chain reached, so a chain
+    /// threading an orphan (issue 3271) over-counted by exactly the orphan's
+    /// shadow rows while a key scan of the same tree, which already judges rows
+    /// through the watermark, was correct. Walks that read keys now admit them
+    /// through <see cref="ScanChainCursor"/>; the count fast path has no keys,
+    /// so it judges each leaf by its declared <see cref="LeafKeyRange"/>
+    /// instead, keeping the fast path free of key materialisation.
+    /// </para>
+    /// <para>
+    /// A correct chain declares contiguous, ascending ranges: each leaf begins
+    /// at or past the exclusive high bound of the leaf before it. A leaf whose
+    /// leading edge is behind that high bound - including one leaving its
+    /// leading edge unset, which claims the keyspace from the unbounded start -
+    /// is claiming territory the walk has left, so it contributes no count and
+    /// its bounds steer neither termination nor resume. As with the scan
+    /// cursor the walk still follows the chain past it, because an orphan is
+    /// spliced between live leaves. A leaf declaring no bounds at all is not
+    /// judged, and neither is the leaf after a trusted leaf with no recorded
+    /// high bound, since there is nothing to judge it against: the guard only
+    /// rejects on positive evidence, preserving the legacy fallback for leaves
+    /// that never recorded their bounds.
+    /// </para>
+    /// </summary>
+    private struct CountChainBounds
+    {
+        private string? _previousHigh;
+
+        /// <summary>
+        /// The exclusive high bound of the last trusted leaf, reported as the
+        /// watermark when a leaf is rejected.
+        /// </summary>
+        internal readonly string? PreviousHigh => _previousHigh;
+
+        /// <summary>
+        /// Returns <see langword="true"/> when the leaf declaring
+        /// <paramref name="bounds"/> continues the chain, recording its high
+        /// bound; returns <see langword="false"/> when it regresses the chain,
+        /// leaving the recorded position unchanged.
+        /// </summary>
+        internal bool Admit(LeafKeyRange bounds)
+        {
+            if (bounds.LowKeyInclusive is null && bounds.HighKeyExclusive is null)
+            {
+                _previousHigh = null;
+                return true;
+            }
+
+            if (_previousHigh is { } previousHigh
+                && (bounds.LowKeyInclusive is not { } low || string.CompareOrdinal(low, previousHigh) < 0))
+            {
+                return false;
+            }
+
+            _previousHigh = bounds.HighKeyExclusive;
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Reports a leaf whose keys regressed the scan's chain watermark, which
     /// proves it is not reachable by descent for the range it claims to own
     /// (issue 3271). Called once per offending leaf per page.

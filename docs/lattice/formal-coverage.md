@@ -76,7 +76,6 @@ once, either here or in the
 | Tenant quotas | 3 | 29 | 26 | 32 | [Quota admission](../../spec/tenant-quotas/README.md) |
 | Tenant rate budgets | 1 | 14 | 23 | 22 | [Rate-budget leases](../../spec/tenant-rate-budget/README.md) |
 | Tenant isolation | 1 | 25 | 25 | 31 | [Isolation epochs and leases](../../spec/tenant-isolation/README.md) |
-| Delegated tenant access | 1 | 20 | 20 | 36 | [Delegated tenant-access administration](../../spec/tenant-access-admin/README.md) |
 | Scheduling and progress | 10 | 203 | 251 | 133 | [Verified Scheduling and Progress](verified-scheduling.md) |
 | Schema enforcement and versioning | 9 | 150 | 178 | 301 | [Schema enforcement and versioning](../../spec/schema/README.md) |
 | Schema and view composition | 1 | 23 | 23 | 28 | [Schema and view composition](../../spec/schema-view/README.md) |
@@ -392,6 +391,21 @@ peak live heap was not measured. These are local observations, not predicted CI
 deadlines. Exhaustive TLC is validated in CI's sharded runs; local iteration uses
 the structural and production-detector scopes rather than serially repeating it.
 
+## Identity, authorization and protected actions
+
+Epic #6046 gives the identity, authorization, protected-action and tenancy
+surfaces the same formal coverage as the protocols above: the authorization
+decision, delegated tenant-access administration, cross-tenant grants,
+installable apps, MCP tool gating, the replication receiver gate and origin
+binding, and audit-trail completeness. Each module refines to an invariant
+[`security.instructions.md`](../../.github/instructions/security.instructions.md)
+states as load-bearing, and appends its own row to this table when it lands.
+
+| Module | Surface | Mutants | Behaviour rows | Detector tests | Page |
+|--------|---------|---------|----------------|----------------|------|
+| `AuthDecision` | Authorization decision layering | 18 | 17 | 41 | [Authorization decision](../../spec/auth-decision/README.md) |
+| `TenantAccessAuthorization` | Delegated tenant access: authorization | 20 | 20 | 36 | [Delegated tenant-access administration](../../spec/tenant-access-admin/README.md) |
+
 ## What each area covers, and what it does not
 
 Coverage of one area must not be read as coverage of another. Each area's page,
@@ -653,6 +667,21 @@ gaps, states its full scope.
     last-admin guard and removal stamps; group deletion and its cascade;
     membership records arriving by replication or restore; app rules on
     app-owned trees; and the compiled snapshot's rebuild after a flip.
+- **Authorization decision** ([`spec/auth-decision/`](../../spec/auth-decision/README.md)).
+  - **Covers:** the decision over a rule store written by the operator
+    surface, the tenant policy facade and system-origin writes: a matched
+    operator verdict is final; the tenant layer runs only on its owner's tenant
+    data trees; a range filter composes the layers per key on operator
+    coverage; `Telemetry` and `AppInstall` come only from the cluster-wide id
+    (`Telemetry` also from a platform grant over one tenant's capability scope);
+    control-plane requests fail closed; bootstrap administrators are the one
+    root of trust; and a cross-tree batch is authorized all or nothing. It
+    publishes the `Allowed(caller, op, scope)` contract the other authorization
+    modules assume.
+  - **Does not cover:** group subjects and templated scopes, the uniform-range
+    shortcut, tenant-isolation composition, snapshot warm-up and the
+    strict-consistency fence, existence probes, or what a registered MCP
+    authorizer decides.
 
 - **Scheduling and progress** ([`spec/scheduling/`](../../spec/scheduling/README.md)).
   - **Covers:** non-reentrant turn occupancy, partition admission capacity,

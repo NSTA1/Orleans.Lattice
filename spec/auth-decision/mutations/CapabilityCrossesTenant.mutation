@@ -1,0 +1,15 @@
+# Pairs with ScopelessFromClusterWideOnly: a Telemetry grant over tenant A's capability scope admits tenant B's.
+
+MODULE: CapabilityCrossesTenant
+TARGET: ScopelessFromClusterWideOnly
+CLASS: Invariant
+SUMMARY: a Telemetry grant over tenant A's capability scope admits tenant B's
+
+--- FIND
+    /\ op \in r.ops
+    /\ r.tree = tree
+--- REPLACE
+    /\ op \in r.ops
+    /\ \/ r.tree = tree
+       \/ r.tree.kind = "tenantCapability" /\ tree.kind = "tenantCapability"
+--- END

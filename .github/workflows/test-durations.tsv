@@ -109,6 +109,7 @@ lattice	formal-tlc-view-resolved-identity	deterministic	0.27
 lattice	formal-tlc-view-joint-repair	deterministic	0.48
 lattice	formal-tlc-view-numeric	deterministic	1.15
 lattice	formal-tlc-schema-view	deterministic	1.77
+lattice	formal-tlc-security	deterministic	6.50
 lattice	formal-tlc-tree-lifecycle	deterministic	0.55
 lattice	formal-tlc-anti-entropy	deterministic	2.48
 lattice	formal-tlc-anti-entropy-2	deterministic	4.61

@@ -1,0 +1,13 @@
+# Pairs with FailClosed: an unmatched control-plane request inherits the permissive data-plane default effect.
+
+MODULE: DefaultAllowsControlPlane
+TARGET: FailClosed
+CLASS: Invariant
+SUMMARY: an unmatched control-plane request inherits the permissive data-plane default effect
+PERTURBS: Evaluate
+
+--- FIND
+                      THEN IF m.matched /\ m.effect = "Allow" THEN "Allow" ELSE "Deny"
+--- REPLACE
+                      THEN IF m.matched /\ m.effect = "Allow" THEN "Allow" ELSE DefaultEffect
+--- END
