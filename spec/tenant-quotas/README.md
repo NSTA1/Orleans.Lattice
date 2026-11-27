@@ -10,7 +10,7 @@ refinement note states which production mechanisms its detectors really reach.
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 | --- | --- | --- | --- | --- | --- | --- |
 | `TenantFootprint` | 5 | 3 | 8 | 13 | 15 | 62,964 |
-| `TenantTreeCount` | 4 | 2 | 3 | 7 | 8 | 636 |
+| `TenantTreeCount` | 5 | 2 | 6 | 10 | 12 | 41,320 |
 | `TenantQuotaEvaluation` | 2 | 1 | 1 | 9 | 3 | 124,416 |
 
 ## Semantics and assumptions
@@ -57,9 +57,12 @@ exists. The storage ceiling abstracts representation, not admission.
 
 `TenantTreeCount` has three unique create requests, a base cap of one or two,
 and zero or 50% burst. Check and register are separate actions, preserving the
-documented race. A later probe refuses at a full cap even if earlier in-flight
+documented race. A re-point of an existing logical id, purges of registered trees
+and one quota change interleave with them; the re-point is never charged. A later
+probe refuses once the count stays at or above the cap, even if earlier in-flight
 checks all succeeded. It neither reserves capacity nor models registry CRDT
-merging or tree deletion.
+merging, soft deletion before purge, or an alias onto a new logical id (see the
+refinement note's abstraction gaps).
 
 `TenantQuotaEvaluation` explores independent nullable limits and usage for all
 four dimensions, zero/50%/100% burst, and deterministic refusal. It does not
