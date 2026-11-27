@@ -66,10 +66,17 @@ It is a design check with detectors, not a machine-checked refinement proof.
 
 ## Deliberate abstraction gaps
 
-- **Tenant-admin authority is a fixed grant.** Who is an admin of a tenant is the contract's constant grant set, not the admin set the model writes. Admin-set and member-set concurrency, the last-admin guard and removal stamps are the sibling module's concern. Production symbols: `TenantRegionResidencyAuthorizer.AuthorizeTenantAdminAsync`, `TenantRecord.IsAdmin`.
-- **Group deletion and its cascade.** The cascade that removes a deleted group's entries, rules and edges is not modelled here; its interleavings with concurrent removals belong to the sibling module. Production symbols: `LatticeTenantDirectoryAdmin.RemoveGroupAsync`.
-- **Arriving operator rules naming a tenant group.** An arrival is drawn from records its source's store admitted. The snapshot compiler re-validates tenant-tier rules on arrival but not an operator rule's tenant group subject, so an operator rule written around every store would not be dropped. Production symbols: `CompiledTenantPartition.Build`, `TenantRuleConfinement.CheckTenantGroupSubject`.
-- **App rules on app-owned trees.** The `app:` allowance for a tenant group on its tenant's app-owned trees is the installable-apps module's concern. Production symbols: `LatticeAppRuleIds.IsAppOwned`.
-- **Arriving membership records.** Group records and edges that arrive by replication or restore are not modelled here; cross-tenant entries in replicated records are the sibling module's concern. Production symbols: `LatticeMembershipDirectory.AddMemberAsync`.
-- **One-level directory expansion.** A claim resolution sees the subject's direct directory groups, not the transitive closure; the claim filter's verdict does not depend on depth. Production symbols: `LatticeMembershipDirectory.GroupsOfAsync`.
-- **Snapshot rebuild on a flip.** The evaluator reads the flag live; the compiled snapshot's rebuild after a flip is not modelled. Production symbols: `CompiledPolicySnapshotMaintainer`.
+- **Tenant-admin authority is a fixed grant.** Who is an admin of a tenant is the contract's constant grant set, not the admin set the model writes. Admin-set and member-set concurrency, the last-admin guard and removal stamps are the sibling module's concern.
+  Production symbols: `TenantRegionResidencyAuthorizer.AuthorizeTenantAdminAsync`, `TenantRecord.IsAdmin`.
+- **Group deletion and its cascade.** The cascade that removes a deleted group's entries, rules and edges is not modelled here; its interleavings with concurrent removals belong to the sibling module.
+  Production symbols: `LatticeTenantDirectoryAdmin.RemoveGroupAsync`.
+- **Arriving operator rules naming a tenant group.** An arrival is drawn from records its source's store admitted. The snapshot compiler re-validates tenant-tier rules on arrival but not an operator rule's tenant group subject, so an operator rule written around every store would not be dropped.
+  Production symbols: `CompiledTenantPartition.Build`, `TenantRuleConfinement.CheckTenantGroupSubject`.
+- **App rules on app-owned trees.** The `app:` allowance for a tenant group on its tenant's app-owned trees is the installable-apps module's concern.
+  Production symbols: `LatticeAppRuleIds.IsAppOwned`.
+- **Arriving membership records.** Group records and edges that arrive by replication or restore are not modelled here; cross-tenant entries in replicated records are the sibling module's concern.
+  Production symbols: `LatticeMembershipDirectory.AddMemberAsync`.
+- **One-level directory expansion.** A claim resolution sees the subject's direct directory groups, not the transitive closure; the claim filter's verdict does not depend on depth.
+  Production symbols: `LatticeMembershipDirectory.GroupsOfAsync`.
+- **Snapshot rebuild on a flip.** The evaluator reads the flag live; the compiled snapshot's rebuild after a flip is not modelled.
+  Production symbols: `CompiledPolicySnapshotMaintainer`.
