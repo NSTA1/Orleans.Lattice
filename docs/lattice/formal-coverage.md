@@ -404,6 +404,7 @@ states as load-bearing, and appends its own row to this table when it lands.
 | Module | Surface | Mutants | Behaviour rows | Detector tests | Page |
 |--------|---------|---------|----------------|----------------|------|
 | `AuthDecision` | Authorization decision layering | 18 | 17 | 41 | [Authorization decision](../../spec/auth-decision/README.md) |
+| `TenantAccessMembership` | Tenant-access membership under concurrency | 12 | 11 | 20 | [Tenant-access membership](../../spec/tenant-access-admin/README.md#tenantaccessmembership) |
 | `McpToolAuthorization` | MCP tool authorization lock-step | 23 | 12 | 25 | [MCP tool authorization](../../spec/mcp-tool-auth/README.md) |
 | `TenantAccessAuthorization` | Delegated tenant access: authorization | 20 | 20 | 36 | [Delegated tenant-access administration](../../spec/tenant-access-admin/README.md) |
 | `ReplicationOriginBinding` | Replication gRPC host admitted-peer seam and origin binding | 10 | 2 | 10 | [Replication receiver admission](../../spec/replication-admission/README.md) |
@@ -675,6 +676,21 @@ gaps, states its full scope.
     last-admin guard and removal stamps; group deletion and its cascade;
     membership records arriving by replication or restore; app rules on
     app-owned trees; and the compiled snapshot's rebuild after a flip.
+
+- **Tenant-access membership** ([`spec/tenant-access-admin/`](../../spec/tenant-access-admin/README.md#tenantaccessmembership)).
+  - **Covers:** the concurrency half of delegated tenant-access
+    administration: concurrent admin-set and member-set removals and tenant
+    group deletion through the registry's compare-and-set loop, with the
+    last-admin guard re-applied to the merged record; removals stamped on a
+    silo whose clock lags the slot's writer; and admin-set, member-set and
+    role-binding entries arriving by replication or restore, another tenant's
+    group included, never conferring anything.
+  - **Does not cover:** the compare-and-set loop's retries and attempt budget
+    (one committing attempt per step); host-supplied registries without the
+    guarded commit; removals arriving by replication, and cross-region
+    whole-record resolution; and the rest of a group deletion's cascade
+    (edges, rules and the group record).
+
 - **Authorization decision** ([`spec/auth-decision/`](../../spec/auth-decision/README.md)).
   - **Covers:** the decision over a rule store written by the operator
     surface, the tenant policy facade and system-origin writes: a matched
