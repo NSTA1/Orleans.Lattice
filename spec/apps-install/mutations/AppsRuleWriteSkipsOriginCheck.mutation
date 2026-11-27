@@ -1,0 +1,12 @@
+# Pairs with AppRulesSystemOriginOnly. Only system origin may put an app-owned rule id.
+MODULE: AppsRuleWriteSkipsOriginCheck
+TARGET: AppRulesSystemOriginOnly
+CLASS: Invariant
+SUMMARY: the store admits an operator put of an app-owned rule id
+PERTURBS: WriteAppRule
+
+--- FIND
+    LET admitted == sys
+--- REPLACE
+    LET admitted == TRUE
+--- END

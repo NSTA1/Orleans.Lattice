@@ -1,0 +1,18 @@
+# Pairs with InstalledEqualsReviewed. The pin is what the operator reviewed; a source change that moves it lets
+# an unreviewed manifest match.
+MODULE: AppsSourceChangeRepins
+TARGET: InstalledEqualsReviewed
+CLASS: Invariant
+SUMMARY: a source change re-pins the digest to the new manifest
+PERTURBS: ChangeManifest
+
+--- FIND
+    /\ seen' = seen
+    /\ obs' = NoObs
+    /\ UNCHANGED <<pin, installed, roleGrants, rules, alias>>
+--- REPLACE
+    /\ seen' = seen
+    /\ obs' = NoObs
+    /\ pin' = Digest(m)
+    /\ UNCHANGED <<installed, roleGrants, rules, alias>>
+--- END

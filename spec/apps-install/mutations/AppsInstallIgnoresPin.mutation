@@ -1,0 +1,14 @@
+# Pairs with InstalledEqualsReviewed. A pinned install must refuse a manifest whose digest is not the reviewed one.
+MODULE: AppsInstallIgnoresPin
+TARGET: InstalledEqualsReviewed
+CLASS: Invariant
+SUMMARY: a pinned install never compares the resolved digest with the pin
+PERTURBS: Install
+
+--- FIND
+    LET auth == sys \/ HoldsClusterWideAppInstall(c)
+        matches == ~pinned \/ (pin # "none" /\ Digest(source) = pin)
+--- REPLACE
+    LET auth == sys \/ HoldsClusterWideAppInstall(c)
+        matches == TRUE
+--- END
