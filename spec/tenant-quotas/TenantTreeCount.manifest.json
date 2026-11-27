@@ -3,11 +3,11 @@
   "refinement": "RefinementTreeCount.md",
   "nonBehaviouralActions": [],
   "counts": {
-    "invariants": 5,
+    "invariants": 6,
     "properties": 2,
-    "actions": 6,
-    "mutations": 10,
-    "behaviourRows": 12,
+    "actions": 7,
+    "mutations": 12,
+    "behaviourRows": 14,
     "distinctStates": 41320
   }
 }

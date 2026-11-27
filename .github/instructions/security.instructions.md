@@ -442,8 +442,9 @@ gate will tell you if you forget.
   logical id adds no row and is not charged. Admission does not reserve, so concurrent
   admissions can overshoot by the number in flight. The design, its mutations and its
   detectors are `TenantTreeCount` in
-  [`spec/tenant-quotas/`](../../spec/tenant-quotas/RefinementTreeCount.md); the
-  tree-admin alias seam does not yet charge a new logical id (#5333).
+  [`spec/tenant-quotas/`](../../spec/tenant-quotas/RefinementTreeCount.md). In the
+  tree-admin facade the alias check is `LatticeTreeAdmin.SetTreeAliasAsync`; do not add a
+  verb that writes a registry row without it.
 
 ## Release-status note for security fixes
 
