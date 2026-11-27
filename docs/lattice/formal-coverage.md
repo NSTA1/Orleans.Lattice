@@ -405,7 +405,7 @@ states as load-bearing, and appends its own row to this table when it lands.
 | Module | Surface | Mutants | Behaviour rows | Detector tests | Page |
 |--------|---------|---------|----------------|----------------|------|
 | `AuthDecision` | Authorization decision layering | 18 | 17 | 41 | [Authorization decision](../../spec/auth-decision/README.md) |
-| `TenantAccessMembership` | Tenant-access membership under concurrency | 12 | 11 | 20 | [Tenant-access membership](../../spec/tenant-access-admin/README.md#tenantaccessmembership) |
+| `TenantAccessMembership` | Tenant-access membership under concurrency | 13 | 11 | 23 | [Tenant-access membership](../../spec/tenant-access-admin/README.md#tenantaccessmembership) |
 
 ## What each area covers, and what it does not
 
@@ -674,8 +674,8 @@ gaps, states its full scope.
   - **Covers:** the concurrency half of delegated tenant-access
     administration: concurrent admin-set and member-set removals and tenant
     group deletion through the registry's compare-and-set loop, with the
-    last-admin guard re-applied to the merged record; removals stamped on a
-    silo whose clock lags the slot's writer; and admin-set, member-set and
+    last-admin guard re-applied to the merged record and counting only
+    entries that admit anyone; removals stamped on a silo whose clock lags the slot's writer; and admin-set, member-set and
     role-binding entries arriving by replication or restore, another tenant's
     group included, never conferring anything.
   - **Does not cover:** the compare-and-set loop's retries and attempt budget
