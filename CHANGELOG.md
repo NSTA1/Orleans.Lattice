@@ -13,6 +13,7 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 ### Added
 
 - **Views - Lag age in view status.** View status reports `ApplyLagAge`, how long the oldest unapplied source change has waited, and the Explorer's Views tab shows it beside the entry lag. ([#6145](https://github.com/NSTA1/Orleans.Lattice/issues/6145)) (`Orleans.Lattice`, `Orleans.Lattice.Api.Abstractions`, `Orleans.Lattice.Api.TreeAdmin`, `Orleans.Lattice.Explorer.UI`)
+- **Telemetry - Tenant-confined telemetry grants.** A platform rule granting `Telemetry` over `LatticeScope.TenantCapability(tenant)` shows a user that one tenant's boards only; the Explorer rule editor offers the scope. ([#5582](https://github.com/NSTA1/Orleans.Lattice/issues/5582)) (`Orleans.Lattice.Auth`, `Orleans.Lattice.Api.Telemetry`, `Orleans.Lattice.Explorer.UI`)
 
 ### Fixed
 
