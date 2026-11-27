@@ -1,0 +1,18 @@
+# Pairs with IntentsResolve. Without the Indeterminate verdict at the maximum
+# pending age, an intent whose anchor history is incomplete waits forever.
+#
+# DEADLOCK: off is required: once the remaining intent can never resolve,
+# no action is enabled, and with the deadlock check on TLC reports the
+# deadlock before it evaluates the property.
+MODULE: AuditReconcilerWaitsForever
+TARGET: IntentsResolve
+CLASS: Temporal
+DEADLOCK: off
+SUMMARY: an intent whose outcome cannot be proven is never resolved
+PERTURBS: Reconcile
+
+--- FIND
+                     [] OTHER -> IF expired THEN "Indeterminate" ELSE "wait"
+--- REPLACE
+                     [] OTHER -> "wait"
+--- END

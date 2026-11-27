@@ -1,0 +1,14 @@
+# Pairs with NoSecretMaterial. The record carries the request's payload (a
+# rule body, a manifest, a credential) rather than allow-listed identifiers
+# and scalars.
+MODULE: AuditIntentCopiesPayload
+TARGET: NoSecretMaterial
+CLASS: Invariant
+SUMMARY: the intent copies the request payload into the record
+PERTURBS: BeginIntent
+
+--- FIND
+!.actor = op[o].caller, !.secret = FALSE, !.long = FALSE]]
+--- REPLACE
+!.actor = op[o].caller, !.secret = TRUE, !.long = FALSE]]
+--- END

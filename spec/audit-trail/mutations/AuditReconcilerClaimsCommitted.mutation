@@ -1,0 +1,14 @@
+# Pairs with ReconcilerNeverClaimsCommitted. A local revision since the base
+# may be another call's, so claiming it as this call's commit asserts what the
+# reconciler cannot prove.
+MODULE: AuditReconcilerClaimsCommitted
+TARGET: ReconcilerNeverClaimsCommitted
+CLASS: Invariant
+SUMMARY: the reconciler claims a commit from a local revision
+PERTURBS: Reconcile
+
+--- FIND
+                     [] viewComplete /\ localSince -> "Indeterminate"
+--- REPLACE
+                     [] viewComplete /\ localSince -> "Committed"
+--- END

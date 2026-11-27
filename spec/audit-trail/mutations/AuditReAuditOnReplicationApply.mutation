@@ -1,0 +1,15 @@
+# Pairs with ReplicatedNotReAudited. A replicated revision of a protected
+# record is audited as if a local principal had made it.
+MODULE: AuditReAuditOnReplicationApply
+TARGET: ReplicatedNotReAudited
+CLASS: Invariant
+SUMMARY: applying a replicated revision writes an audit record
+PERTURBS: ReplicateApply
+
+--- FIND
+    /\ UNCHANGED <<op, pending, finals, viewComplete>>
+--- REPLACE
+\* MUTATION: the replication apply path emits an audit record.
+    /\ finals' = finals \cup {Row(RemoteOp, "Committed", "admin", "replication", FALSE, FALSE)}
+    /\ UNCHANGED <<op, pending, viewComplete>>
+--- END

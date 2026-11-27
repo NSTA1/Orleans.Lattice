@@ -1,0 +1,14 @@
+# Pairs with NeverNotCommittedWhileLive. The reconciler records not committed
+# for an unmoved anchor once the reconcile lease has passed, not the maximum
+# pending age, while an accepted activation or a slow caller can still commit.
+MODULE: AuditNotCommittedAtLease
+TARGET: NeverNotCommittedWhileLive
+CLASS: Invariant
+SUMMARY: an unmoved anchor proves no commit as soon as the lease has passed
+PERTURBS: Reconcile
+
+--- FIND
+        verdict == CASE unmoved -> IF expired THEN "NotCommitted" ELSE "wait"
+--- REPLACE
+        verdict == CASE unmoved -> "NotCommitted"
+--- END

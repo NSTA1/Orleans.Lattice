@@ -1,0 +1,14 @@
+# Pairs with DenialsAudited. A validation, conflict or quota refusal after
+# authorization passed is recorded as Denied, so the trail reports an
+# authorization refusal that never happened.
+MODULE: AuditValidationRecordedAsDenial
+TARGET: DenialsAudited
+CLASS: Invariant
+SUMMARY: an authorized call's domain refusal is recorded as a denial
+PERTURBS: Finalize
+
+--- FIND
+                     [] op[o].result = "domain" -> "Failed"
+--- REPLACE
+                     [] op[o].result = "domain" -> "Denied"
+--- END
