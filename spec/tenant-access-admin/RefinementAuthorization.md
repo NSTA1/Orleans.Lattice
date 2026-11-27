@@ -70,7 +70,7 @@ It is a design check with detectors, not a machine-checked refinement proof.
   Production symbols: `TenantRegionResidencyAuthorizer.AuthorizeTenantAdminAsync`, `TenantRecord.IsAdmin`.
 - **Group deletion and its cascade.** The cascade that removes a deleted group's entries, rules and edges is not modelled here; its interleavings with concurrent removals belong to the sibling module.
   Production symbols: `LatticeTenantDirectoryAdmin.RemoveGroupAsync`.
-- **Arriving operator rules naming a tenant group.** An arrival is drawn from records its source's store admitted. The snapshot compiler re-validates tenant-tier rules on arrival but not an operator rule's tenant group subject, so an operator rule written around every store would not be dropped.
+- **Arriving operator rules naming a tenant group.** An arrival is drawn from records its source's store admitted. The snapshot compiler re-validates tenant-tier rules on arrival but not an operator rule's tenant group subject, so an operator rule written around every store would not be dropped (#6210).
   Production symbols: `CompiledTenantPartition.Build`, `TenantRuleConfinement.CheckTenantGroupSubject`.
 - **App rules on app-owned trees.** The `app:` allowance for a tenant group on its tenant's app-owned trees is the installable-apps module's concern.
   Production symbols: `LatticeAppRuleIds.IsAppOwned`.
