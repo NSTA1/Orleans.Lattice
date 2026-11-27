@@ -73,7 +73,7 @@ once, either here or in the
 | Tree lifecycle composition | 2 | 46 | 66 | 48 | [Resize, reshard and shadow cutover](../../spec/tree-lifecycle/README.md) |
 | Anti-entropy remediation | 1 | 32 | 39 | 60 | [Digest-driven repair](../../spec/anti-entropy/README.md) |
 | Shared alias routing and revert | 2 | 25 | 40 | 22 | [Aliasing](../../spec/aliasing/README.md) |
-| Tenant quotas | 3 | 29 | 26 | 32 | [Quota admission](../../spec/tenant-quotas/README.md) |
+| Tenant quotas | 3 | 32 | 30 | 36 | [Quota admission](../../spec/tenant-quotas/README.md) |
 | Tenant rate budgets | 1 | 14 | 23 | 22 | [Rate-budget leases](../../spec/tenant-rate-budget/README.md) |
 | Tenant isolation | 1 | 25 | 25 | 31 | [Isolation epochs and leases](../../spec/tenant-isolation/README.md) |
 | Scheduling and progress | 10 | 203 | 251 | 133 | [Verified Scheduling and Progress](verified-scheduling.md) |
@@ -614,14 +614,16 @@ gaps, states its full scope.
   - **Covers:** sampled footprint admission against the last selected usage
     sample, cold admission, local and replicated usage accounting with
     per-cluster usage slots and their publication hysteresis, the
-    authoritative tree-count check with its check-then-register race, and the
+    authoritative tree-count check with its check-then-register race, with purges,
+    quota changes and uncharged alias re-points of existing logical ids
+    interleaved with it, and the
     quota evaluator's independent nullable limits, burst arithmetic and
     refusal order.
   - **Does not cover:** a hard ceiling - quotas are soft, concurrent admissions
     can overshoot, and no invariant bounds actual usage by the limit;
     deletions, changed quotas or residency, failed storage operations and
-    equal-clock writer ties; capacity reservation, registry merging or tree
-    deletion for tree counts; and rate limits, exception transport or
+    equal-clock writer ties; capacity reservation, registry merging or soft
+    deletion before purge for tree counts; and rate limits, exception transport or
     permission checks in the evaluator.
 
 - **Tenant rate budgets** ([`spec/tenant-rate-budget/`](../../spec/tenant-rate-budget/README.md)).
