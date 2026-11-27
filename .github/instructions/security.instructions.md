@@ -426,12 +426,29 @@ gate will tell you if you forget.
   silo whose clock runs behind still removes the entry. A cap withdrawal is retried a
   bounded number of times, and one that never lands is reported as a
   `LatticeQuotaExceededException` saying the cap may stay exceeded, never as success.
+- **A death is not proof a silo stopped.** A tenant registry write returns only after
+  every silo that could trust the old policy has acknowledged the new epoch or let its
+  lease lapse, and a fresh `TenantPolicyEpochGrain` or `AppRegistryEpochGrain`
+  activation holds every advance for one lease plus the margin, in case a previous
+  activation granted leases still live. It may end that grace early only once every
+  member has leased from it, or has been seen dead by it for one lease plus the margin:
+  a silo falsely declared dead keeps serving on a lease from the previous activation
+  until it learns it is dead. `AppRegistryEpochGrain` implements this rule; the
+  tenant-policy grain still releases on a death at once (#5719). Model-checked by
+  `spec/tenant-isolation/` (`TenantIsolation`: `NoStaleAuthority` and
+  `NoEarlyGraceRelease`); its refinement note names the detector for each guard.
 - **The conformance suite is the regression guard.** `TenantAccessConformanceTests`
   (`test/lattice.api.tenantadmin/Security/`, Category `Integration`, filter
   `FullyQualifiedName~TenantAccessConformanceTests`) proves the invariants above end to
   end on a real cluster: layering, confinement, claim stripping, isolation, revocation,
   feature-off equivalence, deletion purge, break-glass removal and caps under
   concurrency. Run it, and extend it, when you change any of these seams.
+- **The formal model is `spec/tenant-access-admin/`.** Module `TenantAccessAuthorization`
+  (over the authorization contract's abstract `Allowed`, `spec/auth-decision/`) checks
+  tenant-tier rule confinement, the reserved `t/` namespace, claim stripping whatever
+  the flag, feature-off inertness, authorize-before-disclose and the authorize, validate,
+  write order, each with a mutation that turns it red and detectors in
+  `spec/tenant-access-admin/RefinementAuthorization.md`. Change the model with the seam.
 
 ### Tenant tree-count admission (`src/lattice.tenancy`, consumed by `src/lattice.api.treeadmin`)
 - **Every registry row a tenant adds passes tree-count admission.** `MaxTreeCount`

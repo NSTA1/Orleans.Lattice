@@ -1,0 +1,13 @@
+# Pairs with ReservedGroupNamespace. Without the reserved-tenant refusal an
+# operator creates t/default/..., which is no tenant's group.
+MODULE: FacadeGroupForDefaultTenant
+TARGET: ReservedGroupNamespace
+CLASS: Invariant
+SUMMARY: the tenant directory facade creates a group for the reserved default tenant
+PERTURBS: FacadeUpsertGroup
+
+--- FIND
+          ELSE IF t = Default THEN Refuse("facadeUpsertGroup", auth, fl, "reserved", FALSE)
+--- REPLACE
+          ELSE IF FALSE THEN Refuse("facadeUpsertGroup", auth, fl, "reserved", FALSE)
+--- END
