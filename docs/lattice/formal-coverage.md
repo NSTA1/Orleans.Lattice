@@ -76,7 +76,7 @@ once, either here or in the
 | Tenant quotas | 3 | 29 | 26 | 32 | [Quota admission](../../spec/tenant-quotas/README.md) |
 | Tenant rate budgets | 1 | 14 | 23 | 22 | [Rate-budget leases](../../spec/tenant-rate-budget/README.md) |
 | Tenant isolation | 1 | 25 | 25 | 31 | [Isolation epochs and leases](../../spec/tenant-isolation/README.md) |
-| Delegated tenant access | 2 | 31 | 31 | 54 | [Delegated tenant-access administration](../../spec/tenant-access-admin/README.md) |
+| Delegated tenant access | 1 | 19 | 20 | 35 | [Delegated tenant-access administration](../../spec/tenant-access-admin/README.md) |
 | Scheduling and progress | 10 | 203 | 251 | 133 | [Verified Scheduling and Progress](verified-scheduling.md) |
 | Schema enforcement and versioning | 9 | 150 | 178 | 301 | [Schema enforcement and versioning](../../spec/schema/README.md) |
 | Schema and view composition | 1 | 23 | 23 | 28 | [Schema and view composition](../../spec/schema-view/README.md) |
@@ -404,6 +404,8 @@ states as load-bearing, and appends its own row to this table when it lands.
 
 | Module | Surface | Mutants | Behaviour rows | Detector tests | Page |
 |--------|---------|---------|----------------|----------------|------|
+| `AuthDecision` | Authorization decision layering | 18 | 17 | 41 | [Authorization decision](../../spec/auth-decision/README.md) |
+| `TenantAccessMembership` | Tenant-access membership under concurrency | 12 | 11 | 20 | [Tenant-access membership](../../spec/tenant-access-admin/README.md#tenantaccessmembership) |
 
 ## What each area covers, and what it does not
 
@@ -661,20 +663,42 @@ gaps, states its full scope.
     asserted `t/` groups whatever the flag, on a lagging silo too; the
     delegated-access flag switching the facades and the tenant layer off
     without deleting anything; and the authorize, gate, validate, write order
-    of every facade verb. The concurrency half: concurrent admin-set and
-    member-set removals and tenant group deletion through the registry's
-    compare-and-set loop, with the last-admin guard re-applied to the merged
-    record; removals stamped on a
+    of every facade verb.
+  - **Does not cover:** concurrent admin-set and member-set changes, the
+    last-admin guard and removal stamps; group deletion and its cascade;
+    membership records arriving by replication or restore; an operator rule
+    naming a tenant group that arrives around every store; app rules on
+    app-owned trees; and the compiled snapshot's rebuild after a flip.
+
+- **Tenant-access membership** ([`spec/tenant-access-admin/`](../../spec/tenant-access-admin/README.md#tenantaccessmembership)).
+  - **Covers:** the concurrency half of delegated tenant-access
+    administration: concurrent admin-set and member-set removals and tenant
+    group deletion through the registry's compare-and-set loop, with the
+    last-admin guard re-applied to the merged record; removals stamped on a
     silo whose clock lags the slot's writer; and admin-set, member-set and
     role-binding entries arriving by replication or restore, another tenant's
     group included, never conferring anything.
   - **Does not cover:** the compare-and-set loop's retries and attempt budget
     (one committing attempt per step); host-supplied registries without the
     guarded commit; removals arriving by replication, and cross-region
-    whole-record resolution; the rest of a group deletion's cascade (edges,
-    rules and the group record); an operator rule naming a tenant group that
-    arrives around every store; app rules on app-owned trees; and the compiled
-    snapshot's rebuild after a flip.
+    whole-record resolution; and the rest of a group deletion's cascade
+    (edges, rules and the group record).
+
+- **Authorization decision** ([`spec/auth-decision/`](../../spec/auth-decision/README.md)).
+  - **Covers:** the decision over a rule store written by the operator
+    surface, the tenant policy facade and system-origin writes: a matched
+    operator verdict is final; the tenant layer runs only on its owner's tenant
+    data trees; a range filter composes the layers per key on operator
+    coverage; `Telemetry` and `AppInstall` come only from the cluster-wide id
+    (`Telemetry` also from a platform grant over one tenant's capability scope);
+    control-plane requests fail closed; bootstrap administrators are the one
+    root of trust; and a cross-tree batch is authorized all or nothing. It
+    publishes the `Allowed(caller, op, scope)` contract the other authorization
+    modules assume.
+  - **Does not cover:** group subjects and templated scopes, the uniform-range
+    shortcut, tenant-isolation composition, snapshot warm-up and the
+    strict-consistency fence, existence probes, or what a registered MCP
+    authorizer decides.
 
 - **Scheduling and progress** ([`spec/scheduling/`](../../spec/scheduling/README.md)).
   - **Covers:** non-reentrant turn occupancy, partition admission capacity,
