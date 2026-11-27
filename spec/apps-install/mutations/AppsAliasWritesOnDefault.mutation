@@ -1,0 +1,13 @@
+# Pairs with AliasOwnershipPreserved. A default decision or a guard fault must deny; treating anything but an
+# explicit deny as allow lets an alias land unchecked.
+MODULE: AppsAliasWritesOnDefault
+TARGET: AliasOwnershipPreserved
+CLASS: Invariant
+SUMMARY: the registry writes the alias unless the guard explicitly denies
+PERTURBS: SetAlias
+
+--- FIND
+        write == decision = "allow"
+--- REPLACE
+        write == decision # "deny"
+--- END

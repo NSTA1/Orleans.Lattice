@@ -1,0 +1,13 @@
+# Pairs with InstalledEqualsReviewed. A second review must record the digest of what it reviewed, not the first
+# review's digest.
+MODULE: AppsReviewKeepsStalePin
+TARGET: InstalledEqualsReviewed
+CLASS: Invariant
+SUMMARY: a review after the first keeps the first review's digest
+PERTURBS: Review
+
+--- FIND
+    /\ pin' = Digest(source)
+--- REPLACE
+    /\ pin' = IF pin = "none" THEN Digest(source) ELSE pin
+--- END

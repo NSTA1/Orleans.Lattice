@@ -362,6 +362,14 @@ gate will tell you if you forget.
   upgrade whose `AppInstallRequest.ExpectedManifestDigest` differs from the digest of
   the manifest re-resolved at commit is refused before anything is recorded (#4021).
   A review-then-install client must send the digest; the Explorer does.
+- **The installable-app seams' formal model is `spec/apps-install/`.** Module
+  `AppsInstall` (over the authorization contract's abstract `Allowed`) checks the
+  cluster-wide `AppInstall` gate, the manifest digest pin, the role compiler's
+  refusal of scopeless capabilities and reserved trees, system-origin-only `app:`
+  rules with a non-disclosing refused delete, the alias tree-ownership guard
+  binding every caller, and the app UI bridge's non-disclosure of an app not
+  installed at the requested revision. Its mutations and detectors are in
+  `spec/apps-install/Refinement.md`. Change the model with the seam.
 
 ### Delegated tenant access administration (`src/lattice.auth`, `src/lattice.membership`, `src/lattice.tenancy`, `src/lattice.api.tenantadmin`, `src/lattice.api.tenantadmin.grpc`, `src/lattice.api.auth`, `src/lattice.apps`)
 - **Operator verdicts are final.** The operator layer - every rule whose id is not in

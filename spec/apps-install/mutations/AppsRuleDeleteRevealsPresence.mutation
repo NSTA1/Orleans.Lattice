@@ -1,0 +1,13 @@
+# Pairs with AppRulesSystemOriginOnly. The refusal must come before the store reads the rule; refusing only a
+# present rule tells the caller whether it exists.
+MODULE: AppsRuleDeleteRevealsPresence
+TARGET: AppRulesSystemOriginOnly
+CLASS: Invariant
+SUMMARY: an operator delete of an absent app-owned rule answers not found
+PERTURBS: DeleteAppRule
+
+--- FIND
+        Answer(s, pr) == IF ~s THEN "appOwned" ELSE IF pr THEN "removed" ELSE "notFound"
+--- REPLACE
+        Answer(s, pr) == IF ~s /\ pr THEN "appOwned" ELSE IF pr THEN "removed" ELSE "notFound"
+--- END

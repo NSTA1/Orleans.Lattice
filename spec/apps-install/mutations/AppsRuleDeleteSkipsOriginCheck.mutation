@@ -1,0 +1,12 @@
+# Pairs with AppRulesSystemOriginOnly. Only system origin may delete an app-owned rule id.
+MODULE: AppsRuleDeleteSkipsOriginCheck
+TARGET: AppRulesSystemOriginOnly
+CLASS: Invariant
+SUMMARY: the store admits an operator delete of an app-owned rule id
+PERTURBS: DeleteAppRule
+
+--- FIND
+        Answer(s, pr) == IF ~s THEN "appOwned" ELSE IF pr THEN "removed" ELSE "notFound"
+--- REPLACE
+        Answer(s, pr) == IF pr THEN "removed" ELSE "notFound"
+--- END

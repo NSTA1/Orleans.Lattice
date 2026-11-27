@@ -1,0 +1,12 @@
+# Pairs with TypeOK. The pin is one of the digests a manifest can have.
+MODULE: AppsReviewPinsUnknownDigest
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: a review records a digest outside the digest domain
+PERTURBS: Review
+
+--- FIND
+    /\ pin' = Digest(source)
+--- REPLACE
+    /\ pin' = "D3"
+--- END

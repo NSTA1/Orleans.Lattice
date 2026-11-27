@@ -1,0 +1,13 @@
+# Pairs with AliasOwnershipPreserved. A derived copy inherits its source's owner; judging the copy's own ledger
+# row lets an unowned alias reach an app's data.
+MODULE: AppsAliasIgnoresDerivation
+TARGET: AliasOwnershipPreserved
+CLASS: Invariant
+SUMMARY: the guard judges the target's own owner, not its derivation root's
+PERTURBS: SetAlias
+
+--- FIND
+    LET root == Root(p)
+--- REPLACE
+    LET root == p
+--- END

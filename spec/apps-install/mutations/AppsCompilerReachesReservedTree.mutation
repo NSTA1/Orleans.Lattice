@@ -1,0 +1,12 @@
+# Pairs with RoleCompilerNeverEmitsScopeless. A role may reach only ordinary data trees.
+MODULE: AppsCompilerReachesReservedTree
+TARGET: RoleCompilerNeverEmitsScopeless
+CLASS: Invariant
+SUMMARY: the role compiler admits a grant on a reserved system tree
+PERTURBS: CompileRoles
+
+--- FIND
+    LET admit == o \notin ScopelessOps /\ t \in GrantableTrees
+--- REPLACE
+    LET admit == o \notin ScopelessOps
+--- END

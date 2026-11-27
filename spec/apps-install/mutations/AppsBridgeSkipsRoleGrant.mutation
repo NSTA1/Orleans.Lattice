@@ -1,0 +1,12 @@
+# Pairs with WorkspaceNonDisclosure. A workspace verb needs the app role grant on the tree.
+MODULE: AppsBridgeSkipsRoleGrant
+TARGET: WorkspaceNonDisclosure
+CLASS: Invariant
+SUMMARY: the bridge allows a declared tree without checking the role grant
+PERTURBS: BridgeAuthorize
+
+--- FIND
+               ELSE IF ~holds THEN "denied"
+--- REPLACE
+               ELSE IF FALSE THEN "denied"
+--- END
