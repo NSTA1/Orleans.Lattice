@@ -1,0 +1,15 @@
+# Pairs with PeerAuthorityBounded. Abort skips the hosting gate, so a peer reverts
+# and garbage collects on a tree this cluster keeps local.
+MODULE: PeerRestoreAbortSkipsHostingGate
+TARGET: PeerAuthorityBounded
+CLASS: Invariant
+SUMMARY: an abort compensates a tree this cluster does not replicate under peer authority
+PERTURBS: Abort
+
+--- FIND
+       /\ fence' = "off"
+       /\ IF ~Hosted(t)
+--- REPLACE
+       /\ fence' = "off"
+       /\ IF FALSE
+--- END

@@ -20,6 +20,7 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 - **Telemetry - Tenant-confined telemetry grants.** A platform rule granting `Telemetry` over `LatticeScope.TenantCapability(tenant)` shows a user that one tenant's boards only; the Explorer rule editor offers the scope. ([#5582](https://github.com/NSTA1/Orleans.Lattice/issues/5582)) (`Orleans.Lattice.Auth`, `Orleans.Lattice.Api.Telemetry`, `Orleans.Lattice.Explorer.UI`)
 - **Formal - Authorization decision model.** The authorization decision is model-checked: operator-final layering, tenant-layer confinement, per-key range composition, scopeless capabilities, fail-closed control-plane isolation and all-or-nothing batch authorization. ([#6048](https://github.com/NSTA1/Orleans.Lattice/issues/6048)) (`repository-wide`)
 - **Formal - MCP tool authorization model.** MCP tool advertisement and invocation are model-checked in lock-step across policy changes: one ungated meta-tool, the per-tool minimum, cluster-wide-only telemetry tools and a validated active tenant. ([#6052](https://github.com/NSTA1/Orleans.Lattice/issues/6052)) (`repository-wide`)
+- **Formal - Coordinated-restore peer authority model.** A restore participant's authority is model-checked: system origin only for a credential-bound current peer on enrolled trees and sources, no backup-existence oracle, own-saga commits only once decided, and no stranded write fence. ([#6192](https://github.com/NSTA1/Orleans.Lattice/issues/6192)) (`repository-wide`)
 
 ### Fixed
 

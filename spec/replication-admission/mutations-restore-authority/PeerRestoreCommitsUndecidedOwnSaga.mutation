@@ -1,0 +1,13 @@
+# Pairs with OwnSagaCommitNeedsDurableDecision. The persisted decision is not
+# consulted, so an own-saga commit cuts over a saga a peer may still abort.
+MODULE: PeerRestoreCommitsUndecidedOwnSaga
+TARGET: OwnSagaCommitNeedsDurableDecision
+CLASS: Invariant
+SUMMARY: a commit naming this cluster's own saga runs although its coordinator has not decided to commit
+PERTURBS: Commit
+
+--- FIND
+ELSE IF read # "commit" THEN "refused"
+--- REPLACE
+ELSE IF FALSE THEN "refused"
+--- END

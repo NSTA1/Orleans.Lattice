@@ -1,0 +1,15 @@
+# Pairs with OwnSagaCommitNeedsDurableDecision. A failed status read counts as a
+# Commit decision instead of proving nothing.
+MODULE: PeerRestoreTrustsUnreadableDecision
+TARGET: OwnSagaCommitNeedsDurableDecision
+CLASS: Invariant
+SUMMARY: an own-saga commit whose coordinator decision cannot be read is treated as decided
+PERTURBS: Commit
+
+--- FIND
+read == IF readOk THEN decision ELSE "unreadable"
+        auth == IF up
+--- REPLACE
+read == IF readOk THEN decision ELSE "commit"
+        auth == IF up
+--- END

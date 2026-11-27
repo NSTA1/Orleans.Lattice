@@ -1,0 +1,12 @@
+# Pairs with PeerAuthorityBounded. A missing seam passes instead of refusing, so a
+# host without the membership seam elevates a restore onto any tree.
+MODULE: PeerRestoreElevatesUnwiredSeams
+TARGET: PeerAuthorityBounded
+CLASS: Invariant
+SUMMARY: peer authority holds when the membership, options or topology seam is missing
+
+--- FIND
+HasPeerAuthority(c) == wired /\ c \notin {Self, NoCluster} /\ c \in topology
+--- REPLACE
+HasPeerAuthority(c) == c \notin {Self, NoCluster} /\ c \in topology
+--- END
