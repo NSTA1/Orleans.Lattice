@@ -498,7 +498,9 @@ never suddenly throttles an existing workload.
   a system-origin turn, or authorised view-maintenance traffic - is never charged,
   because there is no validated tenant to charge it to.
 - **Tree creation is admitted.** `MaxTreeCount` is charged where a tree is
-  explicitly created, so the one dimension whose whole purpose is to bound tree
+  explicitly created, and where an alias points a logical id that has no registry
+  entry at a tree (that alias adds an entry, so it is admitted exactly as a create;
+  re-pointing an existing logical id is not charged), so the one dimension whose whole purpose is to bound tree
   creation binds at the point of creation. It is enforced once, at the
   tree-administration facade every explicit create funnels through, rather than
   additionally at the tenant-scoped facade above it: admission consumes a rate token,
