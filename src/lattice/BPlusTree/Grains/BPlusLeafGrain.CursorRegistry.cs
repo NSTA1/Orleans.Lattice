@@ -162,6 +162,21 @@ internal sealed partial class BPlusLeafGrain
             return;
         }
 
+        // Issue #6226: a leaf of a discarded physical tree (an undone resize's
+        // destination) must not re-register what the discard deregistered. Only
+        // the cached verdict is read here - no grain hop on a live tree's
+        // checkpoint path; the probe runs once per activation, before the
+        // replay (ProbeDiscardedTreeOnActivationAsync). The first report after a
+        // discard verdict unregisters this leaf's consumers once, clearing what
+        // an earlier activation re-published; it runs after the replay permit,
+        // so its options read is a cache hit (issue #2871).
+        if (_physicalTreeDiscarded)
+        {
+            await RetireDiscardedTreePinsOnceAsync();
+            StandDownRetiredTreeLeaf();
+            return;
+        }
+
         var treeId = state.State.TreeId!;
         var options = await GetOptionsAsync();
         var partitionCount = Math.Max(1, options.WalPartitions);
@@ -408,6 +423,15 @@ internal sealed partial class BPlusLeafGrain
 
         var idBase = ResolveConsumerIdBase();
         if (idBase is null)
+        {
+            return 0;
+        }
+
+        // Issue #6226: a leaf already known to belong to a discarded physical tree
+        // publishes nothing - the discard deregistered its pins, and a re-publish
+        // would hold the shared WAL until a purge. Only the cached verdict is read
+        // here (free); the probe itself runs once per activation, before the replay.
+        if (_physicalTreeDiscarded)
         {
             return 0;
         }
@@ -789,6 +813,12 @@ internal sealed partial class BPlusLeafGrain
     /// </summary>
     private async Task SeedDurableMaterialiserFrontierAsync()
     {
+        // Issue #6226: a discarded tree's leaf seeds no block pin either.
+        if (_physicalTreeDiscarded)
+        {
+            return;
+        }
+
         var reporter = ResolveCursorReporter();
         if (reporter is null)
         {
@@ -815,6 +845,156 @@ internal sealed partial class BPlusLeafGrain
                 partition, clock, partitionsWithLiveData, partitionsWithEmptyWal);
             reporter.NoteDurableMaterialiserFrontier(
                 treeId, consumerId, frontier, offset);
+        }
+    }
+
+    /// <summary>
+    /// Whether <see cref="ProbeDiscardedTreeOnActivationAsync"/> has already run
+    /// for this activation, so the retention probe costs at most one hop per
+    /// activation and never one per checkpoint.
+    /// </summary>
+    private bool _physicalRetentionProbedOnActivation;
+
+    /// <summary>
+    /// Whether this activation has already unregistered its consumers after a
+    /// discard verdict, so the report path does it once (issue #6226).
+    /// </summary>
+    private bool _discardedTreePinsRetired;
+
+    /// <summary>
+    /// Unregisters this leaf's materialiser consumers once per activation after a
+    /// <see cref="PhysicalTreeRetention.Discarded"/> verdict (issue #6226),
+    /// clearing whatever it re-published after the discard deregistered the
+    /// tree. Never called for a deleted (recoverable) tree, whose pins still
+    /// protect the log its leaves would replay. Fault-contained: a failed
+    /// retirement is logged and left to the WAL GC's discarded-tree sweep.
+    /// </summary>
+    private async Task RetireDiscardedTreePinsOnceAsync()
+    {
+        if (_discardedTreePinsRetired)
+        {
+            return;
+        }
+
+        _discardedTreePinsRetired = true;
+        await RetireMaterialiserPinsAsync(await ResolveMaterialiserPinRetirementAsync());
+    }
+
+    /// <summary>
+    /// Probes the physical tree's retention once per activation, before the
+    /// activation replay can persist a checkpoint and so before any cursor
+    /// report, pin seed, or durable pin flush (issue #6226). A leaf of a
+    /// discarded tree (an undone resize's destination) that is activated after
+    /// the discard - by a WAL GC drive, a sweep, or a stray call - would
+    /// otherwise re-register the cursors and re-publish the durable pins the
+    /// discard deregistered, and nothing clears them again until a purge. On
+    /// <see cref="PhysicalTreeRetention.Discarded"/> the verdict is cached and
+    /// every publish path reads only that flag; the first report then
+    /// unregisters the leaf's own consumers and stands it down. This method
+    /// reads no options, because it runs before the replay permit warms them
+    /// (issue #2871). Fails open: a faulted probe reads as live. Only a resize
+    /// copy (<c>{logical}/resized/{op}</c>) can be discarded, so an ordinary
+    /// tree's activation makes no hop, and a cold start or bulk load of a large
+    /// tree does not fan every leaf into its tree deletion grain.
+    /// </summary>
+    private async Task ProbeDiscardedTreeOnActivationAsync()
+    {
+        if (_physicalRetentionProbedOnActivation)
+        {
+            return;
+        }
+
+        _physicalRetentionProbedOnActivation = true;
+        var treeId = state.State.TreeId;
+        if (string.IsNullOrEmpty(treeId) || TreeDeletionGrain.ResizeLogicalTreeId(treeId) is null)
+        {
+            return;
+        }
+
+        await ProbePhysicalTreeRetentionAsync();
+    }
+
+    /// <summary>
+    /// Re-probes retention on a full coverage-lag pass for a leaf of a resize
+    /// copy (issue #6226). A leaf resident across the discard probed live at
+    /// activation, and its tick would otherwise bank a checkpoint and re-publish
+    /// the cursors and pins the discard deregistered. Only a resize copy
+    /// (<c>{logical}/resized/{op}</c>) can be discarded, so an ordinary tree
+    /// never probes here, and a full pass runs at most once per coverage-lag
+    /// bound. On <see cref="PhysicalTreeRetention.Discarded"/> the leaf clears
+    /// its own consumers and stands down; any other verdict, or a fault, leaves
+    /// the tick unchanged. The re-probe stops for good once
+    /// <see cref="IsResizeCopyBeyondUndoAsync"/> shows no undo can discard the
+    /// copy any more, so a promoted tree pays nothing after that.
+    /// </summary>
+    /// <returns><see langword="true"/> when the leaf stood down.</returns>
+    private async Task<bool> StandDownIfDiscardedResizeCopyAsync()
+    {
+        if (_resizeCopyRetentionSettled)
+        {
+            return false;
+        }
+
+        var treeId = state.State.TreeId;
+        if (string.IsNullOrEmpty(treeId) || TreeDeletionGrain.ResizeLogicalTreeId(treeId) is not { } logicalTreeId)
+        {
+            _resizeCopyRetentionSettled = true;
+            return false;
+        }
+
+        var retention = await ProbePhysicalTreeRetentionAsync();
+        if (retention == PhysicalTreeRetention.Discarded)
+        {
+            _resizeCopyRetentionSettled = true;
+            await RetireDiscardedTreePinsOnceAsync();
+            StandDownRetiredTreeLeaf();
+            return true;
+        }
+
+        if (retention == PhysicalTreeRetention.Live
+            && await IsResizeCopyBeyondUndoAsync(logicalTreeId, treeId))
+        {
+            _resizeCopyRetentionSettled = true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Whether this activation has settled that its resize copy can no longer be
+    /// discarded (or has already handled the discard), so
+    /// <see cref="StandDownIfDiscardedResizeCopyAsync"/> never probes again.
+    /// </summary>
+    private bool _resizeCopyRetentionSettled;
+
+    /// <summary>
+    /// Whether the live resize copy <paramref name="treeId"/> is past the point an
+    /// undo could discard it: its resize coordinator still names it, and no
+    /// longer holds shard migrations - the replaced copy's mirror is gone, which
+    /// happens only once that copy is purged (after which an undo is refused) or
+    /// an undo has finished (which discards the copy and is seen as
+    /// <see cref="PhysicalTreeRetention.Discarded"/> first). An unnamed copy is
+    /// not settled, because the WAL GC discards a copy no resize names (issue
+    /// #3930). Fails toward probing again: any fault reads as not settled.
+    /// </summary>
+    private async Task<bool> IsResizeCopyBeyondUndoAsync(string logicalTreeId, string treeId)
+    {
+        try
+        {
+            var resize = grainFactory.GetGrain<ITreeResizeGrain>(logicalTreeId);
+            if (!await resize.ReferencesPhysicalTreeAsync(treeId).WaitAsync(PhysicalRetentionProbeBudget))
+            {
+                return false;
+            }
+
+            return !await resize.HoldsShardMigrationsAsync().WaitAsync(PhysicalRetentionProbeBudget);
+        }
+        catch (Exception ex)
+        {
+            ResolveLogger()?.LogDebug(ex,
+                "Could not establish whether resize copy {TreeId} is beyond undo; its coverage-lag tick keeps probing.",
+                treeId);
+            return false;
         }
     }
 

@@ -3216,6 +3216,13 @@ internal sealed partial class BPlusLeafGrain
             return;
         }
 
+        // Issue #6226: a resident leaf of a discarded resize copy must not bank
+        // or re-publish below.
+        if (await StandDownIfDiscardedResizeCopyAsync())
+        {
+            return;
+        }
+
         // Issue #3300 ("S2"). A leaf holding rows with no durable checkpoint on
         // any partition cannot be repaired by the recheck below, and - worse -
         // the recheck reports it as healthy. Every arm it would reach is gated
