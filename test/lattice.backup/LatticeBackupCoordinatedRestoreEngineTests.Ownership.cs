@@ -1,5 +1,7 @@
 using System.Text;
 using Orleans.Lattice.BPlusTree;
+using Orleans.Lattice.BPlusTree.State;
+using Orleans.Runtime;
 
 namespace Orleans.Lattice.Backup.Tests;
 
@@ -120,6 +122,41 @@ public sealed partial class LatticeBackupCoordinatedRestoreEngineTests
             Str((await _fixture.GrainFactory.GetGrain<ILattice>(target).GetAsync("live-only"))!),
             Is.EqualTo("pre-cutover"),
             "the ownership gate must not reject the engine's own unmodified result");
+    }
+
+    [Test]
+    public async Task RevertRestoreAsync_returns_to_a_pre_restore_copy_that_is_not_a_restore_shadow()
+    {
+        await _fixture.InitializeAsync();
+        var backupId = await SeedAndCaptureAsync("revert-aliased-previous", ("k1", "v1"));
+
+        // The target already serves a separate physical copy that is neither the
+        // target itself nor a restore shadow of it, as a remediation or resize
+        // leaves it. A revert must still be able to return there.
+        const string target = "orders-revert-aliased-previous";
+        const string physical = "orders-revert-aliased-previous-copy";
+        await Registry.RegisterAsync(physical, new TreeRegistryEntry());
+        await Registry.RegisterAsync(target, new TreeRegistryEntry());
+        using (LatticeAccessGateContext.EnterSystemOrigin())
+        {
+            await Registry.SetAliasAsync(target, physical);
+        }
+        await _fixture.GrainFactory.GetGrain<ILattice>(target).SetAsync("live-only", Bytes("pre-cutover"));
+
+        var shadow = await Engine.BuildShadowAsync(new LatticeRestoreRequest(
+            backupId, target, scope: null, mode: LatticeRestoreMode.ShadowCutover));
+        await Engine.CommitShadowAsync(shadow);
+        Assert.That(shadow.PreviousPhysicalTreeId, Is.EqualTo(physical), "precondition: the copy was replaced");
+
+        await _fixture.Restore.RevertRestoreAsync(shadow);
+
+        var resolved = await Registry.ResolveAsync(target);
+        var value = await _fixture.GrainFactory.GetGrain<ILattice>(target).GetAsync("live-only");
+        Assert.Multiple(() =>
+        {
+            Assert.That(resolved, Is.EqualTo(physical), "the revert returns to the replaced copy");
+            Assert.That(Str(value!), Is.EqualTo("pre-cutover"));
+        });
     }
 
     // ---- CommitShadowAsync -----------------------------------------------

@@ -1009,13 +1009,16 @@ internal sealed partial class LatticeBackupRestoreService(
     /// access gate is bound to the logical tree id and never sees the alias.
     /// </summary>
     /// <remarks>
-    /// Exactly three physical ids are accepted, each established from server-side
+    /// Exactly four physical ids are accepted, each established from server-side
     /// state rather than from the request: the target itself (the un-aliased
     /// case a revert returns to), a tree the engine stamped
     /// <see cref="TreeRegistryEntry.RestoreShadowOfTreeId"/> for this same target
-    /// when it built it, and the target's current physical tree (honouring which
-    /// is a no-op and so cannot move the target anywhere new). Anything else is
-    /// ambiguous and therefore denied.
+    /// when it built it, the target's current physical tree (honouring which
+    /// is a no-op and so cannot move the target anywhere new), and the copy the
+    /// target's current, not-yet-final restore shadow recorded in
+    /// <see cref="TreeRegistryEntry.RestoreRevertPhysicalTreeId"/> at its cutover
+    /// - the physical tree the alias held immediately before that restore,
+    /// whatever built it. Anything else is ambiguous and therefore denied.
     /// </remarks>
     private async Task AssertPhysicalBelongsToTargetAsync(
         ILatticeRegistry registry,
@@ -1037,11 +1040,29 @@ internal sealed partial class LatticeBackupRestoreService(
             // provenance stamp, so the target's alias is read only when that
             // stamp does not decide it.
             var entry = await registry.GetEntryAsync(physicalTreeId).ConfigureAwait(false);
-            if (string.Equals(entry?.RestoreShadowOfTreeId, targetTreeId, StringComparison.Ordinal)
-                || string.Equals(
-                    await registry.ResolveAsync(targetTreeId).ConfigureAwait(false),
-                    physicalTreeId,
-                    StringComparison.Ordinal))
+            if (string.Equals(entry?.RestoreShadowOfTreeId, targetTreeId, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            var current = await registry.ResolveAsync(targetTreeId).ConfigureAwait(false);
+            if (string.Equals(current, physicalTreeId, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            // The copy the target's live, not-yet-final restore reverts to (#5586).
+            // The commit recorded it on the shadow from the registry's own view of
+            // the alias it replaced, before the swap, so whatever built that copy -
+            // a resize, a schema remediation, an explicit alias or an earlier
+            // restore - it is server-derived, never the caller's claim.
+            if (!string.Equals(current, targetTreeId, StringComparison.Ordinal)
+                && await registry.GetEntryAsync(current).ConfigureAwait(false) is
+                {
+                    RestoreFinal: false,
+                } live
+                && string.Equals(live.RestoreShadowOfTreeId, targetTreeId, StringComparison.Ordinal)
+                && string.Equals(live.RestoreRevertPhysicalTreeId, physicalTreeId, StringComparison.Ordinal))
             {
                 return;
             }
@@ -1049,9 +1070,10 @@ internal sealed partial class LatticeBackupRestoreService(
 
         throw new LatticeRestoreValidationException(
             $"Physical tree '{physicalTreeId}' supplied as '{field}' is neither a restore shadow of tree "
-            + $"'{targetTreeId}' nor that tree's current physical tree, so it cannot take part in a "
-            + "shadow-cutover commit or revert of it. A restore copy retired after its restore became final "
-            + "is no longer registered, so a revert that needs it is refused here.");
+            + $"'{targetTreeId}', that tree's current physical tree, nor the copy its current restore recorded "
+            + "to revert to, so it cannot take part in a shadow-cutover commit or revert of it. A restore copy "
+            + "retired after its restore became final is no longer registered, so a revert that needs it is "
+            + "refused here.");
     }
 
     /// <inheritdoc />

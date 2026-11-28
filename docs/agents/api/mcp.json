@@ -2357,7 +2357,7 @@
         "source": "src/lattice.api.abstractions/Backup/ILatticeBackupControl.cs#RevertRestoreAsync"
       },
       "concurrency": {
-        "rule": "Before alias commit or revert, each caller-supplied physical tree id is re-resolved against registry provenance and must be the target itself, a restore shadow of the target, or the target current physical tree.",
+        "rule": "Before alias commit or revert, each caller-supplied physical tree id is re-resolved against registry provenance and must be the target itself, a restore shadow of the target, the target current physical tree, or the pre-restore copy recorded server-side at the cutover of the target current, not-yet-final restore.",
         "source": "src/lattice.backup/LatticeBackupRestoreService.cs#AssertPhysicalBelongsToTargetAsync"
       },
       "sources": [
