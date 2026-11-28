@@ -73,6 +73,7 @@ public sealed class AuthApiGrpcAuthorizationTests
         yield return Case("SearchDirectory", c => c.SearchDirectoryAsync(new DirectorySearchRequest { Term = "u" }));
         yield return Case("ResolveDirectoryPrincipal", c => c.ResolveDirectoryPrincipalAsync(new AuthPrincipalRef { PrincipalId = "u" }));
         yield return Case("GetAccessModel", c => c.GetAccessModelAsync(new AuthAccessModelQuery()));
+        yield return Case("ListAdminAudit", c => c.ListAuditAsync(new AdminAuditQuery()));
     }
 
     [TestCaseSource(nameof(AllOperations))]

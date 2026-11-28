@@ -148,7 +148,8 @@ public sealed class TenantAdminGrpcTenantAccessContractTests
         var methods = Methods();
         var expected = PreEpicRpcs.Select(r => r.Name)
             .Concat(TenantAccessRpcs.Select(r => r.Name))
-            .Append("AdvanceTenantRegion");
+            .Append("AdvanceTenantRegion")
+            .Append("ListTenantAudit");
 
         Assert.That(methods.Values.Select(m => m.Name), Is.EquivalentTo(expected));
     }
@@ -249,7 +250,8 @@ public sealed class TenantAdminGrpcTenantAccessContractTests
             Assert.That((int)LatticeTenantAdminApiOperation.GetTenantEffectivePermissions, Is.EqualTo(34));
             Assert.That((int)LatticeTenantAdminApiOperation.GetTenantAccessPosture, Is.EqualTo(35));
             Assert.That((int)LatticeTenantAdminApiOperation.AdvanceTenantRegion, Is.EqualTo(36));
-            Assert.That(Enum.GetValues<LatticeTenantAdminApiOperation>(), Has.Length.EqualTo(37));
+            Assert.That((int)LatticeTenantAdminApiOperation.ListTenantAudit, Is.EqualTo(37));
+            Assert.That(Enum.GetValues<LatticeTenantAdminApiOperation>(), Has.Length.EqualTo(38));
         });
     }
 

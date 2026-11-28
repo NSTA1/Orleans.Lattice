@@ -79,6 +79,7 @@ The service name is `orleans.lattice.api.tenantadmin`, so each method's full pat
 | `ExplainTenantAccess` | `TenantAdminExplainRequest` | `TenantExplanation` | `ILatticeTenantPolicyAdmin.ExplainAsync` | `ExplainAsync` |
 | `GetTenantEffectivePermissions` | `TenantAdminEffectivePermissionsRequest` | `TenantEffectivePermissions` | `ILatticeTenantPolicyAdmin.EffectivePermissionsAsync` | `EffectivePermissionsAsync` |
 | `GetTenantAccessPosture` | `TenantAdminTenantRequest` | `TenantAccessPosture` | `ILatticeTenantPolicyAdmin.GetPostureAsync` | `GetPostureAsync` |
+| `ListTenantAudit` | `TenantAdminAuditListRequest` | `AdminAuditPage` | `ILatticeTenantAuditLog.ListAuditAsync` | `ListAuditAsync` |
 
 Mapping notes:
 
@@ -188,6 +189,7 @@ The following inventory includes directly declared public members and overloads,
 - `public const string TenantAdminGroupMemberList`
 - `public const string TenantAdminRuleLookup`
 - `public const string TenantAdminRuleRemoval`
+- `public const string TenantAdminAuditListRequest`
 
 ### `Orleans.Lattice.Api.TenantAdmin.Grpc.ILatticeTenantAdminApiAuthSchemeSource`
 
@@ -248,6 +250,12 @@ The following inventory includes directly declared public members and overloads,
 - `public Task<TenantExplanation> ExplainAsync(string tenantId, string subjectId, string treeName, string? key, LatticeOperation operation, TenantSubjectKind subjectKind = TenantSubjectKind.User, CancellationToken cancellationToken = default)`
 - `public Task<TenantEffectivePermissions> EffectivePermissionsAsync(string tenantId, string subjectId, string? treeName = null, TenantSubjectKind subjectKind = TenantSubjectKind.User, CancellationToken cancellationToken = default)`
 - `public Task<TenantAccessPosture> GetPostureAsync(string tenantId, CancellationToken cancellationToken = default)`
+
+[Source](../../src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.Audit.cs) (line 19).
+
+`public sealed partial class LatticeTenantAdminApiGrpcClient : ILatticeTenantAuditLog`
+
+- `public Task<AdminAuditPage> ListAuditAsync(string tenantId, AdminAuditQuery query, CancellationToken cancellationToken = default)`
 
 [Source](../../src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs) (line 32).
 
@@ -338,6 +346,7 @@ The following inventory includes directly declared public members and overloads,
 - `GetTenantEffectivePermissions = 34`
 - `GetTenantAccessPosture = 35`
 - `AdvanceTenantRegion = 36`
+- `ListTenantAudit = 37`
 
 ### `Orleans.Lattice.Api.TenantAdmin.Grpc.LatticeTenantSelfServiceApiGrpcClient`
 
@@ -358,6 +367,15 @@ The following inventory includes directly declared public members and overloads,
 
 - `public required string TenantId { get; init; }`
 - `public required TenantAccessPageRequest Page { get; init; }`
+
+### `Orleans.Lattice.Api.TenantAdmin.Grpc.TenantAdminAuditListRequest`
+
+[Source](../../src/lattice.api.tenantadmin.grpc/Model/TenantAdminAuditListRequest.cs) (line 16).
+
+`public sealed record TenantAdminAuditListRequest`
+
+- `public required string TenantId { get; init; }`
+- `public required AdminAuditQuery Query { get; init; }`
 
 ### `Orleans.Lattice.Api.TenantAdmin.Grpc.TenantAdminCreateRequest`
 

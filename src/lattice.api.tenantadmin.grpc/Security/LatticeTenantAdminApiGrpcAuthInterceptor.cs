@@ -228,6 +228,7 @@ internal sealed class LatticeTenantAdminApiGrpcAuthInterceptor : Interceptor
             LatticeTenantAdminGrpcMethods.ExplainTenantAccessMethodName => LatticeTenantAdminApiOperation.ExplainTenantAccess,
             LatticeTenantAdminGrpcMethods.GetTenantEffectivePermissionsMethodName => LatticeTenantAdminApiOperation.GetTenantEffectivePermissions,
             LatticeTenantAdminGrpcMethods.GetTenantAccessPostureMethodName => LatticeTenantAdminApiOperation.GetTenantAccessPosture,
+            LatticeTenantAdminGrpcMethods.ListTenantAuditMethodName => LatticeTenantAdminApiOperation.ListTenantAudit,
             _ => LatticeTenantAdminApiOperation.Unknown,
         };
 
@@ -253,6 +254,7 @@ internal sealed class LatticeTenantAdminApiGrpcAuthInterceptor : Interceptor
             TenantAdminRuleRequest rr => rr.TenantId,
             TenantAdminExplainRequest e => e.TenantId,
             TenantAdminEffectivePermissionsRequest ep => ep.TenantId,
+            TenantAdminAuditListRequest a => a.TenantId,
             _ => null,
         };
 

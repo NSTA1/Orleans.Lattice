@@ -553,6 +553,7 @@ internal sealed class LoopbackCallInvoker(LatticeTenantAdminGrpcServiceBase serv
             "ExplainTenantAccess" => await service.ExplainTenantAccess((TenantAdminExplainRequest)(object)wireRequest, context),
             "GetTenantEffectivePermissions" => await service.GetTenantEffectivePermissions((TenantAdminEffectivePermissionsRequest)(object)wireRequest, context),
             "GetTenantAccessPosture" => await service.GetTenantAccessPosture((TenantAdminTenantRequest)(object)wireRequest, context),
+            "ListTenantAudit" => await service.ListTenantAudit((TenantAdminAuditListRequest)(object)wireRequest, context),
             _ => throw new NotSupportedException($"Unmapped loopback method '{method.Name}'."),
         };
 

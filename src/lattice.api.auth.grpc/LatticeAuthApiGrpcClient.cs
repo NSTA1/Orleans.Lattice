@@ -21,7 +21,7 @@ namespace Orleans.Lattice.Api.Auth.Grpc;
 /// check); a rejection arrives as a <c>PermissionDenied</c>
 /// <see cref="RpcException"/>.
 /// </remarks>
-public sealed class LatticeAuthApiGrpcClient
+public sealed class LatticeAuthApiGrpcClient : ILatticeAdminAuditLog
 {
     private readonly CallInvoker _invoker;
     private readonly LatticeAuthApiGrpcMethods _methods;
@@ -125,6 +125,22 @@ public sealed class LatticeAuthApiGrpcClient
     /// <summary>Reads the cluster's best-effort access model.</summary>
     public Task<AccessModelDescriptor> GetAccessModelAsync(AuthAccessModelQuery request, CancellationToken cancellationToken = default)
         => UnaryAsync(_methods.GetAccessModel, request, cancellationToken);
+
+    /// <summary>
+    /// Reads one page of the admin audit trail through the server's
+    /// <see cref="ILatticeAdminAuditLog"/>, which requires an <c>Admin</c> verdict
+    /// on the policy tree.
+    /// </summary>
+    /// <remarks>
+    /// A refused caller receives a <c>PermissionDenied</c> <see cref="RpcException"/>;
+    /// a host with no audit log registered answers <c>Unimplemented</c>; a malformed
+    /// query (for example an out-of-range page size) answers <c>InvalidArgument</c>.
+    /// </remarks>
+    public Task<AdminAuditPage> ListAuditAsync(AdminAuditQuery query, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        return UnaryAsync(_methods.ListAdminAudit, query, cancellationToken);
+    }
 
     private async Task<TResponse> UnaryAsync<TRequest, TResponse>(
         Method<TRequest, TResponse> method,

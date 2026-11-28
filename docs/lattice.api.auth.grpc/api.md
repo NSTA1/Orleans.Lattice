@@ -54,7 +54,7 @@ The following inventory includes directly declared public members and overloads,
 
 [Source](../../src/lattice.api.auth.grpc/LatticeAuthApiGrpcClient.cs) (line 24).
 
-`public sealed class LatticeAuthApiGrpcClient`
+`public sealed class LatticeAuthApiGrpcClient : ILatticeAdminAuditLog`
 
 - `public static LatticeAuthApiGrpcClient Create(CallInvoker callInvoker, IServiceProvider serializerProvider)`
 - `public Task<AuthAck> UpsertGroupAsync(AuthGroup request, CancellationToken cancellationToken = default)`
@@ -75,6 +75,7 @@ The following inventory includes directly declared public members and overloads,
 - `public Task<DirectorySearchResult> SearchDirectoryAsync(DirectorySearchRequest request, CancellationToken cancellationToken = default)`
 - `public Task<AuthDirectoryPrincipalResult> ResolveDirectoryPrincipalAsync(AuthPrincipalRef request, CancellationToken cancellationToken = default)`
 - `public Task<AccessModelDescriptor> GetAccessModelAsync(AuthAccessModelQuery request, CancellationToken cancellationToken = default)`
+- `public Task<AdminAuditPage> ListAuditAsync(AdminAuditQuery query, CancellationToken cancellationToken = default)`
 
 ### `Orleans.Lattice.Api.Auth.Grpc.LatticeAuthApiGrpcOptions`
 
@@ -277,6 +278,7 @@ The following inventory includes directly declared public members and overloads,
 - `ResolveDirectoryPrincipal`
 - `GetAccessModel`
 - `Unknown`
+- `ListAdminAudit` (declared after `Unknown`, so the values of the earlier members are unchanged)
 
 ### `Orleans.Lattice.Api.Auth.Grpc.LatticeAuthApiAuthorizationContext`
 

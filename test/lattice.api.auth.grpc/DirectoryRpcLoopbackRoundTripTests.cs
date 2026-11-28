@@ -2,6 +2,7 @@ using Grpc.Core;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
+using NSubstitute.ExceptionExtensions;
 using Orleans.Lattice.Membership;
 using Orleans.Serialization;
 
@@ -152,6 +153,96 @@ public sealed class DirectoryRpcLoopbackRoundTripTests
         });
     }
 
+    private LatticeAuthApiGrpcClient AuditClientFor(ILatticeAdminAuditLog? auditLog)
+    {
+        var bridge = Substitute.For<ILatticeAuthApiCredentialBridge>();
+        bridge.Resolve(Arg.Any<ServerCallContext>()).Returns((LatticeCredential?)null);
+
+        var service = new LatticeAuthApiGrpcService(
+            _methods,
+            Substitute.For<ILatticeAuthAdmin>(),
+            bridge,
+            NullLogger<LatticeAuthApiGrpcService>.Instance,
+            auditLog: auditLog);
+
+        return LatticeAuthApiGrpcClient.Create(new LoopbackCallInvoker(service), _services);
+    }
+
+    [Test]
+    public async Task ListAuditAsync_round_trips_the_audit_page_over_the_wire()
+    {
+        var auditLog = Substitute.For<ILatticeAdminAuditLog>();
+        AdminAuditQuery? seen = null;
+        auditLog.ListAuditAsync(Arg.Do<AdminAuditQuery>(q => seen = q), Arg.Any<CancellationToken>())
+            .Returns(new AdminAuditPage
+            {
+                Records = new[]
+                {
+                    new LatticeAdminAuditRecord
+                    {
+                        OperationId = "op-1",
+                        ActorSubjectId = "alice",
+                        TargetScope = "t/contoso",
+                        Outcome = LatticeAdminAuditOutcome.Committed,
+                        TargetId = "rule-1",
+                    },
+                },
+                NextPageToken = "next",
+            });
+        var client = AuditClientFor(auditLog);
+
+        var page = await client.ListAuditAsync(new AdminAuditQuery { Scope = "t/contoso", PageToken = "p" });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(seen, Is.Not.Null);
+            Assert.That(seen!.Scope, Is.EqualTo("t/contoso"));
+            Assert.That(seen.PageToken, Is.EqualTo("p"));
+            Assert.That(page.Records, Has.Count.EqualTo(1));
+            Assert.That(page.Records[0].OperationId, Is.EqualTo("op-1"));
+            Assert.That(page.Records[0].Outcome, Is.EqualTo(LatticeAdminAuditOutcome.Committed));
+            Assert.That(page.NextPageToken, Is.EqualTo("next"));
+        });
+    }
+
+    [Test]
+    public void ListAuditAsync_maps_the_facade_admin_refusal_to_PermissionDenied()
+    {
+        var auditLog = Substitute.For<ILatticeAdminAuditLog>();
+        auditLog.ListAuditAsync(Arg.Any<AdminAuditQuery>(), Arg.Any<CancellationToken>())
+            .ThrowsAsync(new LatticeAuthorizationDeniedException(
+                "sys-auth-policy", LatticeOperation.Admin, "mallory", "not an administrator"));
+        var client = AuditClientFor(auditLog);
+
+        var ex = Assert.ThrowsAsync<RpcException>(async () => await client.ListAuditAsync(new AdminAuditQuery()));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
+            Assert.That(
+                ex.Trailers.GetValue(LatticeAuthApiGrpcService.DeniedSubjectTrailer),
+                Is.EqualTo("mallory"));
+        });
+    }
+
+    [Test]
+    public void ListAuditAsync_without_a_registered_audit_log_is_Unimplemented()
+    {
+        var client = AuditClientFor(auditLog: null);
+
+        var ex = Assert.ThrowsAsync<RpcException>(async () => await client.ListAuditAsync(new AdminAuditQuery()));
+
+        Assert.That(ex!.StatusCode, Is.EqualTo(StatusCode.Unimplemented));
+    }
+
+    [Test]
+    public void ListAuditAsync_throws_on_a_null_query()
+    {
+        var client = AuditClientFor(Substitute.For<ILatticeAdminAuditLog>());
+
+        Assert.ThrowsAsync<ArgumentNullException>(async () => await client.ListAuditAsync(null!));
+    }
+
     /// <summary>
     /// A <see cref="CallInvoker"/> that loops a unary call back into the service:
     /// it marshals the request through the method's real request marshaller,
@@ -189,6 +280,8 @@ public sealed class DirectoryRpcLoopbackRoundTripTests
                     (Task<TResponse>)(object)service.ResolveDirectoryPrincipal((AuthPrincipalRef)(object)wireRequest, context),
                 LatticeAuthApiGrpcMethods.GetAccessModelMethodName =>
                     (Task<TResponse>)(object)service.GetAccessModel((AuthAccessModelQuery)(object)wireRequest, context),
+                LatticeAuthApiGrpcMethods.ListAdminAuditMethodName =>
+                    (Task<TResponse>)(object)service.ListAdminAudit((AdminAuditQuery)(object)wireRequest, context),
                 _ => throw new NotSupportedException($"Loopback does not route '{method.Name}'."),
             };
 

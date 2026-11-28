@@ -78,6 +78,9 @@ internal sealed class LatticeAuthApiGrpcMethods
     /// <summary>The unary access-model-read RPC method name.</summary>
     public const string GetAccessModelMethodName = "GetAccessModel";
 
+    /// <summary>The unary admin-audit-list RPC method name.</summary>
+    public const string ListAdminAuditMethodName = "ListAdminAudit";
+
     /// <summary>Initialises the method definitions from DI-resolved serializers.</summary>
     public LatticeAuthApiGrpcMethods(
         Serializer<AuthGroup> groupSerializer,
@@ -104,7 +107,9 @@ internal sealed class LatticeAuthApiGrpcMethods
         Serializer<AuthPrincipalRef> principalRefSerializer,
         Serializer<AuthDirectoryPrincipalResult> directoryPrincipalResultSerializer,
         Serializer<AuthAccessModelQuery> accessModelQuerySerializer,
-        Serializer<AccessModelDescriptor> accessModelSerializer)
+        Serializer<AccessModelDescriptor> accessModelSerializer,
+        Serializer<AdminAuditQuery> auditQuerySerializer,
+        Serializer<AdminAuditPage> auditPageSerializer)
     {
         ArgumentNullException.ThrowIfNull(groupSerializer);
         ArgumentNullException.ThrowIfNull(groupRefSerializer);
@@ -131,6 +136,8 @@ internal sealed class LatticeAuthApiGrpcMethods
         ArgumentNullException.ThrowIfNull(directoryPrincipalResultSerializer);
         ArgumentNullException.ThrowIfNull(accessModelQuerySerializer);
         ArgumentNullException.ThrowIfNull(accessModelSerializer);
+        ArgumentNullException.ThrowIfNull(auditQuerySerializer);
+        ArgumentNullException.ThrowIfNull(auditPageSerializer);
 
         UpsertGroup = Unary(UpsertGroupMethodName, groupSerializer, ackSerializer);
         GetGroup = Unary(GetGroupMethodName, groupRefSerializer, groupResultSerializer);
@@ -154,6 +161,8 @@ internal sealed class LatticeAuthApiGrpcMethods
         SearchDirectory = Unary(SearchDirectoryMethodName, directorySearchRequestSerializer, directorySearchResultSerializer);
         ResolveDirectoryPrincipal = Unary(ResolveDirectoryPrincipalMethodName, principalRefSerializer, directoryPrincipalResultSerializer);
         GetAccessModel = Unary(GetAccessModelMethodName, accessModelQuerySerializer, accessModelSerializer);
+
+        ListAdminAudit = Unary(ListAdminAuditMethodName, auditQuerySerializer, auditPageSerializer);
     }
 
     private static Method<TRequest, TResponse> Unary<TRequest, TResponse>(
@@ -223,6 +232,9 @@ internal sealed class LatticeAuthApiGrpcMethods
     /// <summary>The unary <c>GetAccessModel</c> RPC.</summary>
     public Method<AuthAccessModelQuery, AccessModelDescriptor> GetAccessModel { get; }
 
+    /// <summary>The unary <c>ListAdminAudit</c> RPC.</summary>
+    public Method<AdminAuditQuery, AdminAuditPage> ListAdminAudit { get; }
+
     /// <summary>
     /// Builds the method definitions from the Orleans serializers resolved out of
     /// <paramref name="serializerProvider"/>. Shared by the server-side DI factory
@@ -257,7 +269,9 @@ internal sealed class LatticeAuthApiGrpcMethods
             serializerProvider.GetRequiredService<Serializer<AuthPrincipalRef>>(),
             serializerProvider.GetRequiredService<Serializer<AuthDirectoryPrincipalResult>>(),
             serializerProvider.GetRequiredService<Serializer<AuthAccessModelQuery>>(),
-            serializerProvider.GetRequiredService<Serializer<AccessModelDescriptor>>());
+            serializerProvider.GetRequiredService<Serializer<AccessModelDescriptor>>(),
+            serializerProvider.GetRequiredService<Serializer<AdminAuditQuery>>(),
+            serializerProvider.GetRequiredService<Serializer<AdminAuditPage>>());
     }
 }
 

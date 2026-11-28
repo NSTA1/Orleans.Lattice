@@ -278,6 +278,30 @@ public sealed class LatticeAuthApiInterceptorDescribeCallTests
     }
 
     [Test]
+    public void ListAdminAudit_targets_the_requested_scope()
+    {
+        var result = Describe(LatticeAuthApiGrpcMethods.ListAdminAuditMethodName, new AdminAuditQuery { Scope = "t/contoso" });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Operation, Is.EqualTo(LatticeAuthApiOperation.ListAdminAudit));
+            Assert.That(result.TargetId, Is.EqualTo("t/contoso"));
+        });
+    }
+
+    [Test]
+    public void ListAdminAudit_without_a_scope_has_no_single_target()
+    {
+        var result = Describe(LatticeAuthApiGrpcMethods.ListAdminAuditMethodName, new AdminAuditQuery());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Operation, Is.EqualTo(LatticeAuthApiOperation.ListAdminAudit));
+            Assert.That(result.TargetId, Is.Null, "an unscoped audit listing reads the whole trail");
+        });
+    }
+
+    [Test]
     public void An_unrecognised_method_maps_to_Unknown()
     {
         var result = Describe("SomeFutureRpc", new AuthGroupRef { GroupId = "alice" });

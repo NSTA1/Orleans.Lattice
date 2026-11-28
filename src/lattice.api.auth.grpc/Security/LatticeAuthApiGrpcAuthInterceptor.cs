@@ -206,6 +206,7 @@ internal sealed class LatticeAuthApiGrpcAuthInterceptor : Interceptor
             LatticeAuthApiGrpcMethods.SearchDirectoryMethodName => LatticeAuthApiOperation.SearchDirectory,
             LatticeAuthApiGrpcMethods.ResolveDirectoryPrincipalMethodName => LatticeAuthApiOperation.ResolveDirectoryPrincipal,
             LatticeAuthApiGrpcMethods.GetAccessModelMethodName => LatticeAuthApiOperation.GetAccessModel,
+            LatticeAuthApiGrpcMethods.ListAdminAuditMethodName => LatticeAuthApiOperation.ListAdminAudit,
             _ => LatticeAuthApiOperation.Unknown,
         };
 
@@ -221,6 +222,8 @@ internal sealed class LatticeAuthApiGrpcAuthInterceptor : Interceptor
             AuthExplainQuery xq => xq.SubjectId,
             AuthSubjectRef sr => sr.SubjectId,
             AuthPrincipalRef pn => pn.PrincipalId,
+            // An audit listing targets the scope it narrows to (null = the whole trail).
+            AdminAuditQuery aq => aq.Scope,
             // The catalog-wide list operations and the directory search / access-model
             // read target no single id.
             _ => null,

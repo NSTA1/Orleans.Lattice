@@ -206,6 +206,7 @@ internal abstract partial class LatticeTenantAdminGrpcServiceBase
             binder.AddMethod(methods.RejectCrossTenantGrant, (UnaryServerMethod<TenantAdminGrantRequest, TenantGrantChangeResult>?)null);
             binder.AddMethod(methods.RevokeCrossTenantGrant, (UnaryServerMethod<TenantAdminGrantRequest, TenantGrantChangeResult>?)null);
             BindTenantAccessMetadata(binder, methods);
+            BindAuditMetadata(binder, methods);
             return;
         }
 
@@ -232,6 +233,7 @@ internal abstract partial class LatticeTenantAdminGrpcServiceBase
         binder.AddMethod(methods.RejectCrossTenantGrant, new UnaryServerMethod<TenantAdminGrantRequest, TenantGrantChangeResult>(serviceImpl.RejectCrossTenantGrant));
         binder.AddMethod(methods.RevokeCrossTenantGrant, new UnaryServerMethod<TenantAdminGrantRequest, TenantGrantChangeResult>(serviceImpl.RevokeCrossTenantGrant));
         BindTenantAccess(binder, methods, serviceImpl);
+        BindAudit(binder, methods, serviceImpl);
     }
 }
 
@@ -252,6 +254,7 @@ internal sealed partial class LatticeTenantAdminGrpcService : LatticeTenantAdmin
     private readonly ILatticeTenantGrantAdmin? _grantAdmin;
     private readonly ILatticeTenantDirectoryAdmin? _directoryAdmin;
     private readonly ILatticeTenantPolicyAdmin? _policyAdmin;
+    private readonly ILatticeTenantAuditLog? _auditLog;
     private readonly ILatticeTenantAdminApiCredentialBridge _credentialBridge;
     private readonly ILatticeTenantAdminApiAuthSchemeSource _authSchemeSource;
     private readonly IOptions<LatticeTenantAdminApiGrpcOptions> _options;
@@ -270,7 +273,8 @@ internal sealed partial class LatticeTenantAdminGrpcService : LatticeTenantAdmin
     /// <remarks>
     /// <paramref name="regionAdmin"/>, <paramref name="quotaUsage"/>,
     /// <paramref name="accessAdmin"/>, <paramref name="grantAdmin"/>,
-    /// <paramref name="directoryAdmin"/> and <paramref name="policyAdmin"/> are
+    /// <paramref name="directoryAdmin"/>, <paramref name="policyAdmin"/> and
+    /// <paramref name="auditLog"/> are
     /// <b>optional</b>. Each is a separate
     /// opt-in registration (and the usage facade may also be absent on a host
     /// running an older facade package), so a host that binds tenant
@@ -293,7 +297,8 @@ internal sealed partial class LatticeTenantAdminGrpcService : LatticeTenantAdmin
         ILatticeTenantAccessAdmin? accessAdmin = null,
         ILatticeTenantGrantAdmin? grantAdmin = null,
         ILatticeTenantDirectoryAdmin? directoryAdmin = null,
-        ILatticeTenantPolicyAdmin? policyAdmin = null)
+        ILatticeTenantPolicyAdmin? policyAdmin = null,
+        ILatticeTenantAuditLog? auditLog = null)
     {
         ArgumentNullException.ThrowIfNull(methods);
         ArgumentNullException.ThrowIfNull(control);
@@ -311,6 +316,7 @@ internal sealed partial class LatticeTenantAdminGrpcService : LatticeTenantAdmin
         _grantAdmin = grantAdmin;
         _directoryAdmin = directoryAdmin;
         _policyAdmin = policyAdmin;
+        _auditLog = auditLog;
         _credentialBridge = credentialBridge;
         _authSchemeSource = authSchemeSource;
         _options = options;

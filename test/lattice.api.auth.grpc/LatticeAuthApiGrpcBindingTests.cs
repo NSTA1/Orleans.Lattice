@@ -125,7 +125,7 @@ public sealed class LatticeAuthApiGrpcBindingTests
             methods.GetRule.FullName, methods.RemoveRule.FullName, methods.ListRules.FullName,
             methods.ListRulesForTree.FullName, methods.Explain.FullName, methods.EffectivePermissions.FullName,
             methods.SearchDirectory.FullName, methods.ResolveDirectoryPrincipal.FullName,
-            methods.GetAccessModel.FullName,
+            methods.GetAccessModel.FullName, methods.ListAdminAudit.FullName,
         };
 
         var binder = new RecordingServiceBinder();

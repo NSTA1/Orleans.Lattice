@@ -15,7 +15,8 @@
     "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantQuotaUsage.cs",
     "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantRegionAdmin.cs",
     "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantSelfService.cs",
-    "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+    "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs",
+    "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAuditLog.cs"
   ],
   "in_process": {
     "interface": "ILatticeTenantAdmin, ILatticeTenantRegionAdmin, ILatticeTenantAccessAdmin, ILatticeTenantGrantAdmin, ILatticeTenantSelfService, ILatticeTenantQuotaUsage, ILatticeTenantDirectoryAdmin, ILatticeTenantPolicyAdmin",
@@ -1472,6 +1473,84 @@
         }
       ],
       "source": "src/lattice.api.abstractions/TenantAdmin/Model/TenantRegionStatusDescriptor.cs"
+    },
+    "TenantAdminAuditListRequest": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "TenantId",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "Query",
+          "type": "AdminAuditQuery",
+          "required": true
+        }
+      ],
+      "source": "src/lattice.api.tenantadmin.grpc/Model/TenantAdminAuditListRequest.cs"
+    },
+    "AdminAuditQuery": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "PageSize",
+          "type": "int",
+          "required": false
+        },
+        {
+          "name": "PageToken",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "Scope",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "From",
+          "type": "DateTimeOffset?",
+          "required": false
+        },
+        {
+          "name": "To",
+          "type": "DateTimeOffset?",
+          "required": false
+        },
+        {
+          "name": "Actor",
+          "type": "string?",
+          "required": false
+        },
+        {
+          "name": "Action",
+          "type": "LatticeAdminAuditAction?",
+          "required": false
+        },
+        {
+          "name": "Outcome",
+          "type": "LatticeAdminAuditOutcome?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Auth/Model/AdminAuditQuery.cs"
+    },
+    "AdminAuditPage": {
+      "kind": "record",
+      "fields": [
+        {
+          "name": "Records",
+          "type": "IReadOnlyList<LatticeAdminAuditRecord>",
+          "required": false
+        },
+        {
+          "name": "NextPageToken",
+          "type": "string?",
+          "required": false
+        }
+      ],
+      "source": "src/lattice.api.abstractions/Auth/Model/AdminAuditPage.cs"
     }
   },
   "operations": [
@@ -2361,6 +2440,47 @@
       },
       "sources": [
         "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAccessAdmin.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
+        "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
+      ]
+    },
+    {
+      "id": "list-tenant-audit",
+      "in_process": "ILatticeTenantAuditLog.ListAuditAsync",
+      "grpc_method": "/orleans.lattice.api.tenantadmin/ListTenantAudit",
+      "transport_scope": "both",
+      "request": "TenantAdminAuditListRequest",
+      "response": "AdminAuditPage",
+      "errors": [
+        {
+          "error_id": "invalid-argument",
+          "condition": "Malformed tenant id, page token or query window."
+        },
+        {
+          "error_id": "permission-denied",
+          "condition": "Caller is neither a platform operator nor an admin of the target tenant, or the target tenant is foreign to the caller's active tenant."
+        },
+        {
+          "error_id": "unimplemented",
+          "condition": "The tenant audit log facade is not registered on the host."
+        }
+      ],
+      "retry": {
+        "safe": true,
+        "policy": "Read-only tenant-tier operation.",
+        "source": "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminApiGrpcClient.cs"
+      },
+      "idempotency": {
+        "idempotent": true,
+        "basis": "Paged read of the tenant's committed admin audit records; scope is forced to the validated tenant and pending intents are excluded.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAuditLog.cs"
+      },
+      "concurrency": {
+        "rule": "Pages reflect committed audit records at read time; records written between pages may appear on later pages.",
+        "source": "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAuditLog.cs"
+      },
+      "sources": [
+        "src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAuditLog.cs",
         "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcMethods.cs",
         "src/lattice.api.tenantadmin.grpc/LatticeTenantAdminGrpcService.cs"
       ]
