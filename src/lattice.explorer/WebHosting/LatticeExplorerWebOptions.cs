@@ -131,7 +131,9 @@ public sealed class LatticeExplorerWebOptions
     /// built-in persistence and application-name configuration is applied, so a
     /// host can attach additional configuration (a different key store, key
     /// encryption at rest, a custom key lifetime). Runs whether or not the
-    /// blob-persistence options above are set.
+    /// blob-persistence options above are set. A key store configured here, or by
+    /// the host's own <c>AddDataProtection().PersistKeysTo...</c> call, replaces the
+    /// default in-memory ephemeral key ring.
     /// </summary>
     public Action<IDataProtectionBuilder>? ConfigureDataProtection { get; set; }
 

@@ -1,6 +1,9 @@
+using System.Security.Cryptography;
 using Microsoft.AspNetCore.Components.Server;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.DataProtection.KeyManagement;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Orleans.Lattice.Explorer.Core.Authentication;
 using Orleans.Lattice.Explorer.Core.Configuration;
 using Orleans.Lattice.Explorer.Core.Session;
@@ -298,6 +301,96 @@ public class LatticeExplorerWebServiceCollectionExtensionsTests
         services.AddLatticeExplorerWeb(o => o.ConfigureDataProtection = _ => invoked = true);
 
         Assert.That(invoked, Is.True);
+    }
+
+    [Test]
+    public void AddLatticeExplorerWeb_default_key_ring_is_ephemeral_so_a_restart_cannot_decrypt_old_cookies()
+    {
+        using var first = BuildDefaultExplorerProvider();
+        var protectedPayload = first.GetRequiredService<IDataProtectionProvider>()
+            .CreateProtector("cookie").Protect("session");
+
+        using var restarted = BuildDefaultExplorerProvider();
+        var protector = restarted.GetRequiredService<IDataProtectionProvider>().CreateProtector("cookie");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                restarted.GetRequiredService<IOptions<KeyManagementOptions>>().Value.XmlRepository,
+                Is.InstanceOf<EphemeralKeyRingRepository>());
+            Assert.That(() => protector.Unprotect(protectedPayload), Throws.InstanceOf<CryptographicException>());
+        });
+    }
+
+    [Test]
+    public void AddLatticeExplorerWeb_host_configured_key_ring_via_hook_survives_a_restart()
+    {
+        var keyDirectory = Directory.CreateTempSubdirectory("explorer-keyring-");
+        try
+        {
+            Action<LatticeExplorerWebOptions> configure = o =>
+                o.ConfigureDataProtection = b => b.PersistKeysToFileSystem(keyDirectory);
+
+            AssertRoundTripsAcrossRestart(configure, hostRegistration: null);
+        }
+        finally
+        {
+            keyDirectory.Delete(recursive: true);
+        }
+    }
+
+    [Test]
+    public void AddLatticeExplorerWeb_host_configured_key_ring_registered_first_survives_a_restart()
+    {
+        var keyDirectory = Directory.CreateTempSubdirectory("explorer-keyring-");
+        try
+        {
+            AssertRoundTripsAcrossRestart(
+                configure: null,
+                hostRegistration: s => s.AddDataProtection().PersistKeysToFileSystem(keyDirectory));
+        }
+        finally
+        {
+            keyDirectory.Delete(recursive: true);
+        }
+    }
+
+    private static ServiceProvider BuildDefaultExplorerProvider()
+    {
+        var services = new ServiceCollection();
+        services.AddLatticeExplorerWeb();
+        return services.BuildServiceProvider();
+    }
+
+    private static void AssertRoundTripsAcrossRestart(
+        Action<LatticeExplorerWebOptions>? configure,
+        Action<IServiceCollection>? hostRegistration)
+    {
+        ServiceProvider Build()
+        {
+            var services = new ServiceCollection();
+            hostRegistration?.Invoke(services);
+            services.AddLatticeExplorerWeb(configure);
+            return services.BuildServiceProvider();
+        }
+
+        string protectedPayload;
+        using (var first = Build())
+        {
+            protectedPayload = first.GetRequiredService<IDataProtectionProvider>()
+                .CreateProtector("cookie").Protect("session");
+        }
+
+        using var restarted = Build();
+        Assert.Multiple(() =>
+        {
+            Assert.That(
+                restarted.GetRequiredService<IOptions<KeyManagementOptions>>().Value.XmlRepository,
+                Is.Not.InstanceOf<EphemeralKeyRingRepository>());
+            Assert.That(
+                restarted.GetRequiredService<IDataProtectionProvider>().CreateProtector("cookie").Unprotect(protectedPayload),
+                Is.EqualTo("session"));
+        });
     }
 
     private sealed class FakeTokenCredential : Azure.Core.TokenCredential
