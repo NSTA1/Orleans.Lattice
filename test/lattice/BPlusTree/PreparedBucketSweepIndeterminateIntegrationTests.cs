@@ -101,7 +101,16 @@ public sealed class PreparedBucketSweepIndeterminateIntegrationTests
         public void Configure(ISiloBuilder siloBuilder)
         {
             siloBuilder.AddLattice((silo, name) => silo.AddMemoryGrainStorage(name));
-            siloBuilder.ConfigureLattice(o => o.TxDecisionRetention = Retention);
+            siloBuilder.ConfigureLattice(o =>
+            {
+                o.TxDecisionRetention = Retention;
+                // The sweep must be the only path that settles the parked prepare.
+                // Left enabled, the coverage-lag timer's first (jittered) tick sees
+                // the never-checkpointed leaf as starved, drives a WAL replay, and
+                // replay's self-terminalise pass settles the prepare first, so the
+                // sweep reports Replayed == 0 (#6226). 0 disables that timer.
+                o.LeafSnapshotMaxCoverageLagSeconds = 0;
+            });
             siloBuilder.UseInMemoryReminderService();
         }
     }

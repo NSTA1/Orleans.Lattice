@@ -25,7 +25,9 @@ public class ChainedDigestOracleIntegrationTests
     [OneTimeSetUp]
     public async Task OneTimeSetUp()
     {
-        _fixture = new FourShardClusterFixture();
+        // The oracle compares two non-atomic reads; a background coverage-lag
+        // checkpoint flush landing between them changes a leaf hash (#6226).
+        _fixture = new FourShardClusterFixture(coverageLagTimer: false);
         await _fixture.InitializeAsync();
     }
 

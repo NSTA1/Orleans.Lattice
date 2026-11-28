@@ -9,7 +9,13 @@ using Orleans.Lattice.Tests.Fakes;
 
 namespace Orleans.Lattice.Tests.BPlusTree;
 
-public sealed class FourShardClusterFixture
+/// <param name="coverageLagTimer">
+/// When <see langword="false"/>, disables the leaf coverage-lag timer
+/// (<c>LeafSnapshotMaxCoverageLagSeconds = 0</c>). That timer flushes leaf checkpoints in the
+/// background, which changes a leaf's projection hash and checkpoint offset between two
+/// otherwise-adjacent reads; fixtures whose oracle compares two non-atomic reads opt out (#6226).
+/// </param>
+public sealed class FourShardClusterFixture(bool coverageLagTimer = true)
 {
     public const string TreeName = "four-shard-tree";
     public const int TestShardCount = 4;
@@ -22,6 +28,10 @@ public sealed class FourShardClusterFixture
         var builder = new TestClusterBuilder();
         builder.UseSharedInMemoryWal();
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
+        if (!coverageLagTimer)
+        {
+            builder.AddSiloBuilderConfigurator<NoCoverageLagSiloConfigurator>();
+        }
         Cluster = builder.Build();
         await Cluster.DeployAsync();
         await SharedInMemoryWal.AssertAllSilosShareOneWalAsync(Cluster);
@@ -115,5 +125,11 @@ public sealed class FourShardClusterFixture
             siloBuilder.ConfigureLattice(o => o.DigestCoalescingWindowMs = 0);
             siloBuilder.UseInMemoryReminderService();
         }
+    }
+
+    private sealed class NoCoverageLagSiloConfigurator : ISiloConfigurator
+    {
+        public void Configure(ISiloBuilder siloBuilder)
+            => siloBuilder.ConfigureLattice(o => o.LeafSnapshotMaxCoverageLagSeconds = 0);
     }
 }
