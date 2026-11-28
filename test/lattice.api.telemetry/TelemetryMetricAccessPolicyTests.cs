@@ -1,3 +1,6 @@
+using System.Reflection;
+using System.Text.RegularExpressions;
+
 namespace Orleans.Lattice.Api.Telemetry.Tests;
 
 /// <summary>
@@ -153,6 +156,51 @@ public sealed class TelemetryMetricAccessPolicyTests
             Assert.That(policy.IsAdmitted("lattice_wal_append_total\n"), Is.False);
             Assert.That(policy.IsAdmitted("lattice_wal_append_total\r\n"), Is.False);
         });
+    }
+
+    [Test]
+    public void Every_wildcard_pattern_compiles_with_the_non_backtracking_engine()
+    {
+        // Regression guard for #3929 / #6195: the names a wildcard entry tests are
+        // caller-supplied, so the engine must bound every match to linear time.
+        // Swapping NonBacktracking for Compiled (or no option) keeps every
+        // behavioural test green, so the option itself is asserted here.
+        var policy = DenyAll("lattice_*", "lattice_*_*_*_total", "exact_name");
+
+        var patterns = CompiledPatterns(policy);
+
+        Assert.Multiple(() =>
+        {
+            // Non-vacuous: both wildcard entries compiled, the exact one did not.
+            Assert.That(patterns, Has.Length.EqualTo(2));
+            Assert.That(
+                patterns.Select(pattern => pattern.Options),
+                Has.All.Matches<RegexOptions>(options => options.HasFlag(RegexOptions.NonBacktracking)),
+                "A wildcard allow-list entry must compile with RegexOptions.NonBacktracking.");
+            Assert.That(
+                patterns.Select(pattern => pattern.Options),
+                Has.None.Matches<RegexOptions>(options => options.HasFlag(RegexOptions.Singleline)));
+        });
+    }
+
+    /// <summary>
+    /// Reads the compiled wildcard patterns off a policy. The policy holds them in its
+    /// single <see cref="Regex"/>-array field; fail loudly rather than vacuously if that
+    /// field is renamed, retyped, or split.
+    /// </summary>
+    private static Regex[] CompiledPatterns(TelemetryMetricAccessPolicy policy)
+    {
+        var fields = typeof(TelemetryMetricAccessPolicy)
+            .GetFields(BindingFlags.Instance | BindingFlags.NonPublic)
+            .Where(field => field.FieldType == typeof(Regex[]))
+            .ToArray();
+
+        Assert.That(
+            fields,
+            Has.Length.EqualTo(1),
+            "Expected exactly one instance Regex[] field holding the compiled wildcard patterns.");
+
+        return (Regex[])fields[0].GetValue(policy)!;
     }
 
     [Test]
