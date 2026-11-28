@@ -1,0 +1,13 @@
+# Pairs with InstallOnlyWithClusterWideAppInstall. The install gate asks for AppInstall over the cluster-wide tree; accepting a
+# grant on one data tree lets a narrower scope install an app.
+MODULE: AppsInstallAdmitsScopedGrant
+TARGET: InstallOnlyWithClusterWideAppInstall
+CLASS: Invariant
+SUMMARY: the install gate accepts AppInstall granted on a single data tree
+PERTURBS: Install
+
+--- FIND
+    LET auth == sys \/ HoldsClusterWideAppInstall(c)
+--- REPLACE
+    LET auth == sys \/ HoldsClusterWideAppInstall(c) \/ c = "scoped"
+--- END

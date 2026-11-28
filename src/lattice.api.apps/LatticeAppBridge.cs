@@ -29,8 +29,10 @@ namespace Orleans.Lattice.Api.Apps;
 /// </description></item>
 /// <item><description>
 /// The logical tree is resolved server-side: a declared tree to <c>a/{slug}/{tree}</c>, an adopted tree to its
-/// adopted id, then composed with the tenant. An undeclared name is <see cref="AppBridgeFailure.NotFound"/>.
-/// No path accepts a physical tree id from the caller.
+/// adopted id, then composed with the tenant. A caller bound to no app-owned grant of this install is first
+/// <see cref="AppBridgeFailure.Denied"/>, exactly as for an app that does not exist, so it cannot tell an install
+/// from no install or learn which tree names it declares; for a caller bound to a grant, an undeclared name is
+/// <see cref="AppBridgeFailure.NotFound"/>. No path accepts a physical tree id from the caller.
 /// </description></item>
 /// <item><description>
 /// The caller must match an app-owned grant of this install - a role binding's group, holding the concrete
@@ -345,7 +347,14 @@ internal sealed class LatticeAppBridge : ILatticeAppBridge
             throw Fail(AppBridgeFailure.Denied);
         }
 
-        // Step 3: server-side tree resolution; the caller never names a physical tree.
+        // Step 3: a caller bound to no app-owned grant is denied before the tree is resolved, so it cannot tell
+        // an install from no install, nor learn which tree names the install declares.
+        if (!plan.HoldsAnyGrant(subject.GroupIds))
+        {
+            throw Fail(AppBridgeFailure.Denied);
+        }
+
+        // Server-side tree resolution; the caller never names a physical tree.
         if (!plan.TryGetTree(target.LogicalTree, out var tree))
         {
             throw Fail(AppBridgeFailure.NotFound);

@@ -1,0 +1,12 @@
+# Pairs with RoleCompilerNeverEmitsScopeless. A scopeless capability in a role ceiling must be dropped, never compiled.
+MODULE: AppsCompilerEmitsScopeless
+TARGET: RoleCompilerNeverEmitsScopeless
+CLASS: Invariant
+SUMMARY: the role compiler admits a scopeless capability on a data tree
+PERTURBS: CompileRoles
+
+--- FIND
+    LET admit == o \notin ScopelessOps /\ t \in GrantableTrees
+--- REPLACE
+    LET admit == t \in GrantableTrees
+--- END

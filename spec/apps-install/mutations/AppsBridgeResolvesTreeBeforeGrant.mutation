@@ -1,0 +1,15 @@
+# Pairs with WorkspaceNonDisclosure. A caller bound to no grant of the app must be answered as for an app that
+# does not exist, so the tree must not be resolved before the caller's grant membership is checked.
+MODULE: AppsBridgeResolvesTreeBeforeGrant
+TARGET: WorkspaceNonDisclosure
+CLASS: Invariant
+SUMMARY: the bridge resolves the tree before checking the caller holds any grant of the app
+PERTURBS: BridgeAuthorize
+
+--- FIND
+               ELSE IF ~member THEN "denied"
+               ELSE IF t \notin DeclaredTrees THEN "notFound"
+--- REPLACE
+               ELSE IF t \notin DeclaredTrees THEN "notFound"
+               ELSE IF ~member THEN "denied"
+--- END

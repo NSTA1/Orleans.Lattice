@@ -1,0 +1,12 @@
+# Pairs with AppRulesSystemOriginOnly. Activation persists app rules inside a system-origin scope.
+MODULE: AppsActivationWritesUserOrigin
+TARGET: AppRulesSystemOriginOnly
+CLASS: Invariant
+SUMMARY: activation persists the app's rules outside the system-origin scope
+PERTURBS: ActivateRules
+
+--- FIND
+    LET origin == "system"
+--- REPLACE
+    LET origin == "user"
+--- END

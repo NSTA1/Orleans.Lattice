@@ -51,6 +51,7 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 - **Memory - Repository-context reset survives transient faults.** `repocontext_reset_index` retries transient leaf-retirement and SQLite lock faults and reports a tree as partial once retries run out; `RepoContextVectorCache.TryGet` docs describe a miss correctly. ([#5182](https://github.com/NSTA1/Orleans.Lattice/issues/5182), [#5521](https://github.com/NSTA1/Orleans.Lattice/issues/5521)) (`Orleans.Lattice.Api.Mcp.RepoContext`)
 - **CI - Explorer journeys run only for the `journeys-full` label.** Adding any other label to a pull request no longer queues or cancels an Explorer journeys run. ([#5625](https://github.com/NSTA1/Orleans.Lattice/issues/5625)) (`repository-wide`)
 - **Tests - Fewer enumeration and Debug-build flakes.** Integration fixtures use the recovering scan helpers instead of raw key and entry streams, with a guard against new raw sites, and allocation-probe tests no longer fail in Debug builds. ([#5282](https://github.com/NSTA1/Orleans.Lattice/issues/5282), [#5991](https://github.com/NSTA1/Orleans.Lattice/issues/5991)) (`repository-wide`)
+- **Apps - UI bridge hides installs from ungranted callers.** A caller holding no role of an app now gets the same failure and message whether or not the app is installed, so it cannot learn an install or its revision; a granted caller still sees not-found. ([#6193](https://github.com/NSTA1/Orleans.Lattice/issues/6193)) (`Orleans.Lattice.Api.Apps`)
 
 ## Released
 

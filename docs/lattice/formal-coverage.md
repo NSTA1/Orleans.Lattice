@@ -408,6 +408,7 @@ states as load-bearing, and appends its own row to this table when it lands.
 | `TenantAccessMembership` | Tenant-access membership under concurrency | 13 | 11 | 23 | [Tenant-access membership](../../spec/tenant-access-admin/README.md#tenantaccessmembership) |
 | `McpToolAuthorization` | MCP tool authorization lock-step | 23 | 12 | 25 | [MCP tool authorization](../../spec/mcp-tool-auth/README.md) |
 | `TenantAccessAuthorization` | Delegated tenant access: authorization | 20 | 20 | 36 | [Delegated tenant-access administration](../../spec/tenant-access-admin/README.md) |
+| `AppsInstall` | Installable apps | 16 | 15 | 33 | [Installable apps](../../spec/apps-install/README.md) |
 | `ReplicationOriginBinding` | Replication gRPC host admitted-peer seam and origin binding | 11 | 2 | 11 | [Replication receiver admission](../../spec/replication-admission/README.md) |
 | `ReplicationAdmission` | Replication receiver enrollment and merge-mode gate | 7 | 4 | 10 | [Replication receiver admission](../../spec/replication-admission/README.md) |
 | `RestorePeerAuthority` | Coordinated-restore participant peer authority, own-saga decision and cutover fence | 17 | 6 | 23 | [Replication receiver admission](../../spec/replication-admission/README.md) |
@@ -699,6 +700,21 @@ gaps, states its full scope.
     crashes and epoch grain re-activation, which the tenant-isolation area
     covers; cross-cluster replication lag; the single-step host path; and the
     grant listing.
+- **Installable apps** ([`spec/apps-install/`](../../spec/apps-install/README.md)).
+  - **Covers:** the cluster-wide `AppInstall` capability gating an install or
+    upgrade, a tree-scoped grant never sufficing; the manifest digest pin, so
+    a pinned install writes exactly the manifest the operator reviewed; the
+    role compiler never emitting a scopeless capability or reaching a reserved
+    tree; the `app:` rule namespace written and deleted only by system origin,
+    with a refused delete not disclosing whether the rule exists; the alias
+    tree-ownership guard binding system origin too, judged on the target's
+    derivation root, with a default decision or a guard fault writing nothing;
+    and the app UI bridge answering exactly as for an absent app when the app
+    is not installed at the requested revision or the caller holds no role of
+    it.
+  - **Does not cover:** alias swaps, which share the guard; more than one app or app-owned rule; the
+    bridge's tenant refusal, request limiter and consent check; and uninstall,
+    disable and enable, which pass the same `AppInstall` gate.
 
 - **Tenant-access membership** ([`spec/tenant-access-admin/`](../../spec/tenant-access-admin/README.md#tenantaccessmembership)).
   - **Covers:** the concurrency half of delegated tenant-access

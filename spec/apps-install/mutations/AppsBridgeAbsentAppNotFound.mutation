@@ -1,0 +1,13 @@
+# Pairs with WorkspaceNonDisclosure. An app not installed at the requested revision must be answered as an app
+# that does not exist.
+MODULE: AppsBridgeAbsentAppNotFound
+TARGET: WorkspaceNonDisclosure
+CLASS: Invariant
+SUMMARY: the bridge answers not found for an app that is not installed
+PERTURBS: BridgeAuthorize
+
+--- FIND
+        ans == IF ~live THEN "denied"
+--- REPLACE
+        ans == IF ~live THEN "notFound"
+--- END

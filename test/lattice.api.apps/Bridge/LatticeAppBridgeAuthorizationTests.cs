@@ -64,6 +64,32 @@ public sealed class LatticeAppBridgeAuthorizationTests
         Assert.That(mismatch.Message, Is.EqualTo(absent.Message));
     }
 
+    [TestCase("missing")]
+    [TestCase("notes")]
+    public void A_caller_with_no_app_grant_cannot_tell_an_install_from_no_install(string tree)
+    {
+        var calls = new Func<ILatticeAppBridge, Task>[]
+        {
+            b => b.GetAsync(BridgeHarness.Target(tree), "k"),
+            b => b.ScanAsync(BridgeHarness.Target(tree), string.Empty, 10),
+            b => b.SetAsync(BridgeHarness.Target(tree), "k", new byte[] { 1 }),
+            b => b.DeleteAsync(BridgeHarness.Target(tree), "k"),
+        };
+
+        foreach (var call in calls)
+        {
+            var installed = new BridgeHarness().Installed("mallory", "g-somebody-else");
+            var absent = new BridgeHarness().As("mallory", "g-somebody-else");
+
+            var whenInstalled = Assert.ThrowsAsync<AppBridgeException>(() => call(installed.Bridge));
+            var whenAbsent = Assert.ThrowsAsync<AppBridgeException>(() => call(absent.Bridge));
+
+            Assert.That(whenInstalled!.Failure, Is.EqualTo(whenAbsent!.Failure));
+            Assert.That(whenInstalled.Message, Is.EqualTo(whenAbsent.Message));
+            installed.AssertDataPathUntouched();
+        }
+    }
+
     [Test]
     public void An_app_that_is_not_installed_is_denied() =>
         AssertEveryVerbDeniedUntouched(new BridgeHarness().As("alice", BridgeHarness.Editors), BridgeHarness.Target(slug: "billing"));
@@ -500,8 +526,8 @@ public sealed class LatticeAppBridgeAuthorizationTests
         BridgeAssert.Fails(AppBridgeFailure.Denied, () => Editor().Bridge.SetAsync(BridgeHarness.Target("missing"), "k", new byte[] { 1 }));
 
     [Test]
-    public void The_tree_is_resolved_before_the_app_role_grant_is_checked() =>
-        BridgeAssert.Fails(AppBridgeFailure.NotFound, () => new BridgeHarness().Installed("mallory").Bridge.GetAsync(BridgeHarness.Target("missing"), "k"));
+    public void A_caller_holding_no_role_of_the_app_is_denied_before_the_tree_is_resolved() =>
+        BridgeAssert.Fails(AppBridgeFailure.Denied, () => new BridgeHarness().Installed("mallory").Bridge.GetAsync(BridgeHarness.Target("missing"), "k"));
 
     private static void AssertEveryWriteDenied(BridgeHarness harness, AppBridgeTarget target)
     {
