@@ -717,8 +717,13 @@ internal sealed partial class ReplicationShipperGrain(
         cancellationToken.ThrowIfCancellationRequested();
         ParseGrainKey();
         // The driver ensures a shipper only for a peer in the topology, so a
-        // shipper detached when its peer was removed holds the log again.
-        await ReattachToLogAsync();
+        // shipper detached when its peer was removed holds the log again -
+        // unless its tree resolves no write class, in which case the
+        // write-class gate re-attaches it once one resolves (#5699).
+        if (await MayReattachOnEnsureAsync())
+        {
+            await ReattachToLogAsync();
+        }
         // RegisterOrUpdateReminder is idempotent; StartPhaseTimer's
         // _phaseTimer ??= guard makes the second call a no-op. Safe
         // for repeated invocation.
@@ -880,9 +885,18 @@ internal sealed partial class ReplicationShipperGrain(
             return;
         }
 
-        // Ahead of the pause and backoff gates: releasing a covered purge hold
-        // depends on neither, and a held registry blocks every decision purge.
+        // Ahead of the write-class, pause and backoff gates: releasing a covered
+        // purge hold depends on none of them, and a held registry blocks every
+        // decision purge. A shipper the write-class gate holds detached retries
+        // a failed release here on every check.
         await MaybeReleasePurgeHoldAsync(force: false);
+
+        // A tree with no write class ships nothing: its peer would drop every
+        // record while the cursor advanced past it (#5699).
+        if (await SuspendIfWriteClassUnresolvedAsync())
+        {
+            return;
+        }
 
         // Durable administrative pause (saga cutover): no post-cut entry may
         // leave the cluster while a saga is in flight. The cursor is never

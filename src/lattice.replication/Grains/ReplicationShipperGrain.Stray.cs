@@ -16,7 +16,9 @@ namespace Orleans.Lattice.Replication.Grains;
 /// It ships nothing. It withdraws from the log through the peer-removal path
 /// (<see cref="DetachFromLogAsync"/>), drops its peer's cross-tree enrolment,
 /// stops its timer and deactivates. A runtime-disabled or ambiguous tree still
-/// has configuration, so it is not a stray and behaves as before.
+/// has configuration, so it is not a stray: the write-class gate suspends its
+/// shipper instead, which stays active and re-attaches, re-seeding its peer,
+/// once the tree resolves a write class again (#5699).
 /// </para>
 /// </summary>
 internal sealed partial class ReplicationShipperGrain
