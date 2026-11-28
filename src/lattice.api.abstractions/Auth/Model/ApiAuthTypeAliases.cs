@@ -104,4 +104,10 @@ public static class ApiAuthTypeAliases
 
     /// <summary>Alias for the gRPC no-argument access-model read request.</summary>
     public const string AuthAccessModelQuery = "oli.aq";
+
+    /// <summary>Alias for <see cref="AdminAuditQuery"/>.</summary>
+    public const string AdminAuditQuery = "oli.au";
+
+    /// <summary>Alias for <see cref="AdminAuditPage"/>.</summary>
+    public const string AdminAuditPage = "oli.ag";
 }

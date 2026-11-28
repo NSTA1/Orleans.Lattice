@@ -24,6 +24,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The in-memory admin audit tree shared with the operator reader's fixture. -->
+    <Compile Include="..\lattice.api.auth\AdminAuditTreeFake.cs" Link="AdminAuditTreeFake.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\..\src\lattice.api.tenantadmin\Orleans.Lattice.Api.TenantAdmin.csproj" />
     <!-- The delegated tenant access conformance suite (Security/) exercises the cluster
          auth facade's break-glass path and app role binding confinement end to end. -->

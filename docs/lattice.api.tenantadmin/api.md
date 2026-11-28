@@ -4,7 +4,7 @@ This package implements caller-facing tenant administration over the tenancy reg
 
 ## Registration and facade families
 
-`AddLatticeTenantAdminApi` requires `AddLatticeTenancy` on the same silo builder first. It registers lifecycle, region-residency, access, grants, self-service and quota-usage facades, the delegated tenant directory (`ILatticeTenantDirectoryAdmin`) and policy (`ILatticeTenantPolicyAdmin`) facades, plus the authorization, write-clock and tree-cascade seams. The options delegate accepts `LatticeApiTenantAdminOptions`, currently an empty reservation type, not an enforcement switch.
+`AddLatticeTenantAdminApi` requires `AddLatticeTenancy` on the same silo builder first. It registers lifecycle, region-residency, access, grants, self-service and quota-usage facades, the delegated tenant directory (`ILatticeTenantDirectoryAdmin`) and policy (`ILatticeTenantPolicyAdmin`) facades, the tenant audit reader (`ILatticeTenantAuditLog`), plus the authorization, write-clock and tree-cascade seams. The options delegate accepts `LatticeApiTenantAdminOptions`, currently an empty reservation type, not an enforcement switch.
 
 Tenant lifecycle and quota mutation use the operator authorization tier. Region residency, tenant-admin subjects and cross-tenant grants also have tenant-specific authority checks. Delegated directory and policy administration require the separate tenancy opt-in; registration is not permission. Read-only self-service resolves accessible tenants from the caller and hides inaccessible tenants as absent.
 
@@ -15,6 +15,12 @@ Tenant lifecycle and quota mutation use the operator authorization tier. Region 
 Use the exact method signatures below for cancellation, paging, request records and return values. Registry mutations receive monotonic timestamps; tenant deletion enumerates and soft-deletes its owned trees through the internal lifecycle cascade. The directory and policy facades compose the membership directory and the authorization policy store internally; that composition does not waive caller authorization or tenant confinement.
 
 A lifecycle or grant write is not a distributed transaction across all tenant trees. Region backfill/drain and tree deletion are resumable follow-on work; poll the status/read contracts rather than interpreting accepted control state as completed data movement. See [architecture](architecture.md).
+
+## Reading the tenant audit trail
+
+`ILatticeTenantAuditLog` is the tenant administrator's reader over the durable admin audit trail. It is a dedicated contract, not a member of `ILatticeTenantAccessAdmin`. `ListAuditAsync(string tenantId, AdminAuditQuery query)` authorizes the caller as a platform operator or a live admin subject of the active tenant; a refusal is recorded to the trail as a denied `Read` and nothing is read.
+
+The read is then fixed to the validated tenant's own `t/{tenant}` partition as a prefix scan: the query's `Scope` is ignored, so a tenant administrator cannot read another tenant's records or the cluster partition. The time range, actor, action, outcome and paging filters behave as on the operator reader, `ILatticeAdminAuditLog` in [`Orleans.Lattice.Api.Auth`](../lattice.api.auth/api.md#reading-the-admin-audit-trail). `Pending` rows (in-flight intents) are never returned to this reader.
 
 ## Related
 
@@ -187,6 +193,14 @@ The following inventory includes directly declared public members and overloads,
 - `Task<TenantStatusChangeResult> ResumeTenantAsync( string tenantId, CancellationToken cancellationToken = default)`
 - `Task<TenantDeletionResult> DeleteTenantAsync( string tenantId, CancellationToken cancellationToken = default)`
 - `Task<TenantQuotasUpdateResult> SetTenantQuotasAsync( string tenantId, TenantQuotasDescriptor quotas, CancellationToken cancellationToken = default)`
+
+### `Orleans.Lattice.Api.TenantAdmin.ILatticeTenantAuditLog`
+
+[Source](../../src/lattice.api.abstractions/TenantAdmin/ILatticeTenantAuditLog.cs) (line 28).
+
+`public interface ILatticeTenantAuditLog`
+
+- `Task<AdminAuditPage> ListAuditAsync(string tenantId, AdminAuditQuery query, CancellationToken cancellationToken = default)`
 
 ### `Orleans.Lattice.Api.TenantAdmin.ILatticeTenantDirectoryAdmin`
 
