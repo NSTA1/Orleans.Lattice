@@ -46,7 +46,13 @@ namespace Orleans.Lattice;
 /// <c>hosted-</c> client-id prefix alone - that prefix is a client-supplied value an
 /// external Orleans client can trivially forge - but by validating the silo address
 /// embedded in the hosted-client id against this silo's own address and the live
-/// cluster membership; see <see cref="IsInSiloHostedClient"/>.
+/// cluster membership; see <see cref="IsInSiloHostedClient"/>. That validation is a
+/// plausibility check, <b>not</b> authentication: Orleans does not authenticate the
+/// client id a gateway connection announces, so a client that can reach the gateway
+/// and names a live silo's hosted id is indistinguishable from the real hosted client
+/// (issue #5346). The trust boundary is therefore the network: the Orleans gateway
+/// port must admit trusted infrastructure only, and untrusted callers use the gRPC
+/// and HTTP facades.
 /// </item>
 /// </list>
 /// <para>
@@ -217,6 +223,14 @@ internal sealed class LatticeCapabilityStrippingCallFilter : IIncomingGrainCallF
     /// <see cref="SiloStatus.Active"/> member of the local cluster. A forged
     /// <c>hosted-*</c> id whose embedded address is not a live cluster silo is
     /// treated as an external client and has every reserved capability key stripped.
+    /// </para>
+    /// <para>
+    /// This is a plausibility check, not authentication. A gateway client that
+    /// announces the hosted id of a live silo (an address an attacker can learn from
+    /// the cluster) passes it and retains the reserved keys (issue #5346, pinned by
+    /// <c>HostedClientProvenanceGapIntegrationTests</c>). The gateway port is a
+    /// trusted-infrastructure boundary; the authorization layer logs a start-up
+    /// warning when it accepts connections with no TLS middleware configured.
     /// </para>
     /// </summary>
     private bool IsInSiloHostedClient(GrainId sourceId)

@@ -86,6 +86,22 @@ gate will tell you if you forget.
   publishes the `Allowed(caller, op, scope)` contract the other authorization
   modules assume; its refinement note names the detector test for each guard.
 
+### Orleans gateway trust boundary (`src/lattice`, `src/lattice.auth`)
+- The Orleans client gateway port admits **trusted infrastructure only**;
+  untrusted callers use the gRPC and HTTP facades. Orleans does not authenticate
+  the client id a gateway connection announces, so the capability-stripping
+  filter's `hosted-{silo}` recognition (own address or live member) is a
+  plausibility check, not authentication: a client that names a live silo's
+  hosted id keeps the reserved capability keys (#5346,
+  `HostedClientProvenanceGapIntegrationTests`). Never describe that check as
+  authenticating provenance, and never add a capability path that relies on it
+  alone.
+- `AddLatticeAuth` registers `GatewayTrustBoundaryWarner`, which warns at
+  start-up when a gateway has no inbound connection middleware (no TLS). Orleans
+  keeps `UseTls`'s `TlsOptions` in a closure, not in DI, so the client-certificate
+  mode is not observable; with middleware present the warner logs that it cannot
+  verify the mode. Do not upgrade that log to a positive assurance.
+
 ### MCP tool authorization (`src/lattice.api.mcp`)
 - The tool authorizer is consulted at **both** enforcement points - `tools/list`
   advertisement (session configurator) and `tools/call` invocation (credential

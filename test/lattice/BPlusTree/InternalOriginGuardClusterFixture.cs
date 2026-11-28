@@ -20,9 +20,21 @@ public sealed class InternalOriginGuardClusterFixture
 {
     public TestCluster Cluster { get; private set; } = null!;
 
+    /// <summary>
+    /// When true the silos listen on real TCP sockets, so an independently built
+    /// Orleans client can connect to the gateway (the default in-memory transport
+    /// is reachable only by the cluster's own client).
+    /// </summary>
+    public bool UseTcpTransport { get; init; }
+
     public async Task InitializeAsync()
     {
         var builder = new TestClusterBuilder();
+        if (UseTcpTransport)
+        {
+            builder.Options.ConnectionTransport = ConnectionTransportType.TcpSocket;
+        }
+
         builder.UseSharedInMemoryWal();
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
         Cluster = builder.Build();

@@ -101,6 +101,8 @@ public sealed class ReflectionSeamAuditTests
             "Arrange-only: wedges private tracker state by reflection, then asserts through the public AppendAsync.",
         ["test/lattice/BPlusTree/Grains/WalMaterialiserPinGrainFaultArmsTests.cs"] =
             "Private flush arm is also driven from the public report path in the same fixture.",
+        ["test/lattice/BPlusTree/HostedClientProvenanceGapIntegrationTests.cs"] =
+            "Arrange-only (#5346): reflection rewrites the Orleans framework's LocalClientDetails.ClientId on the attacker client to forge a hosted-{silo} id; it invokes no Lattice member, and every assertion goes through the public grain call path and LatticeCapabilityStrippingCallFilter.",
         ["test/lattice/Views/ViewActivationServiceTests.cs"] =
             "Framework-owned caller: BackgroundService.StartAsync invokes ExecuteAsync, so no call site of ours can regress.",
         ["test/shared/Orleans.Lattice.Testing/CrdtBufferOwnershipContractTestsBase.cs"] =
