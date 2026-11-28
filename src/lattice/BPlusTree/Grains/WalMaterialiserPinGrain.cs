@@ -80,7 +80,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// entries are larger than estimated converges instead of failing forever.
 /// </para>
 /// </summary>
-internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinGrain
+internal sealed partial class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinGrain
 {
     /// <summary>
     /// Average slot size, in estimated serialised bytes, above which the shard
@@ -528,6 +528,7 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
             _configuredBuckets);
         _bucketCount = target;
         _persistedWidth = target;
+        InvalidateSlotIndex();
         _legacyDrainBuckets.Clear();
         for (var bucket = 0; bucket < target; bucket++)
         {
@@ -696,6 +697,7 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     /// </summary>
     private void MergeSlotContents(WalMaterialiserPinState contents, int layoutWidth)
     {
+        InvalidateSlotIndex();
         foreach (var pin in contents.Pins)
         {
             if (MergeLoaded(pin.Key, pin.Value) && layoutWidth >= 2)
@@ -1053,6 +1055,9 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
             return;
         }
 
+        // Before the hash cache entry goes: the index routes by it.
+        UnindexConsumer(consumerId);
+
         if (removedHold)
         {
             _estimatedBytes -= EstimateHoldEntryBytes(consumerId);
@@ -1130,6 +1135,7 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
         _state.State.Pins.Clear();
         _state.State.Offsets.Clear();
         _state.State.OverrideHolds.Clear();
+        InvalidateSlotIndex();
         _hashes.Clear();
         _lastMerged.Clear();
         _estimatedBytes = 0;
@@ -1223,6 +1229,7 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
     private bool Merge(string consumerId, HybridLogicalClock frontier, long checkpointOffset)
     {
         RecordMerge(consumerId);
+        var isNew = !IsMapped(consumerId);
         var changed = false;
         var frontierAdvanced = false;
 
@@ -1275,6 +1282,11 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
         {
             _dirty = true;
             MarkBucketDirty(consumerId, _bucketCount);
+        }
+
+        if (isNew)
+        {
+            IndexNewConsumer(consumerId);
         }
 
         return changed;
@@ -1956,6 +1968,14 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
             slices[slot] = new WalMaterialiserPinState { PersistedBucketCount = stamp };
         }
 
+        if (width == _bucketCount && width > 1)
+        {
+            // #6166: under the live layout, read only the written slots' consumers.
+            FillSlicesFromIndex(slices);
+            return slices;
+        }
+
+        SliceBuildVisitsForTest += _state.State.Pins.Count + _state.State.Offsets.Count + _state.State.OverrideHolds.Count;
         foreach (var pin in _state.State.Pins)
         {
             if (slices.TryGetValue(SlotOf(pin.Key, width), out var slice))
@@ -2049,6 +2069,7 @@ internal sealed class WalMaterialiserPinGrain : IGrainBase, IWalMaterialiserPinG
         _bucketCount = target;
         _persistedWidth = target;
         _relayoutTarget = 0;
+        InvalidateSlotIndex();
         _dirtyBuckets.Clear();
         _legacyDrainBuckets.Clear();
         if (target == 1)
