@@ -468,6 +468,7 @@ static async Task RunOrleansClientProducerAsync(string[] args)
             Console.WriteLine($"[producer] preseed treeId={settings.TreeId} skipped workloadMode={BenchWorkloadMetadata.FormatWorkloadMode(settings.WorkloadMode)} preseedKeyCount={settings.PreseedKeyCount}");
         }
 
+        await PostSeedSettleAsync(settings.TreeId, ct).ConfigureAwait(false);
         var generator = CreateChannelGenerator(vehicleCount, readKeySpace);
         var engine = new BenchIngestEngine(
             clusterClient,
@@ -526,6 +527,7 @@ static async Task RunTreeSizeLadderAsync(
         Console.WriteLine($"[producer] tree-size-rung index={i} rung={rung} phase=seed from={seeded}");
         await PreseedWithRetryAsync(lattice, rungSettings, seeded, ct).ConfigureAwait(false);
         seeded = rung;
+        await PostSeedSettleAsync(settings.TreeId, ct).ConfigureAwait(false);
 
         Console.WriteLine($"[producer] tree-size-rung index={i} rung={rung} phase=measure");
         var generator = CreateChannelGenerator(vehicleCount, rung);
@@ -535,6 +537,20 @@ static async Task RunTreeSizeLadderAsync(
         Console.WriteLine($"[producer] tree-size-rung index={i} rung={rung} phase=end");
     }
     Console.WriteLine($"[producer] tree-size-ladder complete rungs={ladder.Length} seeded={seeded}");
+}
+
+// Holds the producer idle between the seed and the measured phase for BENCH_POSTSEED_SETTLE_SEC
+// (default 0), so a cohort can tell post-seed background work apart from steady-state read cost.
+static async Task PostSeedSettleAsync(string treeId, CancellationToken ct)
+{
+    var settleSec = Math.Clamp(ReadIntAllowZero("BENCH_POSTSEED_SETTLE_SEC", 0), 0, 3600);
+    if (settleSec == 0)
+    {
+        return;
+    }
+
+    Console.WriteLine($"[producer] postseed-settle treeId={treeId} seconds={settleSec}");
+    await Task.Delay(TimeSpan.FromSeconds(settleSec), ct).ConfigureAwait(false);
 }
 
 static ChannelGenerator CreateChannelGenerator(int vehicleCount, int readKeySpace = 0)
