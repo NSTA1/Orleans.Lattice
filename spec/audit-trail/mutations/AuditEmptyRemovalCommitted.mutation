@@ -1,0 +1,14 @@
+# Pairs with NoPhantomAudit. An absent anchor has no version to compare, so
+# the caller treats it as moved and records a removal that matched nothing as
+# committed instead of no change.
+MODULE: AuditEmptyRemovalCommitted
+TARGET: NoPhantomAudit
+CLASS: Invariant
+SUMMARY: a removal of an anchor that never existed is committed
+PERTURBS: Finalize
+
+--- FIND
+                     [] op[o].changed -> "Committed"
+--- REPLACE
+                     [] op[o].changed \/ op[o].base = 0 -> "Committed"
+--- END

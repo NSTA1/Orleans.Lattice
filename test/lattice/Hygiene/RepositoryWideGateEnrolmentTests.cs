@@ -118,6 +118,8 @@ public sealed class RepositoryWideGateEnrolmentTests
                 "asserts every banking helper in src is wired to a fault path and lets the fault out (issue #2545), not instrument declarations",
             ["FrameworkNamespaceShadowingHygieneTests"] =
                 "asserts no namespace in src or test shadows an Orleans framework namespace, not instrument declarations",
+            ["LatticeAdminAuditRecordShapeTests"] =
+                "asserts only the administration facades and the trail emit admin audit records (issue #6056), not instrument declarations",
             ["LatticeOptionsResolverPropagationGuardTests"] =
                 "asserts options-resolver propagation across packages, not instrument declarations",
             ["PackageReleasePlumbingTests"] =

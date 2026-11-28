@@ -506,6 +506,28 @@ gate will tell you if you forget.
   mutations and detectors are in `spec/tenant-grants/Refinement.md`. Change the model
   with the seam.
 
+### Admin audit trail (`src/lattice.auth`, every administration facade)
+- **Every committed protected mutation has exactly one audit record attributing the
+  principal the facade authorized.** `LatticeAdminAudit.RunAsync` writes the intent
+  before the commit and refuses the call when it cannot (fail closed); the final record
+  is written create-only by `AdminAuditStore.WriteFinalAsync`, by the caller or by the
+  reconciler, never both. The actor is the resolved caller subject, never a request id.
+- **A record never claims more than the evidence proves.** Committed comes only from
+  the call's own result, taken from the store's merge against the stored record (for
+  tenant records, `IGuardedTenantRegistry.PutProbedAsync` with a
+  `TenantStoredRecordProbe`), never from the authorization read; no change only when
+  `AdminAuditEvidence.CheckMovementAsync` proves nothing has written the anchor since
+  the intent (a truncated or replay-headed history window is unproven, never unmoved);
+  a fault that may follow the commit, or an accepted activation, stays pending.
+  The reconciler (`AdminAuditEvidence.ResolveAsync`) never records Committed, records
+  not committed only past the maximum pending age, and resolves only its own region's
+  intents. Every refusal, of a read or a mutation, writes one Denied record or is
+  counted; records carry allow-listed, bounded fields only. A replicated or restored
+  record is applied as data and never re-audited.
+- **The formal model is `spec/audit-trail/`.** Module `AdminAuditTrail` checks these
+  properties, each with a mutation that turns it red and detectors in
+  `spec/audit-trail/Refinement.md`. Change the model with the seam.
+
 ### Tenant tree-count admission (`src/lattice.tenancy`, consumed by `src/lattice.api.treeadmin`)
 - **Every registry row a tenant adds passes tree-count admission.** `MaxTreeCount`
   bounds the rows under the tenant's prefix, read authoritatively from the registry at

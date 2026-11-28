@@ -1,0 +1,17 @@
+# Pairs with EveryCommitAudited. BeginAsync swallows its own write failure
+# instead of refusing the call, so the mutation commits with no intent and no
+# record: nothing the reconciler could ever find.
+MODULE: AuditIntentFailureProceeds
+TARGET: EveryCommitAudited
+CLASS: Invariant
+SUMMARY: a failed intent write lets the call go on to commit
+PERTURBS: BeginIntent
+
+--- FIND
+       ELSE /\ pending' = pending
+            /\ op' = [op EXCEPT ![o] = [@ EXCEPT !.pc = "done", !.result = "unavailable"]]
+--- REPLACE
+       ELSE /\ pending' = pending
+\* MUTATION: the call proceeds without its intent.
+            /\ op' = [op EXCEPT ![o] = [@ EXCEPT !.pc = "intent", !.live = TRUE, !.base = Obs, !.mark = Len(hist), !.actor = op[o].caller]]
+--- END

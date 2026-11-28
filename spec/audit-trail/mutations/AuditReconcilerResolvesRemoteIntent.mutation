@@ -1,0 +1,15 @@
+# Pairs with ReplicatedNotReAudited. The sweep drops its own-region filter, so
+# an intent replicated from another region is judged by this region's
+# evidence and finalized here.
+MODULE: AuditReconcilerResolvesRemoteIntent
+TARGET: ReplicatedNotReAudited
+CLASS: Invariant
+SUMMARY: the reconciler resolves another region's replicated intent
+PERTURBS: Reconcile
+
+--- FIND
+       /\ o \in LocalOps
+       /\ op[o].age # "young"
+--- REPLACE
+       /\ op[o].age # "young"
+--- END

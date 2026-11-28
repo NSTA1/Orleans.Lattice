@@ -1,0 +1,14 @@
+# Pairs with EveryCommitAudited. The actor is taken from the request instead
+# of the subject the caller context resolves to, so the record attributes a
+# principal the facade never authorized.
+MODULE: AuditActorFromRequest
+TARGET: EveryCommitAudited
+CLASS: Invariant
+SUMMARY: the intent attributes the subject id the request asserts
+PERTURBS: BeginIntent
+
+--- FIND
+!.actor = op[o].caller, !.secret = FALSE, !.long = FALSE]]
+--- REPLACE
+!.actor = Asserted, !.secret = FALSE, !.long = FALSE]]
+--- END

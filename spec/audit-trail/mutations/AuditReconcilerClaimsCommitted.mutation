@@ -1,0 +1,14 @@
+# Pairs with ReconcilerNeverClaimsCommitted. A revision since the intent may
+# be another writer's, so claiming a moved anchor as this call's commit
+# asserts what the reconciler cannot prove.
+MODULE: AuditReconcilerClaimsCommitted
+TARGET: ReconcilerNeverClaimsCommitted
+CLASS: Invariant
+SUMMARY: the reconciler claims a commit because the anchor moved
+PERTURBS: Reconcile
+
+--- FIND
+        verdict == CASE movement = "Moved" -> "Indeterminate"
+--- REPLACE
+        verdict == CASE movement = "Moved" -> "Committed"
+--- END

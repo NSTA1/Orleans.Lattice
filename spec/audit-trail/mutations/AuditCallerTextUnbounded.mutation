@@ -1,0 +1,15 @@
+# Pairs with NoSecretMaterial. The target id and detail of a denied call are
+# built from the raw request before authorization; storing them unbounded lets
+# an unauthorized caller make every denial persist and replicate arbitrary
+# text.
+MODULE: AuditCallerTextUnbounded
+TARGET: NoSecretMaterial
+CLASS: Invariant
+SUMMARY: a denial record stores the caller's text unbounded
+PERTURBS: Authorize
+
+--- FIND
+Row(o, "Denied", c, "caller", FALSE, FALSE)
+--- REPLACE
+Row(o, "Denied", c, "caller", FALSE, TRUE)
+--- END

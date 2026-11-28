@@ -1,0 +1,18 @@
+# Pairs with NoFalseAbsence. The caller records no change when the anchor
+# reads the same as its base, and an absent anchor that is absent again reads
+# the same, so a create undone by a later delete before the finalize is
+# recorded as no change.
+MODULE: AuditFinalizeJudgesByAnchor
+TARGET: NoFalseAbsence
+CLASS: Invariant
+SUMMARY: the caller decides no change from anchor equality alone
+PERTURBS: Finalize
+
+--- FIND
+                     [] op[o].changed -> "Committed"
+                     [] movement = "Unmoved" -> "NoChange"
+                     [] OTHER -> "Indeterminate"
+--- REPLACE
+                     [] Obs = op[o].base -> "NoChange"
+                     [] OTHER -> "Committed"
+--- END

@@ -1,0 +1,18 @@
+# Pairs with NoFalseAbsence. The reconciler treats an anchor absent at the
+# intent and absent again as unmoved, so a create that committed, whose caller
+# then crashed before its finalize, and which a later delete removed, is
+# recorded as not committed.
+MODULE: AuditReconcilerAbsentIsUnmoved
+TARGET: NoFalseAbsence
+CLASS: Invariant
+SUMMARY: an anchor absent before and after is taken as proof that nothing committed
+PERTURBS: Reconcile
+
+--- FIND
+        movement == IF op[o].base # 0 THEN (IF Obs = op[o].base THEN "Unmoved" ELSE "Moved")
+                    ELSE IF Obs # 0 THEN "Moved"
+                    ELSE IF ~viewComplete THEN "Unproven"
+                    ELSE IF Len(hist) = op[o].mark THEN "Unmoved" ELSE "Moved"
+--- REPLACE
+        movement == IF Obs = op[o].base THEN "Unmoved" ELSE "Moved"
+--- END

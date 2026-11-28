@@ -1,0 +1,14 @@
+# Pairs with NoFalseAbsence. The undecided result of an accepted app
+# activation is finalized at once, so an activation that lands after the
+# facade returned is recorded as having changed nothing.
+MODULE: AuditActivationFinalizedAtReturn
+TARGET: NoFalseAbsence
+CLASS: Invariant
+SUMMARY: an accepted, still-running activation is finalized when the facade returns
+PERTURBS: Finalize
+
+--- FIND
+        outcome == CASE op[o].result \in {"infra", "undecided"} -> "Pending"
+--- REPLACE
+        outcome == CASE op[o].result = "infra" -> "Pending"
+--- END
