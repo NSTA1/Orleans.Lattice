@@ -29,7 +29,7 @@ namespace Orleans.Lattice.BPlusTree.Grains;
 /// durable pin <i>older</i> than the leaf's true frontier, which is GC-safe.
 /// </para>
 /// </summary>
-internal sealed class LeafCursorReporter(
+internal sealed partial class LeafCursorReporter(
     IWalCursorRegistry registry,
     IGrainFactory? grainFactory = null,
     IOptionsMonitor<LatticeOptions>? options = null,
@@ -1226,61 +1226,14 @@ internal sealed class LeafCursorReporter(
         return grainFactory!.GetGrain<IWalMaterialiserPinGrain>(key);
     }
 
-    private async Task WriteDurablePinAsync(string treeName, string consumerId, HybridLogicalClock frontier, long checkpointOffset)
+    private Task WriteDurablePinAsync(string treeName, string consumerId, HybridLogicalClock frontier, long checkpointOffset)
     {
-        try
-        {
-            // Route through the shared shard write so this path - the highest
-            // rate durable pin writer there is, one call per leaf checkpoint -
-            // is covered by the caller-side shed gate and the durable-write
-            // latency measurement (issues #2014 and #2015). The grain call it
-            // ends up making is the same ReportManyAsync as before.
-            var shardCount = WalMaterialiserPinRouting.ResolveShardCount(options);
-            var grainKey = WalMaterialiserPinRouting.ShardKey(treeName, consumerId, shardCount);
-            var written = await SeedShardAsync(
-                    grainKey,
-                    new[] { new MaterialiserPinReport(consumerId, frontier, checkpointOffset) },
-                    writeThrough: false,
-                    sheddable: true)
-                .ConfigureAwait(false);
-
-            if (!written)
-            {
-                // Shed, not written. Roll the debounce back for the same reason a
-                // fault does: this frontier has not reached the durable store, so
-                // recording it as landed would let the next report be coalesced
-                // away and leave the pin behind until some later advance happens
-                // to clear the spacing debounce. Rolling back makes shedding a
-                // pure deferral - each checkpoint re-attempts at the cost of one
-                // dictionary lookup, and the first checkpoint after the window
-                // closes lands the pin.
-                _durableDebounce.TryRemove((treeName, consumerId), out _);
-
-                // Keep the shed value for the shutdown flush too: if no later
-                // checkpoint arrives before the silo stops, nothing else would
-                // ever re-attempt it (issue #3509).
-                NotePending((treeName, consumerId), frontier, checkpointOffset);
-            }
-            else
-            {
-                ClearPendingIfCovered((treeName, consumerId), frontier, checkpointOffset);
-            }
-        }
-        catch (Exception ex)
-        {
-            // Roll the debounce state back so a subsequent note retries
-            // rather than treating the failed write as durably landed.
-            _durableDebounce.TryRemove((treeName, consumerId), out _);
-            NotePending((treeName, consumerId), frontier, checkpointOffset);
-            logger?.LogWarning(
-                ex,
-                "Failed to persist durable WAL materialiser pin for tree {TreeId} consumer {ConsumerId} at {Frontier}; will retry on next checkpoint.",
-                treeName,
-                consumerId,
-                frontier);
-        }
+        // Pending until a write lands, so the silo-stop flush covers a report still
+        // queued behind its shard's call in flight (issue #3509).
+        NotePending((treeName, consumerId), frontier, checkpointOffset);
+        EnqueueMirror(treeName, new MaterialiserPinReport(consumerId, frontier, checkpointOffset));
+        return Task.CompletedTask;
     }
-
     private async Task RemoveDurablePinAsync(string treeName, string consumerId, CancellationToken cancellationToken)
     {
         if (grainFactory is null)
