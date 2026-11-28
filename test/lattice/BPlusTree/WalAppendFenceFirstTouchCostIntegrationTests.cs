@@ -132,6 +132,7 @@ public sealed class WalAppendFenceFirstTouchCostIntegrationTests
 
         var touch = Counters.Snapshot();
         TestContext.Out.WriteLine(string.Join(", ", touch.Values.OrderBy(v => v.Key, StringComparer.Ordinal).Select(v => $"{v.Key}={v.Value}")));
+
         Assert.That(touch.Get($"W {HandOffMarkerRows.ShardGrainType}"), Is.EqualTo(DefaultShards),
             "precondition: every shard root seeded its marker, so the shard-root terms are not vacuous");
         return touch;
@@ -315,7 +316,17 @@ public sealed class WalAppendFenceFirstTouchCostIntegrationTests
         public void Configure(ISiloBuilder siloBuilder)
         {
             siloBuilder.AddLattice((silo, name) => silo.Services.AddKeyedSingleton<IGrainStorage>(name, (_, _) => Storage));
-            siloBuilder.ConfigureLattice(o => o.WalPartitions = 1);
+            siloBuilder.ConfigureLattice(o =>
+            {
+                o.WalPartitions = 1;
+
+                // #6162: a leaf's coverage-lag timer first fires at a per-leaf jittered
+                // phase within its period, and that full pass reads the live-advance view,
+                // which reads the shard root's hand-off marker fresh by design. Fires that
+                // land inside a measurement window are background traffic, not first-touch
+                // cost, and made the per-shard marker read count flaky; the timer is off here.
+                o.LeafSnapshotMaxCoverageLagSeconds = 0;
+            });
             siloBuilder.UseInMemoryReminderService();
             siloBuilder.Services.AddSingleton<IIncomingGrainCallFilter, CallCounter>();
         }
