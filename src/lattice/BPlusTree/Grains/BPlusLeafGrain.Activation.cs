@@ -2787,8 +2787,16 @@ internal sealed partial class BPlusLeafGrain
                 return;
             }
 
-            if (await ProbePhysicalTreeRetentionAsync() != PhysicalTreeRetention.Live)
+            var retention = await ProbePhysicalTreeRetentionAsync();
+            if (retention != PhysicalTreeRetention.Live)
             {
+                // Issue #6226: a resident leaf that probed Live at activation
+                // and re-published after the discard clears its own pins here.
+                if (retention == PhysicalTreeRetention.Discarded)
+                {
+                    await RetireDiscardedTreePinsOnceAsync();
+                }
+
                 StandDownRetiredTreeLeaf();
                 return;
             }
@@ -3749,6 +3757,11 @@ internal sealed partial class BPlusLeafGrain
         // first use of ANY tree. The captured value keeps the guard answering the
         // question it was written to answer: did THIS replay warm the cache.
         var replaySeededAtEntry = !string.IsNullOrEmpty(state.State.TreeId);
+
+        // Issue #6226: settle whether this leaf's physical tree was discarded
+        // before anything below can persist a checkpoint and re-publish its
+        // cursors or pins. Once per activation; fails open to live.
+        await ProbeDiscardedTreeOnActivationAsync();
 
         // Step 0 - try to rehydrate the in-memory entry cache from a
         // persisted leaf snapshot. The snapshot is the safety net for

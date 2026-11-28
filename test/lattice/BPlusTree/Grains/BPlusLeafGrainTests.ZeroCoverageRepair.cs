@@ -151,6 +151,11 @@ public partial class BPlusLeafGrainTests
     /// A logger factory registered on the activation services, or
     /// <see langword="null"/> for none.
     /// </param>
+    /// <param name="treeResize">
+    /// The resize coordinator a resize copy's leaf asks whether an undo can still
+    /// discard it, or <see langword="null"/> for an auto-substitute that does not
+    /// name the copy (issue #6226).
+    /// </param>
     private static (BPlusLeafGrain Grain,
         FakePersistentState<LeafNodeState> State,
         ILeafSnapshotStorageGrain SnapshotStub,
@@ -174,7 +179,8 @@ public partial class BPlusLeafGrainTests
             FakePersistentState<LeafNodeState>? reactivateState = null,
             ILeafSnapshotStorageGrain? reactivateSnapshot = null,
             ITreeDeletionGrain? treeDeletion = null,
-            Microsoft.Extensions.Logging.ILoggerFactory? loggerFactory = null)
+            Microsoft.Extensions.Logging.ILoggerFactory? loggerFactory = null,
+            ITreeResizeGrain? treeResize = null)
     {
         var saved = new List<LeafSnapshotBlob>();
 
@@ -253,6 +259,11 @@ public partial class BPlusLeafGrainTests
         if (treeDeletion is not null)
         {
             grainFactory.GetGrain<ITreeDeletionGrain>(Arg.Any<string>()).Returns(treeDeletion);
+        }
+
+        if (treeResize is not null)
+        {
+            grainFactory.GetGrain<ITreeResizeGrain>(Arg.Any<string>()).Returns(treeResize);
         }
 
         liveAdvance?.Configure(grainFactory);
