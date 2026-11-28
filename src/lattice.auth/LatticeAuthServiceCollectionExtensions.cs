@@ -231,6 +231,13 @@ public static class LatticeAuthServiceCollectionExtensions
         builder.Services.TryAddEnumerable(
             ServiceDescriptor.Singleton<IHostedService, AuthPostureLogger>());
 
+        // Trust boundary (issue #5346): Orleans does not authenticate the client id a
+        // gateway connection announces, so a client that can reach the gateway can
+        // claim a silo's hosted client id and keep reserved capabilities. Warn at
+        // start-up when the gateway has no inbound middleware (no TLS) configured.
+        builder.Services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IHostedService, GatewayTrustBoundaryWarner>());
+
         return builder;
     }
 

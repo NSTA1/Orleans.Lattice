@@ -187,6 +187,25 @@ establish the internal capabilities it legitimately needs; a forged `hosted-*`
 id whose embedded address is not a live cluster silo is treated as an external
 client and has its forged capabilities stripped.
 
+This validation is a **plausibility check, not authentication**. Orleans does
+not authenticate the client id a gateway connection announces, so an external
+Orleans client that reaches the gateway port and names the hosted id of a *live*
+silo is indistinguishable from the real hosted client and keeps the reserved
+capability keys (issue #5346; `HostedClientProvenanceGapIntegrationTests` pins
+the current behaviour). The trust boundary is therefore the network:
+
+- **The Orleans gateway port admits trusted infrastructure only.** Do not expose
+  it to untrusted networks or tenants. Where it must cross a network you do not
+  fully control, require client certificates (`UseTls` with
+  `RemoteCertificateMode.RequireCertificate`).
+- **Untrusted callers use the gRPC and HTTP facades**, which authenticate the
+  caller's credential and call the cluster through the in-silo hosted client.
+- **Start-up warning.** `AddLatticeAuth` registers a hosted service that logs a
+  warning when the silo exposes a gateway with no inbound connection middleware
+  (no TLS). Orleans does not expose the configured client-certificate mode, so
+  when gateway middleware is present the service logs at information level that
+  the mode cannot be verified rather than claiming the gateway is safe.
+
 ## Bootstrap administrators (break-glass root of trust)
 
 `LatticeAuthOptions.BootstrapAdministrators` is a set of **subject ids** that the
