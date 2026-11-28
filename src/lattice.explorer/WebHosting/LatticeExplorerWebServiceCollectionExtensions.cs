@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.DataProtection.KeyManagement;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -185,8 +186,14 @@ public static class LatticeExplorerWebServiceCollectionExtensions
     /// </summary>
     internal const long MinimumCircuitMessageBytes = 160 * 1024;
     /// <summary>
-    /// Registers ASP.NET Data Protection. Without configuration this is exactly the
-    /// framework default (a per-instance, ephemeral key ring). When a host supplies
+    /// Registers ASP.NET Data Protection. Without configuration the key ring is
+    /// ephemeral: held in memory for the life of the process, so a restart signs
+    /// every user out. This is explicit rather than the framework default, which
+    /// outside a container persists keys to the user profile and so keeps sessions
+    /// alive across a restart on the same host. A key repository the host configures
+    /// itself (through <see cref="LatticeExplorerWebOptions.ConfigureDataProtection"/>
+    /// or its own <c>AddDataProtection().PersistKeysTo...</c> call, before or after
+    /// this one) is respected. When a host supplies
     /// <see cref="LatticeExplorerWebOptions.DataProtectionKeyRingBlobUri"/> the key
     /// ring is instead persisted to shared Azure Blob Storage so every replica
     /// shares one ring and can decrypt one another's OpenID Connect session cookie
@@ -218,6 +225,12 @@ public static class LatticeExplorerWebServiceCollectionExtensions
         }
 
         options.ConfigureDataProtection?.Invoke(dataProtection);
+
+        // Post-configure runs after every Configure, so any PersistKeysTo... the host
+        // registered, in either order relative to this call, has already set the
+        // repository and is left alone.
+        services.PostConfigure<KeyManagementOptions>(keyManagement =>
+            keyManagement.XmlRepository ??= new EphemeralKeyRingRepository());
     }
 
     private static string? ResolveConfigFilePath(LatticeExplorerWebOptions options)

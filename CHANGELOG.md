@@ -28,6 +28,7 @@ This is the **v10.x** changelog. Earlier release lines are archived: v9.x in [`C
 
 ### Fixed
 
+- **Explorer - Default key ring is ephemeral.** Without a configured key ring, the web head keeps Data Protection keys in memory, so a restart signs users out on every platform instead of persisting keys to the user profile. A host's own key store still applies. ([#5584](https://github.com/NSTA1/Orleans.Lattice/issues/5584)) (`Orleans.Lattice.Explorer.Web`)
 - **Tenancy - Policy freshness survives a false death declaration.** Policy and app-registry changes reach silos after a fresh epoch grain or a live silo wrongly declared dead; `FalseDeathHorizon` and `FalseDeathReinvalidationInterval` tune this. ([#5719](https://github.com/NSTA1/Orleans.Lattice/issues/5719), [#6216](https://github.com/NSTA1/Orleans.Lattice/issues/6216)) (`Orleans.Lattice.Tenancy`, `Orleans.Lattice.Apps`)
 - **Tenant access - Last-admin guard ignores foreign entries.** Another tenant's group or a malformed `t/` entry in a tenant's admin set, which only replication or restore can write, no longer lets the last real admin be removed. ([#6204](https://github.com/NSTA1/Orleans.Lattice/issues/6204)) (`Orleans.Lattice.Tenancy`, `Orleans.Lattice.Api.TenantAdmin`)
 - **MCP - Region discovery honours revoked grants.** `lattice_list_regions` re-checks at every call that the caller still holds a facade grant, so a session opened before its grants were revoked stops receiving region topology. ([#6205](https://github.com/NSTA1/Orleans.Lattice/issues/6205)) (`Orleans.Lattice.Api.Mcp`)

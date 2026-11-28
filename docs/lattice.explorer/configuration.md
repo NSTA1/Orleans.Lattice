@@ -55,7 +55,17 @@ endpoint mapping agree on the mount point.
 | `DataProtectionKeyRingCredential` | `TokenCredential?` | `null` | Azure credential used to read and write the key-ring blob named by `DataProtectionKeyRingBlobUri`. Required when the blob URI is set; ignored otherwise. |
 | `DataProtectionApplicationName` | `string?` | `null` | Optional Data Protection application discriminator. Set the same stable value on every replica that must share cookies. |
 | `MaxImportBytes` | `long` | `2147483648` (2 GiB) | The largest file, in bytes, the Data area's Import dialog reads. An import streams the file at every hop and holds only a bounded window of it whatever its size, so this bounds how long one import may occupy the head and the cluster rather than how much memory it takes. A larger file is refused before any of it is read. |
-| `ConfigureDataProtection` | `Action<IDataProtectionBuilder>?` | `null` | Escape hatch invoked after the built-in Data Protection configuration, so a host can add key encryption, a custom key lifetime, or a different store. |
+| `ConfigureDataProtection` | `Action<IDataProtectionBuilder>?` | `null` | Escape hatch invoked after the built-in Data Protection configuration, so a host can add key encryption, a custom key lifetime, or a different store. A key store set here replaces the ephemeral default. |
+
+When neither `DataProtectionKeyRingBlobUri` nor a host key store is configured,
+the Data Protection key ring is ephemeral on every platform: keys live in memory
+for the life of the process, so a restart signs every user out. The Explorer
+sets this explicitly rather than relying on the framework default, which outside
+a container persists keys to the user profile. To keep sessions across restarts,
+configure a key store, either through `ConfigureDataProtection` (for example
+`b => b.PersistKeysToFileSystem(directory)`) or through the host's own
+`AddDataProtection().PersistKeysTo...` call, made before or after
+`AddLatticeExplorerWeb`.
 
 Setting `DataProtectionKeyRingBlobUri` without
 `DataProtectionKeyRingCredential` throws `InvalidOperationException` during
