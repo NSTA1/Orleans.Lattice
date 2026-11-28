@@ -1852,6 +1852,21 @@ internal sealed partial class BPlusLeafGrain
         => Volatile.Read(ref _replayConcurrencyGate) is { CurrentCount: > 0 };
 
     /// <summary>
+    /// Whether an activation replay of <paramref name="treeId"/> runs outside the per-silo
+    /// replay gate (#6166): the tree registry's own leaves. Every gated replay of a user tree
+    /// reads its shard map from the registry with its permit lent
+    /// (<see cref="ResolveReplayShardMapAsync"/>), and the registry reads that map through
+    /// these leaves; gated, a registry leaf activating while the gate was full queued behind
+    /// - or was refused by - holders that were waiting on it, and every holder in the cluster
+    /// waited on the registry until its response timeout. A registry leaf's replay is bounded
+    /// by the number of registered trees and makes no registry call of its own, so it adds no
+    /// unbounded load the gate exists to bound. Other system trees - the replication logs and
+    /// queues among them - can be large, and stay gated.
+    /// </summary>
+    internal static bool IsReplayGateExempt(string? treeId)
+        => string.Equals(treeId, LatticeConstants.RegistryTreeId, StringComparison.Ordinal);
+
+    /// <summary>
     /// Applies the replay admission decision (issue #3284) and throws the
     /// refusal when it refuses: past the depth bound with the holders stalled or
     /// slow, or a current smoothed wait at or above the bound.
@@ -1987,7 +2002,7 @@ internal sealed partial class BPlusLeafGrain
     /// <exception cref="LatticeSaturatedException">Admission was refused.</exception>
     private void ThrowIfReplayAdmissionRefusedBeforeRehydrate()
     {
-        if (string.IsNullOrEmpty(state.State.TreeId) || _options is not { } options)
+        if (string.IsNullOrEmpty(state.State.TreeId) || IsReplayGateExempt(state.State.TreeId) || _options is not { } options)
             return;
 
         ThrowIfReplayAdmissionRefused(options, LatticeReplayAdmissionContext.Current, sideEffectFree: true);
@@ -2015,7 +2030,7 @@ internal sealed partial class BPlusLeafGrain
     /// <exception cref="LatticeSaturatedException">Admission was refused, including a retained replay aging out.</exception>
     private async Task<SemaphoreSlim?> AcquireReplayPermitAsync(bool rehydratedFromSnapshot, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrEmpty(state.State.TreeId))
+        if (string.IsNullOrEmpty(state.State.TreeId) || IsReplayGateExempt(state.State.TreeId))
             return null;
 
         // Phase tracking for issue #2770. This method has TWO awaits and only
