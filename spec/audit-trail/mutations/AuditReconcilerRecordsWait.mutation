@@ -1,0 +1,14 @@
+# Pairs with TypeOK. The reconciler finalizes an intent whose evidence is
+# still undecided, writing a record whose outcome is not one the schema has.
+MODULE: AuditReconcilerRecordsWait
+TARGET: TypeOK
+CLASS: Invariant
+SUMMARY: the reconciler writes a record for an intent it should still wait on
+PERTURBS: Reconcile
+
+--- FIND
+          ELSE /\ verdict # "wait"
+               /\ finals' = finals \cup {Row(o, verdict, op[o].actor, "reconciler", op[o].secret, op[o].long)}
+--- REPLACE
+          ELSE /\ finals' = finals \cup {Row(o, verdict, op[o].actor, "reconciler", op[o].secret, op[o].long)}
+--- END

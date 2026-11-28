@@ -1,0 +1,15 @@
+# Pairs with NoPhantomAudit. Whether a removal changed anything is taken from
+# the read the call made before its commit (the authorization read) rather
+# than from the store's merge, so of two concurrent removals of one entry both
+# report a change and both are recorded as committed.
+MODULE: AuditChangedFromStaleRead
+TARGET: NoPhantomAudit
+CLASS: Invariant
+SUMMARY: a removal's change is taken from a read made before the commit
+PERTURBS: Commit
+
+--- FIND
+!.landed = lands, !.changed = lands,
+--- REPLACE
+!.landed = lands, !.changed = r \in {"ok", "infra"} /\ (op[o].kind = "put" \/ op[o].base # 0),
+--- END

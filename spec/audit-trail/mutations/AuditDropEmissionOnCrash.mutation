@@ -1,0 +1,18 @@
+# Pairs with EveryCommitAudited. The intent lives only in the caller (or is
+# cleaned up when the caller stops), so a crash between the commit and the
+# finalize leaves a committed mutation with no audit record at all.
+MODULE: AuditDropEmissionOnCrash
+TARGET: EveryCommitAudited
+CLASS: Invariant
+SUMMARY: a caller that crashes between commit and finalize takes its intent with it
+PERTURBS: Crash
+
+--- FIND
+    /\ op' = [op EXCEPT ![o] = [@ EXCEPT !.pc = "crashed", !.live = @ /\ op[o].result = "undecided"]]
+    /\ UNCHANGED <<present, hist, pending, finals, env>>
+--- REPLACE
+    /\ op' = [op EXCEPT ![o] = [@ EXCEPT !.pc = "crashed", !.live = @ /\ op[o].result = "undecided"]]
+\* MUTATION: the crash path drops the intent.
+    /\ pending' = pending \ {o}
+    /\ UNCHANGED <<present, hist, finals, env>>
+--- END

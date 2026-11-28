@@ -1,0 +1,15 @@
+# Pairs with EveryCommitAudited. WriteFinalAsync writes the final record
+# without the create-only check (or under a key that differs per writer), so
+# a caller finalizing after the reconciler already resolved its intent adds a
+# second record for the same call.
+MODULE: AuditFinalKeyPerWriter
+TARGET: EveryCommitAudited
+CLASS: Invariant
+SUMMARY: the final record is written blindly rather than create-only
+PERTURBS: Finalize
+
+--- FIND
+finals' = IF HasFinal(o) THEN finals ELSE finals \cup {Row(o, outcome, op[o].actor, "caller", op[o].secret, op[o].long)}
+--- REPLACE
+finals' = finals \cup {Row(o, outcome, op[o].actor, "caller", op[o].secret, op[o].long)}
+--- END

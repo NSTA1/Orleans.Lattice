@@ -1,0 +1,13 @@
+# Pairs with DenialsAudited. Read and introspection calls authorize without
+# the audited path, so a refused read leaves no denial record.
+MODULE: AuditReadDenialUnaudited
+TARGET: DenialsAudited
+CLASS: Invariant
+SUMMARY: a refused read call is not audited
+PERTURBS: Authorize
+
+--- FIND
+finals' = IF w THEN finals \cup {Row(o, "Denied", c, "caller", FALSE, FALSE)} ELSE finals
+--- REPLACE
+finals' = IF w /\ k # "read" THEN finals \cup {Row(o, "Denied", c, "caller", FALSE, FALSE)} ELSE finals
+--- END

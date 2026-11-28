@@ -1,0 +1,14 @@
+# Pairs with NoPhantomAudit. The caller infers its own change from the anchor
+# having moved since its base read, so a removal that matched nothing, while a
+# replicated or concurrent write moved the anchor, is recorded as committed.
+MODULE: AuditAnchorMovedClaimsCommitted
+TARGET: NoPhantomAudit
+CLASS: Invariant
+SUMMARY: a call that wrote nothing is committed whenever the anchor moved
+PERTURBS: Finalize
+
+--- FIND
+                     [] op[o].changed -> "Committed"
+--- REPLACE
+                     [] op[o].changed \/ Obs # op[o].base -> "Committed"
+--- END

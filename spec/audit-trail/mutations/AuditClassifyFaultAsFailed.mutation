@@ -1,0 +1,16 @@
+# Pairs with NoFalseAbsence. Classify maps an infrastructure fault to Failed
+# instead of leaving the intent Pending, so a timeout that struck after the
+# commit landed is recorded as a call that changed nothing.
+MODULE: AuditClassifyFaultAsFailed
+TARGET: NoFalseAbsence
+CLASS: Invariant
+SUMMARY: a fault that may follow the commit is recorded as a failure
+PERTURBS: Finalize
+
+--- FIND
+        outcome == CASE op[o].result \in {"infra", "undecided"} -> "Pending"
+                     [] op[o].result = "domain" -> "Failed"
+--- REPLACE
+        outcome == CASE op[o].result = "undecided" -> "Pending"
+                     [] op[o].result \in {"domain", "infra"} -> "Failed"
+--- END

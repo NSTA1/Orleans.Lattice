@@ -1,0 +1,18 @@
+# Pairs with NoFalseAbsence. The movement check counts a trimmed history
+# window (or one whose first surviving entry is an old-clock replay) as
+# complete, so an absent anchor whose create and later delete fell outside
+# the window reads as unmoved, and the reconciler records a committed create
+# whose caller crashed as not committed.
+MODULE: AuditTrimmedWindowCountsAsComplete
+TARGET: NoFalseAbsence
+CLASS: Invariant
+SUMMARY: a trimmed history window is taken as proof that the anchor never moved
+PERTURBS: Reconcile
+
+--- FIND
+                    ELSE IF Obs # 0 THEN "Moved"
+                    ELSE IF ~viewComplete THEN "Unproven"
+--- REPLACE
+                    ELSE IF Obs # 0 THEN "Moved"
+                    ELSE IF ~viewComplete THEN "Unmoved"
+--- END

@@ -1,0 +1,13 @@
+# Pairs with DenialsAudited. RecordDeniedAsync swallows a failed write without
+# the write-failure counter, so a refusal the caller saw leaves no trace.
+MODULE: AuditDenialWriteFailureUncounted
+TARGET: DenialsAudited
+CLASS: Invariant
+SUMMARY: a failed denial write is neither recorded nor counted
+PERTURBS: Authorize
+
+--- FIND
+!.pc = "refused", !.meter = ~w]]
+--- REPLACE
+!.pc = "refused", !.meter = FALSE]]
+--- END
