@@ -61,6 +61,8 @@ public sealed class HostedClientProvenanceGapIntegrationTests
     private InternalOriginGuardClusterFixture _fixture = null!;
     private TestCluster _cluster = null!;
 
+    private SiloHandle Primary => _cluster.Primary ?? throw new InvalidOperationException("The test cluster has no primary silo.");
+
     [OneTimeSetUp]
     public async Task OneTimeSetUp()
     {
@@ -87,7 +89,7 @@ public sealed class HostedClientProvenanceGapIntegrationTests
     {
         // Any live silo's hosted id works; the secondary is used so the forged id
         // differs from the hosted client of the gateway the attacker connects to.
-        var otherSilo = _cluster.Silos.First(s => !s.SiloAddress.Equals(_cluster.Primary.SiloAddress));
+        var otherSilo = _cluster.Silos.First(s => !s.SiloAddress.Equals(Primary.SiloAddress));
         var forgedId = "hosted-" + otherSilo.SiloAddress.ToParsableString();
         using var host = await StartExternalClientAsync(forgedId);
         var client = host.Services.GetRequiredService<IClusterClient>();
@@ -255,7 +257,7 @@ public sealed class HostedClientProvenanceGapIntegrationTests
     // from that singleton, so this is exactly what a hostile client process can do.
     private async Task<IHost> StartExternalClientAsync(string clientIdKey)
     {
-        var gateway = _cluster.Primary.GatewayAddress.Endpoint;
+        var gateway = Primary.GatewayAddress.Endpoint;
         var host = Host.CreateDefaultBuilder()
             .UseOrleansClient(client =>
             {
