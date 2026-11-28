@@ -136,7 +136,7 @@ failure_modes:
     effect: "The revert is refused before it takes the alias reservation or changes lineage, and the alias stays on the later physical copy."
     response: "Do not use a superseded restore result to roll back a newer publication."
   - id: revert-physical-mismatch
-    signal: "Revert throws LatticeRestoreValidationException (FailedPrecondition over gRPC) naming a physical tree that is neither a restore shadow of the target nor its current physical tree."
+    signal: "Revert throws LatticeRestoreValidationException (FailedPrecondition over gRPC) naming a physical tree that is neither a restore shadow of the target, its current physical tree, nor the pre-restore copy its current, not-yet-final restore recorded at cutover."
     effect: "The alias is not moved."
     response: "Pass the physical tree ids from the original restore result back verbatim."
   - id: alias-reservation-held
