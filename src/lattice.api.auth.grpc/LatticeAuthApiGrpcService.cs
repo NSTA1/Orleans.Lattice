@@ -75,6 +75,9 @@ internal abstract class LatticeAuthApiGrpcServiceBase
     /// <summary>Reads the cluster access model. Implemented in <see cref="LatticeAuthApiGrpcService"/>.</summary>
     public abstract Task<AccessModelDescriptor> GetAccessModel(AuthAccessModelQuery request, ServerCallContext context);
 
+    /// <summary>Lists a page of the admin audit trail. Implemented in <see cref="LatticeAuthApiGrpcService"/>.</summary>
+    public abstract Task<AdminAuditPage> ListAdminAudit(AdminAuditQuery request, ServerCallContext context);
+
     /// <summary>
     /// gRPC binding hook invoked by <c>Grpc.AspNetCore</c>. Called once at
     /// startup with <paramref name="serviceImpl"/> set to <see langword="null"/>
@@ -112,6 +115,7 @@ internal abstract class LatticeAuthApiGrpcServiceBase
             binder.AddMethod(m.SearchDirectory, (UnaryServerMethod<DirectorySearchRequest, DirectorySearchResult>?)null);
             binder.AddMethod(m.ResolveDirectoryPrincipal, (UnaryServerMethod<AuthPrincipalRef, AuthDirectoryPrincipalResult>?)null);
             binder.AddMethod(m.GetAccessModel, (UnaryServerMethod<AuthAccessModelQuery, AccessModelDescriptor>?)null);
+            binder.AddMethod(m.ListAdminAudit, (UnaryServerMethod<AdminAuditQuery, AdminAuditPage>?)null);
             return;
         }
 
@@ -133,6 +137,7 @@ internal abstract class LatticeAuthApiGrpcServiceBase
         binder.AddMethod(m.SearchDirectory, new UnaryServerMethod<DirectorySearchRequest, DirectorySearchResult>(serviceImpl.SearchDirectory));
         binder.AddMethod(m.ResolveDirectoryPrincipal, new UnaryServerMethod<AuthPrincipalRef, AuthDirectoryPrincipalResult>(serviceImpl.ResolveDirectoryPrincipal));
         binder.AddMethod(m.GetAccessModel, new UnaryServerMethod<AuthAccessModelQuery, AccessModelDescriptor>(serviceImpl.GetAccessModel));
+        binder.AddMethod(m.ListAdminAudit, new UnaryServerMethod<AdminAuditQuery, AdminAuditPage>(serviceImpl.ListAdminAudit));
     }
 }
 
@@ -168,6 +173,7 @@ internal sealed class LatticeAuthApiGrpcService : LatticeAuthApiGrpcServiceBase
     internal const string DeniedReasonTrailer = "lattice-denied-reason";
 
     private readonly ILatticeAuthAdmin _admin;
+    private readonly ILatticeAdminAuditLog? _auditLog;
     private readonly ILatticeAuthApiCredentialBridge _credentialBridge;
     private readonly ILogger<LatticeAuthApiGrpcService> _logger;
     private readonly string? _activeTenantHeaderName;
@@ -179,14 +185,17 @@ internal sealed class LatticeAuthApiGrpcService : LatticeAuthApiGrpcServiceBase
     /// singleton (whose factory populates
     /// <see cref="LatticeAuthApiGrpcMethodsHolder.Current"/>) before this service
     /// resolves, so the static <see cref="LatticeAuthApiGrpcServiceBase.BindService"/>
-    /// hook always observes a populated holder.
+    /// hook always observes a populated holder. <paramref name="auditLog"/> is
+    /// optional: without it the <c>ListAdminAudit</c> RPC answers
+    /// <see cref="StatusCode.Unimplemented"/>.
     /// </summary>
     public LatticeAuthApiGrpcService(
         LatticeAuthApiGrpcMethods methods,
         ILatticeAuthAdmin admin,
         ILatticeAuthApiCredentialBridge credentialBridge,
         ILogger<LatticeAuthApiGrpcService> logger,
-        Microsoft.Extensions.Options.IOptions<LatticeAuthApiGrpcOptions>? options = null)
+        Microsoft.Extensions.Options.IOptions<LatticeAuthApiGrpcOptions>? options = null,
+        ILatticeAdminAuditLog? auditLog = null)
     {
         ArgumentNullException.ThrowIfNull(methods);
         ArgumentNullException.ThrowIfNull(admin);
@@ -194,6 +203,7 @@ internal sealed class LatticeAuthApiGrpcService : LatticeAuthApiGrpcServiceBase
         ArgumentNullException.ThrowIfNull(logger);
 
         _admin = admin;
+        _auditLog = auditLog;
         _credentialBridge = credentialBridge;
         _logger = logger;
         _activeTenantHeaderName = options is null
@@ -344,10 +354,34 @@ internal sealed class LatticeAuthApiGrpcService : LatticeAuthApiGrpcServiceBase
     public override Task<AccessModelDescriptor> GetAccessModel(AuthAccessModelQuery request, ServerCallContext context)
         => InvokeAsync(request, context, static (admin, _, ct) => admin.GetAccessModelAsync(ct));
 
-    private async Task<TResponse> InvokeAsync<TRequest, TResponse>(
+    /// <inheritdoc />
+    /// <remarks>
+    /// Delegates to the registered <see cref="ILatticeAdminAuditLog"/>, whose own
+    /// <c>Admin</c> verdict on the policy tree is the gate: the stamped caller is
+    /// what that check sees, and its denial (itself audited) maps to
+    /// <see cref="StatusCode.PermissionDenied"/>. A host that registers no audit
+    /// log answers <see cref="StatusCode.Unimplemented"/> rather than serving the
+    /// trail through any other path.
+    /// </remarks>
+    public override Task<AdminAuditPage> ListAdminAudit(AdminAuditQuery request, ServerCallContext context)
+        => _auditLog is null
+            ? Task.FromException<AdminAuditPage>(new RpcException(new Status(
+                StatusCode.Unimplemented,
+                "The admin audit trail is not available on this host: no ILatticeAdminAuditLog is registered.")))
+            : InvokeFacadeAsync(_auditLog, request, context, static (log, req, ct) => log.ListAuditAsync(req, ct));
+
+    private Task<TResponse> InvokeAsync<TRequest, TResponse>(
         TRequest request,
         ServerCallContext context,
         Func<ILatticeAuthAdmin, TRequest, CancellationToken, Task<TResponse>> handler,
+        bool stampActiveTenant = false)
+        => InvokeFacadeAsync(_admin, request, context, handler, stampActiveTenant);
+
+    private async Task<TResponse> InvokeFacadeAsync<TFacade, TRequest, TResponse>(
+        TFacade facade,
+        TRequest request,
+        ServerCallContext context,
+        Func<TFacade, TRequest, CancellationToken, Task<TResponse>> handler,
         bool stampActiveTenant = false)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -358,7 +392,7 @@ internal sealed class LatticeAuthApiGrpcService : LatticeAuthApiGrpcServiceBase
 
         try
         {
-            return await handler(_admin, request, context.CancellationToken).ConfigureAwait(false);
+            return await handler(facade, request, context.CancellationToken).ConfigureAwait(false);
         }
         catch (RpcException)
         {

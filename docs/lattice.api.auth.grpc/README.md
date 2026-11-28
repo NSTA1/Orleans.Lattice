@@ -50,10 +50,11 @@ The service is exposed under the fully-qualified gRPC service name **`orleans.la
 | `SearchDirectory` | `SearchDirectoryAsync` | `DirectorySearchRequest` | `DirectorySearchResult` |
 | `ResolveDirectoryPrincipal` | `ResolveDirectoryPrincipalAsync` | `AuthPrincipalRef` | `AuthDirectoryPrincipalResult` |
 | `GetAccessModel` | `GetAccessModelAsync` | `AuthAccessModelQuery` | `AccessModelDescriptor` |
+| `ListAdminAudit` | `ILatticeAdminAuditLog.ListAuditAsync` | `AdminAuditQuery` | `AdminAuditPage` |
 
 ### Request and response envelopes
 
-The gRPC contract does **not** send the facade method arguments as bare scalars; it wraps them in code-first `[GenerateSerializer]` records (public, in the `Orleans.Lattice.Api.Auth.Grpc` namespace) so the wire shape can version additively. A few RPCs reuse a facade DTO from `Orleans.Lattice.Api.Auth` directly as their message (`AuthGroup`, `AuthPageRequest`, `AuthGroupPage`, `AuthRulePage`, `AuthExplanation`, `AuthEffectivePermissions`, `DirectorySearchRequest`, `DirectorySearchResult`, `AccessModelDescriptor`); the rest use the envelopes below.
+The gRPC contract does **not** send the facade method arguments as bare scalars; it wraps them in code-first `[GenerateSerializer]` records (public, in the `Orleans.Lattice.Api.Auth.Grpc` namespace) so the wire shape can version additively. A few RPCs reuse a facade DTO from `Orleans.Lattice.Api.Auth` directly as their message (`AuthGroup`, `AuthPageRequest`, `AuthGroupPage`, `AuthRulePage`, `AuthExplanation`, `AuthEffectivePermissions`, `DirectorySearchRequest`, `DirectorySearchResult`, `AccessModelDescriptor`, and the audit trail's `AdminAuditQuery` / `AdminAuditPage` from `Orleans.Lattice.Api`); the rest use the envelopes below.
 
 Request envelopes:
 
@@ -107,7 +108,7 @@ Every admin call passes through two independent gates, both fail-closed:
 
 A denial from the facade check is mapped to `PermissionDenied` with response trailers carrying only non-sensitive fields (`lattice-denied-tree`, `lattice-denied-operation`, `lattice-denied-subject`, `lattice-denied-reason`) - never a policy value.
 
-The transport authorizer receives a `LatticeAuthApiAuthorizationContext` naming the call's `LatticeAuthApiOperation` and a `TargetId`: the group id for `UpsertGroup`, `GetGroup`, `RemoveGroup`, `ListGroupMembers`, `AddMember`, and `RemoveMember`; the member id for `ListSubjectGroups`; the governed tree id for `PutRule` (the rule's scope tree), `GetRule`, `RemoveRule`, and `ListRulesForTree`; the subject id for `Explain` and `EffectivePermissions`; the principal id for `ResolveDirectoryPrincipal`; and `null` for `ListGroups`, `ListRules`, `SearchDirectory`, and `GetAccessModel`.
+The transport authorizer receives a `LatticeAuthApiAuthorizationContext` naming the call's `LatticeAuthApiOperation` and a `TargetId`: the group id for `UpsertGroup`, `GetGroup`, `RemoveGroup`, `ListGroupMembers`, `AddMember`, and `RemoveMember`; the member id for `ListSubjectGroups`; the governed tree id for `PutRule` (the rule's scope tree), `GetRule`, `RemoveRule`, and `ListRulesForTree`; the subject id for `Explain` and `EffectivePermissions`; the principal id for `ResolveDirectoryPrincipal`; the query's `Scope` (or `null` for a cluster-wide read) for `ListAdminAudit`; and `null` for `ListGroups`, `ListRules`, `SearchDirectory`, and `GetAccessModel`.
 
 ### Error mapping
 

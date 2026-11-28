@@ -72,6 +72,12 @@ public enum LatticeAuthApiOperation
     /// than have it silently masquerade as a benign operation.
     /// </summary>
     Unknown,
+
+    /// <summary>
+    /// The <c>ListAdminAudit</c> RPC. Declared after <see cref="Unknown"/> so the
+    /// numeric values of the already-shipped members do not change.
+    /// </summary>
+    ListAdminAudit,
 }
 
 /// <summary>

@@ -14,7 +14,8 @@ namespace Orleans.Lattice.Api.TenantAdmin.Grpc;
 /// per-region status) and the three <see cref="ILatticeTenantAccessAdmin"/>
 /// admin-subject operations (list, add, remove). It also implements the delegated
 /// tenant access contracts <see cref="ILatticeTenantDirectoryAdmin"/> and
-/// <see cref="ILatticeTenantPolicyAdmin"/> directly, so a remote management surface
+/// <see cref="ILatticeTenantPolicyAdmin"/> directly, and the tenant-scoped audit
+/// reader <see cref="ILatticeTenantAuditLog"/>, so a remote management surface
 /// binds to those interfaces with no adapter. A management surface (dashboard,
 /// CLI) consumes the API through this client rather than hand-rolling channel
 /// calls.

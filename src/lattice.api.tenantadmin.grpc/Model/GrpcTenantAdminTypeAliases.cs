@@ -98,4 +98,7 @@ public static class GrpcTenantAdminTypeAliases
 
     /// <summary>Alias for <see cref="TenantAdminRuleRemoval"/>.</summary>
     public const string TenantAdminRuleRemoval = "oitng.rulerm";
+
+    /// <summary>Alias for <see cref="TenantAdminAuditListRequest"/>.</summary>
+    public const string TenantAdminAuditListRequest = "oitng.audlist";
 }

@@ -1,5 +1,6 @@
 using Grpc.Core;
 using Microsoft.Extensions.DependencyInjection;
+using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Api.TenantAdmin;
 using Orleans.Serialization;
 
@@ -163,6 +164,9 @@ internal sealed class LatticeTenantAdminGrpcMethods
     /// <summary>The unary, read-only tenant access posture RPC method name.</summary>
     public const string GetTenantAccessPostureMethodName = "GetTenantAccessPosture";
 
+    /// <summary>The unary, read-only tenant admin audit trail listing RPC method name.</summary>
+    public const string ListTenantAuditMethodName = "ListTenantAudit";
+
     /// <summary>Initialises the method definitions from DI-resolved serializers.</summary>
     public LatticeTenantAdminGrpcMethods(
         Serializer<TenantAdminTenantRequest> tenantRequestSerializer,
@@ -214,7 +218,9 @@ internal sealed class LatticeTenantAdminGrpcMethods
         Serializer<TenantRulePage> rulePageSerializer,
         Serializer<TenantExplanation> explanationSerializer,
         Serializer<TenantEffectivePermissions> effectivePermissionsSerializer,
-        Serializer<TenantAccessPosture> accessPostureSerializer)
+        Serializer<TenantAccessPosture> accessPostureSerializer,
+        Serializer<TenantAdminAuditListRequest> auditListRequestSerializer,
+        Serializer<AdminAuditPage> auditPageSerializer)
     {
         ArgumentNullException.ThrowIfNull(tenantRequestSerializer);
         ArgumentNullException.ThrowIfNull(createRequestSerializer);
@@ -266,6 +272,8 @@ internal sealed class LatticeTenantAdminGrpcMethods
         ArgumentNullException.ThrowIfNull(explanationSerializer);
         ArgumentNullException.ThrowIfNull(effectivePermissionsSerializer);
         ArgumentNullException.ThrowIfNull(accessPostureSerializer);
+        ArgumentNullException.ThrowIfNull(auditListRequestSerializer);
+        ArgumentNullException.ThrowIfNull(auditPageSerializer);
 
         CreateTenant = new Method<TenantAdminCreateRequest, TenantCreationResult>(
             type: MethodType.Unary,
@@ -435,6 +443,7 @@ internal sealed class LatticeTenantAdminGrpcMethods
         GetTenantEffectivePermissions = Unary(
             GetTenantEffectivePermissionsMethodName, effectivePermissionsRequestSerializer, effectivePermissionsSerializer);
         GetTenantAccessPosture = Unary(GetTenantAccessPostureMethodName, tenantRequestSerializer, accessPostureSerializer);
+        ListTenantAudit = Unary(ListTenantAuditMethodName, auditListRequestSerializer, auditPageSerializer);
     }
 
     /// <summary>Builds one unary method definition on this service from its request and response serializers.</summary>
@@ -569,6 +578,9 @@ internal sealed class LatticeTenantAdminGrpcMethods
     /// <summary>The unary, read-only tenant access posture RPC.</summary>
     public Method<TenantAdminTenantRequest, TenantAccessPosture> GetTenantAccessPosture { get; }
 
+    /// <summary>The unary, read-only tenant admin audit trail listing RPC.</summary>
+    public Method<TenantAdminAuditListRequest, AdminAuditPage> ListTenantAudit { get; }
+
     /// <summary>
     /// Builds the method definitions from the Orleans serializers resolved out of
     /// <paramref name="serializerProvider"/>. Shared by the server-side DI factory
@@ -628,7 +640,9 @@ internal sealed class LatticeTenantAdminGrpcMethods
             serializerProvider.GetRequiredService<Serializer<TenantRulePage>>(),
             serializerProvider.GetRequiredService<Serializer<TenantExplanation>>(),
             serializerProvider.GetRequiredService<Serializer<TenantEffectivePermissions>>(),
-            serializerProvider.GetRequiredService<Serializer<TenantAccessPosture>>());
+            serializerProvider.GetRequiredService<Serializer<TenantAccessPosture>>(),
+            serializerProvider.GetRequiredService<Serializer<TenantAdminAuditListRequest>>(),
+            serializerProvider.GetRequiredService<Serializer<AdminAuditPage>>());
     }
 }
 

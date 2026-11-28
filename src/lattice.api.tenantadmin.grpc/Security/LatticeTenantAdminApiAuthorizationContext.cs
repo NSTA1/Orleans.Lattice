@@ -184,6 +184,12 @@ public enum LatticeTenantAdminApiOperation
 
     /// <summary>The mutating operator-only <c>AdvanceTenantRegion</c> RPC.</summary>
     AdvanceTenantRegion = 36,
+
+    /// <summary>
+    /// The read-only, <b>operator-or-tenant-admin</b> <c>ListTenantAudit</c> RPC,
+    /// which reads one page of a tenant's admin audit trail.
+    /// </summary>
+    ListTenantAudit = 37,
 }
 
 /// <summary>

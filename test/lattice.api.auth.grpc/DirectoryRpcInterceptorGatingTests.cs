@@ -44,6 +44,10 @@ public sealed class DirectoryRpcInterceptorGatingTests
             LatticeAuthApiGrpcMethods.GetAccessModelMethodName,
             (object)new AuthAccessModelQuery())
             .SetName("GetAccessModel");
+        yield return new TestCaseData(
+            LatticeAuthApiGrpcMethods.ListAdminAuditMethodName,
+            (object)new AdminAuditQuery())
+            .SetName("ListAdminAudit");
     }
 
     [TestCaseSource(nameof(NewDirectoryRpcs))]

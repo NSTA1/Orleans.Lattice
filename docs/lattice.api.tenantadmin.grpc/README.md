@@ -109,6 +109,7 @@ auth-scheme advertisement. Each row below is one bound RPC:
 | `ExplainTenantAccess` | `ILatticeTenantPolicyAdmin.ExplainAsync` |
 | `GetTenantEffectivePermissions` | `ILatticeTenantPolicyAdmin.EffectivePermissionsAsync` |
 | `GetTenantAccessPosture` | `ILatticeTenantPolicyAdmin.GetPostureAsync` |
+| `ListTenantAudit` | `ILatticeTenantAuditLog.ListAuditAsync` - read-only; operator or tenant admin, scope forced to the tenant's own partition, pending intents excluded |
 | `GetAuthScheme` | (binding-local) advertises accepted credential schemes |
 
 ### Region-residency RPCs
@@ -184,7 +185,7 @@ same vocabulary; the last column notes where an arm applies to only some of them
 | `LatticeTenantAccessDeniedException` | `PermissionDenied` | Fail-closed tenant resolution refused the caller's asserted active tenant. Deliberately not `Internal`, which a client would retry. |
 | `ArgumentException` | `InvalidArgument` | A malformed tenant, region, or subject id, or a grant with a blank scope, an empty operation set, or the same tenant on both sides; also a negative `BurstPercent` or quota ceiling, and an added admin subject the identity directory cannot resolve (`LatticeDirectoryValidationException` derives from `ArgumentException`). |
 | `OperationCanceledException` | `Cancelled` | The caller's deadline or cancellation token fired. |
-| (optional facade not registered) | `Unimplemented` | The region-residency, tenant-admin subject, cross-tenant grant, quota-usage, tenant directory, or tenant policy facade is absent from the host, so its RPCs are not served. |
+| (optional facade not registered) | `Unimplemented` | The region-residency, tenant-admin subject, cross-tenant grant, quota-usage, tenant directory, tenant policy, or tenant audit facade is absent from the host, so its RPCs are not served. |
 | `LatticeSaturatedException` | `ResourceExhausted` | Storage back-pressure: the store refused the call on purpose and nothing was applied. Retry after a short backoff (#5723). Mapped explicitly on every RPC group, ahead of the `InvalidOperationException` arm it derives from where that arm exists. |
 | `TimeoutException` | `DeadlineExceeded` | A grain call timed out inside the cluster, so the outcome is unknown and a write may already have applied. Retry an idempotent read; confirm state before retrying a write. Logged at Warning (#5742). |
 | `OrleansMessageRejectionException` (including `SiloUnavailableException`) or `EnumerationAbortedException` | `Unavailable` | A silo was unavailable or rejected the message, or a remote enumerator was lost to a grain deactivation mid-read: a transient cluster fault. Retry after a short backoff. Logged at Warning (#5742). |
@@ -223,8 +224,8 @@ opaque `Internal`.
 | `RejectCrossTenantGrantAsync` | `Task<TenantGrantChangeResult> RejectCrossTenantGrantAsync(string granterTenantId, string granteeTenantId, string scope, CancellationToken cancellationToken = default)` |
 | `RevokeCrossTenantGrantAsync` | `Task<TenantGrantChangeResult> RevokeCrossTenantGrantAsync(string granterTenantId, string granteeTenantId, string scope, CancellationToken cancellationToken = default)` |
 
-The client also implements `ILatticeTenantDirectoryAdmin` and
-`ILatticeTenantPolicyAdmin`, with exactly the member signatures those interfaces
+The client also implements `ILatticeTenantDirectoryAdmin`,
+`ILatticeTenantPolicyAdmin` and `ILatticeTenantAuditLog`, with exactly the member signatures those interfaces
 declare (see [`Orleans.Lattice.Api.TenantAdmin`](../lattice.api.tenantadmin/README.md#delegated-tenant-access-administration)).
 
 `LatticeTenantSelfServiceApiGrpcClient` (read-only; construct with
@@ -253,6 +254,7 @@ Properties marked `required` must be set by the caller.
 |---|---|---|
 | `TenantAdminCreateRequest` | `required string TenantId`, `IReadOnlyList<string> AdminSubjects` | `CreateTenant` |
 | `TenantAdminTenantRequest` | `required string TenantId` | `SuspendTenant`, `ResumeTenant`, `DeleteTenant`, `GetTenant`, `GetTenantRegionStatus`, `GetTenantQuotaUsage`, `ListTenantAdminSubjects`, `ListCrossTenantGrants`, `GetTenantAccessPosture` |
+| `TenantAdminAuditListRequest` | `required string TenantId`, `required AdminAuditQuery Query` (its `Scope` is ignored; the read is confined to `TenantId`) | `ListTenantAudit` |
 | `TenantAdminSetQuotasRequest` | `required string TenantId`, `TenantQuotasDescriptor Quotas` | `SetTenantQuotas` |
 | `TenantAdminRegionSetRequest` | `required string TenantId`, `IReadOnlyList<string> Regions`, `string? RegionId`, `bool AcknowledgeDataInPlace` | `AuthorizeAllowedRegions`, `SetTenantResidency` (which read `Regions`), `AdvanceTenantRegion` (which reads `RegionId` and `AcknowledgeDataInPlace`) |
 | `TenantAdminSubjectRequest` | `required string TenantId`, `required string SubjectId` | `AddTenantAdminSubject`, `RemoveTenantAdminSubject` |
@@ -343,7 +345,7 @@ The public seams a host implements or substitutes to open this surface up:
 | `DenyTenantAdminApiAuthorizer` | class | The **registered default**: refuses every call, so the surface is closed until a host opts in. |
 | `AllowAllTenantAdminApiAuthorizer` | class | Admits every call, deferring entirely to the facade's own gate. For a host whose endpoint is already guarded by an outer boundary. |
 | `LatticeTenantAdminApiAuthorizationContext` | readonly struct | What the authorizer is handed: the `Operation`, the `TargetId` (the tenant id the request names - for every cross-tenant grant call, including the grantee-side approve and reject, the granting tenant - or `null` when not tenant-scoped), and the raw `ServerCallContext` for header / identity / peer inspection. |
-| `LatticeTenantAdminApiOperation` | enum | The per-operation discriminator. Tenant lifecycle and quota: `CreateTenant`, `SuspendTenant`, `ResumeTenant`, `DeleteTenant`, `SetTenantQuotas`, `GetTenantQuotaUsage`. Region residency: `AuthorizeAllowedRegions`, `SetTenantResidency`, `GetTenantRegionStatus`, `AdvanceTenantRegion`. Tenant-admin subjects: `ListTenantAdminSubjects`, `AddTenantAdminSubject`, `RemoveTenantAdminSubject`. Cross-tenant grants: `ListCrossTenantGrants`, `OfferCrossTenantGrant`, `ApproveCrossTenantGrant`, `RejectCrossTenantGrant`, `RevokeCrossTenantGrant`. Delegated tenant access: `ListTenantGroups`, `GetTenantGroup`, `UpsertTenantGroup`, `RemoveTenantGroup`, `ListTenantGroupMembers`, `AddTenantGroupMember`, `RemoveTenantGroupMember`, `ListTenantMembers`, `AddTenantMember`, `RemoveTenantMember`, `ResolveTenantSubject`, `PutTenantRule`, `GetTenantRule`, `RemoveTenantRule`, `ListTenantRules`, `ExplainTenantAccess`, `GetTenantEffectivePermissions`, `GetTenantAccessPosture`. An unrecognised method maps to `Unknown`, never to a permissive default - so a deny-by-default policy refuses an RPC it has never heard of rather than falling through. |
+| `LatticeTenantAdminApiOperation` | enum | The per-operation discriminator. Tenant lifecycle and quota: `CreateTenant`, `SuspendTenant`, `ResumeTenant`, `DeleteTenant`, `SetTenantQuotas`, `GetTenantQuotaUsage`. Region residency: `AuthorizeAllowedRegions`, `SetTenantResidency`, `GetTenantRegionStatus`, `AdvanceTenantRegion`. Tenant-admin subjects: `ListTenantAdminSubjects`, `AddTenantAdminSubject`, `RemoveTenantAdminSubject`. Cross-tenant grants: `ListCrossTenantGrants`, `OfferCrossTenantGrant`, `ApproveCrossTenantGrant`, `RejectCrossTenantGrant`, `RevokeCrossTenantGrant`. Delegated tenant access: `ListTenantGroups`, `GetTenantGroup`, `UpsertTenantGroup`, `RemoveTenantGroup`, `ListTenantGroupMembers`, `AddTenantGroupMember`, `RemoveTenantGroupMember`, `ListTenantMembers`, `AddTenantMember`, `RemoveTenantMember`, `ResolveTenantSubject`, `PutTenantRule`, `GetTenantRule`, `RemoveTenantRule`, `ListTenantRules`, `ExplainTenantAccess`, `GetTenantEffectivePermissions`, `GetTenantAccessPosture`. Audit: `ListTenantAudit`. An unrecognised method maps to `Unknown`, never to a permissive default - so a deny-by-default policy refuses an RPC it has never heard of rather than falling through. |
 | `ILatticeTenantAdminApiCredentialBridge` | interface | Lifts the inbound credential (`LatticeCredential? Resolve(ServerCallContext context)`) into the ambient Lattice credential for the duration of one call. The default reads the configured header; substitute it for a bespoke identity source such as a client certificate. |
 | `ILatticeTenantAdminApiAuthSchemeSource` | interface | Supplies what the unauthenticated `GetAuthScheme` RPC advertises (`AuthSchemeAdvertisement GetAdvertisement()`). The default projects `LatticeTenantAdminApiGrpcOptions.AdvertisedAuthSchemes`. |
 | `AuthSchemeDescriptor` | record | One advertised credential scheme: its required `SchemeId`, a friendly `DisplayName`, and the public `Parameters` a client needs to run the sign-in challenge. |

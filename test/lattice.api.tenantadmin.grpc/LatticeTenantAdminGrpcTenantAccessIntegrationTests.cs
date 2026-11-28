@@ -9,6 +9,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Primitives;
 using Orleans.Hosting;
+using Orleans.Lattice.Api.Auth;
 using Orleans.Lattice.Api.TenantAdmin;
 using Orleans.Lattice.Auth;
 using Orleans.Lattice.Membership;
@@ -205,6 +206,24 @@ public sealed class LatticeTenantAdminGrpcTenantAccessIntegrationTests
     }
 
     [Test]
+    public async Task A_tenant_admin_reads_its_own_audit_trail_but_not_another_tenants()
+    {
+        var own = await SeedTenantAsync("grpc-audit-own");
+        var foreign = await SeedTenantAsync("grpc-audit-foreign", admin: "carol");
+        var client = ClientAs(Admin);
+
+        var page = await client.ListAuditAsync(own, new AdminAuditQuery { Scope = $"t/{foreign}" });
+        var crossTenant = Assert.ThrowsAsync<RpcException>(async () => await client.ListAuditAsync(foreign, new AdminAuditQuery()));
+        var outsider = Assert.ThrowsAsync<RpcException>(async () => await ClientAs("mallory").ListAuditAsync(own, new AdminAuditQuery()));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(page.Records.Select(r => r.TargetScope), Is.All.EqualTo($"t/{own}"), "the scope is forced to the routed tenant");
+            Assert.That(crossTenant!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
+            Assert.That(outsider!.StatusCode, Is.EqualTo(StatusCode.PermissionDenied));
+        });
+    }
+    [Test]
     public void The_reserved_default_tenant_is_a_failed_precondition()
     {
         var ex = Assert.ThrowsAsync<RpcException>(async () => await ClientAs(Operator).ListGroupsAsync(TenantId.DefaultId, new TenantAccessPageRequest()));
@@ -286,6 +305,7 @@ public sealed class LatticeTenantAdminGrpcTenantAccessIntegrationTests
                     services.AddSingleton(silo.GetRequiredService<ILatticeTenantAdmin>());
                     services.AddSingleton(silo.GetRequiredService<ILatticeTenantSelfService>());
                     services.AddSingleton(silo.GetRequiredService<ILatticeTenantAccessAdmin>());
+                    services.AddSingleton(silo.GetRequiredService<ILatticeTenantAuditLog>());
                     if (withTenantAccess)
                     {
                         services.AddSingleton(silo.GetRequiredService<ILatticeTenantDirectoryAdmin>());
@@ -319,7 +339,7 @@ public sealed class LatticeTenantAdminGrpcTenantAccessIntegrationTests
         return LatticeTenantAdminApiGrpcClient.Create(invoker, host.Services);
     }
 
-    private async Task<string> SeedTenantAsync(string tenantId)
+    private async Task<string> SeedTenantAsync(string tenantId, string admin = Admin)
     {
         var record = TenantRecord.Create(
             TenantId.Parse(tenantId),
@@ -328,7 +348,7 @@ public sealed class LatticeTenantAdminGrpcTenantAccessIntegrationTests
             TenantPlacement.Shared,
             new HybridLogicalClock { WallClockTicks = 1 },
             "seed");
-        record.AddAdminSubject(Admin, new HybridLogicalClock { WallClockTicks = 2 }, "seed");
+        record.AddAdminSubject(admin, new HybridLogicalClock { WallClockTicks = 2 }, "seed");
         using (LatticeSystemOrigin.Enter())
         {
             await Silo.GetRequiredService<ITenantRegistry>().CreateAsync(record);
