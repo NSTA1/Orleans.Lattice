@@ -3151,7 +3151,48 @@ internal sealed partial class BPlusLeafGrain
     /// when the GC share had no immediate capacity for a drive of
     /// <paramref name="origin"/> and nothing was replayed (issue #3761).
     /// </returns>
-    private async Task<LeafStarvationDriveOutcome> DriveStarvedCheckpointAsync(StarvationDriveOrigin origin)
+    private Task<LeafStarvationDriveOutcome> DriveStarvedCheckpointAsync(StarvationDriveOrigin origin)
+        => AwaitDiagnostics.Enabled
+            ? CensusStarvationDriveAsync(origin)
+            : RunStarvationDriveAsync(origin);
+
+    /// <summary>
+    /// Runs one starvation drive and counts its verdict, or the fault it raised, and its
+    /// elapsed time under <c>leaf.drive.by-origin.{origin}</c> on the benchmark census
+    /// (#6166), so a shard root's bulk catch-up - a <see cref="StarvationDriveOrigin.WalGcSweep"/>
+    /// drive - shows how often it is refused or already running against what it costs.
+    /// </summary>
+    /// <param name="origin">Who requested the drive.</param>
+    /// <returns>The drive's verdict.</returns>
+    private async Task<LeafStarvationDriveOutcome> CensusStarvationDriveAsync(StarvationDriveOrigin origin)
+    {
+        var started = Stopwatch.GetTimestamp();
+        var prefix = string.Concat("leaf.drive.by-origin.", origin.ToString(), ".");
+        var verdict = "unfinished";
+        try
+        {
+            var outcome = await RunStarvationDriveAsync(origin);
+            verdict = outcome.ToString();
+            return outcome;
+        }
+        catch (Exception ex)
+        {
+            verdict = string.Concat("fault.", ex.GetType().Name);
+            throw;
+        }
+        finally
+        {
+            AwaitDiagnostics.Count(string.Concat(prefix, verdict));
+            AwaitDiagnostics.Add(
+                string.Concat(prefix, verdict, ".us"),
+                (long)Stopwatch.GetElapsedTime(started).TotalMicroseconds);
+        }
+    }
+
+    /// <summary>The body of <see cref="DriveStarvedCheckpointAsync(StarvationDriveOrigin)"/>.</summary>
+    /// <param name="origin">Who requested the drive.</param>
+    /// <returns>The drive's verdict.</returns>
+    private async Task<LeafStarvationDriveOutcome> RunStarvationDriveAsync(StarvationDriveOrigin origin)
     {
         if (string.IsNullOrEmpty(state.State.TreeId))
         {
@@ -3265,7 +3306,7 @@ internal sealed partial class BPlusLeafGrain
             // barrier accepted: work may continue detached. It is bounded
             // because the detached replay dies at its next cancellation check,
             // and it is safe because replay application is idempotent.
-            driveTask = DriveStarvedCheckpointCoreAsync(partitionCount, driveCts.Token);
+            driveTask = DriveStarvedCheckpointCoreAsync(partitionCount, origin, driveCts.Token);
             return await driveTask.WaitAsync(driveCts.Token);
         }
         catch (OperationCanceledException) when (driveCts.IsCancellationRequested)
@@ -3419,6 +3460,26 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
+    /// Charges the time since <paramref name="started"/> to a starvation drive's
+    /// <paramref name="phase"/> on the benchmark census (#6166), and returns the lap's end.
+    /// </summary>
+    /// <param name="prefix">The drive's census prefix, or <see langword="null"/> when the census is off.</param>
+    /// <param name="phase">The phase the lap is charged to.</param>
+    /// <param name="started">When the lap began.</param>
+    /// <returns>When the lap ended, or <c>0</c> when the census is off.</returns>
+    private static long LapDrivePhase(string? prefix, string phase, long started)
+    {
+        if (prefix is null)
+            return 0L;
+
+        var now = Stopwatch.GetTimestamp();
+        AwaitDiagnostics.Add(
+            string.Concat(prefix, phase),
+            (long)Stopwatch.GetElapsedTime(started, now).TotalMicroseconds);
+        return now;
+    }
+
+    /// <summary>
     /// Sums this leaf's checkpoint offsets over its WAL partitions, so that a
     /// starvation drive can report how far its replay advanced (issue #3479).
     /// </summary>
@@ -3460,6 +3521,7 @@ internal sealed partial class BPlusLeafGrain
     /// </remarks>
     private async Task<LeafStarvationDriveOutcome> DriveStarvedCheckpointCoreAsync(
         int partitionCount,
+        StarvationDriveOrigin origin,
         CancellationToken cancellationToken)
     {
         // Every slice read this drive's replay makes is bounded below the
@@ -3467,13 +3529,23 @@ internal sealed partial class BPlusLeafGrain
         // flow, so it reaches the readers this replay builds and nothing else.
         DriveSliceReadDeadline.Value = ResolveDriveSliceReadDeadline();
 
+        // #6166: where a drive's time goes after its permit, by origin. Null, and so
+        // free, unless the benchmark census is enabled.
+        var phasePrefix = AwaitDiagnostics.Enabled
+            ? string.Concat("leaf.drive.by-origin.", origin.ToString(), ".us.")
+            : null;
+        var phaseStarted = phasePrefix is null ? 0L : Stopwatch.GetTimestamp();
+
         bool advanced;
         try
         {
             // Issue #5572: bank the leaf's own live writes first, so the replay
             // below starts past them instead of from -1.
             var liveAdvanced = await TryAdvanceLiveCheckpointAsync(withinDrive: true);
-            advanced = await ReplayWalSinceCheckpointAsync(null, cancellationToken) || liveAdvanced;
+            phaseStarted = LapDrivePhase(phasePrefix, "live", phaseStarted);
+            advanced = await ReplayWalSinceCheckpointAsync(
+                null, cancellationToken, driveCensusClass: phasePrefix is null ? null : origin.ToString()) || liveAdvanced;
+            phaseStarted = LapDrivePhase(phasePrefix, "replay", phaseStarted);
         }
         catch (LeafProjectionStaleException)
         {
@@ -3504,6 +3576,7 @@ internal sealed partial class BPlusLeafGrain
         // advance is pending regardless of the leaf's frontier clock, and is a
         // no-op when the replay recorded none.
         await ((ILeafProjection)this).FlushCheckpointAsync(cancellationToken);
+        phaseStarted = LapDrivePhase(phasePrefix, "flush", phaseStarted);
 
         // Advancing the checkpoint is only HALF of what the pin needs. The pin
         // is min(checkpoint, coverage), so a checkpoint that advances over
@@ -3561,6 +3634,7 @@ internal sealed partial class BPlusLeafGrain
         await MaybeRunPeriodicSnapshotRecheckAsync(
             fromCheckpointPersist: false,
             cancellationToken);
+        phaseStarted = LapDrivePhase(phasePrefix, "recheck", phaseStarted);
 
         // Republish the durable pin (issue #3103). Everything above repairs the
         // leaf so that the pin it ALREADY reported becomes usable; neither arm
@@ -3590,6 +3664,7 @@ internal sealed partial class BPlusLeafGrain
         // recorded no advance and whose persisted checkpoint is still -1 has
         // nothing to release, and the flush stays a no-op for it.
         var releases = await FlushDurableMaterialiserFrontierAsync(cancellationToken);
+        LapDrivePhase(phasePrefix, "pin", phaseStarted);
 
         // Report the property the pin actually depends on, not a proxy for
         // it. `advanced` alone is the same class of mistake this issue is
@@ -5003,12 +5078,17 @@ internal sealed partial class BPlusLeafGrain
     /// what the cut proves holds nothing it has not read. Where the cut owes a read to the
     /// leaf's own close first, that read runs capped and the cut is taken again after it.
     /// </param>
-    private async Task<bool> ReplayWalSinceCheckpointAsync(long? checkpointOverride, CancellationToken cancellationToken, bool atActivation = false)
+    private async Task<bool> ReplayWalSinceCheckpointAsync(long? checkpointOverride, CancellationToken cancellationToken, bool atActivation = false, string? driveCensusClass = null)
     {
         _warmCacheReplaysInFlight++;
         if (_warmCacheReplaysInFlight != 1)
             _warmCacheReplayFailed = true;
-        var census = atActivation && AwaitDiagnostics.Enabled ? new ActivationReplayCensus() : null;
+        var census = AwaitDiagnostics.Enabled && (atActivation || driveCensusClass is not null)
+            ? new ActivationReplayCensus(
+                atActivation ? ActivationReplayCensus.ActivationRoot : ActivationReplayCensus.DriveRoot,
+                atActivation ? null : driveCensusClass,
+                _replayEntriesAppliedThisActivation)
+            : null;
         try
         {
             var advanced = await ReplayWalSinceCheckpointCoreAsync(
@@ -5023,7 +5103,7 @@ internal sealed partial class BPlusLeafGrain
                 census?.Lap(ActivationReplayCensus.Phase.Settle);
             }
 
-            census?.Report();
+            census?.Report(_replayEntriesAppliedThisActivation);
             return advanced;
         }
         catch (OperationCanceledException)
@@ -5556,7 +5636,7 @@ internal sealed partial class BPlusLeafGrain
                 census?.Lap(ActivationReplayCensus.Phase.ShardMap);
             }
 
-            var (advanced, maxScanned) = await ReplayPartitionAsync(treeId, partition, checkpoint, projection, deferredTerminals, deferredOffsets, partitionsAbsorbed == partitionCount - 1, replayOwnership ?? default, resolvedOptions.WalReplayMaxRecordsPerTurn, resolvedOptions.MaxDurableUnresolvedReplayWork, probedHead, resolvedOptions.MaxLeafReplayEntries, cancellationToken);
+            var (advanced, maxScanned) = await ReplayPartitionAsync(treeId, partition, checkpoint, projection, deferredTerminals, deferredOffsets, partitionsAbsorbed == partitionCount - 1, replayOwnership ?? default, resolvedOptions.WalReplayMaxRecordsPerTurn, resolvedOptions.MaxDurableUnresolvedReplayWork, probedHead, resolvedOptions.MaxLeafReplayEntries, census, cancellationToken);
             partitionsAbsorbed++;
             if (advanced)
                 anyAdvanced = true;
@@ -7927,6 +8007,7 @@ internal sealed partial class BPlusLeafGrain
         int maxDurableUnresolvedWork,
         long? probedHead,
         int maxLeafReplayEntries,
+        ActivationReplayCensus? census,
         CancellationToken cancellationToken)
     {
         var coordinator = grainFactory.GetGrain<ILeafReplayCoordinatorGrain>(
@@ -8254,6 +8335,7 @@ internal sealed partial class BPlusLeafGrain
             cancellationToken.ThrowIfCancellationRequested();
 
             IReadOnlyList<CommitLogSliceEntry> slice;
+            var sliceReadStarted = census is null ? 0L : Stopwatch.GetTimestamp();
             try
             {
                 slice = await sliceReader.ReadSliceAsync(
@@ -8326,6 +8408,7 @@ internal sealed partial class BPlusLeafGrain
                 throw;
             }
 
+            census?.AddSlice(slice.Count, sliceReadStarted);
             if (slice.Count == 0)
                 break;
 

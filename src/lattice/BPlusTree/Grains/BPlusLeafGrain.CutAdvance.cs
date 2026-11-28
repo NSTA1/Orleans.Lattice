@@ -582,18 +582,32 @@ internal sealed partial class BPlusLeafGrain
     }
 
     /// <summary>
-    /// One activation replay's benchmark census (#6166), attributed to its first cut's class:
-    /// the offsets its passes actually read - a catch-up reads only to its close, where the
-    /// owed counts measure to the head - the partitions that owed a heavy span, and the
-    /// replay's elapsed time. Allocated once per activation replay, only when the diagnostic is
-    /// enabled; otherwise the replay passes <see langword="null"/> and allocates nothing.
+    /// One replay's benchmark census (#6166). An activation replay is attributed to its first
+    /// cut's class, a starvation drive's replay to the drive's origin: the offsets its passes
+    /// actually read - a catch-up reads only to its close, where the owed counts measure to the
+    /// head - the entries the filtered slices returned and the time their reads took, the
+    /// entries applied, the partitions that owed a heavy span, and the replay's elapsed time.
+    /// Allocated once per replay, only when the diagnostic is enabled; otherwise the replay
+    /// passes <see langword="null"/> and allocates nothing.
     /// </summary>
-    private sealed class ActivationReplayCensus
+    private sealed class ActivationReplayCensus(string root, string? replayClass, long appliedAtStart)
     {
+        /// <summary>The census root of an activation replay, which its first cut's class completes.</summary>
+        internal const string ActivationRoot = "leaf.replay.activation.by-cut.";
+
+        /// <summary>The census root of a starvation drive's replay, which the drive's origin completes.</summary>
+        internal const string DriveRoot = "leaf.replay.drive.";
+
         /// <summary>A replay read past this many offsets, over every partition and pass, counts as heavy.</summary>
         internal const long HeavyReadOffsets = 65_536;
 
         private readonly long _started = System.Diagnostics.Stopwatch.GetTimestamp();
+
+        private long _readEntries;
+
+        private long _slices;
+
+        private long _sliceReadTicks;
 
         /// <summary>Where the replay's time went, by <see cref="Phase"/>, in stopwatch ticks.</summary>
         private readonly long[] _phaseTicks = new long[(int)Phase.Settle + 1];
@@ -627,8 +641,8 @@ internal sealed partial class BPlusLeafGrain
             _lapStarted = now;
         }
 
-        /// <summary>The first cut's outcome and reason, as its <c>leaf.replay.cut.first.*</c> name carries them.</summary>
-        internal string? Class;
+        /// <summary>The first cut's outcome and reason, as its <c>leaf.replay.cut.first.*</c> name carries them, or a drive's origin.</summary>
+        internal string? Class = replayClass;
 
         /// <summary>The offsets read, summed over every partition and pass.</summary>
         internal long ReadOffsets;
@@ -645,12 +659,29 @@ internal sealed partial class BPlusLeafGrain
             }
         }
 
-        /// <summary>Writes the replay's totals under <c>leaf.replay.activation.by-cut.{class}</c>.</summary>
-        internal void Report()
+        /// <summary>Adds one slice read that returned <paramref name="entries"/> entries and began at <paramref name="readStarted"/>.</summary>
+        internal void AddSlice(int entries, long readStarted)
         {
-            var prefix = string.Concat("leaf.replay.activation.by-cut.", Class ?? "unclassified");
+            _slices++;
+            _readEntries += entries;
+            _sliceReadTicks += System.Diagnostics.Stopwatch.GetTimestamp() - readStarted;
+        }
+
+        /// <summary>
+        /// Writes the replay's totals under its root and class; <paramref name="appliedNow"/> is the
+        /// leaf's running applied-entry total, whose growth since the census began is the replay's.
+        /// </summary>
+        internal void Report(long appliedNow)
+        {
+            var prefix = string.Concat(root, Class ?? "unclassified");
             AwaitDiagnostics.Count(prefix);
             AwaitDiagnostics.Add(string.Concat(prefix, ".read-offsets"), ReadOffsets);
+            AwaitDiagnostics.Add(string.Concat(prefix, ".read-entries"), _readEntries);
+            AwaitDiagnostics.Add(string.Concat(prefix, ".slices"), _slices);
+            AwaitDiagnostics.Add(
+                string.Concat(prefix, ".slice-read.ms"),
+                (long)(_sliceReadTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency));
+            AwaitDiagnostics.Add(string.Concat(prefix, ".applied"), appliedNow - appliedAtStart);
             AwaitDiagnostics.Add(
                 string.Concat(prefix, ".ms"),
                 (long)System.Diagnostics.Stopwatch.GetElapsedTime(_started).TotalMilliseconds);
