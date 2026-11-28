@@ -103,6 +103,22 @@ internal static class AwaitDiagnostics
         Interlocked.Add(ref Census.GetOrAdd(name, static _ => new long[1])[0], amount);
     }
 
+    private static Action<long, Action<string>>? _snapshot;
+
+    /// <summary>
+    /// Registers a point-in-time snapshot the watchdog writes each period after the census:
+    /// it is passed the period's timestamp and the line writer. The first registration wins;
+    /// a no-op when the diagnostic is disabled.
+    /// </summary>
+    internal static void RegisterSnapshot(Action<long, Action<string>> snapshot)
+    {
+        if (!Enabled)
+            return;
+
+        EnsureWatchdog();
+        Interlocked.CompareExchange(ref _snapshot, snapshot, null);
+    }
+
     private static async Task<T> TimeSlowAsync<T>(Task<T> task, string region, GrainId grain, string? detail)
     {
         using var scope = Begin(region, grain, detail);
@@ -199,6 +215,8 @@ internal static class AwaitDiagnostics
                     null,
                     string.Create(CultureInfo.InvariantCulture, $"count={Interlocked.Read(ref count[0])}")));
             }
+
+            Volatile.Read(ref _snapshot)?.Invoke(now, Write);
         }
         catch
         {

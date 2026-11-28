@@ -3265,7 +3265,7 @@ internal sealed partial class BPlusLeafGrain
             // barrier accepted: work may continue detached. It is bounded
             // because the detached replay dies at its next cancellation check,
             // and it is safe because replay application is idempotent.
-            driveTask = DriveStarvedCheckpointCoreAsync(partitionCount, driveCts.Token);
+            driveTask = DriveStarvedCheckpointCoreAsync(partitionCount, origin, driveCts.Token);
             return await driveTask.WaitAsync(driveCts.Token);
         }
         catch (OperationCanceledException) when (driveCts.IsCancellationRequested)
@@ -3386,7 +3386,10 @@ internal sealed partial class BPlusLeafGrain
                 else
                     Interlocked.Decrement(ref _starvationReplayPermits);
                 if (permitAcquired)
+                {
                     RecordReplayPermitHold(acquiredAt);
+                    CensusPermitHold(AwaitDiagnostics.Enabled ? DriveCensusKind(origin) : string.Empty, acquiredAt);
+                }
             }
             _starvationDriveInFlight = false;
 
@@ -3460,6 +3463,7 @@ internal sealed partial class BPlusLeafGrain
     /// </remarks>
     private async Task<LeafStarvationDriveOutcome> DriveStarvedCheckpointCoreAsync(
         int partitionCount,
+        StarvationDriveOrigin origin,
         CancellationToken cancellationToken)
     {
         // Every slice read this drive's replay makes is bounded below the
@@ -3473,7 +3477,8 @@ internal sealed partial class BPlusLeafGrain
             // Issue #5572: bank the leaf's own live writes first, so the replay
             // below starts past them instead of from -1.
             var liveAdvanced = await TryAdvanceLiveCheckpointAsync(withinDrive: true);
-            advanced = await ReplayWalSinceCheckpointAsync(null, cancellationToken) || liveAdvanced;
+            advanced = await ReplayWalSinceCheckpointAsync(
+                null, cancellationToken, driveKind: AwaitDiagnostics.Enabled ? DriveCensusKind(origin) : null) || liveAdvanced;
         }
         catch (LeafProjectionStaleException)
         {
@@ -4416,6 +4421,11 @@ internal sealed partial class BPlusLeafGrain
                         TryRestoreWithheldReplayPermit();
                     RecordReplayPermitHold(replayPermitAcquiredAt, metricTreeId, _replayPermitTreeId);
                 }
+
+                if (AwaitDiagnostics.Enabled)
+                {
+                    CensusPermitHold(replayCheckpointOverride == -1L ? "activation.cold" : "activation.warm", replayPermitAcquiredAt);
+                }
             }
 
             // Withdrawn only after the permit is back (#5999): the withdrawal makes
@@ -5003,12 +5013,15 @@ internal sealed partial class BPlusLeafGrain
     /// what the cut proves holds nothing it has not read. Where the cut owes a read to the
     /// leaf's own close first, that read runs capped and the cut is taken again after it.
     /// </param>
-    private async Task<bool> ReplayWalSinceCheckpointAsync(long? checkpointOverride, CancellationToken cancellationToken, bool atActivation = false)
+    private async Task<bool> ReplayWalSinceCheckpointAsync(long? checkpointOverride, CancellationToken cancellationToken, bool atActivation = false, string? driveKind = null)
     {
         _warmCacheReplaysInFlight++;
         if (_warmCacheReplaysInFlight != 1)
             _warmCacheReplayFailed = true;
         var census = atActivation && AwaitDiagnostics.Enabled ? new ActivationReplayCensus() : null;
+        var progress = AwaitDiagnostics.Enabled
+            ? BeginReplayProgress(atActivation ? (checkpointOverride == -1L ? "activation.cold" : "activation.warm") : driveKind ?? "replay")
+            : null;
         try
         {
             var advanced = await ReplayWalSinceCheckpointCoreAsync(
@@ -5085,6 +5098,7 @@ internal sealed partial class BPlusLeafGrain
         finally
         {
             _warmCacheReplaysInFlight--;
+            EndReplayProgress(progress);
             if (atActivation)
             {
                 _replayReadCap = null;
@@ -5306,7 +5320,12 @@ internal sealed partial class BPlusLeafGrain
         }
         else if (activationCut != ActivationCut.None)
         {
-            CountCut(activationCut == ActivationCut.CatchUpAllowed, "cold-rebuild", census);
+            // #6166: a cold rebuild of a leaf that has a checkpoint lost its cache - no
+            // snapshot covered it - where one that never checkpointed had nothing to keep.
+            CountCut(
+                activationCut == ActivationCut.CatchUpAllowed,
+                AwaitDiagnostics.Enabled && AnyPersistedCheckpoint(partitionCount) ? "cold-rebuild.checkpointed" : "cold-rebuild.never-checkpointed",
+                census);
         }
 
         census?.Lap(ActivationReplayCensus.Phase.Cut);
@@ -7980,6 +7999,7 @@ internal sealed partial class BPlusLeafGrain
         ThrowIfReplayCoordinatorWithdrawn();
         var head = CapReplayHead(partition, probedHead ?? await ReplaySliceReader.AwaitProviderReadAsync(
             coordinator.GetHeadOffsetAsync(cancellationToken), cancellationToken));
+        var progress = NoteReplayPartitionStart(partition, checkpoint, head);
 
         // The offset of the NEWEST entry that actually exists on this partition
         // (issue #2668). These two quantities are measured from different
@@ -8778,6 +8798,10 @@ internal sealed partial class BPlusLeafGrain
             if (lastOffset <= fromExclusive)
                 break;
             fromExclusive = lastOffset;
+            if (progress is not null)
+            {
+                progress.Scanned = lastOffset;
+            }
 
             // Incremental checkpoint flush over the safe contiguous prefix
             // (issue #1513), clamped by TryFlushRecoveredCeilingAsync so it can
