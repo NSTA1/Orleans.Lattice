@@ -3390,7 +3390,13 @@ internal sealed partial class BPlusLeafGrain(
         var bornHere = false;
         using var routingMutation = EnterLeafRoutingMutation();
         _warmCacheTopologyChanged = true;
+
+        // #6166: a birth's phases, by kind, so what grows with the tree can be told apart.
+        var birthKind = init.SplitBirth ? "leaf.birth.split" : "leaf.birth.append";
+        var birthStarted = AwaitDiagnostics.Enabled ? Stopwatch.GetTimestamp() : 0L;
+        var birthPhase = birthStarted;
         await AwaitReplayBarrierAsync();
+        birthPhase = BirthPhaseMark(birthKind, ".barrier", birthPhase);
 
         // Batched birth-time seeding for a freshly created split sibling.
         // Collapses the five separate gated setter RPCs (tree id, shard
@@ -3404,6 +3410,7 @@ internal sealed partial class BPlusLeafGrain(
         // partially-seeded sibling is safe. The seal is unioned rather than
         // write-once for the same reason, stated at its own site below.
         await _splitGate.WaitAsync().ConfigureAwait(true);
+        birthPhase = BirthPhaseMark(birthKind, ".gate", birthPhase);
         try
         {
             // Snapshot the pre-seed values so a thrown PersistAsync can
@@ -3520,6 +3527,7 @@ internal sealed partial class BPlusLeafGrain(
                 changed = true;
             }
 
+            birthPhase = BirthPhaseMark(birthKind, ".state", birthPhase);
             if (changed)
             {
                 // A split sibling is a topology seed: an unbound donor (#1744) mints
@@ -3529,6 +3537,7 @@ internal sealed partial class BPlusLeafGrain(
                 try
                 {
                     await PersistAsync();
+                    birthPhase = BirthPhaseMark(birthKind, ".persist", birthPhase);
                 }
                 catch
                 {
@@ -3585,9 +3594,36 @@ internal sealed partial class BPlusLeafGrain(
                 _birthHintAwaitedUntil = Stopwatch.GetTimestamp() + (long)(BirthHintGrace.TotalSeconds * Stopwatch.Frequency);
             }
 
+            // From here: the post-gate steps (reachability proof, birth-hint latch) are not timed.
+            birthPhase = birthPhase != 0L ? Stopwatch.GetTimestamp() : 0L;
             await SeedDurableMaterialiserBlockPinAsync(init.WalHeadsAtBirth);
+            birthPhase = BirthPhaseMark(birthKind, ".pin", birthPhase);
             await EnsureCoverageLagTimerAsync();
+            BirthPhaseMark(birthKind, ".timer", birthPhase);
         }
+
+        if (birthStarted != 0L)
+        {
+            AwaitDiagnostics.Count(birthKind);
+            AwaitDiagnostics.Add(string.Concat(birthKind, ".us"), (long)Stopwatch.GetElapsedTime(birthStarted).TotalMicroseconds);
+        }
+    }
+
+    /// <summary>
+    /// Adds the microseconds since <paramref name="start"/> to the census of
+    /// <paramref name="kind"/>'s <paramref name="phase"/> and returns now; a no-op returning 0
+    /// for a start of 0 (#6166).
+    /// </summary>
+    private static long BirthPhaseMark(string kind, string phase, long start)
+    {
+        if (start == 0L)
+        {
+            return 0L;
+        }
+
+        var now = Stopwatch.GetTimestamp();
+        AwaitDiagnostics.Add(string.Concat(kind, phase, ".us"), (long)Stopwatch.GetElapsedTime(start, now).TotalMicroseconds);
+        return now;
     }
 
     /// <summary>

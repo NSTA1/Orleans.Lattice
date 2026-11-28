@@ -37,7 +37,7 @@ namespace Orleans.Lattice.Tests.BPlusTree.Grains;
 /// </para>
 /// </summary>
 [TestFixture]
-public sealed class WalMaterialiserPinGrainAutoSplitTests
+public sealed partial class WalMaterialiserPinGrainAutoSplitTests
 {
     private const string Tree = "tree-3576";
 

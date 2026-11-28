@@ -1150,6 +1150,11 @@ internal sealed partial class WalShardGrain(
         // #6166: whether the batch's previous entry was tabled, so a sorted batch extends one
         // slot once the table is full.
         var unstampedRun = false;
+
+        // #6166: a bulk seed's time in this shard, enqueue (cap waits included) then ack.
+        var seedStarted = TShape.Stamped && stamp.IsBulkSeed && AwaitDiagnostics.Enabled
+            ? System.Diagnostics.Stopwatch.GetTimestamp()
+            : 0L;
         try
         {
             for (var i = 0; i < count; i++)
@@ -1177,6 +1182,11 @@ internal sealed partial class WalShardGrain(
                     }
                     if (atCap)
                     {
+                        if (seedStarted != 0L)
+                        {
+                            AwaitDiagnostics.Count("wal.shard.seed.cap-wait");
+                        }
+
                         try { await headTask!.ConfigureAwait(true); } catch { /* surfaced via TCSs */ }
                         if (Volatile.Read(ref _stickyFailure) is { } stickyMid)
                         {
@@ -1400,6 +1410,8 @@ internal sealed partial class WalShardGrain(
             }
         }
 
+        var acksStarted = seedStarted != 0L ? System.Diagnostics.Stopwatch.GetTimestamp() : 0L;
+
         // Await every per-entry ack. The first one's completion is the
         // batch's commit point in the common case (every entry shares
         // one flush window); when the batch was cut over mid-stream
@@ -1409,6 +1421,21 @@ internal sealed partial class WalShardGrain(
         {
             await acks[i].Task.ConfigureAwait(true);
         }
+
+        if (acksStarted != 0L)
+        {
+            AwaitDiagnostics.Count("wal.shard.seed.batch");
+            AwaitDiagnostics.Add("wal.shard.seed.enqueue.us", (long)System.Diagnostics.Stopwatch.GetElapsedTime(seedStarted, acksStarted).TotalMicroseconds);
+            AwaitDiagnostics.Add("wal.shard.seed.ack.us", (long)System.Diagnostics.Stopwatch.GetElapsedTime(acksStarted).TotalMicroseconds);
+            int inFlight;
+            lock (_stateGate)
+            {
+                inFlight = _inFlight.Count;
+            }
+
+            AwaitDiagnostics.Add("wal.shard.seed.in-flight", inFlight);
+        }
+
         return TShape.Complete(offsets, admittedCount, unstampedWatermark, fenceOutcome);
     }
 
