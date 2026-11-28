@@ -74,6 +74,8 @@ public sealed class HostedClientProvenanceGapIntegrationTests
     [TearDown]
     public void TearDown() => RequestContext.Clear();
 
+    private const int MaxAttempts = 24;
+
     private static byte[] Val(string key) => Encoding.UTF8.GetBytes(key);
 
     [Test]
@@ -93,11 +95,13 @@ public sealed class HostedClientProvenanceGapIntegrationTests
         // The response is addressed to the forged id, so when the shard activates on
         // the forged silo that silo's genuine hosted client claims it and the caller
         // times out. A timeout proves nothing either way, so each attempt uses a
-        // fresh grain key (fresh placement) until one response returns.
+        // fresh grain key (fresh placement) until one response returns. Placement is
+        // roughly even across the two silos, so the cap must make an all-timeout run
+        // negligible: six attempts failed about one run in 64.
         Exception? observed = null;
         try
         {
-            for (var attempt = 0; attempt < 6 && observed is null; attempt++)
+            for (var attempt = 0; attempt < MaxAttempts && observed is null; attempt++)
             {
                 var shard = client.GetGrain<IShardRootGrain>($"hosted-provenance-gap-{attempt}/0");
                 RequestContext.Set(LatticeEventConstants.AccessGateSystemOriginRequestContextKey, true);
