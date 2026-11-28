@@ -231,10 +231,11 @@ internal sealed partial class BPlusLeafGrain
             : head;
 
     /// <summary>
-    /// Advances each checkpointed partition to its consistent cut's head where the cut and
-    /// a view read after it prove the leaf has read every record below the head it could
-    /// own (issue #6166); the guard is the split's (<see cref="CutAdvanceTarget"/>). Never on a
-    /// write; a never-checkpointed partition is left to the starvation drive.
+    /// Advances each partition to its consistent cut's head where the cut and a view read
+    /// after it prove the leaf has read every record below the head it could own (issue
+    /// #6166); the guard is the split's (<see cref="CutAdvanceTarget"/>). Never on a write. A
+    /// never-checkpointed partition reads from -1 and is judged by the same guard; a
+    /// stale-latched one is left to the starvation drive.
     /// </summary>
     /// <param name="partitions">The tree's WAL partition count.</param>
     /// <param name="atActivation">
@@ -258,22 +259,6 @@ internal sealed partial class BPlusLeafGrain
                 : !IsLiveAdvanceOverlapExcluded() ? "overlap-not-excluded"
                 : !IsPreArmGateOpen() ? "pre-arm-gate-closed"
                 : "no-tree";
-            return CutAdvanceOutcome.NotTaken;
-        }
-
-        var anyCheckpointed = false;
-        for (var p = 0; p < partitions; p++)
-        {
-            if (GetCurrentCheckpointForPartition(p) >= 0 && !IsPartitionStaleLatched(p))
-            {
-                anyCheckpointed = true;
-                break;
-            }
-        }
-
-        if (!anyCheckpointed)
-        {
-            _cutDecline = "never-checkpointed";
             return CutAdvanceOutcome.NotTaken;
         }
 
@@ -364,12 +349,17 @@ internal sealed partial class BPlusLeafGrain
                         break;
                     }
 
+                    // A never-checkpointed partition's read position is -1: it has read
+                    // every record below offset 0, so the guard applies to it as to any
+                    // other, as the split's uplift and the model's FreeCommit apply it.
+                    // Excluded, a leaf born or caught up while a partition was still empty
+                    // replayed that whole partition on every drive and activation (#6166).
                     var current = GetCurrentCheckpointForPartition(p);
-                    if (current < 0 || IsPartitionStaleLatched(p))
+                    if (IsPartitionStaleLatched(p))
                     {
                         reached = false;
                         boundedOnly = false;
-                        heldBy ??= "partition-uncheckpointed";
+                        heldBy ??= "partition-stale-latched";
                         continue;
                     }
 

@@ -183,23 +183,77 @@ public partial class BPlusLeafGrainTests
     }
 
     [Test]
-    public async Task CutAdvance_a_never_checkpointed_leaf_is_left_to_the_starvation_drive()
+    public async Task CutAdvance_a_never_checkpointed_leaf_past_every_bound_takes_the_cut_head()
     {
-        var rig = PreArmRig();
-        var grain = CreateGrain(
-            liveAdvance: rig,
-            configureGrainFactory: f => f.GetGrain<IWalShardGrain>(Arg.Any<string>(), Arg.Any<string?>()).Returns(rig.Shard));
-        await InitialiseOwnMarkerAsync(rig);
-        await SetStampedAsync(grain, "a", "1");
+        // #6166: a leaf born or caught up while its partition was still empty holds -1 there.
+        // Its read position is -1 - it has read every record below offset 0 - so the guard
+        // applies to it as to any other; excluded, it replayed the whole partition.
+        var (grain, _) = await IdleCutLeafAsync(
+            new WalSplitCut(Head: 40, ForeignHigh: -1, UnstampedWatermark: -1),
+            configureState: NeverCheckpointed);
+        Assert.That(grain.GetCurrentCheckpointForPartition(0), Is.EqualTo(-1L), "precondition: the leaf never checkpointed");
 
         var reached = await grain.TryAdvanceCheckpointFromCutAsync(partitions: 1);
 
         Assert.Multiple(() =>
         {
-            Assert.That(reached, Is.EqualTo(BPlusLeafGrain.CutAdvanceOutcome.NotTaken));
-            Assert.That(grain.GetCurrentCheckpointForPartition(0), Is.EqualTo(-1L));
+            Assert.That(reached, Is.EqualTo(BPlusLeafGrain.CutAdvanceOutcome.Reached), "a never-checkpointed leaf past every bound was sent to replay its whole partition");
+            Assert.That(grain.GetCurrentCheckpointForPartition(0), Is.EqualTo(39L));
         });
-        await rig.Shard.DidNotReceive().GetSplitCutAsync(Arg.Any<WalAppendStamp>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task CutAdvance_a_never_checkpointed_leaf_held_by_a_bound_owes_a_catch_up_to_it_alone()
+    {
+        var (grain, _) = await IdleCutLeafAsync(
+            new WalSplitCut(Head: 40, ForeignHigh: 12, UnstampedWatermark: -1),
+            configureState: NeverCheckpointed);
+
+        var reached = await grain.TryAdvanceCheckpointFromCutAsync(partitions: 1);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(reached, Is.EqualTo(BPlusLeafGrain.CutAdvanceOutcome.CatchUp), "a never-checkpointed leaf held only by a known read was not capped at it");
+            Assert.That(grain.CutCatchUpBoundsForReplay, Is.EqualTo(new long[] { 12 }));
+            Assert.That(grain.GetCurrentCheckpointForPartition(0), Is.EqualTo(-1L), "the advance passed a record it had not read");
+        });
+    }
+
+    [Test]
+    [NonParallelizable]
+    public async Task CutAdvance_the_starved_arm_takes_the_cut_before_it_replays()
+    {
+        // #6166: a never-checkpointed leaf holding rows takes the starved arm, whose drive
+        // replayed every partition from -1 - the whole log at the 6M seed's end, past the
+        // drive's budget - without trying the cut the stalled arm takes.
+        BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
+        BPlusLeafGrain.SeedReplayAdmissionStateForTest(ceiling: TimerAdmissionCeiling, queued: 0);
+        try
+        {
+            var (grain, rig) = await IdleCutLeafAsync(
+                new WalSplitCut(Head: 40, ForeignHigh: -1, UnstampedWatermark: -1),
+                configure: r => r.ReportedWatermark = r.Writer.ForeignAppend(),
+                configureState: NeverCheckpointed);
+
+            var starvedDeclines = await CountStarvedArmDeclinesAsync(() => grain.OnCoverageLagTimerTickAsync(CancellationToken.None));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(starvedDeclines, Is.GreaterThan(0), "precondition: the tick took the starved arm");
+                Assert.That(grain.GetCurrentCheckpointForPartition(0), Is.EqualTo(39L), "the starved arm replayed instead of taking the cut head");
+            });
+            await rig.Shard.Received().GetSplitCutAsync(Arg.Any<WalAppendStamp>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<CancellationToken>());
+        }
+        finally
+        {
+            BPlusLeafGrain.ResetReplayConcurrencyGateForTest();
+        }
+    }
+
+    private static void NeverCheckpointed(LeafNodeState state)
+    {
+        state.ProjectionCheckpointOffset = 0;
+        state.ProjectionCheckpointOffsetAssigned = false;
     }
 
     [Test]

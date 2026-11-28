@@ -3306,7 +3306,11 @@ internal sealed partial class BPlusLeafGrain
             // which would re-decline on the pre-replay reading.
             // Dispatched onto an interleaving turn rather than awaited here:
             // see DispatchTimerDriveAsync.
-            await DispatchTimerDriveAsync(starvationPartitionCount, "arm=starved-drive");
+            // #6166: the cut first, as the stalled arm takes it. A leaf born or caught up
+            // while every partition was still empty holds -1 everywhere, and its replay
+            // read the whole log; the cut passes what it cannot own, or caps the replay at
+            // what it can, and a Reached bank still runs the recheck this drive exists for.
+            await DispatchTimerDriveAsync(starvationPartitionCount, "arm=starved-drive", cutFirst: true);
             return;
         }
 
