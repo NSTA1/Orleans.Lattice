@@ -885,16 +885,18 @@ internal sealed partial class ReplicationShipperGrain(
             return;
         }
 
+        // Ahead of the write-class, pause and backoff gates: releasing a covered
+        // purge hold depends on none of them, and a held registry blocks every
+        // decision purge. A shipper the write-class gate holds detached retries
+        // a failed release here on every check.
+        await MaybeReleasePurgeHoldAsync(force: false);
+
         // A tree with no write class ships nothing: its peer would drop every
         // record while the cursor advanced past it (#5699).
         if (await SuspendIfWriteClassUnresolvedAsync())
         {
             return;
         }
-
-        // Ahead of the pause and backoff gates: releasing a covered purge hold
-        // depends on neither, and a held registry blocks every decision purge.
-        await MaybeReleasePurgeHoldAsync(force: false);
 
         // Durable administrative pause (saga cutover): no post-cut entry may
         // leave the cluster while a saga is in flight. The cursor is never

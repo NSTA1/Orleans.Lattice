@@ -75,15 +75,28 @@ internal sealed partial class ReplicationShipperGrain
             // then trim a prepare the shipper has not read without a hold, so
             // the same write takes the peer off the log: every saga record is
             // withheld until it is re-attached and re-seeded.
+            var wasSuspendedForWriteClass = state.State.SuspendedForWriteClass;
             state.State.DetachedFromLog = true;
             state.State.SuspendedForWriteClass = writeClassUnresolved;
-            if (ReseedRequired)
+            try
             {
-                await state.WriteStateAsync();
+                if (ReseedRequired)
+                {
+                    await state.WriteStateAsync();
+                }
+                else
+                {
+                    await TakePeerOffLogAsync();
+                }
             }
-            else
+            catch
             {
-                await TakePeerOffLogAsync();
+                // Nothing durable says detached: roll the flags back so the next
+                // tick retries the whole detach rather than skipping it while the
+                // registration and the holds stay in place.
+                state.State.DetachedFromLog = false;
+                state.State.SuspendedForWriteClass = wasSuspendedForWriteClass;
+                throw;
             }
         }
 
