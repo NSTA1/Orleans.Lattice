@@ -293,4 +293,15 @@ internal sealed class ReplicationShipperState
     /// </summary>
     [Id(24)]
     public Dictionary<int, long> SourceLineageBoundary { get; set; } = new();
+
+    /// <summary>
+    /// Whether this shipper detached from the log because its tree's write
+    /// class stopped resolving (the tree was disabled at runtime or its runtime
+    /// merge mode became ambiguous). Distinct from a peer-removal detach: only
+    /// the write-class gate re-attaches a shipper it suspended, and it does so
+    /// once the class resolves again, re-marking the peer for re-seed. A state
+    /// written before this slot decodes to <see langword="false"/>.
+    /// </summary>
+    [Id(25)]
+    public bool SuspendedForWriteClass { get; set; }
 }

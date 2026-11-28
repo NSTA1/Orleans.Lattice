@@ -422,6 +422,19 @@ A shipper that finds its tree has no configuration and is an alias or not a
 registered tree is such a stray: it ships nothing, withdraws from the log through
 the peer-removal path, drops its peer's cross-tree enrolment and deactivates.
 
+A tree that still has configuration but no write class - disabled at runtime,
+or with an ambiguous merge mode - is not a stray, yet its peers drop every
+write they receive for it. Shipping on would advance the cursor past writes
+nobody applied, losing them for good. A shipper therefore re-resolves its
+tree's write class on every tick rather than caching it for its lifetime. When
+none resolves it ships nothing and detaches from the log through the
+peer-removal path, so the WAL is not pinned while the tree stays disabled.
+When a write class resolves again the shipper reattaches and seeds its peer
+afresh from a snapshot instead of resuming the abandoned cursor. The retention
+choice is stated per write class; every class currently detaches and
+re-seeds. The receive path already classifies each inbound tree per batch, so
+a runtime change takes effect there on the next batch.
+
 A coarse backstop resolve
 (`LatticeReplicationOptions.ShipSourceIdentityBackstopInterval`, default 30 s)
 is the only path that still reads the registry, and it runs solely as a

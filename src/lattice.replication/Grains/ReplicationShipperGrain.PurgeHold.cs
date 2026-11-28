@@ -17,6 +17,10 @@ namespace Orleans.Lattice.Replication.Grains;
 /// and every partition re-ships from its lowest retained entry.</item>
 /// <item>When the peer is removed from the topology (<see cref="DetachFromLogAsync"/>):
 /// a removed peer must not hold the log or the tree's decisions indefinitely.</item>
+/// <item>When the tree's write class stops resolving - it was disabled at
+/// runtime or its merge mode became ambiguous - and the write-class gate
+/// suspends the shipper (issue #5699). The peer is re-seeded once a write
+/// class resolves again.</item>
 /// </list>
 /// The release is checked on the phase timer at most every
 /// <see cref="PurgeHoldCheckInterval"/>, and is conditional in the hold grain,
@@ -32,14 +36,37 @@ internal sealed partial class ReplicationShipperGrain
 
     private DateTimeOffset _nextPurgeHoldCheckUtc = DateTimeOffset.MinValue;
 
-    /// <summary><see langword="true"/> once the peer was removed from the topology and this shipper stopped holding the log.</summary>
+    /// <summary><see langword="true"/> once the shipper stopped holding the log: its peer was removed from the topology, or its tree's write class stopped resolving.</summary>
     internal bool DetachedFromLog => state.State.DetachedFromLog;
+
+    /// <summary><see langword="true"/> while the write-class gate holds this shipper detached because its tree resolves no write class.</summary>
+    internal bool SuspendedForWriteClass => state.State.SuspendedForWriteClass;
 
     /// <inheritdoc />
     public async Task DetachFromLogAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         ParseGrainKey();
+        // A peer removal supersedes a write-class suspension: the gate must not
+        // re-attach a shipper whose peer has left the topology.
+        if (state.State.SuspendedForWriteClass)
+        {
+            state.State.SuspendedForWriteClass = false;
+            await state.WriteStateAsync();
+        }
+
+        await DetachCoreAsync(writeClassUnresolved: false);
+    }
+
+    /// <summary>
+    /// Stops this shipper holding the log and the tree's saga decisions, and
+    /// takes the peer off the log so it is re-seeded when the shipper
+    /// re-attaches. <paramref name="writeClassUnresolved"/> records the cause:
+    /// the peer's removal, or the tree's write class no longer resolving
+    /// (issue #5699), in which case the write-class gate also stops shipping.
+    /// </summary>
+    private async Task DetachCoreAsync(bool writeClassUnresolved)
+    {
         PrepareOutsidePump();
         if (!state.State.DetachedFromLog)
         {
@@ -49,6 +76,7 @@ internal sealed partial class ReplicationShipperGrain
             // the same write takes the peer off the log: every saga record is
             // withheld until it is re-attached and re-seeded.
             state.State.DetachedFromLog = true;
+            state.State.SuspendedForWriteClass = writeClassUnresolved;
             if (ReseedRequired)
             {
                 await state.WriteStateAsync();
@@ -70,9 +98,9 @@ internal sealed partial class ReplicationShipperGrain
         {
             // Harmless to leave: a detached shipper answers no read position.
             Logger.LogWarning(ex,
-                "{Context}: withdrawing from the offset consumers of log {Log} after the peer's removal failed; "
+                "{Context}: withdrawing from the offset consumers of log {Log} failed while detaching ({Cause}); "
                 + "the shipper no longer holds that log.",
-                LogContext, log);
+                LogContext, log, writeClassUnresolved ? "write class unresolved" : "peer removed");
         }
 
         await ReleasePurgeHoldAsync(log, positions: null);
@@ -85,16 +113,28 @@ internal sealed partial class ReplicationShipperGrain
             await state.WriteStateAsync();
         }
 
-        Logger.LogInformation(
-            "{Context}: the peer was removed from the replication topology; the shipper no longer holds log {Log} "
-            + "or the tree's saga decisions, ships only plain writes, and withholds saga records until the peer "
-            + "returns and is re-seeded.",
-            LogContext, log);
+        if (writeClassUnresolved)
+        {
+            Logger.LogWarning(
+                "{Context}: the tree resolves no write class (it was disabled or its merge mode is ambiguous); "
+                + "the shipper stopped shipping, no longer holds log {Log} or the tree's saga decisions, and the "
+                + "peer is re-seeded once the tree resolves a write class again.",
+                LogContext, log);
+        }
+        else
+        {
+            Logger.LogInformation(
+                "{Context}: the peer was removed from the replication topology; the shipper no longer holds log {Log} "
+                + "or the tree's saga decisions, ships only plain writes, and withholds saga records until the peer "
+                + "returns and is re-seeded.",
+                LogContext, log);
+        }
     }
 
     /// <summary>
-    /// Re-attaches a shipper whose peer was added back, so its next read
-    /// registers with the log again. Called from <see cref="EnsureActiveAsync"/>.
+    /// Re-attaches a detached shipper - its peer was added back, or its tree
+    /// resolves a write class again - so its next read registers with the log
+    /// again. Called from <see cref="EnsureActiveAsync"/> and the write-class gate.
     /// </summary>
     private async Task ReattachToLogAsync()
     {
@@ -109,6 +149,7 @@ internal sealed partial class ReplicationShipperGrain
         PrepareOutsidePump();
         await TakePeerOffLogStateAsync();
         state.State.DetachedFromLog = false;
+        state.State.SuspendedForWriteClass = false;
         await state.WriteStateAsync();
         ReportReseedState();
         _nextPurgeHoldCheckUtc = DateTimeOffset.MinValue;

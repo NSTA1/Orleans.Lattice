@@ -20,9 +20,10 @@ namespace Orleans.Lattice.Replication;
 /// register surfaced more than one live mode after a concurrent divergent
 /// assignment), <see cref="Resolve"/> returns <see langword="null"/> so new
 /// commit-time observer doorbells short-circuit before the sink. Already-active
-/// shippers are not torn down and do not consult this resolver to decide whether
-/// to run, so a peer that also resolves no mode drops what they ship while the
-/// sender advances past it. The resolver never silently picks one of the
+/// shippers re-resolve the mode on every tick: one whose tree resolves no mode
+/// stops shipping and detaches from the log, so its cursor never advances past
+/// writes the peer would drop, and its peer is re-seeded once the tree resolves
+/// a mode again. The resolver never silently picks one of the
 /// divergent modes. Ambiguity wins even when the tree is also declared in the
 /// static seed map, because the runtime divergence is a deliberate operator
 /// state that must be resolved before egress resumes.

@@ -717,8 +717,13 @@ internal sealed partial class ReplicationShipperGrain(
         cancellationToken.ThrowIfCancellationRequested();
         ParseGrainKey();
         // The driver ensures a shipper only for a peer in the topology, so a
-        // shipper detached when its peer was removed holds the log again.
-        await ReattachToLogAsync();
+        // shipper detached when its peer was removed holds the log again -
+        // unless its tree resolves no write class, in which case the
+        // write-class gate re-attaches it once one resolves (#5699).
+        if (await MayReattachOnEnsureAsync())
+        {
+            await ReattachToLogAsync();
+        }
         // RegisterOrUpdateReminder is idempotent; StartPhaseTimer's
         // _phaseTimer ??= guard makes the second call a no-op. Safe
         // for repeated invocation.
@@ -876,6 +881,13 @@ internal sealed partial class ReplicationShipperGrain(
 
         // Ahead of everything else: a stray never reads or ships (#5676).
         if (await RetireIfStrayAsync())
+        {
+            return;
+        }
+
+        // A tree with no write class ships nothing: its peer would drop every
+        // record while the cursor advanced past it (#5699).
+        if (await SuspendIfWriteClassUnresolvedAsync())
         {
             return;
         }
