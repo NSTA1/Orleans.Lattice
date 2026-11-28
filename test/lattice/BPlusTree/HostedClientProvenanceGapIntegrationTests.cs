@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Reflection;
 using System.Text;
@@ -63,7 +64,12 @@ public sealed class HostedClientProvenanceGapIntegrationTests
     [OneTimeSetUp]
     public async Task OneTimeSetUp()
     {
-        _fixture = new InternalOriginGuardClusterFixture { UseTcpTransport = true };
+        GapRecorder.Reset();
+        _fixture = new InternalOriginGuardClusterFixture
+        {
+            UseTcpTransport = true,
+            ConfigureBuilder = b => b.AddSiloBuilderConfigurator<GapRecorder.Configurator>(),
+        };
         await _fixture.InitializeAsync();
         _cluster = _fixture.Cluster;
     }
@@ -77,7 +83,7 @@ public sealed class HostedClientProvenanceGapIntegrationTests
     private static byte[] Val(string key) => Encoding.UTF8.GetBytes(key);
 
     [Test]
-    public async Task KnownGap_external_client_forging_live_hosted_id_keeps_reserved_capability_and_reaches_leaf()
+    public async Task KnownGap_external_client_forging_live_hosted_id_keeps_reserved_capability_and_passes_internal_origin_guard()
     {
         // Any live silo's hosted id works; the secondary is used so the forged id
         // differs from the hosted client of the gateway the attacker connects to.
@@ -86,47 +92,62 @@ public sealed class HostedClientProvenanceGapIntegrationTests
         using var host = await StartExternalClientAsync(forgedId);
         var client = host.Services.GetRequiredService<IClusterClient>();
 
-        // Admission is proven by reaching the leaf's argument validation: the leaf
-        // rejects an LWW-register CRDT delta with ArgumentException, which only an
-        // admitted call can reach. A stripped caller is refused earlier with
-        // LatticeAuthorizationDeniedException (see the refusal tests below).
-        // The response is addressed to the forged id, so when the shard activates on
-        // the forged silo that silo's genuine hosted client claims it and the caller
-        // times out. A timeout proves nothing either way, so each attempt uses a
-        // fresh grain key (fresh placement) until one response returns.
-        Exception? observed = null;
+        // The outcome is observed on the silo, by a recording filter that runs after
+        // the capability-stripping filter (GapRecorder), not from the client's reply.
+        // The reply is addressed to the forged id, so Orleans may route it to that
+        // silo's genuine hosted client and the attacker never sees it; the call has
+        // been admitted and has run regardless, so the client outcome is ignored.
+        // The internal-origin guard is the first statement of
+        // ShardRootGrain.ApplyCrdtDeltaAsync, so a stripped caller is refused with
+        // LatticeAuthorizationDeniedException (see the refusal tests below). Any
+        // other outcome - the leaf's ArgumentException for an LWW-register delta,
+        // or a first-touch activation-readiness timeout on a loaded runner - is
+        // only reachable after the guard admitted the call. A missing observation
+        // is retried on a fresh key.
+        GapRecorder.Observation? conclusive = null;
         try
         {
-            for (var attempt = 0; attempt < 6 && observed is null; attempt++)
+            for (var attempt = 0; attempt < 3 && conclusive is null; attempt++)
             {
-                var shard = client.GetGrain<IShardRootGrain>($"hosted-provenance-gap-{attempt}/0");
+                var key = $"{GapRecorder.KeyPrefix}{attempt}/0";
+                var shard = client.GetGrain<IShardRootGrain>(key);
                 RequestContext.Set(LatticeEventConstants.AccessGateSystemOriginRequestContextKey, true);
                 try
                 {
-                    await shard.ApplyCrdtDeltaAsync("k", LatticeMergeMode.LwwRegister, Val("v"));
-                    Assert.Fail("The leaf accepted an LWW-register CRDT delta.");
+                    await shard.ApplyCrdtDeltaAsync("k", LatticeMergeMode.LwwRegister, Val("v"))
+                        .WaitAsync(TimeSpan.FromSeconds(15));
                 }
-                catch (TimeoutException)
+                catch (Exception)
                 {
-                }
-                catch (Exception ex)
-                {
-                    observed = ex;
+                    // Client-side outcome is not evidence; see above.
                 }
                 finally
                 {
                     RequestContext.Clear();
                 }
+
+                var observation = await GapRecorder.WaitForAsync(key, TimeSpan.FromSeconds(30));
+                TestContext.Progress.WriteLine($"attempt {attempt}: {observation?.ToString() ?? "no observation"}");
+                conclusive = observation;
             }
         }
         finally
         {
-            await host.StopAsync();
+            await StopQuietlyAsync(host);
         }
 
-        // KNOWN GAP (#5346): the forged external call is admitted as in-silo
-        // infrastructure. Invert this assertion once provenance is authenticated.
-        Assert.That(observed, Is.InstanceOf<ArgumentException>(), observed?.ToString() ?? "every attempt timed out");
+        Assert.That(conclusive, Is.Not.Null, "no conclusive silo-side observation: " + GapRecorder.Describe());
+
+        // KNOWN GAP (#5346): the forged external call is treated as in-silo
+        // infrastructure - its seeded reserved capability survives the filter and
+        // the call passes the internal-origin guard on the physical shard grain.
+        // Invert these once provenance is authenticated.
+        Assert.Multiple(() =>
+        {
+            Assert.That(conclusive!.SourceKey, Is.EqualTo(forgedId));
+            Assert.That(conclusive.SystemOriginRetained, Is.True, "reserved capability was stripped");
+            Assert.That(conclusive.Fault, Is.Not.InstanceOf<LatticeAuthorizationDeniedException>(), "internal-origin guard refused the call");
+        });
     }
 
     [Test]
@@ -163,6 +184,69 @@ public sealed class HostedClientProvenanceGapIntegrationTests
 
         Assert.ThrowsAsync<LatticeAuthorizationDeniedException>(
             async () => await shard.SetAsync("k", Val("k")));
+    }
+
+    // Silo-side observer for the known-gap test. Registered after the fixture's
+    // capability-stripping filter, so it sees the RequestContext the grain body
+    // will see, and it records the call's outcome on the silo, independent of
+    // whether the reply ever reaches the (forged) caller.
+    internal sealed class GapRecorder : IIncomingGrainCallFilter
+    {
+        public const string KeyPrefix = "hosted-provenance-gap-";
+
+        private static readonly ConcurrentDictionary<string, Observation> Observations = new();
+
+        public sealed record Observation(string? SourceKey, bool SystemOriginRetained, Exception? Fault);
+
+        public static void Reset() => Observations.Clear();
+
+        public static string Describe() => Observations.IsEmpty
+            ? "(none)"
+            : string.Join(" | ", Observations.Select(o => $"{o.Key}: {o.Value.Fault?.GetType().Name ?? "ok"}"));
+
+        public static async Task<Observation?> WaitForAsync(string key, TimeSpan timeout)
+        {
+            var deadline = DateTime.UtcNow + timeout;
+            while (DateTime.UtcNow < deadline)
+            {
+                if (Observations.TryGetValue(key, out var observation))
+                {
+                    return observation;
+                }
+
+                await Task.Delay(50);
+            }
+
+            return null;
+        }
+
+        public async Task Invoke(IIncomingGrainCallContext context)
+        {
+            var key = context.TargetId.Key.ToString();
+            if (context.Grain is not IShardRootGrain || key is null || !key.StartsWith(KeyPrefix, StringComparison.Ordinal))
+            {
+                await context.Invoke();
+                return;
+            }
+
+            var sourceKey = context.SourceId is { } source && source.IsClient() ? source.Key.ToString() : null;
+            var retained = RequestContext.Get(LatticeEventConstants.AccessGateSystemOriginRequestContextKey) is not null;
+            try
+            {
+                await context.Invoke();
+                Observations[key] = new Observation(sourceKey, retained, null);
+            }
+            catch (Exception ex)
+            {
+                Observations[key] = new Observation(sourceKey, retained, ex);
+                throw;
+            }
+        }
+
+        public sealed class Configurator : ISiloConfigurator
+        {
+            public void Configure(ISiloBuilder siloBuilder) => siloBuilder.AddIncomingGrainCallFilter<GapRecorder>();
+        }
     }
 
     // Builds an ordinary external Orleans client against the primary gateway, then
@@ -204,5 +288,20 @@ public sealed class HostedClientProvenanceGapIntegrationTests
         }
 
         return host;
+    }
+
+    // A forged client's shutdown can stall on replies routed elsewhere; never let
+    // it hold the fixture.
+    private static async Task StopQuietlyAsync(IHost host)
+    {
+        try
+        {
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+            await host.StopAsync(cts.Token).WaitAsync(TimeSpan.FromSeconds(15));
+        }
+        catch (Exception ex)
+        {
+            TestContext.Progress.WriteLine("external client stop did not complete cleanly: " + ex.GetType().Name);
+        }
     }
 }

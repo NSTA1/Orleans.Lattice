@@ -27,6 +27,13 @@ public sealed class InternalOriginGuardClusterFixture
     /// </summary>
     public bool UseTcpTransport { get; init; }
 
+    /// <summary>
+    /// Optional extra builder configuration, applied after the fixture's own silo
+    /// configurator so anything it registers (for example an observing grain call
+    /// filter) runs after the capability-stripping filter.
+    /// </summary>
+    public Action<TestClusterBuilder>? ConfigureBuilder { get; init; }
+
     public async Task InitializeAsync()
     {
         var builder = new TestClusterBuilder();
@@ -37,6 +44,7 @@ public sealed class InternalOriginGuardClusterFixture
 
         builder.UseSharedInMemoryWal();
         builder.AddSiloBuilderConfigurator<SiloConfigurator>();
+        ConfigureBuilder?.Invoke(builder);
         Cluster = builder.Build();
         await Cluster.DeployAsync();
         await SharedInMemoryWal.AssertAllSilosShareOneWalAsync(Cluster);
