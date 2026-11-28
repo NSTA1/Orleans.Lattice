@@ -28,6 +28,12 @@ public partial class CrossTreeSiblingBoundaryIntegrationTests
         // see HoldNaturalCollection.
         using var naturalHold = NaturalServices(_siteB).GetRequiredService<NaturalObservationTrace>()
             .HoldNaturalCollection(sibling);
+        // The origin's own natural passes over the sibling are deferred until its outbound shipper
+        // has registered too (#6226 row 6). Unheld, a site-a pass that lands first trims the seed
+        // row nothing yet holds, so the shipper starts at a cursor below the first retained sequence
+        // and takes the designed forced-gap re-seed, still in flight when the links are sampled.
+        using var originNaturalHold = NaturalServices(_siteA).GetRequiredService<NaturalObservationTrace>()
+            .HoldNaturalCollection(sibling);
 
         await WriteAsync(tree, sibling);
         LatticeBootstrapCoordinatorGrain.SiblingBoundaryReseedAfter = TimeSpan.FromSeconds(10);
@@ -149,6 +155,9 @@ public partial class CrossTreeSiblingBoundaryIntegrationTests
                 _siteA.Client.GetGrain<IReplicationShipperGrain>($"{treeName}/{SiteBClusterId}").EnsureActiveAsync(CancellationToken.None),
                 _siteB.Client.GetGrain<IReplicationShipperGrain>($"{treeName}/{SiteAClusterId}").EnsureActiveAsync(CancellationToken.None));
         }
+        RequireProtectionEligible(await WaitForOriginSiblingShipperRegisteredAsync(sibling, TimeSpan.FromSeconds(30)),
+            "the origin's outbound sibling shipper never registered as a consumer of its log");
+        originNaturalHold.Dispose();
         await _siteA.Client.GetGrain<ILattice>(tree).SetAsync(statusKey, System.Text.Encoding.UTF8.GetBytes(draining));
         await SignalShipperAsync(_siteA.Client, tree, SiteBClusterId);
         var drainingArrived = await WaitForValueAsync(_siteB.Client, tree, statusKey, draining, TimeSpan.FromSeconds(40));
@@ -164,7 +173,9 @@ public partial class CrossTreeSiblingBoundaryIntegrationTests
         await _siteB.Client.GetGrain<ILattice>(sibling).SetAsync(westWriteKey, [2]);
         await SignalShipperAsync(_siteB.Client, sibling, SiteAClusterId);
         var westWriteArrived = await WaitForValueAsync(_siteA.Client, sibling, westWriteKey, [2], TimeSpan.FromSeconds(40));
-        var stable = await CaptureDrainStateAsync(tree, sibling);
+        // The test shortens SiblingBoundaryReseedAfter, so a sibling-boundary re-seed
+        // can still be in flight when the writes converge (#6019): wait it out.
+        var stable = await WaitForDrainQuiescenceAsync(tree, sibling, TimeSpan.FromSeconds(60));
         var healthyLinks = ReadOutboundHealth(tree, sibling);
         await ObserveNaturalBoundaryAsync("protection-after-health-snapshot", tree, sibling);
         Assert.Multiple(() =>
@@ -179,6 +190,28 @@ public partial class CrossTreeSiblingBoundaryIntegrationTests
             Assert.That(healthyLinks, Has.Length.EqualTo(4), string.Join(Environment.NewLine, healthyLinks));
             Assert.That(healthyLinks, Is.All.Contains("healthy=True"), string.Join(Environment.NewLine, healthyLinks));
         });
+    }
+
+    private async Task<bool> WaitForOriginSiblingShipperRegisteredAsync(string sibling, TimeSpan timeout)
+    {
+        var shipper = _siteA.Client.GetGrain<IReplicationShipperGrain>($"{sibling}/{SiteBClusterId}").GetGrainId();
+        var deadline = Environment.TickCount64 + (long)timeout.TotalMilliseconds;
+        while (true)
+        {
+            // The shipper registers before its first read, not on activation, so poll the registry.
+            var entry = await _siteA.Client.GetLatticeRegistry().GetEntryAsync(sibling);
+            var physical = entry?.PhysicalTreeId ?? sibling;
+            var consumers = await _siteA.Client.GetGrain<IWalOffsetConsumerRegistryGrain>(physical).GetConsumersAsync();
+            if (consumers.Contains(shipper))
+            {
+                return true;
+            }
+            if (Environment.TickCount64 >= deadline)
+            {
+                return false;
+            }
+            await Task.Delay(100);
+        }
     }
 
     private sealed record ProtectionPin(string Store, string Consumer, Guid Owner, int Partition, long? Offset);
