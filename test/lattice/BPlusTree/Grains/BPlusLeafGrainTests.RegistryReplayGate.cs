@@ -34,6 +34,8 @@ public partial class BPlusLeafGrainTests
                 taken++;
             }
 
+            Assert.That(taken, Is.EqualTo(TimerAdmissionCeiling), "precondition: every permit is taken");
+
             var (registryLeaf, _, _, _) = CreateLeafForCoverageRepair(
                 persistedCheckpoint: -1L,
                 treeId: LatticeConstants.RegistryTreeId,
@@ -45,28 +47,32 @@ public partial class BPlusLeafGrainTests
                 maxConcurrentReplays: TimerAdmissionCeiling,
                 replayCoordinator: new GrowingWal().Coordinator);
 
+            using var registryCts = new CancellationTokenSource();
             using var userCts = new CancellationTokenSource();
-            var registryActivation = LeafActivationHarness.ActivateAsync(registryLeaf, CancellationToken.None);
+            var registryActivation = LeafActivationHarness.ActivateAsync(registryLeaf, registryCts.Token);
             var userActivation = LeafActivationHarness.ActivateAsync(userLeaf, userCts.Token);
             var registryActivated = await Task.WhenAny(registryActivation, Task.Delay(TimeSpan.FromSeconds(10))) == registryActivation;
             var userWaited = !userActivation.IsCompleted;
+
+            // Unblock everything before observing it, so a failure fails rather than hangs.
+            registryCts.Cancel();
             userCts.Cancel();
+            gate.Release(taken);
+            taken = 0;
             try
             {
-                await userActivation;
+                await Task.WhenAll(registryActivation, userActivation).WaitAsync(TimeSpan.FromSeconds(30));
             }
-            catch (OperationCanceledException)
+            catch (Exception ex) when (ex is not TimeoutException)
             {
             }
 
             Assert.Multiple(() =>
             {
-                Assert.That(taken, Is.EqualTo(TimerAdmissionCeiling), "precondition: every permit is taken");
                 Assert.That(registryActivated, Is.True,
                     "a registry leaf waited on the replay gate, whose holders wait on the registry");
                 Assert.That(userWaited, Is.True, "a user-tree leaf bypassed the replay gate");
             });
-            await registryActivation;
         }
         finally
         {
