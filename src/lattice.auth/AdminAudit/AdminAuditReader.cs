@@ -14,7 +14,10 @@ namespace Orleans.Lattice.Auth;
 /// descending order. The scan holds at most <c>pageSize + 1</c> final records in memory, so
 /// a page costs one pass over the narrowed key range rather than a load of the whole trail.
 /// Pending intents are few (in-flight calls only) and are read in full, so a call with both
-/// a pending intent and its final record is returned once, as the final record.
+/// a pending intent and its final record is returned once, as the final record. On a
+/// single-partition read the final record of an admitted intent can sort beyond the narrowed
+/// range (it is stamped when the call completes), so a second scan of the partition tail
+/// resolves those intents before any is reported as pending.
 /// </remarks>
 internal static class AdminAuditReader
 {
@@ -120,6 +123,11 @@ internal static class AdminAuditReader
                     Add(page, record, limit);
                 }
             }
+
+            if (scope is not null && end is not null && pending.Count > 0)
+            {
+                await DropResolvedIntentsAsync(tree, scope, end, pending, Admits, cancellationToken).ConfigureAwait(false);
+            }
         }
 
         foreach (var intent in pending.Values)
@@ -217,5 +225,65 @@ internal static class AdminAuditReader
         return (start, end);
     }
 
+    /// <summary>
+    /// Drops the intents whose final record lies beyond the narrowed range of a single-partition
+    /// read. A final record is stamped when the call completes, so it can sort after the
+    /// <c>To</c> bound or the cursor while its intent sorts inside them; without this pass such
+    /// a call would surface as pending although it has finished. Only the partition tail from
+    /// the oldest admitted intent onward is scanned, and the scan stops once every admitted
+    /// intent is resolved.
+    /// </summary>
+    private static async Task DropResolvedIntentsAsync(
+        ILattice tree,
+        string scope,
+        string narrowedEnd,
+        Dictionary<string, LatticeAdminAuditRecord> pending,
+        Func<LatticeAdminAuditRecord, bool> admits,
+        CancellationToken cancellationToken)
+    {
+        var unresolved = 0;
+        long oldest = long.MaxValue;
+        foreach (var intent in pending.Values)
+        {
+            if (admits(intent))
+            {
+                unresolved++;
+                oldest = Math.Min(oldest, intent.TimestampUtc.UtcTicks);
+            }
+        }
+
+        if (unresolved == 0)
+        {
+            return;
+        }
+
+        var start = Max(narrowedEnd, string.Create(CultureInfo.InvariantCulture, $"{AdminAuditKeys.ScopeStart(scope)}{oldest:D19}"));
+        var scopeEnd = AdminAuditKeys.ScopeEnd(scope);
+        if (string.CompareOrdinal(start, scopeEnd) >= 0)
+        {
+            return;
+        }
+
+        await foreach (var entry in tree
+            .ScanEntriesAsync(start, scopeEnd, cancellationToken: cancellationToken)
+            .ConfigureAwait(false))
+        {
+            if (AdminAuditStore.Deserialize(entry.Value) is not { } record
+                || record.Outcome == LatticeAdminAuditOutcome.Pending
+                || !pending.TryGetValue(record.OperationId, out var intent))
+            {
+                continue;
+            }
+
+            pending.Remove(record.OperationId);
+            if (admits(intent) && --unresolved == 0)
+            {
+                return;
+            }
+        }
+    }
+
     private static string Min(string a, string b) => string.CompareOrdinal(a, b) <= 0 ? a : b;
+
+    private static string Max(string a, string b) => string.CompareOrdinal(a, b) >= 0 ? a : b;
 }
