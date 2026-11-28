@@ -14,7 +14,7 @@ reach.
 
 | Module | Invariants | Properties | Actions | Mutations | Behaviour rows | Distinct states |
 | --- | --- | --- | --- | --- | --- | --- |
-| `AppsInstall` | 7 | 0 | 9 | 15 | 15 | 4,320 |
+| `AppsInstall` | 7 | 0 | 9 | 16 | 15 | 4,320 |
 
 ## AppsInstall
 
@@ -36,8 +36,9 @@ An operator or system origin writes or deletes an app-owned rule id
 (`WriteAppRule`, `DeleteAppRule`). Any caller, system origin included,
 assigns an alias through whichever ownership guard the silo binds: the
 ledger-backed guard, the default guard of a host without the apps package,
-or a guard whose ledger read faults (`SetAlias`). A member of the app's role
-calls the UI bridge naming an app, a revision and a tree (`BridgeAuthorize`).
+or a guard whose ledger read faults (`SetAlias`). A member of the app's role,
+or a caller holding no role of it, calls the UI bridge naming an app, a
+revision and a tree (`BridgeAuthorize`).
 
 **Properties.**
 
@@ -54,9 +55,10 @@ calls the UI bridge naming an app, a revision and a tree (`BridgeAuthorize`).
 - `AliasOwnershipPreserved`: every alias resolves to a target whose derivation
   root has the alias name's owner, and a default decision or a guard fault
   writes nothing, whoever the caller.
-- `WorkspaceNonDisclosure`: for a member of the app's role, an app that is not
-  installed at the requested revision is answered exactly as an app that does
-  not exist, and a verb is allowed only with the role grant on the tree.
+- `WorkspaceNonDisclosure`: an app that is not installed at the requested
+  revision, and any app asked about by a caller holding no role of it, is
+  answered exactly as an app that does not exist, and a verb is allowed only
+  with the role grant on the tree.
 
 **Bounds.** Three callers, two manifest contents with distinct digests, three
 capabilities (two of them scopeless), three trees (one reserved), one
