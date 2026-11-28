@@ -68,6 +68,10 @@ public static class LatticeApiAuthServiceCollectionExtensions
         // that every transport binding (gRPC now) adapts over.
         builder.Services.TryAddSingleton<ILatticeAuthAdmin, LatticeAuthAdmin>();
 
+        // The operator reader of the durable admin audit trail (#3638), gated like
+        // every ILatticeAuthAdmin call.
+        builder.Services.TryAddSingleton<ILatticeAdminAuditLog, LatticeAdminAuditLog>();
+
         // Idempotency marker: a repeat call still layers any supplied configure
         // delegate above, matching how the sibling add-ons treat repeated
         // registration.

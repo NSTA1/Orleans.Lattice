@@ -186,6 +186,13 @@ public static partial class LatticeApiTenantAdminServiceCollectionExtensions
             sp.GetRequiredService<TenantRegionResidencyAuthorizer>(),
             sp.GetRequiredService<ITenantUsageReader>()));
 
+        // The tenant-admin reader of the durable admin audit trail (#3638): the
+        // caller's validated tenant's own partition only, final records only.
+        builder.Services.TryAddSingleton<ILatticeTenantAuditLog>(sp => new LatticeTenantAuditLog(
+            sp.GetRequiredService<TenantRegionResidencyAuthorizer>(),
+            sp.GetRequiredService<IGrainFactory>(),
+            sp.GetService<ILatticeAdminAuditTrail>()));
+
         // Delegated tenant access administration (epic #4154). The tenant directory
         // facade (tenant groups, group members, the tenant member set) and the tenant
         // policy facade (tenant-tier rules, layer-aware explain, posture) are each

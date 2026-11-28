@@ -12,7 +12,7 @@ The package registers the in-process implementation of the shared `ILatticeAuthA
 
 | Method | Signature | Purpose |
 |---|---|---|
-| `AddLatticeAuthApi` | `ISiloBuilder AddLatticeAuthApi(this ISiloBuilder builder, Action<LatticeApiAuthOptions>? configure = null)` | Binds `LatticeApiAuthOptions` and registers `ILatticeAuthAdmin` as a silo singleton. Throws `ArgumentNullException` when `builder` is null and `InvalidOperationException` when `AddLatticeAuth(...)` has not been called first. A repeated call layers its delegate; the facade itself is registered with `TryAdd`. |
+| `AddLatticeAuthApi` | `ISiloBuilder AddLatticeAuthApi(this ISiloBuilder builder, Action<LatticeApiAuthOptions>? configure = null)` | Binds `LatticeApiAuthOptions` and registers `ILatticeAuthAdmin` and `ILatticeAdminAuditLog` as silo singletons. Throws `ArgumentNullException` when `builder` is null and `InvalidOperationException` when `AddLatticeAuth(...)` has not been called first. A repeated call layers its delegate; the facade itself is registered with `TryAdd`. |
 
 `LatticeApiAuthOptions` has one property, `MaxExplanationRules`; see [Configuration](configuration.md).
 
@@ -33,6 +33,22 @@ Every method first requires the caller to hold a whole-tree `Admin` verdict on t
 | `LatticeTenantAccessDeniedException` | `ListRulesAsync` | `AuthPageRequest.ActiveTenantOnly` is set and the caller's active-tenant assertion is refused; the listing is never narrowed to a defaulted tenant. |
 
 Every exception above except `LatticeTenantAccessDeniedException` derives from `ArgumentException`, which the [gRPC binding](../lattice.api.auth.grpc/api.md) maps to `InvalidArgument`; it maps the administrator-check denial (`LatticeAuthorizationDeniedException`, an `UnauthorizedAccessException`) and a refused tenant assertion to `PermissionDenied`.
+
+## Reading the admin audit trail
+
+`ILatticeAdminAuditLog` is the operator reader over the durable admin audit trail (the reserved `sys-admin-audit` tree). It is a dedicated contract, not a member of `ILatticeAuthAdmin`, and it is gated the same way: the caller needs a whole-tree `Admin` verdict on `sys-auth-policy`, a refusal is recorded to the trail as a denied `Read` and surfaces as `LatticeAuthorizationDeniedException`, and nothing is read before the check passes.
+
+`ListAuditAsync(AdminAuditQuery query)` returns one `AdminAuditPage`, newest first.
+
+| `AdminAuditQuery` member | Meaning |
+|---|---|
+| `Scope` | One audit partition (`cluster`, `t/{tenant}`, or a tree id). Null reads every scope. |
+| `From`, `To` | Inclusive lower and exclusive upper bounds on the record's timestamp. |
+| `Actor` | Ordinal match on the acting subject id. |
+| `Action`, `Outcome` | Exact match on `LatticeAdminAuditAction` / `LatticeAdminAuditOutcome`. |
+| `PageSize`, `PageToken` | Page size (default 100, clamped to 1000) and the opaque `NextPageToken` of the previous page. A malformed token is an `ArgumentException`. |
+
+Only this operator reader sees `Pending` rows: an intent whose call has not yet finalized or been reconciled, shown as in progress. The tenant reader, `ILatticeTenantAuditLog` in [`Orleans.Lattice.Api.TenantAdmin`](../lattice.api.tenantadmin/api.md#reading-the-tenant-audit-trail), never shows them. Before the first audited call the trail tree does not exist and the reader returns an empty page.
 
 ## `LatticeTenantOwnedGroupException`
 
@@ -99,6 +115,14 @@ The following inventory includes directly declared public members and overloads,
 - `Task<DirectoryPrincipalDescriptor?> ResolveDirectoryPrincipalAsync(string principalId, CancellationToken cancellationToken = default)`
 - `Task<AccessModelDescriptor> GetAccessModelAsync(CancellationToken cancellationToken = default)`
 
+### `Orleans.Lattice.Api.Auth.ILatticeAdminAuditLog`
+
+[Source](../../src/lattice.api.abstractions/Auth/ILatticeAdminAuditLog.cs) (line 24).
+
+`public interface ILatticeAdminAuditLog`
+
+- `Task<AdminAuditPage> ListAuditAsync(AdminAuditQuery query, CancellationToken cancellationToken = default)`
+
 ### `Orleans.Lattice.Api.Auth.AccessAuthenticationMode`
 
 [Source](../../src/lattice.api.abstractions/Auth/Model/AccessAuthenticationMode.cs) (line 18).
@@ -126,6 +150,33 @@ The following inventory includes directly declared public members and overloads,
 - `public bool AccessAdministrationDelegationEnabled { get; init; }`
 - `public bool DelegatedTenantAccessAdministrationEnabled { get; init; }`
 - `public bool DirectoryValidationRequired { get; init; }`
+
+### `Orleans.Lattice.Api.Auth.AdminAuditPage`
+
+[Source](../../src/lattice.api.abstractions/Auth/Model/AdminAuditPage.cs) (line 7).
+
+`public sealed record AdminAuditPage`
+
+- `public IReadOnlyList<LatticeAdminAuditRecord> Records { get; init; }`
+- `public string? NextPageToken { get; init; }`
+
+### `Orleans.Lattice.Api.Auth.AdminAuditQuery`
+
+[Source](../../src/lattice.api.abstractions/Auth/Model/AdminAuditQuery.cs) (line 14).
+
+`public sealed record AdminAuditQuery`
+
+- `public const int DefaultPageSize`
+- `public const int MaxPageSize`
+- `public int PageSize { get; init; }`
+- `public string? PageToken { get; init; }`
+- `public string? Scope { get; init; }`
+- `public DateTimeOffset? From { get; init; }`
+- `public DateTimeOffset? To { get; init; }`
+- `public string? Actor { get; init; }`
+- `public LatticeAdminAuditAction? Action { get; init; }`
+- `public LatticeAdminAuditOutcome? Outcome { get; init; }`
+- `public int EffectivePageSize`
 
 ### `Orleans.Lattice.Api.Auth.ApiAuthTypeAliases`
 
@@ -160,6 +211,8 @@ The following inventory includes directly declared public members and overloads,
 - `public const string AuthPrincipalRef`
 - `public const string AuthDirectoryPrincipalResult`
 - `public const string AuthAccessModelQuery`
+- `public const string AdminAuditQuery`
+- `public const string AdminAuditPage`
 
 ### `Orleans.Lattice.Api.Auth.AuthEffectivePermissions`
 
