@@ -169,6 +169,14 @@ public static class LatticeEventConstants
     internal const string BootstrapShadowCutoverRequestContextKey = "ol.bs.cutover";
 
     /// <summary>
+    /// Orleans <c>RequestContext</c> key set while a bulk append catches its rightmost leaf
+    /// up to the WAL head (issue #6166), so the leaf tries its consistent cut before it
+    /// replays. It selects a strategy, confers no capability, and an older leaf ignores it.
+    /// Internal - set through <c>LatticeBulkCatchUpContext</c>.
+    /// </summary>
+    internal const string BulkCatchUpRequestContextKey = "ol.bulk.catchup";
+
+    /// <summary>
     /// Orleans <c>RequestContext</c> key used to carry the
     /// atomic-transaction <c>(Size, Index)</c> pair from the
     /// <see cref="BPlusTree.Grains.AtomicWriteGrain"/> coordinator down

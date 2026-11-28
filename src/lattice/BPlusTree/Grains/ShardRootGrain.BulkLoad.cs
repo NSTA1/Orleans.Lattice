@@ -1310,7 +1310,11 @@ internal sealed partial class ShardRootGrain
     {
         try
         {
-            await rightmostLeaf.DriveStarvedCheckpointAsync();
+            // #6166: the leaf tries its consistent cut first, which reads no WAL.
+            using (LatticeBulkCatchUpContext.BeginScope())
+            {
+                await rightmostLeaf.DriveStarvedCheckpointAsync();
+            }
         }
         catch (Exception ex) when (ex is LatticeSaturatedException or LeafProjectionStaleException)
         {

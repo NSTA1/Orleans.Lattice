@@ -3139,7 +3139,46 @@ internal sealed partial class BPlusLeafGrain
     /// take the whole GC share (issue #3575).
     /// </remarks>
     public Task<LeafStarvationDriveOutcome> DriveStarvedCheckpointAsync()
-        => DriveStarvedCheckpointAsync(StarvationDriveOrigin.WalGcSweep);
+        => LatticeBulkCatchUpContext.IsActive
+            ? DriveBulkCatchUpAsync()
+            : DriveStarvedCheckpointAsync(StarvationDriveOrigin.WalGcSweep);
+
+    /// <summary>
+    /// A bulk append's catch-up of its rightmost leaf (issue #6166): the consistent cut
+    /// first, as a cut-first stall drive takes it, and a replay only for what the cut does
+    /// not reach - capped at the cut's catch-up targets when it names them. The append
+    /// needs the leaf's read frontier at the head before it reads the tail; a leaf behind
+    /// a sorted append's right edge applies nothing in the span, so its cut reaches the
+    /// head without the replay reading every shard's appends since its last one.
+    /// </summary>
+    private async Task<LeafStarvationDriveOutcome> DriveBulkCatchUpAsync()
+    {
+        if (string.IsNullOrEmpty(state.State.TreeId))
+        {
+            return LeafStarvationDriveOutcome.NotDriven;
+        }
+
+        var partitionCount = Math.Max(1, (await GetOptionsAsync()).WalPartitions);
+        var persistedBefore = SumCheckpointOffsets(partitionCount, persistedOnly: true);
+        var cut = await TryAdvanceCheckpointFromCutAsync(partitionCount);
+        AwaitDiagnostics.Count(string.Concat("bulk.catch-up.cut.", cut.ToString()));
+        if (cut == CutAdvanceOutcome.Reached)
+        {
+            return SumCheckpointOffsets(partitionCount, persistedOnly: true) > persistedBefore
+                ? LeafStarvationDriveOutcome.Lifted
+                : LeafStarvationDriveOutcome.NoAdvance;
+        }
+
+        _replayReadCap = cut == CutAdvanceOutcome.CatchUp ? _cutCatchUpBounds : null;
+        try
+        {
+            return await DriveStarvedCheckpointAsync(StarvationDriveOrigin.WalGcSweep);
+        }
+        finally
+        {
+            _replayReadCap = null;
+        }
+    }
 
     /// <summary>
     /// Runs one starvation drive, admitted to the replay gate's GC share as a
