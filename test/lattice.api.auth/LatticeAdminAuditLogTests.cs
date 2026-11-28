@@ -103,6 +103,56 @@ public sealed class LatticeAdminAuditLogTests
     }
 
     [Test]
+    public async Task ListAuditAsync_does_not_show_a_finished_call_as_pending_when_its_final_record_is_after_To()
+    {
+        var tree = Seeded();
+        tree.Pending(AdminAuditTreeFake.Record("late", 6, scope: Acme));
+        tree.Final(AdminAuditTreeFake.Record("late", 8, scope: Acme));
+        var to = new DateTimeOffset(2026, 11, 27, 12, 7, 0, TimeSpan.Zero);
+
+        var page = await Create(tree).ListAuditAsync(new AdminAuditQuery { Scope = Acme, To = to });
+
+        Assert.That(Ids(page), Is.EqualTo(new[] { "d", "b" }));
+    }
+
+    [Test]
+    public async Task ListAuditAsync_does_not_show_a_finished_call_as_pending_when_its_final_record_is_past_the_cursor()
+    {
+        var tree = Seeded();
+        tree.Pending(AdminAuditTreeFake.Record("late", 3, scope: Acme));
+        tree.Final(AdminAuditTreeFake.Record("late", 6, scope: Acme));
+        var log = Create(tree);
+
+        var first = await log.ListAuditAsync(new AdminAuditQuery { Scope = Acme, PageSize = 1 });
+        var second = await log.ListAuditAsync(new AdminAuditQuery { Scope = Acme, PageSize = 1, PageToken = first.NextPageToken });
+        var third = await log.ListAuditAsync(new AdminAuditQuery { Scope = Acme, PageSize = 1, PageToken = second.NextPageToken });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Ids(first), Is.EqualTo(new[] { "late" }));
+            Assert.That(Ids(second), Is.EqualTo(new[] { "d" }));
+            Assert.That(Ids(third), Is.EqualTo(new[] { "b" }));
+            Assert.That(third.NextPageToken, Is.Null);
+        });
+    }
+
+    [Test]
+    public async Task ListAuditAsync_still_shows_a_scoped_in_flight_intent_as_pending()
+    {
+        var tree = Seeded();
+        tree.Pending(AdminAuditTreeFake.Record("live", 3, scope: Acme));
+        var to = new DateTimeOffset(2026, 11, 27, 12, 7, 0, TimeSpan.Zero);
+
+        var page = await Create(tree).ListAuditAsync(new AdminAuditQuery { Scope = Acme, To = to });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Ids(page), Is.EqualTo(new[] { "d", "live", "b" }));
+            Assert.That(page.Records[1].Outcome, Is.EqualTo(LatticeAdminAuditOutcome.Pending));
+        });
+    }
+
+    [Test]
     public async Task ListAuditAsync_on_a_cluster_without_a_trail_returns_an_empty_page()
     {
         var page = await Create(new AdminAuditTreeFake(treeExists: false)).ListAuditAsync(new AdminAuditQuery());
